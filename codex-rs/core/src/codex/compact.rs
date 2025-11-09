@@ -153,6 +153,9 @@ async fn run_compact_task_inner(
     new_history.extend(ghost_snapshots);
     sess.replace_history(new_history).await;
 
+    // Clear last_response_id after compact since conversation context has changed
+    sess.state.lock().await.clear_last_response_id();
+
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
     });
