@@ -1,0 +1,77 @@
+# Example configuration for using gpt_openapi adapter
+# This demonstrates how to configure multiple providers using the same adapter
+# with different settings.
+
+# Example 1: Production gateway with GPT-4
+[model_providers.enterprise_prod]
+name = "Enterprise Production Gateway"
+base_url = "https://api.enterprise.com/v1"
+env_key = "ENTERPRISE_API_KEY"
+adapter = "gpt_openapi"
+model_name = "gpt-4"
+
+[model_providers.enterprise_prod.adapter_config]
+api_version = "v1"
+timeout = 60
+max_retries = 3
+
+# Example 2: Staging gateway with GPT-3.5
+[model_providers.enterprise_staging]
+name = "Enterprise Staging Gateway"
+base_url = "https://api-staging.enterprise.com/v1"
+env_key = "ENTERPRISE_STAGING_KEY"
+adapter = "gpt_openapi"
+model_name = "gpt-3.5-turbo"
+
+[model_providers.enterprise_staging.adapter_config]
+api_version = "v1"
+timeout = 30
+max_retries = 1
+
+# Example 3: Development gateway with custom model
+[model_providers.enterprise_dev]
+name = "Enterprise Dev Gateway"
+base_url = "https://api-dev.enterprise.com/v1"
+env_key = "ENTERPRISE_DEV_KEY"
+adapter = "gpt_openapi"
+model_name = "custom-llm-model"
+
+[model_providers.enterprise_dev.adapter_config]
+api_version = "v1"
+timeout = 120
+debug = true
+enable_tracing = true
+
+# Example 4: Multi-region gateway (Region 1)
+[model_providers.gateway_us_east]
+name = "Enterprise Gateway US East"
+base_url = "https://us-east.api.enterprise.com/v1"
+env_key = "ENTERPRISE_API_KEY"
+adapter = "gpt_openapi"
+model_name = "gpt-4"
+
+[model_providers.gateway_us_east.adapter_config]
+region = "us-east-1"
+api_version = "v1"
+
+# Example 5: Multi-region gateway (Region 2)
+[model_providers.gateway_eu_west]
+name = "Enterprise Gateway EU West"
+base_url = "https://eu-west.api.enterprise.com/v1"
+env_key = "ENTERPRISE_API_KEY"
+adapter = "gpt_openapi"
+model_name = "gpt-4"
+
+[model_providers.gateway_eu_west.adapter_config]
+region = "eu-west-1"
+api_version = "v1"
+
+# Notes:
+# - The gpt_openapi adapter uses BaseWireApi::Responses for HTTP communication
+# - All providers share the same adapter implementation but can have different:
+#   * base_url: Different API endpoints
+#   * env_key: Different authentication keys
+#   * model_name: Different model names
+#   * adapter_config: Different configuration options
+# - The adapter performs minimal transformation, assuming OpenAI-compatible format
+# - Supports standard SSE (Server-Sent Events) streaming

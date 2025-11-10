@@ -13,6 +13,9 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    /// Last response ID from the model, used for continuing conversations.
+    /// Cleared on compact or model switch.
+    last_response_id: Option<String>,
 }
 
 impl SessionState {
@@ -22,6 +25,7 @@ impl SessionState {
             session_configuration,
             history: ContextManager::new(),
             latest_rate_limits: None,
+            last_response_id: None,
         }
     }
 
@@ -67,5 +71,18 @@ impl SessionState {
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
+    }
+
+    // Previous response ID helpers
+    pub(crate) fn set_last_response_id(&mut self, id: String) {
+        self.last_response_id = Some(id);
+    }
+
+    pub(crate) fn get_last_response_id(&self) -> Option<&str> {
+        self.last_response_id.as_deref()
+    }
+
+    pub(crate) fn clear_last_response_id(&mut self) {
+        self.last_response_id = None;
     }
 }

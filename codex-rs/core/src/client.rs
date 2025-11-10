@@ -30,6 +30,9 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::AuthManager;
+use crate::adapters::AdapterConfig;
+use crate::adapters::AdapterContext;
+use crate::adapters::get_adapter;
 use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
 use crate::chat_completions::AggregateStreamExt;
@@ -141,6 +144,12 @@ impl ModelClient {
     }
 
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // Check if provider specifies a custom adapter
+        if let Some(adapter_name) = &self.provider.adapter {
+            return self.stream_with_adapter(prompt, adapter_name).await;
+        }
+
+        // Fallback to existing wire_api routing (backward compatible)
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
@@ -181,6 +190,250 @@ impl ModelClient {
                 Ok(ResponseStream { rx_event: rx })
             }
         }
+    }
+
+    /// Stream with a custom adapter
+    ///
+    /// Uses the adapter system to transform requests/responses for non-OpenAI providers.
+    async fn stream_with_adapter(
+        &self,
+        prompt: &Prompt,
+        adapter_name: &str,
+    ) -> Result<ResponseStream> {
+        // Get adapter from registry
+        let mut adapter = get_adapter(adapter_name)
+            .map_err(|e| CodexErr::Fatal(format!("Failed to get adapter '{adapter_name}': {e}")))?;
+
+        // Configure adapter if provider has adapter_config
+        if let Some(config_map) = &self.provider.adapter_config {
+            let mut config = AdapterConfig::new();
+            config.options = config_map.clone();
+
+            // Configure and validate
+            Arc::get_mut(&mut adapter)
+                .ok_or_else(|| {
+                    CodexErr::Fatal("Failed to configure adapter: Arc is shared".into())
+                })?
+                .configure(&config)?;
+            adapter.validate_config(&config)?;
+        }
+
+        // Clone prompt and inject reasoning configuration from ModelClient
+        let mut enhanced_prompt = prompt.clone();
+        enhanced_prompt.reasoning_effort = self.effort;
+        enhanced_prompt.reasoning_summary = Some(self.summary);
+
+        // Transform request using adapter
+        let transformed_request = adapter
+            .transform_request(&enhanced_prompt, &self.provider)
+            .map_err(|e| {
+                CodexErr::Fatal(format!(
+                    "Adapter '{adapter_name}' failed to transform request: {e}"
+                ))
+            })?;
+
+        // Build runtime context for dynamic headers/params
+        let request_context = crate::adapters::RequestContext {
+            conversation_id: self.conversation_id.to_string(),
+            session_source: format!("{:?}", self.session_source),
+        };
+
+        // Let adapter build dynamic metadata (headers, query params)
+        let request_metadata = adapter
+            .build_request_metadata(&enhanced_prompt, &self.provider, &request_context)
+            .map_err(|e| {
+                CodexErr::Fatal(format!(
+                    "Adapter '{adapter_name}' failed to build request metadata: {e}"
+                ))
+            })?;
+
+        // Route based on provider's wire API
+        match self.provider.wire_api {
+            WireApi::Responses => {
+                self.stream_with_adapter_responses(transformed_request, adapter, request_metadata)
+                    .await
+            }
+            WireApi::Chat => {
+                self.stream_with_adapter_chat(transformed_request, adapter, request_metadata)
+                    .await
+            }
+        }
+    }
+
+    /// Stream using adapter + Chat Completions-style HTTP
+    async fn stream_with_adapter_chat(
+        &self,
+        transformed_request: Value,
+        adapter: Arc<dyn crate::adapters::ProviderAdapter>,
+        request_metadata: crate::adapters::RequestMetadata,
+    ) -> Result<ResponseStream> {
+        let base_url =
+            self.provider.base_url.as_ref().ok_or_else(|| {
+                CodexErr::Fatal("Provider base_url is required for adapters".into())
+            })?;
+
+        // Build HTTP request
+        // Use adapter's custom endpoint if specified, otherwise use wire_api default
+        let endpoint = if let Some(path) = adapter.endpoint_path() {
+            path.to_string()
+        } else {
+            // Use provider's wire_api to determine endpoint
+            match self.provider.wire_api {
+                WireApi::Responses => "/responses".to_string(),
+                WireApi::Chat => "/chat/completions".to_string(),
+            }
+        };
+
+        // Build URL with query params
+        let mut url = format!("{base_url}{endpoint}");
+        if !request_metadata.query_params.is_empty() {
+            let query_string = request_metadata
+                .query_params
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("&");
+            url = format!("{url}?{query_string}");
+        }
+
+        let mut request_builder = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .json(&transformed_request);
+
+        // Add authentication
+        if let Ok(Some(api_key)) = self.provider.api_key() {
+            request_builder = request_builder.bearer_auth(api_key);
+        }
+
+        // Add static headers from provider config
+        if let Some(headers) = &self.provider.http_headers {
+            for (key, value) in headers {
+                request_builder = request_builder.header(key, value);
+            }
+        }
+
+        // Add dynamic headers from adapter
+        for (key, value) in &request_metadata.headers {
+            request_builder = request_builder.header(key, value);
+        }
+
+        // Send request
+        let response = request_builder
+            .send()
+            .await
+            .map_err(|e| CodexErr::Fatal(format!("Failed to connect to provider: {e}")))?;
+
+        // Check status
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error response".into());
+            return Err(CodexErr::Fatal(format!(
+                "Provider returned error {status}: {body}"
+            )));
+        }
+
+        // Create SSE stream
+        let byte_stream = response.bytes_stream();
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+
+        // Spawn task to process SSE stream with adapter
+        let otel = self.otel_event_manager.clone();
+        tokio::spawn(async move {
+            process_sse_with_adapter(byte_stream, tx_event, adapter, otel).await;
+        });
+
+        Ok(ResponseStream { rx_event })
+    }
+
+    /// Stream using adapter + Responses API-style HTTP
+    async fn stream_with_adapter_responses(
+        &self,
+        transformed_request: Value,
+        adapter: Arc<dyn crate::adapters::ProviderAdapter>,
+        request_metadata: crate::adapters::RequestMetadata,
+    ) -> Result<ResponseStream> {
+        let base_url =
+            self.provider.base_url.as_ref().ok_or_else(|| {
+                CodexErr::Fatal("Provider base_url is required for adapters".into())
+            })?;
+
+        // Build HTTP request
+        // Use adapter's custom endpoint if specified, otherwise default to /responses
+        let endpoint = if let Some(path) = adapter.endpoint_path() {
+            path.to_string()
+        } else {
+            "/responses".to_string()
+        };
+
+        // Build URL with query params
+        let mut url = format!("{base_url}{endpoint}");
+        if !request_metadata.query_params.is_empty() {
+            let query_string = request_metadata
+                .query_params
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("&");
+            url = format!("{url}?{query_string}");
+        }
+
+        let mut request_builder = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .json(&transformed_request);
+
+        // Add authentication
+        if let Ok(Some(api_key)) = self.provider.api_key() {
+            request_builder = request_builder.bearer_auth(api_key);
+        }
+
+        // Add static headers from provider config
+        if let Some(headers) = &self.provider.http_headers {
+            for (key, value) in headers {
+                request_builder = request_builder.header(key, value);
+            }
+        }
+
+        // Add dynamic headers from adapter
+        for (key, value) in &request_metadata.headers {
+            request_builder = request_builder.header(key, value);
+        }
+
+        // Send request
+        let response = request_builder
+            .send()
+            .await
+            .map_err(|e| CodexErr::Fatal(format!("Failed to connect to provider: {e}")))?;
+
+        // Check status
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error response".into());
+            return Err(CodexErr::Fatal(format!(
+                "Provider returned error {status}: {body}"
+            )));
+        }
+
+        // Create SSE stream
+        let byte_stream = response.bytes_stream();
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+
+        // Spawn task to process SSE stream with adapter
+        let otel = self.otel_event_manager.clone();
+        tokio::spawn(async move {
+            process_sse_with_adapter(byte_stream, tx_event, adapter, otel).await;
+        });
+
+        Ok(ResponseStream { rx_event })
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
@@ -1124,6 +1377,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1188,6 +1444,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1225,6 +1484,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1264,6 +1526,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1299,6 +1564,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1334,6 +1602,9 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1438,6 +1709,9 @@ mod tests {
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
                 requires_openai_auth: false,
+                adapter: None,
+                adapter_config: None,
+                model_name: None,
             };
 
             let otel_event_manager = otel_event_manager();
@@ -1519,5 +1793,90 @@ mod tests {
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");
+    }
+}
+
+/// Process SSE stream using a custom adapter
+///
+/// Reads SSE events from the byte stream and uses the adapter to transform
+/// them into codex-rs ResponseEvents.
+async fn process_sse_with_adapter<S>(
+    stream: S,
+    tx_event: mpsc::Sender<Result<ResponseEvent>>,
+    adapter: Arc<dyn crate::adapters::ProviderAdapter>,
+    _otel_event_manager: OtelEventManager,
+) where
+    S: Stream<Item = reqwest::Result<Bytes>> + Unpin,
+{
+    // Create AdapterContext for this request's lifetime.
+    //
+    // MEMORY MANAGEMENT:
+    // - This context exists ONLY for the duration of this function
+    // - State accumulates as we process each SSE chunk
+    // - When this function returns (normally or on error), context is automatically
+    //   dropped and all accumulated state is freed (Rust RAII)
+    // - No manual cleanup needed
+    // - No memory leaks across requests (each request gets a fresh context)
+    //
+    // Typical lifecycle:
+    //   1. Create context (empty HashMap)
+    //   2. Process chunks → state grows (e.g., accumulated text)
+    //   3. Request completes → function returns → context drops → memory freed
+    let mut adapter_context = AdapterContext::new();
+    let mut stream = stream.eventsource();
+    let idle_timeout = Duration::from_secs(30);
+
+    loop {
+        let response = timeout(idle_timeout, stream.next()).await;
+
+        match response {
+            Ok(Some(Ok(sse))) => {
+                // Skip comments and ping events
+                if sse.event == "comment" || sse.event == "ping" {
+                    continue;
+                }
+
+                // Skip empty data
+                if sse.data.trim().is_empty() {
+                    continue;
+                }
+
+                // Use adapter to transform the chunk
+                match adapter.transform_response_chunk(&sse.data, &mut adapter_context) {
+                    Ok(events) => {
+                        for event in events {
+                            if tx_event.send(Ok(event)).await.is_err() {
+                                // Receiver dropped
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Fatal(format!(
+                                "Adapter failed to transform response: {e}"
+                            ))))
+                            .await;
+                        return;
+                    }
+                }
+            }
+            Ok(Some(Err(e))) => {
+                let _ = tx_event
+                    .send(Err(CodexErr::Stream(e.to_string(), None)))
+                    .await;
+                return;
+            }
+            Ok(None) => {
+                // Stream ended normally
+                return;
+            }
+            Err(_) => {
+                let _ = tx_event
+                    .send(Err(CodexErr::Stream("SSE stream timeout".into(), None)))
+                    .await;
+                return;
+            }
+        }
     }
 }

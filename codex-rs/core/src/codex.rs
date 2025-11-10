@@ -694,6 +694,11 @@ impl Session {
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
         let mut state = self.state.lock().await;
 
+        // Clear last_response_id if model is being changed
+        if updates.model.is_some() {
+            state.clear_last_response_id();
+        }
+
         state.session_configuration = state.session_configuration.apply(&updates);
     }
 
@@ -709,6 +714,12 @@ impl Session {
     ) -> Arc<TurnContext> {
         let session_configuration = {
             let mut state = self.state.lock().await;
+
+            // Clear last_response_id if model is being changed
+            if updates.model.is_some() {
+                state.clear_last_response_id();
+            }
+
             let session_configuration = state.session_configuration.clone().apply(&updates);
             state.session_configuration = session_configuration.clone();
             session_configuration
@@ -1887,12 +1898,18 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
+
+    // Get previous_response_id from SessionState for conversation continuity
+    let previous_response_id = sess.state.lock().await.get_last_response_id().map(String::from);
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        previous_response_id,
+        ..Default::default()
     };
 
     let mut retries = 0;
@@ -2134,9 +2151,12 @@ async fn try_run_turn(
                 sess.update_rate_limits(&turn_context, snapshot).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                // Store response_id for next turn's previous_response_id
+                sess.state.lock().await.set_last_response_id(response_id);
+
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 let processed_items = output.try_collect().await?;

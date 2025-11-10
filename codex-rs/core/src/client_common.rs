@@ -46,6 +46,18 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Reasoning effort level for models that support reasoning.
+    /// This is injected by ModelClient when using adapters.
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+
+    /// Reasoning summary configuration for models that support reasoning.
+    /// This is injected by ModelClient when using adapters.
+    pub reasoning_summary: Option<ReasoningSummaryConfig>,
+
+    /// Previous response ID for continuing conversations with context.
+    /// Populated from SessionState when adapter supports it.
+    pub previous_response_id: Option<String>,
 }
 
 impl Prompt {

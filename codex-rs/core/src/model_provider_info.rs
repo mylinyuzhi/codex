@@ -42,7 +42,7 @@ pub enum WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
     pub name: String,
@@ -93,6 +93,70 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Optional: Custom adapter for protocol transformation.
+    ///
+    /// If `None`, uses the `wire_api` field for routing (existing behavior).
+    /// If `Some("adapter_name")`, uses that adapter to transform requests/responses.
+    ///
+    /// Adapters enable support for providers with different API formats (e.g.,
+    /// Anthropic Messages API, Google Gemini) while reusing the existing HTTP layer.
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.anthropic]
+    /// name = "Anthropic Claude"
+    /// base_url = "https://api.anthropic.com/v1"
+    /// env_key = "ANTHROPIC_API_KEY"
+    /// adapter = "anthropic"  # Uses AnthropicAdapter
+    ///
+    /// [model_providers.openai]
+    /// # No adapter - uses wire_api field (existing behavior)
+    /// wire_api = "responses"
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+
+    /// Optional: Configuration for the adapter
+    ///
+    /// Provider-specific settings that customize the adapter's behavior.
+    /// The structure is flexible and adapter-specific.
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.anthropic]
+    /// adapter = "anthropic"
+    ///
+    /// [model_providers.anthropic.adapter_config]
+    /// api_version = "2023-12-15"
+    /// default_max_tokens = 8192
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_config: Option<HashMap<String, serde_json::Value>>,
+
+    /// Optional: Model name for this provider configuration
+    ///
+    /// When set, this model name will be used in API requests for this provider.
+    /// This allows multiple ModelProviderInfo entries to share the same adapter
+    /// and base_url but use different models.
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.gateway_gpt4]
+    /// adapter = "gpt_openapi"
+    /// base_url = "https://api.enterprise.com/v1"
+    /// model_name = "gpt-4"
+    ///
+    /// [model_providers.gateway_claude]
+    /// adapter = "gpt_openapi"
+    /// base_url = "https://api.enterprise.com/v1"
+    /// model_name = "claude-3-5-sonnet"
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
 }
 
 impl ModelProviderInfo {
@@ -309,6 +373,9 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: true,
+                adapter: None,
+                adapter_config: None,
+                model_name: None,
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -354,6 +421,9 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        adapter: None,
+        adapter_config: None,
+        model_name: None,
     }
 }
 
@@ -394,6 +464,9 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -424,6 +497,9 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -457,6 +533,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -480,6 +559,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                adapter: None,
+                adapter_config: None,
+                model_name: None,
             }
         }
 
@@ -513,6 +595,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
         };
         assert!(named_provider.is_azure_responses_endpoint());
 
