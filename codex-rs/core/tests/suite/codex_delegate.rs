@@ -223,3 +223,36 @@ async fn codex_delegate_ignores_legacy_deltas() {
         "expected one legacy reasoning delta"
     );
 }
+
+/// Test that Op::CustomAgent invokes CustomAgentTask and completes successfully.
+/// This verifies the full path: Op::CustomAgent → handler → CustomAgentTask →
+/// run_codex_conversation_one_shot → SubAgentSource::Other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_agent_task_spawns_and_completes() {
+    skip_if_no_network!();
+
+    // Custom agent returns a simple response and completes
+    let sse_stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "Custom agent response"),
+        ev_completed("resp-1"),
+    ]);
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(&server, vec![sse_stream]).await;
+
+    let mut builder = test_codex();
+    let test = builder.build(&server).await.expect("build test codex");
+
+    // Kick off custom agent (note: "review" is a built-in agent that exists in the registry)
+    test.codex
+        .submit(Op::CustomAgent {
+            agent_name: "review".to_string(),
+            prompt: "Please analyze this code".to_string(),
+        })
+        .await
+        .expect("submit custom agent");
+
+    // Wait for task completion
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+}

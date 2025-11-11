@@ -6,6 +6,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 pub mod adapters;
+pub mod agent_registry;
 mod apply_patch;
 pub mod auth;
 pub mod bash;

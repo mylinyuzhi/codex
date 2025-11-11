@@ -1344,6 +1344,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            Op::CustomAgent { agent_name, prompt } => {
+                handlers::custom_agent(&sess, sub.id.clone(), agent_name, prompt).await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -1637,6 +1640,25 @@ mod handlers {
             turn_context.clone(),
             sub_id,
             review_request,
+        )
+        .await;
+    }
+
+    pub async fn custom_agent(sess: &Arc<Session>, sub_id: String, agent_name: String, prompt: String) {
+        use crate::tasks::CustomAgentTask;
+        use codex_protocol::user_input::UserInput;
+
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
+            .await;
+
+        // Seed the custom agent with the prompt as the initial user message
+        let input: Vec<UserInput> = vec![UserInput::Text { text: prompt }];
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            input,
+            CustomAgentTask { agent_name },
         )
         .await;
     }

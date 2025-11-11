@@ -1,0 +1,84 @@
+# Example custom agent configuration for Codex
+# Place this file in ~/.codex/agents/ (user-level) or .codex/agents/ (project-level)
+#
+# Priority: built-in < user-level < project-level
+
+# Agent identifier (used when invoking via SubAgentSource::Other("name"))
+name = "security-reviewer"
+
+# Human-readable description
+description = "Specialized agent for security vulnerability analysis"
+
+# System prompt prepended to all interactions
+# This will be injected via config.developer_instructions
+system_prompt = """
+You are a security expert specializing in code review.
+
+Your primary responsibilities:
+- Identify SQL injection, XSS, CSRF vulnerabilities
+- Check for authentication and authorization flaws
+- Detect sensitive data exposure risks
+- Review cryptography usage patterns
+- Flag insecure dependencies and configurations
+
+Provide actionable recommendations with severity levels (Critical/High/Medium/Low).
+"""
+
+# Optional: Override the model for this agent
+# If omitted, uses the default model from global config
+model = "claude-sonnet-4"
+
+# Optional: Tool whitelist
+# If omitted, agent has access to all tools (subject to approval policies)
+# Common read-only tools: read_file, grep, glob, ls
+tools = ["read_file", "grep", "glob", "bash"]
+
+# Optional: Future use - not currently applied to Config
+# These fields are stored but not yet integrated
+max_turns = 20
+thinking_budget = 10000
+
+# ============================================================================
+# Additional Examples
+# ============================================================================
+
+# Example 2: Test Coverage Analyzer
+# -----------------------------------
+# name = "test-analyzer"
+# description = "Analyzes test coverage and suggests improvements"
+# system_prompt = """
+# You are a testing expert. Analyze test coverage and suggest:
+# - Missing edge cases
+# - Uncovered code paths
+# - Flaky test patterns
+# - Integration test gaps
+# """
+# model = "claude-sonnet-4"
+# tools = ["read_file", "grep", "glob"]
+
+# Example 3: Documentation Generator
+# -----------------------------------
+# name = "doc-generator"
+# description = "Generates comprehensive documentation from code"
+# system_prompt = """
+# You are a technical writer. Generate clear, comprehensive documentation:
+# - API reference from code comments
+# - Usage examples
+# - Architecture diagrams (mermaid)
+# - Troubleshooting guides
+# """
+# tools = ["read_file", "grep", "glob", "write_file"]
+
+# Example 4: Performance Reviewer
+# --------------------------------
+# name = "perf-reviewer"
+# description = "Identifies performance bottlenecks and optimization opportunities"
+# system_prompt = """
+# You are a performance optimization expert. Identify:
+# - O(n²) algorithms that could be O(n log n)
+# - Unnecessary allocations
+# - Missing caching opportunities
+# - Database query inefficiencies
+# """
+# model = "claude-opus-4"  # Use stronger model for complex analysis
+# tools = ["read_file", "grep"]
