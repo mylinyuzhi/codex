@@ -109,7 +109,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         // Prepend system_prompt to developer_instructions
         let agent_prompt = &def.system_prompt;
         config.developer_instructions = match &config.developer_instructions {
-            Some(existing) => Some(format!("{}\n\n{}", agent_prompt, existing)),
+            Some(existing) => Some(format!("{agent_prompt}\n\n{existing}")),
             None => Some(agent_prompt.clone()),
         };
     }

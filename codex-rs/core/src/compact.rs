@@ -5,6 +5,8 @@ use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::compact_strategy::CompactContext;
+use crate::compact_strategy::get_strategy;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
@@ -144,7 +146,20 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+
+    // Strategy dispatch: check if compact_prompt has "strategy:" prefix
+    let compact_prompt = turn_context.compact_prompt();
+    let strategy_name = compact_prompt.strip_prefix("strategy:").unwrap_or("simple");
+
+    let strategy = get_strategy(strategy_name);
+    let context = CompactContext {
+        user_messages: user_messages.clone(),
+        history: history_snapshot.clone(),
+        cwd: turn_context.cwd.clone(),
+    };
+
+    let mut new_history =
+        strategy.build_compacted_history(initial_context, &user_messages, &summary_text, &context);
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))

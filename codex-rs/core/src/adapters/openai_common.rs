@@ -503,7 +503,7 @@ impl ResponsesApiParserState {
                                 id: item_data
                                     .get("id")
                                     .and_then(|i| i.as_str())
-                                    .map(|s| s.to_string()),
+                                    .map(std::string::ToString::to_string),
                                 role: "assistant".to_string(),
                                 content: vec![],
                             });
@@ -525,7 +525,7 @@ impl ResponsesApiParserState {
                                 id: item_data
                                     .get("id")
                                     .and_then(|i| i.as_str())
-                                    .map(|s| s.to_string()),
+                                    .map(std::string::ToString::to_string),
                                 name: item_data
                                     .get("name")
                                     .and_then(|n| n.as_str())
@@ -623,27 +623,27 @@ impl ResponsesApiParserState {
 
             "response.done" => {
                 // Extract token usage
-                let token_usage = data.get("usage").and_then(|u| {
-                    let input_tokens = u.get("input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+                let token_usage = data.get("usage").map(|u| {
+                    let input_tokens = u.get("input_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0);
                     let output_tokens =
-                        u.get("output_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+                        u.get("output_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0);
                     let cached_input_tokens = u
                         .get("input_tokens_cache_read")
-                        .and_then(|t| t.as_i64())
+                        .and_then(serde_json::Value::as_i64)
                         .unwrap_or(0);
                     let reasoning_output_tokens = u
                         .get("reasoning_output_tokens")
-                        .and_then(|t| t.as_i64())
+                        .and_then(serde_json::Value::as_i64)
                         .unwrap_or(0);
                     let total_tokens = input_tokens + output_tokens;
 
-                    Some(crate::protocol::TokenUsage {
+                    crate::protocol::TokenUsage {
                         input_tokens,
                         cached_input_tokens,
                         output_tokens,
                         reasoning_output_tokens,
                         total_tokens,
-                    })
+                    }
                 });
 
                 Ok(vec![ResponseEvent::Completed {

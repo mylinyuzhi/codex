@@ -161,7 +161,7 @@ impl AgentRegistry {
 
         // Validate required fields
         def.validate()
-            .map_err(|e| format!("Validation failed: {}", e))?;
+            .map_err(|e| format!("Validation failed: {e}"))?;
 
         Ok(def)
     }
@@ -191,7 +191,7 @@ impl AgentRegistry {
     pub fn is_available(&self, name: &str) -> bool {
         self.agents
             .get(name)
-            .map(|s| s.is_available())
+            .map(codex_protocol::agent_definition::AgentLoadStatus::is_available)
             .unwrap_or(false)
     }
 }
