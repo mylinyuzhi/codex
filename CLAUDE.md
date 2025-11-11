@@ -180,6 +180,28 @@ codex-rs/
 - **When to add code:** New agent types, config fields, delegation patterns
 - **Tests:** `core/tests/suite/codex_delegate.rs`, `core/tests/suite/agent_registry.rs`
 
+### **Compact Strategies**
+**Responsibility:** Pluggable conversation compaction strategies for flexible context management
+- **Core abstraction:** `core/src/compact_strategy.rs` → `CompactStrategy` trait, registry with `LazyLock`
+- **Built-in strategies:**
+  - `simple` (default) → Handoff-focused prompt, preserves recent user messages (~20k tokens)
+  - `file-recovery` → Kode-cli inspired, 8-section structured prompt + automatic file recovery
+- **Strategy selection:** Via `compact_prompt` config field with `strategy:` prefix
+  - Example: `compact_prompt = "strategy:file-recovery"` in `~/.codex/config.toml`
+  - Defaults to `simple` if no prefix or invalid strategy name
+- **File recovery mechanism:**
+  - Parses `read_file` function calls from conversation history (stateless)
+  - Filters: excludes `node_modules`, `.git`, `dist/`, `build/`, `.cache/`, `/tmp`
+  - Limits: max 5 files, 10k tokens/file, 50k total tokens
+  - Reads current file state (not historical tool output)
+  - Appends to compacted history with line numbers
+- **Architecture:**
+  - `core/src/compact_strategies/` → Strategy implementations (`simple.rs`, `file_recovery.rs`)
+  - `core/templates/compact/` → Prompt templates (`prompt.md`, `file_recovery.md`)
+  - Strategy dispatch in `core/src/compact.rs` (~15 lines modified)
+- **When to add code:** New compaction strategies, custom prompt templates, file filtering rules
+- **Tests:** `core/src/compact_strategies/file_recovery.rs` (unit tests), `core/tests/suite/compact.rs` (integration)
+
 ---
 
 **Key Files:**
