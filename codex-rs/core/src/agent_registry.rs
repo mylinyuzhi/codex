@@ -1,8 +1,11 @@
-use codex_protocol::agent_definition::{AgentDefinition, AgentLoadStatus};
+use codex_protocol::agent_definition::AgentDefinition;
+use codex_protocol::agent_definition::AgentLoadStatus;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
+use tracing::warn;
 
 /// Default system prompt for the Review agent
 const DEFAULT_REVIEW_PROMPT: &str = r#"You are a code review expert. Your task is to:

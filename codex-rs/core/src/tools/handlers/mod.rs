@@ -9,8 +9,10 @@ mod shell;
 mod test_sync;
 mod unified_exec;
 mod view_image;
+mod write_todos;
 
 pub use plan::PLAN_TOOL;
+pub use write_todos::WRITE_TODOS_TOOL;
 
 pub use apply_patch::ApplyPatchHandler;
 pub use grep_files::GrepFilesHandler;
@@ -23,3 +25,4 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
+pub use write_todos::WriteTodosHandler;
