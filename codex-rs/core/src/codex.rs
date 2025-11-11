@@ -1644,7 +1644,12 @@ mod handlers {
         .await;
     }
 
-    pub async fn custom_agent(sess: &Arc<Session>, sub_id: String, agent_name: String, prompt: String) {
+    pub async fn custom_agent(
+        sess: &Arc<Session>,
+        sub_id: String,
+        agent_name: String,
+        prompt: String,
+    ) {
         use crate::tasks::CustomAgentTask;
         use codex_protocol::user_input::UserInput;
 
@@ -1922,7 +1927,12 @@ async fn run_turn(
     let parallel_tool_calls = model_supports_parallel;
 
     // Get previous_response_id from SessionState for conversation continuity
-    let previous_response_id = sess.state.lock().await.get_last_response_id().map(String::from);
+    let previous_response_id = sess
+        .state
+        .lock()
+        .await
+        .get_last_response_id()
+        .map(String::from);
 
     let prompt = Prompt {
         input,

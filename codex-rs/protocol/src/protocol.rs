@@ -22,6 +22,7 @@ use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
+use crate::write_todos::WriteTodosArgs;
 use mcp_types::CallToolResult;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -542,6 +543,9 @@ pub enum EventMsg {
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
+
+    /// Update to the active todos list for tracking execution progress
+    TodoUpdate(WriteTodosArgs),
 
     TurnAborted(TurnAbortedEvent),
 

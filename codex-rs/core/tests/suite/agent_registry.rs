@@ -1,5 +1,6 @@
 use codex_core::agent_registry::AgentRegistry;
-use codex_protocol::agent_definition::{AgentDefinition, AgentLoadStatus};
+use codex_protocol::agent_definition::AgentDefinition;
+use codex_protocol::agent_definition::AgentLoadStatus;
 use std::sync::Arc;
 use tempfile::TempDir;
 

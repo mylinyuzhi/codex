@@ -17,8 +17,8 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_registry::AgentRegistry;
 use crate::AuthManager;
+use crate::agent_registry::AgentRegistry;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
@@ -88,9 +88,7 @@ pub(crate) async fn run_codex_conversation_interactive(
                     });
                 }
                 None => {
-                    return Err(CodexErr::AgentNotFound {
-                        name: name.clone(),
-                    });
+                    return Err(CodexErr::AgentNotFound { name: name.clone() });
                 }
             }
         }

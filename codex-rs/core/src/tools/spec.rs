@@ -4,6 +4,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::WRITE_TODOS_TOOL;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -29,6 +30,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub enable_write_todos: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -70,6 +72,10 @@ impl ToolsConfig {
             web_search_request: include_web_search_request,
             include_view_image_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            // WriteTodos tool is opt-in via experimental_supported_tools
+            enable_write_todos: model_family
+                .experimental_supported_tools
+                .contains(&"write_todos".to_string()),
         }
     }
 }
@@ -868,6 +874,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::WriteTodosHandler;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -875,6 +882,7 @@ pub(crate) fn build_specs(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let write_todos_handler = Arc::new(WriteTodosHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
@@ -909,6 +917,12 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    // WriteTodos tool is opt-in via experimental_supported_tools
+    if config.enable_write_todos {
+        builder.push_spec(WRITE_TODOS_TOOL.clone());
+        builder.register_handler("write_todos", write_todos_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {

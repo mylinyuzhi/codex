@@ -625,9 +625,16 @@ impl ResponsesApiParserState {
                 // Extract token usage
                 let token_usage = data.get("usage").and_then(|u| {
                     let input_tokens = u.get("input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
-                    let output_tokens = u.get("output_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
-                    let cached_input_tokens = u.get("input_tokens_cache_read").and_then(|t| t.as_i64()).unwrap_or(0);
-                    let reasoning_output_tokens = u.get("reasoning_output_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+                    let output_tokens =
+                        u.get("output_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+                    let cached_input_tokens = u
+                        .get("input_tokens_cache_read")
+                        .and_then(|t| t.as_i64())
+                        .unwrap_or(0);
+                    let reasoning_output_tokens = u
+                        .get("reasoning_output_tokens")
+                        .and_then(|t| t.as_i64())
+                        .unwrap_or(0);
                     let total_tokens = input_tokens + output_tokens;
 
                     Some(crate::protocol::TokenUsage {
