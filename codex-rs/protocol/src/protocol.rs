@@ -183,6 +183,15 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Request a custom configured agent task.
+    /// The agent_name must match an agent defined in ~/.codex/agents/ or .codex/agents/
+    CustomAgent {
+        /// Name of the custom agent (e.g., "security-reviewer")
+        agent_name: String,
+        /// Initial prompt/task for the custom agent
+        prompt: String,
+    },
+
     /// Request to shut down codex instance.
     Shutdown,
 

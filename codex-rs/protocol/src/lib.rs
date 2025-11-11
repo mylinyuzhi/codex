@@ -1,4 +1,5 @@
 pub mod account;
+pub mod agent_definition;
 mod conversation_id;
 pub use conversation_id::ConversationId;
 pub mod approvals;

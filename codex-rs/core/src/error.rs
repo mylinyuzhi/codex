@@ -138,6 +138,16 @@ pub enum CodexErr {
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
 
+    /// Agent configuration errors
+    #[error("agent '{name}' not found")]
+    AgentNotFound { name: String },
+
+    #[error("agent '{name}' configuration is invalid: {reason}")]
+    InvalidAgentConfig { name: String, reason: String },
+
+    #[error("tool '{tool}' is not allowed for agent '{agent}'")]
+    ToolNotAllowed { tool: String, agent: String },
+
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
 

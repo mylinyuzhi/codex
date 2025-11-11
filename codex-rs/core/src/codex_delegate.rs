@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::AtomicU64;
 
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::agent_definition::AgentLoadStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -15,6 +17,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_registry::AgentRegistry;
 use crate::AuthManager;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
@@ -25,11 +28,38 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
 
+// Global agent registry, loaded once at startup
+static AGENT_REGISTRY: LazyLock<AgentRegistry> = LazyLock::new(AgentRegistry::load);
+
 /// Start an interactive sub-Codex conversation and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+///
+/// # Future Enhancements (TODO)
+///
+/// ## Observability Improvements
+/// - Add SubagentActivity events for real-time progress visibility
+/// - Implement heartbeat events (every 5s) to show subagent is working
+/// - Add SubagentThought, SubagentToolStart/End event types
+/// - Create TUI collapsible panel for subagent output
+///
+/// ## Structured Output Validation
+/// - Add optional JSON schema validation for agent outputs
+/// - Implement complete_task tool for explicit completion signaling
+/// - Support partial result collection on timeout/abort
+///
+/// ## Advanced Tool Control
+/// - Implement tool parameter filtering at invocation time
+/// - Add dynamic tool injection based on agent capabilities
+/// - Support tool metadata for automatic allowlist generation
+///
+/// ## Agent Management CLI
+/// - `codex agent list` - List all available agents (built-in + custom)
+/// - `codex agent validate <file>` - Validate agent TOML configuration
+/// - `codex agent create <name>` - Interactive agent template creation
+/// - `codex agent show <name>` - Display agent configuration details
 pub(crate) async fn run_codex_conversation_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -37,7 +67,55 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    subagent_source: SubAgentSource,
 ) -> Result<Codex, CodexErr> {
+    // Load agent configuration if using custom agent
+    // TODO: Consider loading Review/Compact from registry to allow user overrides
+    let agent_config = match &subagent_source {
+        SubAgentSource::Review | SubAgentSource::Compact => {
+            // Built-in agents don't need configuration loading
+            // Future: Allow user to override via ~/.codex/agents/review.toml
+            None
+        }
+        SubAgentSource::Other(name) => {
+            // Use cached global registry (loaded once via LazyLock)
+            match AGENT_REGISTRY.get(name) {
+                Some(AgentLoadStatus::Available(def)) => Some(Arc::clone(def)),
+                Some(AgentLoadStatus::Invalid { error, .. }) => {
+                    return Err(CodexErr::InvalidAgentConfig {
+                        name: name.clone(),
+                        reason: error.clone(),
+                    });
+                }
+                None => {
+                    return Err(CodexErr::AgentNotFound {
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+    };
+
+    // Apply agent configuration to config
+    let mut config = config;
+    if let Some(def) = &agent_config {
+        // Override model if specified
+        if let Some(model) = &def.model {
+            config.model = model.clone();
+        }
+
+        // Note: max_turns and thinking_budget are defined in AgentDefinition
+        // but not currently applied to Config as these fields don't exist.
+        // They are stored for potential future use or documentation purposes.
+
+        // Prepend system_prompt to developer_instructions
+        let agent_prompt = &def.system_prompt;
+        config.developer_instructions = match &config.developer_instructions {
+            Some(existing) => Some(format!("{}\n\n{}", agent_prompt, existing)),
+            None => Some(agent_prompt.clone()),
+        };
+    }
+
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
@@ -45,7 +123,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         config,
         auth_manager,
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::SubAgent(subagent_source),
     )
     .await?;
     let codex = Arc::new(codex);
@@ -95,6 +173,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    subagent_source: SubAgentSource,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -106,6 +185,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_ctx,
         child_cancel.clone(),
         initial_history,
+        subagent_source,
     )
     .await?;
 

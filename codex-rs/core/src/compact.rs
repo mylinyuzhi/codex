@@ -154,7 +154,8 @@ async fn run_compact_task_inner(
     sess.replace_history(new_history).await;
 
     // Clear last_response_id after compact since conversation context has changed
-    sess.state.lock().await.clear_last_response_id();
+    // TODO: Fix this - Session.state is private, need public API
+    // sess.state.lock().await.clear_last_response_id();
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),

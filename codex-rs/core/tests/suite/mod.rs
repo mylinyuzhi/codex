@@ -2,6 +2,7 @@
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod agent_registry;
 #[cfg(not(target_os = "windows"))]
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]

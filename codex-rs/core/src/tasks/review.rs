@@ -91,6 +91,7 @@ async fn start_review_conversation(
         ctx.clone(),
         cancellation_token,
         None,
+        codex_protocol::protocol::SubAgentSource::Review,
     )
     .await)
         .ok()

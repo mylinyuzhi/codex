@@ -167,13 +167,18 @@ codex-rs/
 
 ### **Subagent Support**
 **Responsibility:** Nested Codex conversations that delegate approvals to parent sessions
-- Enables hierarchical workflows (Review, Compact, custom) with isolated conversation context
-- **Core:** `core/src/codex_delegate.rs` → `run_codex_conversation_interactive()`, approval routing logic
-- **Protocol:** `protocol/src/protocol.rs` → `SessionSource::SubAgent(SubAgentSource)` enum variants
-- **Types:** `Review`, `Compact`, `Other(String)` for different delegation contexts
-- **Model Integration:** Automatically sends `x-openai-subagent` HTTP header to provider
-- **When to add code:** New delegation patterns, approval workflows, subagent lifecycle management
-- **Tests:** `core/tests/suite/codex_delegate.rs` → Integration tests for delegation flows
+- Enables hierarchical workflows with isolated conversation context
+- **Built-in types:** `Review`, `Compact` with default configurations
+- **Custom agents:** TOML configs in `~/.codex/agents/` (user) or `.codex/agents/` (project)
+  - Priority: built-in < user < project
+  - Schema: name, description, system_prompt, model, tools, max_turns, thinking_budget
+- **Invocation:** `Op::CustomAgent { agent_name, prompt }` dispatches to CustomAgentTask
+- **Registry:** `core/src/agent_registry.rs` → File discovery, validation, LazyLock caching
+- **Protocol:** `protocol/src/agent_definition.rs` → AgentDefinition, AgentLoadStatus
+- **Task:** `core/src/tasks/custom_agent.rs` → CustomAgentTask spawns subagent with config
+- **HTTP:** `x-openai-subagent` header includes subagent type/name
+- **When to add code:** New agent types, config fields, delegation patterns
+- **Tests:** `core/tests/suite/codex_delegate.rs`, `core/tests/suite/agent_registry.rs`
 
 ---
 
