@@ -311,6 +311,36 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
+fn create_web_fetch_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "A prompt containing URL(s) (up to 20) and instructions for processing their content. \
+                 URLs must start with http:// or https://. GitHub blob URLs will be automatically \
+                 converted to raw content URLs."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "web_fetch".to_string(),
+        description:
+            "Fetches and processes content from web URLs. Supports http/https protocols. \
+             Converts HTML to plain text. GitHub blob URLs are automatically converted to raw URLs. \
+             Can fetch up to 20 URLs in a single request."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["prompt".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_test_sync_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1025,6 +1055,26 @@ pub(crate) fn build_specs(
     if config.include_view_image_tool {
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"web_fetch".to_string())
+    {
+        use crate::tools::handlers::WebFetchHandler;
+        use codex_protocol::config_types::WebFetchConfig;
+
+        let web_fetch_config = WebFetchConfig::default();
+        match WebFetchHandler::new(web_fetch_config) {
+            Ok(handler) => {
+                let handler = Arc::new(handler);
+                builder.push_spec_with_parallel_support(create_web_fetch_tool(), true);
+                builder.register_handler("web_fetch", handler);
+            }
+            Err(e) => {
+                tracing::error!("Failed to create WebFetchHandler: {e:?}");
+            }
+        }
     }
 
     if let Some(mcp_tools) = mcp_tools {

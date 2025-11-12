@@ -9,6 +9,7 @@ mod shell;
 mod test_sync;
 mod unified_exec;
 mod view_image;
+mod web_fetch;
 mod web_search;
 mod write_todos;
 
@@ -26,5 +27,6 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
+pub use web_fetch::WebFetchHandler;
 pub use web_search::WebSearchHandler;
 pub use write_todos::WriteTodosHandler;

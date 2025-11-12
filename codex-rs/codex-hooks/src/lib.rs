@@ -60,9 +60,18 @@ pub mod manager;
 pub mod types;
 
 // Re-export commonly used types
-pub use action::{HookAction, HookActionError};
-pub use context::{HookContext, HookState};
-pub use decision::{HookDecision, HookEffect, HookResult};
-pub use executor::{ExecutionResult, HookExecutor};
-pub use manager::{trigger_hook, HookError, HookManager};
-pub use types::{HookMetadata, HookPhase, HookPriority};
+pub use action::HookAction;
+pub use action::HookActionError;
+pub use context::HookContext;
+pub use context::HookState;
+pub use decision::HookDecision;
+pub use decision::HookEffect;
+pub use decision::HookResult;
+pub use executor::ExecutionResult;
+pub use executor::HookExecutor;
+pub use manager::trigger_hook;
+pub use manager::HookError;
+pub use manager::HookManager;
+pub use types::HookMetadata;
+pub use types::HookPhase;
+pub use types::HookPriority;

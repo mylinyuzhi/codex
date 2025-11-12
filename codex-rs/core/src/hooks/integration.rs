@@ -1,8 +1,11 @@
 //! Convenient hook trigger functions for core integration
 
-use crate::error::{CodexErr, Result as CodexResult};
+use crate::error::CodexErr;
+use crate::error::Result as CodexResult;
 use codex_hooks::trigger_hook;
-use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+use codex_protocol::hooks::HookEventContext;
+use codex_protocol::hooks::HookEventData;
+use codex_protocol::hooks::HookEventName;
 
 /// Trigger PreToolUse hook
 ///

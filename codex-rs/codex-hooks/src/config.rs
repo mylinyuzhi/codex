@@ -1,10 +1,17 @@
 //! Configuration loading for hooks
 
-use crate::action::{bash::BashAction, native::NativeAction, registry, HookAction};
+use crate::action::bash::BashAction;
+use crate::action::native::NativeAction;
+use crate::action::registry;
+use crate::action::HookAction;
 use crate::executor::HookExecutor;
 use crate::manager::HookManager;
-use crate::types::{HookPhase, HookPriority, PRIORITY_NORMAL};
-use codex_protocol::hooks::{HookActionConfig, HookDefinition, HooksConfig};
+use crate::types::HookPhase;
+use crate::types::HookPriority;
+use crate::types::PRIORITY_NORMAL;
+use codex_protocol::hooks::HookActionConfig;
+use codex_protocol::hooks::HookDefinition;
+use codex_protocol::hooks::HooksConfig;
 use std::path::Path;
 use std::sync::Arc;
 

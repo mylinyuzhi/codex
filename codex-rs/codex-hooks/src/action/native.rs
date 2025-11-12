@@ -1,6 +1,7 @@
 //! Native Rust function action
 
-use super::{HookAction, HookActionError};
+use super::HookAction;
+use super::HookActionError;
 use crate::context::HookContext;
 use crate::decision::HookResult;
 use async_trait::async_trait;
@@ -62,8 +63,11 @@ impl HookAction for NativeAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decision::{HookDecision, HookEffect};
-    use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+    use crate::decision::HookDecision;
+    use crate::decision::HookEffect;
+    use codex_protocol::hooks::HookEventContext;
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     #[tokio::test]
     async fn test_native_action() {

@@ -66,7 +66,9 @@ pub enum HookActionError {
 mod tests {
     use super::*;
     use crate::decision::HookDecision;
-    use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+    use codex_protocol::hooks::HookEventContext;
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     // Test action for unit tests
     #[derive(Debug)]

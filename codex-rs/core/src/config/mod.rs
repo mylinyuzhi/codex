@@ -241,6 +241,9 @@ pub struct Config {
     /// Web search configuration (provider, max_results).
     pub web_search_config: codex_protocol::config_types::WebSearchConfig,
 
+    /// Web fetch configuration (timeout, max_content_length, user_agent).
+    pub web_fetch_config: codex_protocol::config_types::WebFetchConfig,
+
     /// When `true`, run a model-based assessment for commands denied by the sandbox.
     pub experimental_sandbox_command_assessment: bool,
 
@@ -713,6 +716,10 @@ pub struct ToolsToml {
     /// Web search configuration (provider, max_results, etc.)
     #[serde(default)]
     pub web_search_config: Option<WebSearchConfigToml>,
+
+    /// Web fetch configuration (timeout, max_content_length, user_agent)
+    #[serde(default)]
+    pub web_fetch_config: Option<WebFetchConfigToml>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -721,6 +728,16 @@ pub struct WebSearchConfigToml {
     pub provider: Option<codex_protocol::config_types::WebSearchProvider>,
     #[serde(default)]
     pub max_results: Option<usize>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct WebFetchConfigToml {
+    #[serde(default)]
+    pub max_content_length: Option<usize>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1184,6 +1201,21 @@ impl Config {
                     })
                 })
                 .unwrap_or_default(),
+            web_fetch_config: cfg
+                .tools
+                .as_ref()
+                .and_then(|t| {
+                    t.web_fetch_config.as_ref().map(|config| {
+                        codex_protocol::config_types::WebFetchConfig {
+                            max_content_length: config.max_content_length.unwrap_or(100_000),
+                            timeout_secs: config.timeout_secs.unwrap_or(30),
+                            user_agent: config.user_agent.clone().unwrap_or_else(|| {
+                                format!("codex-rs/{}", env!("CARGO_PKG_VERSION"))
+                            }),
+                        }
+                    })
+                })
+                .unwrap_or_default(),
             experimental_sandbox_command_assessment,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
@@ -1316,6 +1348,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
     use crate::features::Feature;
+    use codex_protocol::config_types::WebFetchConfig;
     use codex_protocol::config_types::WebSearchConfig;
 
     use super::*;
@@ -2932,6 +2965,7 @@ model_verbosity = "high"
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 web_search_config: WebSearchConfig::default(),
+                web_fetch_config: WebFetchConfig::default(),
                 experimental_sandbox_command_assessment: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
@@ -3004,6 +3038,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3091,6 +3126,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3164,6 +3200,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,

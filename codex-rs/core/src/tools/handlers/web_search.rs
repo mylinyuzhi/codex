@@ -12,7 +12,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::web_search::{WebSearchProvider, format_results_for_llm};
+use crate::tools::web_search::WebSearchProvider;
+use crate::tools::web_search::format_results_for_llm;
 
 pub struct WebSearchHandler {
     provider: Arc<dyn WebSearchProvider>,

@@ -3,13 +3,17 @@
 //! Tests the entire hook system end-to-end, including configuration loading,
 //! hook execution, and Claude Code protocol compatibility.
 
-use codex_hooks::{
-    action::registry,
-    config::{build_manager_from_config, load_config_from_file},
-    decision::{HookEffect, HookResult},
-    manager::{enable_hooks, initialize, trigger_hook},
-};
-use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+use codex_hooks::action::registry;
+use codex_hooks::config::build_manager_from_config;
+use codex_hooks::config::load_config_from_file;
+use codex_hooks::decision::HookEffect;
+use codex_hooks::decision::HookResult;
+use codex_hooks::manager::enable_hooks;
+use codex_hooks::manager::initialize;
+use codex_hooks::manager::trigger_hook;
+use codex_protocol::hooks::HookEventContext;
+use codex_protocol::hooks::HookEventData;
+use codex_protocol::hooks::HookEventName;
 use serial_test::serial;
 use std::io::Write;
 use tempfile::NamedTempFile;
