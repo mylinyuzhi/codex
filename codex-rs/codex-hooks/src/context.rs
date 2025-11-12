@@ -162,10 +162,7 @@ mod tests {
         assert!(ctx.is_approved().await);
         {
             let state = ctx.state.read().await;
-            assert_eq!(
-                state.approval_reason,
-                Some("Test approval".to_string())
-            );
+            assert_eq!(state.approval_reason, Some("Test approval".to_string()));
         }
     }
 
@@ -187,7 +184,10 @@ mod tests {
         ctx.insert_extension(42i32);
 
         // Retrieve extension data
-        assert_eq!(ctx.get_extension::<String>(), Some(&"test_data".to_string()));
+        assert_eq!(
+            ctx.get_extension::<String>(),
+            Some(&"test_data".to_string())
+        );
         assert_eq!(ctx.get_extension::<i32>(), Some(&42));
         assert_eq!(ctx.get_extension::<bool>(), None);
     }
@@ -212,10 +212,8 @@ mod tests {
 
     #[test]
     fn test_command_mutations() {
-        let mutation = CommandMutation::WrapWithPrefix(vec![
-            "sandbox-exec".to_string(),
-            "-p".to_string(),
-        ]);
+        let mutation =
+            CommandMutation::WrapWithPrefix(vec!["sandbox-exec".to_string(), "-p".to_string()]);
 
         match mutation {
             CommandMutation::WrapWithPrefix(args) => {

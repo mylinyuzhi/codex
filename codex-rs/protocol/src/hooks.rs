@@ -78,9 +78,7 @@ pub enum HookEventData {
     },
 
     /// Data for UserPromptSubmit event
-    UserPromptSubmit {
-        prompt: String,
-    },
+    UserPromptSubmit { prompt: String },
 
     /// Data for Stop event
     Stop {
@@ -89,9 +87,7 @@ pub enum HookEventData {
     },
 
     /// Data for SubagentStop event
-    SubagentStop {
-        subagent_type: String,
-    },
+    SubagentStop { subagent_type: String },
 
     /// Data for Notification event
     Notification {

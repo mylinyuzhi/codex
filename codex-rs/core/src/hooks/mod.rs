@@ -5,4 +5,4 @@
 pub mod integration;
 
 // Re-export commonly used types
-pub use codex_hooks::{trigger_hook, HookError};
+pub use codex_hooks::{HookError, trigger_hook};

@@ -52,11 +52,14 @@ os_info = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+scraper = "0.20"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
+url = "2.5"
+urlencoding = "2.1"
 similar = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }

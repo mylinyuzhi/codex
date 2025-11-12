@@ -162,11 +162,12 @@ impl ProviderAdapter for AnthropicAdapter {
     fn validate_config(&self, config: &AdapterConfig) -> CodexResult<()> {
         // Validate API version format
         if let Some(version) = config.get_string("api_version")
-            && !version.starts_with("20") {
-                return Err(CodexErr::Fatal(format!(
-                    "api_version should be in format YYYY-MM-DD, got {version}"
-                )));
-            }
+            && !version.starts_with("20")
+        {
+            return Err(CodexErr::Fatal(format!(
+                "api_version should be in format YYYY-MM-DD, got {version}"
+            )));
+        }
 
         Ok(())
     }

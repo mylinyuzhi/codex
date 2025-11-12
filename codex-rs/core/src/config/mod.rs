@@ -238,6 +238,9 @@ pub struct Config {
 
     pub tools_web_search_request: bool,
 
+    /// Web search configuration (provider, max_results).
+    pub web_search_config: codex_protocol::config_types::WebSearchConfig,
+
     /// When `true`, run a model-based assessment for commands denied by the sandbox.
     pub experimental_sandbox_command_assessment: bool,
 
@@ -706,6 +709,18 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Web search configuration (provider, max_results, etc.)
+    #[serde(default)]
+    pub web_search_config: Option<WebSearchConfigToml>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct WebSearchConfigToml {
+    #[serde(default)]
+    pub provider: Option<codex_protocol::config_types::WebSearchProvider>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -713,6 +728,12 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+            web_search_config: tools_toml.web_search_config.map(|config| {
+                codex_protocol::config_types::WebSearchConfig {
+                    provider: config.provider.unwrap_or_default(),
+                    max_results: config.max_results.unwrap_or(5),
+                }
+            }),
         }
     }
 }
@@ -1151,6 +1172,18 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
+            web_search_config: cfg
+                .tools
+                .as_ref()
+                .and_then(|t| {
+                    t.web_search_config.as_ref().map(|config| {
+                        codex_protocol::config_types::WebSearchConfig {
+                            provider: config.provider.unwrap_or_default(),
+                            max_results: config.max_results.unwrap_or(5),
+                        }
+                    })
+                })
+                .unwrap_or_default(),
             experimental_sandbox_command_assessment,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
@@ -1283,6 +1316,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
     use crate::features::Feature;
+    use codex_protocol::config_types::WebSearchConfig;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -2897,6 +2931,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
+                web_search_config: WebSearchConfig::default(),
                 experimental_sandbox_command_assessment: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
@@ -2968,6 +3003,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            web_search_config: WebSearchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3054,6 +3090,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            web_search_config: WebSearchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3126,6 +3163,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            web_search_config: WebSearchConfig::default(),
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,

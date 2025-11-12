@@ -359,6 +359,39 @@ cargo insta accept -p codex-tui
 ```
 ---
 
+## Adding New Tools
+
+**Implementation Flow:**
+1. `protocol/src/config_types.rs` → Config structs (#[derive(Default)] + #[serde(default)])
+2. `core/src/tools/my_tool.rs` → Handler (impl ToolHandler, must be Send + Sync)
+3. `core/src/tools/spec.rs` → Register in build_specs() (push_spec + register_handler)
+4. `core/src/config/mod.rs` → Add config field to Config struct
+5. Tests → Use anyhow, validate data exists before using
+
+**Critical: Batch Error Discovery** ⚠️
+
+```bash
+# Step 4 trigger: Adding field to Config breaks ALL test initializations
+cargo check 2>&1 | tee errors.txt        # Discover all at once
+rg "Config \{" core/src --type rust      # Find every initialization
+# Fix all simultaneously, not one-by-one (saves 70% iterations)
+```
+
+**Common Pitfalls:**
+
+| Mistake | Fix Command | Why It Matters |
+|---------|-------------|----------------|
+| Using invalid test data (model slugs, IDs) | `rg 'starts_with\("' core/src/model_family.rs` | Prevents .unwrap() panics |
+| Incremental error fixing | `cargo check 2>&1 \| grep "error\[E"` | Batch discovery saves time |
+| Implicit test configs | Explicitly construct test configs | Default may not match test expectations |
+
+**Verification:**
+```bash
+cargo check && cargo test -p codex-core --lib <tool> && just fmt
+```
+
+---
+
 ## Development Workflow
 
 **Core workflow:**
