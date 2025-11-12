@@ -80,6 +80,7 @@ codex-rs/
 ├─ tui/           → Ratatui interface (codex-rs/tui/styles.md)
 ├─ exec/          → Headless automation
 ├─ tools/         → Tool registry & handlers
+├─ codex-hooks/   → Hook system (event interception, Bash/native actions)
 ├─ mcp*/          → MCP integration (uses anyhow)
 └─ utils/         → git, cache, pty, tokenizer
 ```
@@ -156,6 +157,17 @@ codex-rs/
 - **Error Handling:** Uses `anyhow::Result`
 - **When to add code:** New test helpers, mock responses
 
+### **codex-hooks/** - Hook System
+**Responsibility:** Event-driven interception system for tool execution lifecycle
+- `action/` → Bash and native action executors, global function registry
+- `executor.rs` → Sequential/parallel execution with effect application
+- `manager.rs` → Global singleton HookManager, registration and triggering
+- `config.rs` → TOML configuration loading and manager building
+- `context.rs` → Shared state management (approval, sandbox, mutations)
+- `decision.rs` → HookDecision types and effect definitions
+- **Error Handling:** Uses `anyhow::Result` (utility crate)
+- **When to add code:** New action types, hook phases, effect types, protocol extensions
+
 ### **Custom Commands (Custom Prompts)**
 **Responsibility:** User-defined slash commands via Markdown files in `~/.codex/prompts/`
 - Enables `/prompts:name KEY=value` invocation with named (`$KEY`) and positional (`$1-$9`) parameters
@@ -201,6 +213,30 @@ codex-rs/
   - Strategy dispatch in `core/src/compact.rs` (~15 lines modified)
 - **When to add code:** New compaction strategies, custom prompt templates, file filtering rules
 - **Tests:** `core/src/compact_strategies/file_recovery.rs` (unit tests), `core/tests/suite/compact.rs` (integration)
+
+### **Hook System**
+**Responsibility:** Event-driven lifecycle interception system allowing external scripts and native functions to block, validate, or augment tool execution at various lifecycle points
+- **Claude Code compatible:** Full protocol compatibility with 9 event types (PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, Notification, PreCompact, SessionStart, SessionEnd)
+- **Dual action types:**
+  - **Bash actions:** Execute external scripts with JSON I/O protocol, support exit code convention (0=continue, 2=block)
+  - **Native actions:** Call registered Rust functions directly via global registry
+- **Configuration:** TOML files in `~/.codex/hooks.toml` or `.codex/hooks.toml`
+  - Structure: `[[PreToolUse]]` → `matcher` pattern → `[[PreToolUse.hooks]]` action list
+  - Sequential vs parallel execution mode per hook definition
+  - Priority-based ordering: hooks execute in (Phase, Priority) tuple order
+- **Architecture:**
+  - **Protocol:** `protocol/src/hooks.rs` → Claude Code protocol types (HookEventContext, HookOutput, HookDecision)
+  - **Core crate:** `codex-hooks/` → Complete hook system implementation
+    - `action/` → Bash and native action executors, global registry
+    - `executor.rs` → Sequential/parallel execution coordinator
+    - `manager.rs` → Global singleton with trigger API, disabled by default
+    - `config.rs` → TOML loading and HookManager builder
+  - **Core integration:** `core/src/hooks/integration.rs` → Convenience wrappers for triggering hooks
+  - **Error handling:** `core/src/error.rs` → `CodexErr::HookBlocked` variant
+- **State sharing:** Hooks can modify shared state (approval, sandbox, command mutations, metadata) via effect system
+- **Examples:** `.codex/hooks/` → validate-shell.sh, audit-log.sh, session lifecycle hooks
+- **When to add code:** New hook events → `protocol/src/hooks.rs`, new action types → `codex-hooks/src/action/`, integration points → `core/src/hooks/`
+- **Tests:** `codex-hooks/src/*` (24 unit tests), `codex-hooks/tests/integration_tests.rs` (9 integration tests)
 
 ---
 
@@ -326,9 +362,20 @@ cargo insta accept -p codex-tui
 ## Development Workflow
 
 **Core workflow:**
-1. `just fmt` → `cargo test -p <crate>` → `just fix -p <crate>` (⚠️ ask first)
-2. `cargo test --all-features` (if core/protocol changed, ⚠️ ask first)
-3. `just clippy` + `rg "unwrap\(\)" --type rust` + `rg "white\(\)" codex-rs/tui/`
+1. `just fmt` → `cargo check` → `cargo test -p <crate>` → `just fix -p <crate>` (⚠️ ask first)
+2. **CRITICAL for protocol/EventMsg changes:** `cargo build` (verifies all downstream match statements)
+3. `cargo test --all-features` (if core/protocol changed, ⚠️ ask first)
+4. `just clippy` + `rg "unwrap\(\)" --type rust` + `rg "white\(\)" codex-rs/tui/`
+
+**Why `cargo check` before tests:**
+- Catches non-exhaustive pattern matching (common when adding enum variants to `EventMsg`)
+- `cargo test` may skip certain code paths, missing compilation errors
+- Faster than `cargo build` for quick validation
+
+**When to use `cargo build`:**
+- After modifying `protocol/src/protocol.rs` (especially `EventMsg` enum)
+- Before committing changes to core types
+- To verify all crates in the workspace compile correctly
 
 **Other commands:** `just codex` (run), `just tui` (TUI), `just exec "prompt"` (headless), `cargo insta review` (snapshots)
 
