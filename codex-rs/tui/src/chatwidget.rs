@@ -1562,7 +1562,8 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::TodoUpdate(_) => {}
+            | EventMsg::TodoUpdate(_)
+            | EventMsg::WebSearchToolCall(_) => {}
         }
     }
 
