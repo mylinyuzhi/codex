@@ -3,7 +3,8 @@
 //! This is a marker provider that signals to use OpenAI's native web_search tool type.
 //! The actual search is performed by OpenAI's API infrastructure, not locally.
 
-use super::provider::{SearchResult, WebSearchProvider};
+use super::provider::SearchResult;
+use super::provider::WebSearchProvider;
 use crate::error::Result as CodexResult;
 use crate::model_family::ModelFamily;
 use async_trait::async_trait;

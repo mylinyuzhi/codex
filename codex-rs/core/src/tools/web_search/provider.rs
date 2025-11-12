@@ -3,7 +3,8 @@
 use crate::error::Result as CodexResult;
 use crate::model_family::ModelFamily;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// A single search result from a web search provider.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

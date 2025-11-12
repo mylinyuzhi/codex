@@ -2,10 +2,12 @@
 //!
 //! Central registry and trigger system for hooks.
 
-use crate::context::{HookContext, HookState};
+use crate::context::HookContext;
+use crate::context::HookState;
 use crate::decision::HookDecision;
 use crate::executor::HookExecutor;
-use crate::types::{HookPhase, HookPriority};
+use crate::types::HookPhase;
+use crate::types::HookPriority;
 use codex_protocol::hooks::HookEventContext;
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
@@ -160,10 +162,12 @@ pub async fn is_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{bash::BashAction, HookAction};
+    use crate::action::bash::BashAction;
+    use crate::action::HookAction;
     use crate::executor::HookExecutor;
     use crate::types::PRIORITY_NORMAL;
-    use codex_protocol::hooks::{HookEventData, HookEventName};
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     #[tokio::test]
     async fn test_manager_registration() {

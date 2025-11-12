@@ -2,11 +2,14 @@
 //!
 //! Uses Tavily's AI-optimized search API. Requires TAVILY_API_KEY environment variable.
 
-use super::provider::{SearchResult, WebSearchProvider};
-use crate::error::{CodexErr, Result as CodexResult};
+use super::provider::SearchResult;
+use super::provider::WebSearchProvider;
+use crate::error::CodexErr;
+use crate::error::Result as CodexResult;
 use crate::model_family::ModelFamily;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::env;
 
 /// Tavily search provider.

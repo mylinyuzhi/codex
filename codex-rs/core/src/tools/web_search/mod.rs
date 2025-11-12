@@ -9,12 +9,16 @@ mod tavily_provider;
 
 pub use duckduckgo_provider::DuckDuckGoProvider;
 pub use openai_provider::OpenAIProvider;
-pub use provider::{SearchResult, WebSearchProvider, format_results_for_llm};
+pub use provider::SearchResult;
+pub use provider::WebSearchProvider;
+pub use provider::format_results_for_llm;
 pub use tavily_provider::TavilyProvider;
 
-use crate::error::{CodexErr, Result as CodexResult};
+use crate::error::CodexErr;
+use crate::error::Result as CodexResult;
 use crate::model_family::ModelFamily;
-use codex_protocol::config_types::{WebSearchConfig, WebSearchProvider as WebSearchProviderConfig};
+use codex_protocol::config_types::WebSearchConfig;
+use codex_protocol::config_types::WebSearchProvider as WebSearchProviderConfig;
 use std::sync::Arc;
 
 /// Select the appropriate web search provider based on configuration and model family.

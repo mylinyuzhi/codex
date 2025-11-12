@@ -3,9 +3,12 @@
 //! Manages the execution of multiple hook actions, supporting both sequential
 //! and parallel execution modes.
 
-use crate::action::{HookAction, HookActionError};
+use crate::action::HookAction;
+use crate::action::HookActionError;
 use crate::context::HookContext;
-use crate::decision::{HookDecision, HookEffect, HookResult};
+use crate::decision::HookDecision;
+use crate::decision::HookEffect;
+use crate::decision::HookResult;
 use std::sync::Arc;
 
 /// Hook executor
@@ -202,7 +205,9 @@ mod tests {
     use super::*;
     use crate::action::HookAction;
     use async_trait::async_trait;
-    use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+    use codex_protocol::hooks::HookEventContext;
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     #[derive(Debug)]
     struct TestAction {

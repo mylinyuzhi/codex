@@ -136,3 +136,39 @@ impl Default for WebSearchConfig {
 fn default_max_results() -> usize {
     5
 }
+
+/// Web fetch configuration.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+pub struct WebFetchConfig {
+    /// Maximum content length in characters (default 100,000)
+    #[serde(default = "default_max_content_length")]
+    pub max_content_length: usize,
+    /// Request timeout in seconds (default 30)
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    /// User-Agent header for HTTP requests
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
+}
+
+impl Default for WebFetchConfig {
+    fn default() -> Self {
+        Self {
+            max_content_length: default_max_content_length(),
+            timeout_secs: default_timeout_secs(),
+            user_agent: default_user_agent(),
+        }
+    }
+}
+
+fn default_max_content_length() -> usize {
+    100_000
+}
+
+fn default_timeout_secs() -> u64 {
+    30
+}
+
+fn default_user_agent() -> String {
+    format!("codex-rs/{}", env!("CARGO_PKG_VERSION"))
+}

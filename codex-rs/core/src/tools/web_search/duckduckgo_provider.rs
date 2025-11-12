@@ -2,11 +2,14 @@
 //!
 //! Uses DuckDuckGo's HTML endpoint with scraping. No API key required.
 
-use super::provider::{SearchResult, WebSearchProvider};
-use crate::error::{CodexErr, Result as CodexResult};
+use super::provider::SearchResult;
+use super::provider::WebSearchProvider;
+use crate::error::CodexErr;
+use crate::error::Result as CodexResult;
 use crate::model_family::ModelFamily;
 use async_trait::async_trait;
-use scraper::{Html, Selector};
+use scraper::Html;
+use scraper::Selector;
 
 /// DuckDuckGo search provider.
 ///

@@ -1,8 +1,10 @@
 //! Hook execution context
 
 use codex_protocol::hooks::HookEventContext;
-use serde::{Deserialize, Serialize};
-use std::any::{Any, TypeId};
+use serde::Deserialize;
+use serde::Serialize;
+use std::any::Any;
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -130,7 +132,8 @@ impl HookContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::hooks::{HookEventData, HookEventName};
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     #[tokio::test]
     async fn test_hook_context_state_access() {

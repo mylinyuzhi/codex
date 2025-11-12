@@ -4,7 +4,8 @@
 //! with Claude Code's hook format. Hooks can intercept tool execution at various
 //! lifecycle points and make decisions about whether to proceed, block, or modify operations.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Hook event types (fully compatible with Claude Code)

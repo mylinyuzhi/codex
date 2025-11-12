@@ -2,9 +2,13 @@
 //!
 //! Executes external bash scripts as hook actions, following Claude Code's protocol.
 
-use super::{HookAction, HookActionError};
+use super::HookAction;
+use super::HookActionError;
 use crate::context::HookContext;
-use crate::decision::{HookDecision, HookEffect, HookResult, LogLevel};
+use crate::decision::HookDecision;
+use crate::decision::HookEffect;
+use crate::decision::HookResult;
+use crate::decision::LogLevel;
 use async_trait::async_trait;
 use codex_protocol::hooks as protocol;
 use std::process::Stdio;
@@ -192,7 +196,9 @@ impl BashAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
+    use codex_protocol::hooks::HookEventContext;
+    use codex_protocol::hooks::HookEventData;
+    use codex_protocol::hooks::HookEventName;
 
     fn make_test_context() -> HookContext {
         let event = HookEventContext {
