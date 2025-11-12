@@ -78,6 +78,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ShutdownComplete
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::WebSearchToolCall(_)
+        | EventMsg::WebFetchToolCall(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::ItemCompleted(_)
