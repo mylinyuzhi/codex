@@ -370,6 +370,35 @@ cargo insta accept -p codex-tui
 4. `core/src/config/mod.rs` → Add config field to Config struct
 5. Tests → Use anyhow, validate data exists before using
 
+**Optional: Add EventMsg for User Notifications** 📢
+
+If tool needs to notify user (like web_search, web_fetch):
+1. `protocol/src/protocol.rs` → Add event variant + struct:
+   ```rust
+   // In EventMsg enum
+   MyToolCall(MyToolCallEvent),
+
+   // Event struct definition
+   #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+   pub struct MyToolCallEvent {
+       pub call_id: String,
+       pub info: String,  // Tool-specific info to display
+   }
+   ```
+2. Update ALL EventMsg matches (3 files):
+   - `mcp-server/src/codex_tool_runner.rs`
+   - `exec/src/event_processor_with_human_output.rs`
+   - `tui/src/chatwidget.rs`
+   - Add `| EventMsg::MyToolCall(_)` to wildcard match arms
+3. In handler, send event before execution:
+   ```rust
+   session.send_event(
+       turn.as_ref(),
+       EventMsg::MyToolCall(MyToolCallEvent { call_id, info })
+   ).await;
+   ```
+4. **Run `cargo build`** to catch all missing match arms
+
 **Critical: Batch Error Discovery** ⚠️
 
 ```bash

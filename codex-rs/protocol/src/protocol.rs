@@ -509,6 +509,9 @@ pub enum EventMsg {
     /// Notification that the agent executed a web search.
     WebSearchToolCall(WebSearchToolCallEvent),
 
+    /// Notification that the agent is fetching web content.
+    WebFetchToolCall(WebFetchToolCallEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -1270,6 +1273,14 @@ pub struct WebSearchToolCallEvent {
     pub query: String,
     /// The search provider being used (e.g., "DuckDuckGo", "Tavily", "OpenAI").
     pub provider: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WebFetchToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// The URLs being fetched.
+    pub urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

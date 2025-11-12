@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use crate::error::Result as CodexResult;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::EventMsg;
+use crate::protocol::WebFetchToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -144,7 +146,13 @@ impl ToolHandler for WebFetchHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            call_id,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -167,6 +175,17 @@ impl ToolHandler for WebFetchHandler {
                 "No valid URLs found in prompt. Please provide URLs starting with http:// or https://".to_string(),
             ));
         }
+
+        // Send event that web fetch is starting
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::WebFetchToolCall(WebFetchToolCallEvent {
+                    call_id: call_id.clone(),
+                    urls: urls.clone(),
+                }),
+            )
+            .await;
 
         // Fetch all URLs
         let mut results = Vec::new();
