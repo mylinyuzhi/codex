@@ -624,9 +624,14 @@ impl ResponsesApiParserState {
             "response.done" => {
                 // Extract token usage
                 let token_usage = data.get("usage").map(|u| {
-                    let input_tokens = u.get("input_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0);
-                    let output_tokens =
-                        u.get("output_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                    let input_tokens = u
+                        .get("input_tokens")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0);
+                    let output_tokens = u
+                        .get("output_tokens")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0);
                     let cached_input_tokens = u
                         .get("input_tokens_cache_read")
                         .and_then(serde_json::Value::as_i64)

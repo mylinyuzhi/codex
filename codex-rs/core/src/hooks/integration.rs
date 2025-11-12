@@ -1,8 +1,8 @@
 //! Convenient hook trigger functions for core integration
 
+use crate::error::{CodexErr, Result as CodexResult};
 use codex_hooks::trigger_hook;
 use codex_protocol::hooks::{HookEventContext, HookEventData, HookEventName};
-use crate::error::{CodexErr, Result as CodexResult};
 
 /// Trigger PreToolUse hook
 ///
@@ -60,10 +60,7 @@ pub async fn trigger_post_tool_use(
 }
 
 /// Trigger SessionStart hook
-pub async fn trigger_session_start(
-    session_id: &str,
-    cwd: &std::path::Path,
-) -> CodexResult<()> {
+pub async fn trigger_session_start(session_id: &str, cwd: &std::path::Path) -> CodexResult<()> {
     let context = HookEventContext {
         session_id: session_id.to_string(),
         transcript_path: None,
@@ -79,10 +76,7 @@ pub async fn trigger_session_start(
 }
 
 /// Trigger SessionEnd hook
-pub async fn trigger_session_end(
-    session_id: &str,
-    cwd: &std::path::Path,
-) -> CodexResult<()> {
+pub async fn trigger_session_end(session_id: &str, cwd: &std::path::Path) -> CodexResult<()> {
     let context = HookEventContext {
         session_id: session_id.to_string(),
         transcript_path: None,

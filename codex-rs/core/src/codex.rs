@@ -416,6 +416,7 @@ impl Session {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &config.features,
+            web_search_config: &config.web_search_config,
         });
 
         TurnContext {
@@ -1688,6 +1689,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
+        web_search_config: &config.web_search_config,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();

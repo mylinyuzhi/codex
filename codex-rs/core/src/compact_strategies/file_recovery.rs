@@ -43,16 +43,16 @@ impl FileRecoveryStrategy {
                 name, arguments, ..
             } = item
                 && name == "read_file"
-                    && let Ok(args) = self.parse_read_args(arguments)
-                {
-                    let path = PathBuf::from(args.file_path);
-                    if seen.insert(path.clone()) && self.is_valid_for_recovery(&path) {
-                        file_paths.push(path);
-                        if file_paths.len() >= MAX_FILES {
-                            break;
-                        }
+                && let Ok(args) = self.parse_read_args(arguments)
+            {
+                let path = PathBuf::from(args.file_path);
+                if seen.insert(path.clone()) && self.is_valid_for_recovery(&path) {
+                    file_paths.push(path);
+                    if file_paths.len() >= MAX_FILES {
+                        break;
                     }
                 }
+            }
         }
 
         file_paths

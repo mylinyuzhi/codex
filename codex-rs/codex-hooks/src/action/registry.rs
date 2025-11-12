@@ -1,8 +1,8 @@
 //! Global registry for native hook functions
 
 use super::native::NativeHookFn;
-use crate::decision::HookResult;
 use crate::context::HookContext;
+use crate::decision::HookResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -124,6 +124,9 @@ mod tests {
         };
         let ctx = HookContext::new(event);
         let result = func(&ctx);
-        assert!(matches!(result.decision, crate::decision::HookDecision::Skip));
+        assert!(matches!(
+            result.decision,
+            crate::decision::HookDecision::Skip
+        ));
     }
 }

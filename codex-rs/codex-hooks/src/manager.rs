@@ -30,7 +30,12 @@ impl HookManager {
     }
 
     /// Register a hook executor for a specific phase and priority
-    pub fn register(&mut self, phase: HookPhase, priority: HookPriority, executor: Arc<HookExecutor>) {
+    pub fn register(
+        &mut self,
+        phase: HookPhase,
+        priority: HookPriority,
+        executor: Arc<HookExecutor>,
+    ) {
         self.executors.insert((phase, priority), executor);
     }
 
@@ -62,7 +67,11 @@ impl HookManager {
                 continue;
             }
 
-            tracing::debug!("Triggering hooks for phase {:?}, priority {}", exec_phase, priority);
+            tracing::debug!(
+                "Triggering hooks for phase {:?}, priority {}",
+                exec_phase,
+                priority
+            );
 
             let result = executor.execute(&ctx).await;
 
@@ -161,10 +170,8 @@ mod tests {
         let mut manager = HookManager::new();
         manager.set_enabled(true);
 
-        let actions: Vec<Arc<dyn HookAction>> = vec![Arc::new(BashAction::new(
-            "echo 'test'".to_string(),
-            5000,
-        ))];
+        let actions: Vec<Arc<dyn HookAction>> =
+            vec![Arc::new(BashAction::new("echo 'test'".to_string(), 5000))];
 
         let executor = Arc::new(HookExecutor::new(actions, false));
         manager.register(HookPhase::PreToolUse, PRIORITY_NORMAL, executor);

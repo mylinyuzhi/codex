@@ -92,8 +92,8 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_load_config_from_toml() {
@@ -113,7 +113,9 @@ timeout = 5000
 
         let config = load_config_from_file(temp_file.path()).unwrap();
 
-        assert!(config.hooks.contains_key(&codex_protocol::hooks::HookEventName::PreToolUse));
+        assert!(config
+            .hooks
+            .contains_key(&codex_protocol::hooks::HookEventName::PreToolUse));
     }
 
     #[test]

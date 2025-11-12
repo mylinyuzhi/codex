@@ -8,6 +8,7 @@ pub mod router;
 pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
+pub mod web_search;
 
 use crate::context_manager::format_output_for_model_body;
 use crate::exec::ExecToolCallOutput;

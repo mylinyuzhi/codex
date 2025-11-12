@@ -84,10 +84,7 @@ impl HookAction for BashAction {
 }
 
 impl BashAction {
-    fn parse_output(
-        &self,
-        output: std::process::Output,
-    ) -> Result<HookResult, HookActionError> {
+    fn parse_output(&self, output: std::process::Output) -> Result<HookResult, HookActionError> {
         let exit_code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -97,7 +94,9 @@ impl BashAction {
                 // Success: try to parse JSON output
                 let stdout_trimmed = stdout.trim();
                 if !stdout_trimmed.is_empty() {
-                    if let Ok(hook_output) = serde_json::from_str::<protocol::HookOutput>(stdout_trimmed) {
+                    if let Ok(hook_output) =
+                        serde_json::from_str::<protocol::HookOutput>(stdout_trimmed)
+                    {
                         return Ok(self.convert_hook_output(hook_output));
                     }
                 }

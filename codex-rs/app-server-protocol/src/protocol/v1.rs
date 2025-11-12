@@ -311,6 +311,8 @@ pub struct Profile {
 pub struct Tools {
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
+    #[serde(default)]
+    pub web_search_config: Option<codex_protocol::config_types::WebSearchConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

@@ -506,6 +506,9 @@ pub enum EventMsg {
     /// Notification that the agent attached a local image via the view_image tool.
     ViewImageToolCall(ViewImageToolCallEvent),
 
+    /// Notification that the agent executed a web search.
+    WebSearchToolCall(WebSearchToolCallEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -1257,6 +1260,16 @@ pub struct ViewImageToolCallEvent {
     pub call_id: String,
     /// Local filesystem path provided to the tool.
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WebSearchToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// The search query being executed.
+    pub query: String,
+    /// The search provider being used (e.g., "DuckDuckGo", "Tavily", "OpenAI").
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

@@ -28,14 +28,17 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
+    pub web_search_config: codex_protocol::config_types::WebSearchConfig,
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
     pub enable_write_todos: bool,
+    pub model_family: ModelFamily,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
     pub(crate) features: &'a Features,
+    pub(crate) web_search_config: &'a codex_protocol::config_types::WebSearchConfig,
 }
 
 impl ToolsConfig {
@@ -43,6 +46,7 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_family,
             features,
+            web_search_config,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -70,12 +74,14 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
+            web_search_config: (*web_search_config).clone(),
             include_view_image_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
             // WriteTodos tool is opt-in via experimental_supported_tools
             enable_write_todos: model_family
                 .experimental_supported_tools
                 .contains(&"write_todos".to_string()),
+            model_family: (*model_family).clone(),
         }
     }
 }
@@ -974,7 +980,46 @@ pub(crate) fn build_specs(
     }
 
     if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {});
+        use crate::tools::handlers::WebSearchHandler;
+        use crate::tools::web_search::create_provider_sync;
+
+        // Create provider based on configuration
+        let provider = create_provider_sync(&config.web_search_config, &config.model_family);
+        let max_results = config.web_search_config.max_results;
+
+        // For OpenAI provider, use native web_search tool (no handler registration needed)
+        // For custom providers, use Function tool with handler
+        if provider.name() == "OpenAI" {
+            builder.push_spec(ToolSpec::WebSearch {});
+        } else {
+            // Create Function tool for custom providers
+            let mut properties = BTreeMap::new();
+            properties.insert(
+                "query".to_string(),
+                JsonSchema::String {
+                    description: Some("The search query to execute".to_string()),
+                },
+            );
+
+            builder.push_spec(ToolSpec::Function(ResponsesApiTool {
+                name: "web_search".to_string(),
+                description: format!(
+                    "Search the web for current information using {}. \
+                     Returns title, snippet, and URL for each result.",
+                    provider.name()
+                ),
+                strict: false,
+                parameters: JsonSchema::Object {
+                    properties,
+                    required: Some(vec!["query".to_string()]),
+                    additional_properties: Some(false.into()),
+                },
+            }));
+
+            // Register handler for custom providers
+            let handler = Arc::new(WebSearchHandler::new(provider, max_results));
+            builder.register_handler("web_search", handler);
+        }
     }
 
     if config.include_view_image_tool {
@@ -1007,8 +1052,20 @@ mod tests {
     use crate::client_common::tools::FreeformTool;
     use crate::model_family::find_family_for_model;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_protocol::config_types::WebSearchConfig;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
+
+    fn default_web_search_config() -> WebSearchConfig {
+        WebSearchConfig::default()
+    }
+
+    fn openai_web_search_config() -> WebSearchConfig {
+        WebSearchConfig {
+            provider: codex_protocol::config_types::WebSearchProvider::OpenAI,
+            max_results: 5,
+        }
+    }
 
     use super::*;
 
@@ -1105,6 +1162,7 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &openai_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1161,6 +1219,7 @@ mod tests {
         let model_family = find_family_for_model(model_family)
             .unwrap_or_else(|| panic!("{model_family} should be a valid model family"));
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features,
         });
@@ -1267,6 +1326,7 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1289,6 +1349,7 @@ mod tests {
         features.disable(Feature::ViewImageTool);
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1308,6 +1369,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.disable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1338,6 +1400,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1431,6 +1494,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1508,6 +1572,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1565,6 +1630,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1619,6 +1685,7 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::ApplyPatchFreeform);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1675,6 +1742,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });
@@ -1743,6 +1811,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            web_search_config: &default_web_search_config(),
             model_family: &model_family,
             features: &features,
         });

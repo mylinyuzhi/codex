@@ -85,3 +85,54 @@ pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
 }
+
+/// Web search provider backend selection.
+#[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    JsonSchema,
+    TS,
+    EnumIter,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum WebSearchProvider {
+    /// DuckDuckGo HTML scraping (free, no API key required)
+    #[default]
+    DuckDuckGo,
+    /// Tavily AI-optimized search API (requires TAVILY_API_KEY)
+    Tavily,
+    /// OpenAI native web_search tool (only for GPT models)
+    OpenAI,
+}
+
+/// Web search configuration.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+pub struct WebSearchConfig {
+    /// Search provider backend
+    #[serde(default)]
+    pub provider: WebSearchProvider,
+    /// Maximum number of search results to return (1-20)
+    #[serde(default = "default_max_results")]
+    pub max_results: usize,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            provider: WebSearchProvider::default(),
+            max_results: default_max_results(),
+        }
+    }
+}
+
+fn default_max_results() -> usize {
+    5
+}
