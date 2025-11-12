@@ -293,6 +293,8 @@ codex-rs/
 | No #[serde(default)] | Add for optional fields | Test TOML loading |
 | unsigned integers | Always use i32/i64 | `rg "u32\|u64" --type rust` |
 | format!("{}", var) | Use format!("{var}") | `just fmt` auto-fixes |
+| Only `cargo check -p` | Always run `cargo build` before commit | `cargo build` |
+| Adding tool without full build | Run `cargo build` after tool changes | Checks EventMsg matches |
 | `.white()` in TUI | Never use - use default foreground | `rg "\.white\(\)" codex-rs/tui/` |
 | Manual Style in TUI | Use `.dim()`, `.bold()`, `.cyan()` helpers | See `tui/styles.md` |
 | Plain string wrapping | Use `textwrap::wrap` for strings | Check imports |
@@ -387,7 +389,11 @@ rg "Config \{" core/src --type rust      # Find every initialization
 
 **Verification:**
 ```bash
-cargo check && cargo test -p codex-core --lib <tool> && just fmt
+just fmt                           # Format code
+cargo check                        # Quick check
+cargo build                        # ⭐ REQUIRED: Verify all 42+ crates
+cargo test -p codex-core --lib     # Unit tests
+just clippy                        # Lint check
 ```
 
 ---
@@ -396,19 +402,25 @@ cargo check && cargo test -p codex-core --lib <tool> && just fmt
 
 **Core workflow:**
 1. `just fmt` → `cargo check` → `cargo test -p <crate>` → `just fix -p <crate>` (⚠️ ask first)
-2. **CRITICAL for protocol/EventMsg changes:** `cargo build` (verifies all downstream match statements)
+2. **CRITICAL for protocol/core changes:** `cargo build` (verifies all 42+ crates)
 3. `cargo test --all-features` (if core/protocol changed, ⚠️ ask first)
 4. `just clippy` + `rg "unwrap\(\)" --type rust` + `rg "white\(\)" codex-rs/tui/`
 
-**Why `cargo check` before tests:**
-- Catches non-exhaustive pattern matching (common when adding enum variants to `EventMsg`)
-- `cargo test` may skip certain code paths, missing compilation errors
-- Faster than `cargo build` for quick validation
+**Quality Checks Levels:**
+- **Level 1 (iteration):** `cargo check -p <crate>` - fast feedback during development
+- **Level 2 (pre-commit):** `cargo build` - **REQUIRED before any commit**
+- **Level 3 (core changes):** `cargo test --all-features` - comprehensive validation
 
-**When to use `cargo build`:**
+**When `cargo build` is REQUIRED:**
 - After modifying `protocol/src/protocol.rs` (especially `EventMsg` enum)
-- Before committing changes to core types
-- To verify all crates in the workspace compile correctly
+- After adding new tools in `core/src/tools/` (may affect EventMsg matches downstream)
+- After changing public APIs in core/protocol packages
+- **Always as final check before committing**
+
+**Why:**
+- `cargo check -p` only validates one crate, misses downstream issues (exec, tui, mcp-server)
+- Adding tools can break EventMsg pattern matches in other packages
+- Codex-rs has 42+ crates with complex dependencies
 
 **Other commands:** `just codex` (run), `just tui` (TUI), `just exec "prompt"` (headless), `cargo insta review` (snapshots)
 
