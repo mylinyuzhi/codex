@@ -1,0 +1,113 @@
+# Codex Hook System Configuration Example
+#
+# This file demonstrates how to configure hooks for the codex hook system.
+# Hooks allow you to intercept and control tool execution at various lifecycle points.
+#
+# To use this configuration:
+# 1. Copy this file to ~/.codex/hooks.toml or ./.codex/hooks.toml
+# 2. Modify the hook scripts and patterns to match your needs
+# 3. Ensure hook scripts are executable (chmod +x)
+#
+# For more information, see: docs/hooks.md
+
+# =============================================================================
+# PreToolUse Hooks
+# =============================================================================
+# These hooks run BEFORE a tool executes, allowing you to:
+# - Block dangerous commands
+# - Validate inputs
+# - Add security checks
+# - Log tool usage
+
+[[PreToolUse]]
+# Match tool names with regex or exact match
+# Examples: "local_shell", ".*shell.*", "*" (match all)
+matcher = "local_shell"
+
+# Execute hooks sequentially (true) or in parallel (false)
+sequential = false
+
+# Example 1: Bash script that validates shell commands
+[[PreToolUse.hooks]]
+type = "command"
+command = "~/.codex/hooks/validate-shell.sh"
+timeout = 5000  # milliseconds
+
+# Example 2: Native Rust function (must be registered in code)
+[[PreToolUse.hooks]]
+type = "native"
+function = "security_check"
+
+# =============================================================================
+# PostToolUse Hooks
+# =============================================================================
+# These hooks run AFTER a tool executes successfully, allowing you to:
+# - Log tool outputs
+# - Send notifications
+# - Audit trail
+# - Metrics collection
+
+[[PostToolUse]]
+matcher = "*"  # Match all tools
+sequential = false
+
+[[PostToolUse.hooks]]
+type = "command"
+command = "~/.codex/hooks/audit-log.sh"
+timeout = 3000
+
+# =============================================================================
+# SessionStart Hooks
+# =============================================================================
+# These hooks run when a new session starts
+
+[[SessionStart]]
+matcher = ""
+
+[[SessionStart.hooks]]
+type = "command"
+command = "~/.codex/hooks/session-start.sh"
+timeout = 5000
+
+# =============================================================================
+# SessionEnd Hooks
+# =============================================================================
+# These hooks run when a session ends
+
+[[SessionEnd]]
+matcher = ""
+
+[[SessionEnd.hooks]]
+type = "command"
+command = "~/.codex/hooks/session-end.sh"
+timeout = 5000
+
+# =============================================================================
+# Hook Script Protocol
+# =============================================================================
+#
+# Input (via stdin): JSON with event context
+# {
+#   "session_id": "abc123",
+#   "cwd": "/path/to/workspace",
+#   "hook_event_name": "PreToolUse",
+#   "timestamp": "2025-01-01T00:00:00Z",
+#   "tool_name": "local_shell",  # for tool events
+#   "tool_input": { "command": "ls" }
+# }
+#
+# Output (via stdout): JSON with decision
+# {
+#   "continue": true,  # false to block
+#   "decision": "approve",  # approve, block, deny, allow, ask
+#   "reason": "Optional reason",
+#   "systemMessage": "Optional log message",
+#   "additionalContext": "Optional context to add"
+# }
+#
+# OR use exit codes:
+# - 0: Continue (approve)
+# - 2: Block operation
+# - Other: Error
+#
+# =============================================================================

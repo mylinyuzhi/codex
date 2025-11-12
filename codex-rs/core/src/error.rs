@@ -135,6 +135,10 @@ pub enum CodexErr {
     #[error("codex-linux-sandbox was required but not provided")]
     LandlockSandboxExecutableNotProvided,
 
+    /// Hook blocked execution
+    #[error("hook blocked execution: {0}")]
+    HookBlocked(String),
+
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
 

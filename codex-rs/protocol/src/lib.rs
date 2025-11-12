@@ -5,6 +5,7 @@ pub use conversation_id::ConversationId;
 pub mod approvals;
 pub mod config_types;
 pub mod custom_prompts;
+pub mod hooks;
 pub mod items;
 pub mod message_history;
 pub mod models;
