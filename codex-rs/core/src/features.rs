@@ -43,6 +43,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Enable the smart_edit tool with LLM-powered error correction.
+    SmartEdit,
 }
 
 impl Feature {
@@ -290,6 +292,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SmartEdit,
+        key: "smart_edit",
+        stage: Stage::Stable,
         default_enabled: false,
     },
 ];

@@ -32,6 +32,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
     pub enable_write_todos: bool,
+    pub enable_smart_edit: bool,
     pub model_family: ModelFamily,
 }
 
@@ -51,6 +52,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let enable_smart_edit = features.enabled(Feature::SmartEdit);
 
         let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
@@ -81,6 +83,7 @@ impl ToolsConfig {
             enable_write_todos: model_family
                 .experimental_supported_tools
                 .contains(&"write_todos".to_string()),
+            enable_smart_edit,
             model_family: (*model_family).clone(),
         }
     }
@@ -1007,6 +1010,13 @@ pub(crate) fn build_specs(
         let test_sync_handler = Arc::new(TestSyncHandler);
         builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
         builder.register_handler("test_sync_tool", test_sync_handler);
+    }
+
+    if config.enable_smart_edit {
+        use crate::tools::handlers::SmartEditHandler;
+        let smart_edit_handler = Arc::new(SmartEditHandler);
+        builder.push_spec(create_smart_edit_tool());
+        builder.register_handler("smart_edit", smart_edit_handler);
     }
 
     if config.web_search_request {
@@ -1967,4 +1977,85 @@ mod tests {
             })
         );
     }
+}
+
+fn create_smart_edit_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+
+    properties.insert(
+        "file_path".to_string(),
+        JsonSchema::String {
+            description: Some("Path to the file to edit".to_string()),
+        },
+    );
+
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Clear semantic instruction explaining WHY the change is needed, WHERE it should happen, WHAT the high-level change is, and the desired OUTCOME. Example: 'In the calculateTotal function, update the sales tax rate from 0.05 to 0.075 to reflect new regional tax laws.'".to_string()
+            ),
+        },
+    );
+
+    properties.insert(
+        "old_string".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Exact literal text to replace. For single replacements, include at least 3 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. Do NOT escape the string.".to_string()
+            ),
+        },
+    );
+
+    properties.insert(
+        "new_string".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Exact literal replacement text. Do NOT escape the string. Ensure the resulting code is correct and idiomatic.".to_string()
+            ),
+        },
+    );
+
+    properties.insert(
+        "expected_replacements".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Number of expected replacements (default: 1). Set this when replacing multiple occurrences.".to_string()
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "smart_edit".to_string(),
+        description: r#"Intelligent file editing with automatic error correction.
+
+Uses three progressive matching strategies:
+1. Exact - literal string matching
+2. Flexible - line-by-line with trimmed whitespace, preserves indentation
+3. Regex - token-based flexible regex matching
+
+If all strategies fail, automatically uses LLM to correct the search string and retries.
+
+**Best Practices:**
+- Always use `read_file` first to verify current file content
+- Include 3+ lines of context around target text for single replacements
+- Provide clear semantic instruction (WHY/WHERE/WHAT/OUTCOME)
+- Use exact literal text (no escaping)
+- Break down complex changes into multiple smaller atomic edits
+
+**Multiple replacements:**
+Set `expected_replacements` to the number of occurrences you want to replace. The tool will replace ALL occurrences that match `old_string` exactly."#
+            .to_string(),
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "file_path".to_string(),
+                "instruction".to_string(),
+                "old_string".to_string(),
+                "new_string".to_string(),
+            ]),
+            additional_properties: None,
+        },
+        strict: false,
+    })
 }
