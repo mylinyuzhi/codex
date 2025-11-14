@@ -285,10 +285,17 @@ impl ModelClient {
         };
 
         // Build URL with query params
+        // Start with provider's static query params, then overlay adapter's dynamic params
+        let mut combined_params = self.provider.query_params
+            .clone()
+            .unwrap_or_default();
+        for (key, value) in &request_metadata.query_params {
+            combined_params.insert(key.clone(), value.clone());
+        }
+
         let mut url = format!("{base_url}{endpoint}");
-        if !request_metadata.query_params.is_empty() {
-            let query_string = request_metadata
-                .query_params
+        if !combined_params.is_empty() {
+            let query_string = combined_params
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
@@ -371,10 +378,17 @@ impl ModelClient {
         };
 
         // Build URL with query params
+        // Start with provider's static query params, then overlay adapter's dynamic params
+        let mut combined_params = self.provider.query_params
+            .clone()
+            .unwrap_or_default();
+        for (key, value) in &request_metadata.query_params {
+            combined_params.insert(key.clone(), value.clone());
+        }
+
         let mut url = format!("{base_url}{endpoint}");
-        if !request_metadata.query_params.is_empty() {
-            let query_string = request_metadata
-                .query_params
+        if !combined_params.is_empty() {
+            let query_string = combined_params
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()

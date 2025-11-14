@@ -496,6 +496,11 @@ User → Op → SQ → CodexConversation → Tool → EQ → Response
 Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>
 ```
 
+**Abort/Cancellation:**
+- **Mechanism:** `CancellationToken` propagates Session → Task → Tool; 100ms graceful timeout → force abort (`tasks/mod.rs:196-223`)
+- **Tool handling:** `tokio::select!` monitors cancellation, returns abort message with elapsed time as `function_call_output` (`tools/parallel.rs:62-82`)
+- **Protocol:** `Op::Interrupt` → `handlers::interrupt()` → `abort_all_tasks()` → `TurnAborted` event (`Interrupted`|`Replaced`|`ReviewEnded`)
+
 </implementation_patterns>
 
 ---
