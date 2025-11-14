@@ -655,6 +655,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
 // Re-export submodules
 pub mod anthropic;
 pub mod gpt_openapi;
+pub(crate) mod http;
 pub mod openai_common;
 pub mod passthrough;
 pub mod registry;
