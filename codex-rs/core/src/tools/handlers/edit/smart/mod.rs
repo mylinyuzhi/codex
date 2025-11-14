@@ -13,23 +13,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-/// SHA256 hash for content verification
-fn hash_content(content: &str) -> String {
-    use sha2::Digest;
-    use sha2::Sha256;
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-/// Detect line ending style
-fn detect_line_ending(content: &str) -> &'static str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
+use super::common;
 
 pub(crate) mod correction;
 pub(crate) mod strategies;
@@ -94,7 +78,7 @@ impl ToolHandler for SmartEditHandler {
         let (current_content, original_line_ending, is_new_file) =
             match fs::read_to_string(&file_path) {
                 Ok(content) => {
-                    let line_ending = detect_line_ending(&content);
+                    let line_ending = common::detect_line_ending(&content);
                     (content, line_ending, false)
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -145,7 +129,7 @@ impl ToolHandler for SmartEditHandler {
         }
 
         // 5. Compute initial content hash (for concurrent modification detection)
-        let initial_content_hash = hash_content(&current_content);
+        let initial_content_hash = common::hash_content(&current_content);
 
         // 6. Try three-layer search strategies
         let initial_result =
@@ -191,7 +175,7 @@ impl ToolHandler for SmartEditHandler {
             ))
         })?;
 
-        let on_disk_hash = hash_content(&on_disk_content);
+        let on_disk_hash = common::hash_content(&on_disk_content);
 
         let (content_for_correction, error_msg_for_correction) = if initial_content_hash
             != on_disk_hash
