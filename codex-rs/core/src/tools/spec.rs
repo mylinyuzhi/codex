@@ -1012,11 +1012,19 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
+    // Edit tool - mutually exclusive registration (simple or smart)
     if config.enable_smart_edit {
+        // Register smart edit (flexible matching + semantic correction)
         use crate::tools::handlers::SmartEditHandler;
-        let smart_edit_handler = Arc::new(SmartEditHandler);
-        builder.push_spec(create_smart_edit_tool());
-        builder.register_handler("smart_edit", smart_edit_handler);
+        let handler = Arc::new(SmartEditHandler);
+        builder.push_spec(create_edit_tool(true));
+        builder.register_handler("edit", handler);
+    } else {
+        // Register simple edit (exact matching + simple correction)
+        use crate::tools::handlers::EditHandler;
+        let handler = Arc::new(EditHandler);
+        builder.push_spec(create_edit_tool(false));
+        builder.register_handler("edit", handler);
     }
 
     if config.web_search_request {
@@ -1979,7 +1987,8 @@ mod tests {
     }
 }
 
-fn create_smart_edit_tool() -> ToolSpec {
+/// Create edit tool spec (simple or smart based on use_smart flag)
+fn create_edit_tool(use_smart: bool) -> ToolSpec {
     let mut properties = BTreeMap::new();
 
     properties.insert(
@@ -1989,21 +1998,26 @@ fn create_smart_edit_tool() -> ToolSpec {
         },
     );
 
-    properties.insert(
-        "instruction".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Clear semantic instruction explaining WHY the change is needed, WHERE it should happen, WHAT the high-level change is, and the desired OUTCOME. Example: 'In the calculateTotal function, update the sales tax rate from 0.05 to 0.075 to reflect new regional tax laws.'".to_string()
-            ),
-        },
-    );
+    // instruction is only required for smart edit
+    if use_smart {
+        properties.insert(
+            "instruction".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Clear semantic instruction explaining WHY the change is needed, WHERE it should happen, WHAT the high-level change is, and the desired OUTCOME. Example: 'In the calculateTotal function, update the sales tax rate from 0.05 to 0.075 to reflect new regional tax laws.'".to_string()
+                ),
+            },
+        );
+    }
 
     properties.insert(
         "old_string".to_string(),
         JsonSchema::String {
-            description: Some(
-                "Exact literal text to replace. For single replacements, include at least 3 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. Do NOT escape the string.".to_string()
-            ),
+            description: Some(if use_smart {
+                "Text to replace. Can be approximate - flexible matching handles whitespace differences. Include 3+ lines of context for single replacements. Do NOT escape the string.".to_string()
+            } else {
+                "EXACT literal text to replace (must match character-by-character). Include at least 3 lines of context for uniqueness. Do NOT escape the string.".to_string()
+            }),
         },
     );
 
@@ -2011,7 +2025,7 @@ fn create_smart_edit_tool() -> ToolSpec {
         "new_string".to_string(),
         JsonSchema::String {
             description: Some(
-                "Exact literal replacement text. Do NOT escape the string. Ensure the resulting code is correct and idiomatic.".to_string()
+                "Exact literal replacement text. Do NOT escape the string.".to_string(),
             ),
         },
     );
@@ -2025,35 +2039,68 @@ fn create_smart_edit_tool() -> ToolSpec {
         },
     );
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "smart_edit".to_string(),
-        description: r#"Intelligent file editing with automatic error correction.
+    let required = if use_smart {
+        vec![
+            "file_path".to_string(),
+            "instruction".to_string(),
+            "old_string".to_string(),
+            "new_string".to_string(),
+        ]
+    } else {
+        vec![
+            "file_path".to_string(),
+            "old_string".to_string(),
+            "new_string".to_string(),
+        ]
+    };
 
-Uses three progressive matching strategies:
-1. Exact - literal string matching
-2. Flexible - line-by-line with trimmed whitespace, preserves indentation
-3. Regex - token-based flexible regex matching
+    let description = if use_smart {
+        r#"Intelligent file editing with flexible matching and semantic correction.
 
-If all strategies fail, automatically uses LLM to correct the search string and retries.
+**Features:**
+- Three progressive matching strategies (exact → flexible → regex)
+- Automatic indentation preservation
+- Semantic error correction using LLM (based on instruction)
+- File modification detection
 
 **Best Practices:**
 - Always use `read_file` first to verify current file content
-- Include 3+ lines of context around target text for single replacements
 - Provide clear semantic instruction (WHY/WHERE/WHAT/OUTCOME)
-- Use exact literal text (no escaping)
-- Break down complex changes into multiple smaller atomic edits
+- old_string can be approximate (flexible matching handles whitespace)
+- Include 3+ lines of context for single replacements
+- Do NOT escape strings
 
 **Multiple replacements:**
-Set `expected_replacements` to the number of occurrences you want to replace. The tool will replace ALL occurrences that match `old_string` exactly."#
-            .to_string(),
+Set `expected_replacements` to replace ALL matching occurrences."#
+    } else {
+        r#"Precise file editing with exact string matching and simple correction.
+
+**Features:**
+- Fast exact matching (character-by-character)
+- Automatic unescape attempt (handles LLM over-escaping)
+- Simple LLM correction on failure
+- File modification detection
+
+**Best Practices:**
+- Always use `read_file` first to verify current file content
+- old_string must match EXACTLY (including all whitespace)
+- Include at least 3 lines of context for uniqueness
+- Do NOT escape strings
+
+**Multiple replacements:**
+Set `expected_replacements` to replace ALL matching occurrences.
+
+**When to use simple vs smart:**
+- Use this (simple) for fast, exact replacements when format is known
+- Use smart_edit for flexible matching (handles indentation differences)"#
+    };
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "edit".to_string(), // Both use the same name "edit"
+        description: description.to_string(),
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec![
-                "file_path".to_string(),
-                "instruction".to_string(),
-                "old_string".to_string(),
-                "new_string".to_string(),
-            ]),
+            required: Some(required),
             additional_properties: None,
         },
         strict: false,

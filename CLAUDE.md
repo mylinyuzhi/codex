@@ -427,6 +427,22 @@ just clippy                        # Lint check
 
 ---
 
+## Edit Tool
+
+**Two implementations sharing same "edit" name:**
+- **Simple**: Exact match + generic LLM correction (no `instruction` param)
+- **Smart** (default): 3-tier match (exact → flexible → regex) + semantic correction (requires `instruction`)
+
+**Toggle:** `enable_smart_edit` flag in config (default: `true`)
+
+**Directory:** `core/src/tools/handlers/edit/` → `common/`, `simple/`, `smart/`
+
+**Key features:** Mutual exclusive registration, hash-based concurrent modification detection, line ending preservation, auto-unescape for over-escaped strings
+
+**Registration:** `core/src/tools/spec.rs` (lines ~400-500), dynamically adjusts spec based on flag
+
+---
+
 ## Development Workflow
 
 **Core workflow:**
