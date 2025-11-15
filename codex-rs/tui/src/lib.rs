@@ -93,6 +93,26 @@ use std::io::Write as _;
 
 // (tests access modules directly within the crate)
 
+/// Build EnvFilter from logging configuration.
+/// Priority: RUST_LOG env var > config.logging.modules > config.logging.level
+fn build_env_filter(logging: &codex_core::config::types::LoggingConfig) -> EnvFilter {
+    // RUST_LOG env var takes precedence
+    if let Ok(filter) = EnvFilter::try_from_default_env() {
+        return filter;
+    }
+
+    // Use module-specific levels if configured
+    if !logging.modules.is_empty() {
+        return EnvFilter::new(logging.modules.join(","));
+    }
+
+    // Fall back to default level
+    EnvFilter::new(format!(
+        "codex_core={},codex_tui={},codex_rmcp_client={}",
+        logging.level, logging.level, logging.level
+    ))
+}
+
 pub async fn run_main(
     mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -209,18 +229,19 @@ pub async fn run_main(
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to info for codex crates.
-    let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
-        })
-    };
+    // Build EnvFilter from config, with RUST_LOG env var taking precedence
+    let env_filter = build_env_filter(&config.logging);
 
+    // Build file_layer with location, target, and configurable timezone
+    let timer = codex_core::logging::ConfigurableTimer::new(config.logging.timezone.clone());
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_target(false)
+        .with_line_number(config.logging.location)
+        .with_file(config.logging.location)
+        .with_target(config.logging.target)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-        .with_filter(env_filter());
+        .with_timer(timer)
+        .with_filter(env_filter);
 
     let feedback = codex_feedback::CodexFeedback::new();
     let targets = Targets::new().with_default(tracing::Level::TRACE);

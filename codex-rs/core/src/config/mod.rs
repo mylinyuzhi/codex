@@ -277,6 +277,9 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    /// Logging configuration for tracing subscriber (location, timezone, levels).
+    pub logging: crate::config::types::LoggingConfig,
 }
 
 impl Config {
@@ -648,6 +651,10 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
+
+    /// Logging configuration for tracing subscriber.
+    #[serde(default)]
+    pub logging: Option<crate::config::types::LoggingConfig>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
@@ -1243,7 +1250,27 @@ impl Config {
                     exporter,
                 }
             },
+            logging: cfg.logging.unwrap_or_default(),
         };
+
+        // Validate adapter compatibility with provider settings
+        // This ensures config errors are caught at load time, not during requests
+        if let Some(adapter_name) = &config.model_provider.adapter {
+            if let Ok(adapter) = crate::adapters::get_adapter(adapter_name) {
+                adapter.validate_provider(&config.model_provider).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Adapter validation failed for provider '{}': {}",
+                            config.model_provider_id, e
+                        ),
+                    )
+                })?;
+            }
+            // If adapter not found, validation will fail later during actual usage
+            // We don't fail here to avoid breaking config loading for unknown adapters
+        }
+
         Ok(config)
     }
 
@@ -2939,6 +2966,7 @@ model_verbosity = "high"
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
+                logging: types::LoggingConfig::default(),
                 notify: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
@@ -3012,6 +3040,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -3100,6 +3129,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -3174,6 +3204,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),

@@ -458,6 +458,38 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
+    /// Validate adapter compatibility with provider settings
+    ///
+    /// This method is called after `validate_config()` to ensure the adapter is
+    /// compatible with the provider's configuration (e.g., wire_api, base_url).
+    ///
+    /// Adapters that have strict requirements (e.g., only support Responses API)
+    /// can override this to reject incompatible configurations early.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider configuration containing wire_api, base_url, etc.
+    ///
+    /// # Default Implementation
+    ///
+    /// Always succeeds - adapters that don't need provider validation can skip this.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn validate_provider(&self, provider: &ModelProviderInfo) -> Result<()> {
+    ///     if provider.wire_api != WireApi::Responses {
+    ///         return Err(CodexErr::Fatal(
+    ///             "This adapter requires wire_api = \"responses\"".into()
+    ///         ));
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    fn validate_provider(&self, _provider: &crate::model_provider_info::ModelProviderInfo) -> Result<()> {
+        Ok(())
+    }
+
     /// Get the API endpoint path for this adapter
     ///
     /// This method returns the endpoint path (without base URL) that should be used

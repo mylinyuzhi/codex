@@ -31,6 +31,7 @@ mod flags;
 pub mod git_info;
 pub mod hooks;
 pub mod landlock;
+pub mod logging;
 pub mod mcp;
 mod mcp_connection_manager;
 mod mcp_tool_call;
