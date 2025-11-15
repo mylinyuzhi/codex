@@ -9,6 +9,7 @@ use crate::CodexAuth;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use codex_app_server_protocol::AuthMode;
+use codex_protocol::config_types::ModelParameters;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -157,6 +158,26 @@ pub struct ModelProviderInfo {
     /// ```
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+
+    /// Optional: Common LLM sampling parameters for this provider
+    ///
+    /// These parameters control the model's generation behavior. If specified,
+    /// they override global defaults from the Config struct.
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.custom]
+    /// name = "Custom Provider"
+    /// base_url = "https://api.example.com/v1"
+    ///
+    /// [model_providers.custom.model_parameters]
+    /// temperature = 0.7
+    /// top_p = 0.95
+    /// max_output_tokens = 8192
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_parameters: Option<ModelParameters>,
 }
 
 impl ModelProviderInfo {
@@ -376,6 +397,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 adapter: None,
                 adapter_config: None,
                 model_name: None,
+                model_parameters: None,
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -424,6 +446,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         adapter: None,
         adapter_config: None,
         model_name: None,
+        model_parameters: None,
     }
 }
 
@@ -467,6 +490,7 @@ base_url = "http://localhost:11434/v1"
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -500,6 +524,7 @@ query_params = { api-version = "2025-04-01-preview" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -536,6 +561,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -562,6 +588,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 adapter: None,
                 adapter_config: None,
                 model_name: None,
+                model_parameters: None,
             }
         }
 
@@ -598,6 +625,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
         assert!(named_provider.is_azure_responses_endpoint());
 

@@ -133,6 +133,40 @@ impl ModelClient {
         })
     }
 
+    /// Resolve effective model parameters by merging global config with provider-specific overrides.
+    ///
+    /// Priority: provider.model_parameters > config global defaults
+    ///
+    /// Returns ModelParameters with resolved values where provider settings take precedence
+    /// over global config settings.
+    pub(crate) fn resolve_parameters(&self) -> codex_protocol::config_types::ModelParameters {
+        use codex_protocol::config_types::ModelParameters;
+
+        // If provider has model_parameters, merge with global config (provider wins)
+        if let Some(provider_params) = &self.provider.model_parameters {
+            ModelParameters {
+                temperature: provider_params.temperature.or(self.config.temperature),
+                top_p: provider_params.top_p.or(self.config.top_p),
+                frequency_penalty: provider_params
+                    .frequency_penalty
+                    .or(self.config.frequency_penalty),
+                presence_penalty: provider_params
+                    .presence_penalty
+                    .or(self.config.presence_penalty),
+                max_tokens: provider_params.max_tokens.or(self.config.model_max_output_tokens),
+            }
+        } else {
+            // No provider overrides, use global config defaults
+            ModelParameters {
+                temperature: self.config.temperature,
+                top_p: self.config.top_p,
+                frequency_penalty: self.config.frequency_penalty,
+                presence_penalty: self.config.presence_penalty,
+                max_tokens: self.config.model_max_output_tokens,
+            }
+        }
+    }
+
     pub fn config(&self) -> Arc<Config> {
         Arc::clone(&self.config)
     }

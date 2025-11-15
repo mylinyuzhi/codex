@@ -176,6 +176,33 @@ impl ProviderAdapter for GptOpenapiAdapter {
             "stream": true,
         });
 
+        // Bind tools if present
+        let tools_json = crate::tools::spec::create_tools_json_for_responses_api(&prompt.tools)?;
+        if !tools_json.is_empty() {
+            request["tools"] = json!(tools_json);
+            request["parallel_tool_calls"] = json!(prompt.parallel_tool_calls);
+        }
+
+        // Apply effective model parameters
+        // Note: Adapters decide how to map these to API-specific names
+        let params = &prompt.effective_parameters;
+        if let Some(temp) = params.temperature {
+            request["temperature"] = json!(temp);
+        }
+        if let Some(top_p) = params.top_p {
+            request["top_p"] = json!(top_p);
+        }
+        if let Some(freq_penalty) = params.frequency_penalty {
+            request["frequency_penalty"] = json!(freq_penalty);
+        }
+        if let Some(pres_penalty) = params.presence_penalty {
+            request["presence_penalty"] = json!(pres_penalty);
+        }
+        if let Some(max_tokens) = params.max_tokens {
+            // Note: Using max_output_tokens for Responses API
+            request["max_output_tokens"] = json!(max_tokens);
+        }
+
         // Add previous_response_id if present (for Responses API conversation continuity)
         if let Some(prev_id) = &prompt.previous_response_id {
             request["previous_response_id"] = json!(prev_id);

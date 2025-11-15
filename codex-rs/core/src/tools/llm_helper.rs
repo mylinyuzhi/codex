@@ -56,6 +56,7 @@ pub async fn call_llm_for_text(
         }],
         tools: vec![], // No tools for simple text generation
         parallel_tool_calls: false,
+        effective_parameters: Default::default(), // Use default parameters
         base_instructions_override: None,
         output_schema: None,
         reasoning_effort: None,

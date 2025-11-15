@@ -35,8 +35,6 @@ static ADAPTER_REGISTRY: LazyLock<AdapterRegistry> = LazyLock::new(|| {
     let registry = AdapterRegistry::new();
 
     // Register built-in adapters
-    registry.register(Arc::new(super::passthrough::PassthroughAdapter));
-    registry.register(Arc::new(super::anthropic::AnthropicAdapter::new()));
     registry.register(Arc::new(super::gpt_openapi::GptOpenapiAdapter::new()));
 
     // Future: Add more built-in adapters here as they are implemented
@@ -220,31 +218,12 @@ mod tests {
     #[test]
     fn test_registry_builtin_adapters() {
         let adapters = list_adapters();
-        // PassthroughAdapter should be registered by default
-        assert!(
-            adapters.contains(&"passthrough".to_string()),
-            "PassthroughAdapter should be registered. Found: {:?}",
-            adapters
-        );
-        // AnthropicAdapter should be registered by default
-        assert!(
-            adapters.contains(&"anthropic".to_string()),
-            "AnthropicAdapter should be registered. Found: {:?}",
-            adapters
-        );
         // GptOpenapiAdapter should be registered by default
         assert!(
             adapters.contains(&"gpt_openapi".to_string()),
             "GptOpenapiAdapter should be registered. Found: {:?}",
             adapters
         );
-    }
-
-    #[test]
-    fn test_get_adapter() {
-        let adapter = get_adapter("passthrough");
-        assert!(adapter.is_ok(), "Should find passthrough adapter");
-        assert_eq!(adapter.unwrap().name(), "passthrough");
     }
 
     #[test]
