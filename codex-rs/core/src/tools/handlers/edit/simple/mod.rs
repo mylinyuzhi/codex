@@ -96,8 +96,7 @@ impl ToolHandler for EditHandler {
 
         if is_success(&result, args.expected_replacements) {
             // Phase 1 成功，但检查 new_string 是否有转义问题（对齐 gemini-cli）
-            let new_appears_escaped =
-                common::unescape_string(&normalized_new) != normalized_new;
+            let new_appears_escaped = common::unescape_string(&normalized_new) != normalized_new;
 
             if new_appears_escaped {
                 // new_string 有转义问题，调用 LLM 修正
@@ -126,13 +125,7 @@ impl ToolHandler for EditHandler {
                 );
             }
 
-            return write_and_respond(
-                &file_path,
-                &result.new_content,
-                line_ending,
-                &args,
-                "exact",
-            );
+            return write_and_respond(&file_path, &result.new_content, line_ending, &args, "exact");
         }
 
         // 阶段2：反转义尝试 old_string（与 gemini-cli 对齐）
@@ -482,10 +475,7 @@ mod tests {
 
         // new 应该保持不变
         let new_appears_escaped = common::unescape_string(normalized_new) != normalized_new;
-        assert!(
-            !new_appears_escaped,
-            "new_string should not appear escaped"
-        );
+        assert!(!new_appears_escaped, "new_string should not appear escaped");
     }
 
     #[test]
@@ -507,10 +497,7 @@ mod tests {
         // 确保反转义不会破坏已经正确的字符串
         let correct = "hello\nworld"; // 真正的换行符
         let result = common::unescape_string(correct);
-        assert_eq!(
-            result, correct,
-            "Should not change already-correct strings"
-        );
+        assert_eq!(result, correct, "Should not change already-correct strings");
     }
 
     #[test]
@@ -530,10 +517,7 @@ mod tests {
         // 混合：有的需要反转义，有的不需要
         let input = "hello\\nworld\ntest"; // \\n + 真正的\n
         let result = common::unescape_string(input);
-        assert_eq!(
-            result, "hello\nworld\ntest",
-            "Should handle mixed escaping"
-        );
+        assert_eq!(result, "hello\nworld\ntest", "Should handle mixed escaping");
     }
 
     #[test]
@@ -632,7 +616,10 @@ mod tests {
         // 实际出现次数多于预期
         let result = try_exact_replacement("a", "b", "a a a a a");
         assert_eq!(result.occurrences, 5);
-        assert!(!is_success(&result, 2), "Should fail when more occurrences than expected");
+        assert!(
+            !is_success(&result, 2),
+            "Should fail when more occurrences than expected"
+        );
     }
 
     // ========== 文件创建逻辑测试 ==========
@@ -716,17 +703,17 @@ mod tests {
         // 测试检测逻辑的各种情况
 
         // 不应该被检测为转义的情况
-        let correct1 = "hello\nworld";  // 真实换行
+        let correct1 = "hello\nworld"; // 真实换行
         assert!(!string_appears_escaped(correct1));
 
-        let correct2 = "path/to/file";  // 普通路径
+        let correct2 = "path/to/file"; // 普通路径
         assert!(!string_appears_escaped(correct2));
 
         // 应该被检测为转义的情况
-        let escaped1 = "hello\\nworld";  // 转义的换行
+        let escaped1 = "hello\\nworld"; // 转义的换行
         assert!(string_appears_escaped(escaped1));
 
-        let escaped2 = "tab\\there";  // 转义的tab
+        let escaped2 = "tab\\there"; // 转义的tab
         assert!(string_appears_escaped(escaped2));
     }
 

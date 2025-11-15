@@ -64,6 +64,9 @@ pub struct Config {
 - Unsigned integers (u32/u64) - always use i32/i64
 - `.unwrap()` in non-test code
 
+**Code Comments:**
+- Always write comments in English for LLM code generation consistency
+
 </critical_rules>
 
 ---

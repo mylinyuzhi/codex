@@ -14,11 +14,19 @@ use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::SessionSource;
 
-use crate::adapters::{AdapterConfig, AdapterContext, ProviderAdapter, RequestMetadata, get_adapter};
-use crate::client_common::{Prompt, ResponseEvent, ResponseStream};
+use crate::adapters::AdapterConfig;
+use crate::adapters::AdapterContext;
+use crate::adapters::ProviderAdapter;
+use crate::adapters::RequestMetadata;
+use crate::adapters::get_adapter;
+use crate::client_common::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
 use crate::default_client::CodexHttpClient;
-use crate::error::{CodexErr, Result};
-use crate::model_provider_info::{ModelProviderInfo, WireApi};
+use crate::error::CodexErr;
+use crate::error::Result;
+use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::WireApi;
 
 /// HTTP client for adapter-based provider communication
 ///
@@ -54,9 +62,8 @@ impl AdapterHttpClient {
         summary: ReasoningSummaryConfig,
     ) -> Result<ResponseStream> {
         // Get adapter from registry
-        let mut adapter = get_adapter(adapter_name).map_err(|e| {
-            CodexErr::Fatal(format!("Failed to get adapter '{adapter_name}': {e}"))
-        })?;
+        let mut adapter = get_adapter(adapter_name)
+            .map_err(|e| CodexErr::Fatal(format!("Failed to get adapter '{adapter_name}': {e}")))?;
 
         // Configure adapter if provider has adapter_config
         if let Some(config_map) = &provider.adapter_config {
@@ -175,9 +182,10 @@ impl AdapterHttpClient {
         }
 
         // Send request
-        let response = request_builder.send().await.map_err(|e| {
-            CodexErr::Fatal(format!("Failed to connect to provider: {e}"))
-        })?;
+        let response = request_builder
+            .send()
+            .await
+            .map_err(|e| CodexErr::Fatal(format!("Failed to connect to provider: {e}")))?;
 
         // Check status
         if !response.status().is_success() {

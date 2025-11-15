@@ -456,6 +456,62 @@ fn create_grep_files_tool() -> ToolSpec {
     })
 }
 
+fn create_glob_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Glob pattern to match files (e.g., \"*.rs\", \"src/**/*.ts\", \"**/test_*.py\"). \
+                 Supports standard glob syntax: * (any chars), ** (any directories), ? (single char), \
+                 [abc] (character set).".to_string()
+            ),
+        },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional directory path to search. Defaults to the current working directory."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of files to return (defaults to 1000, max 2000). \
+                 Use lower values for quick previews, higher for comprehensive searches."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "case_sensitive".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to perform case-sensitive pattern matching (defaults to false)."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "glob".to_string(),
+        description:
+            "Finds files matching a glob pattern, sorted intelligently (recent files first, then alphabetical). \
+             Automatically respects .gitignore to filter out build artifacts, dependencies, and sensitive files. \
+             Use this to locate files by name/extension patterns rather than searching file contents.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["pattern".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_read_file_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -982,6 +1038,16 @@ pub(crate) fn build_specs(
         let grep_files_handler = Arc::new(GrepFilesHandler);
         builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
         builder.register_handler("grep_files", grep_files_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"glob".to_string())
+    {
+        use crate::tools::handlers::GlobHandler;
+        let glob_handler = Arc::new(GlobHandler);
+        builder.push_spec_with_parallel_support(create_glob_tool(), true);
+        builder.register_handler("glob", glob_handler);
     }
 
     if config
