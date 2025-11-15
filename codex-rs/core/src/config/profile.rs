@@ -24,6 +24,9 @@ pub struct ConfigProfile {
     pub top_p: Option<f32>,
     pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
+    pub http_connect_timeout_ms: Option<u64>,
+    pub http_request_timeout_ms: Option<u64>,
+    pub stream_idle_timeout_ms: Option<u64>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
@@ -52,6 +55,9 @@ impl From<ConfigProfile> for codex_app_server_protocol::Profile {
             top_p: config_profile.top_p,
             frequency_penalty: config_profile.frequency_penalty,
             presence_penalty: config_profile.presence_penalty,
+            http_connect_timeout_ms: config_profile.http_connect_timeout_ms,
+            http_request_timeout_ms: config_profile.http_request_timeout_ms,
+            stream_idle_timeout_ms: config_profile.stream_idle_timeout_ms,
             chatgpt_base_url: config_profile.chatgpt_base_url,
         }
     }

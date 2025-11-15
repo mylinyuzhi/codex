@@ -189,6 +189,7 @@ impl ModelClient {
                     self.session_source.clone(),
                     self.effort,
                     self.summary,
+                    self.config.stream_idle_timeout_ms,
                 )
                 .await;
         }
@@ -355,7 +356,7 @@ impl ModelClient {
 
         let mut req_builder = self
             .provider
-            .create_request_builder(&self.client, &auth)
+            .create_request_builder(&self.client, &auth, self.config.http_request_timeout_ms)
             .await
             .map_err(StreamAttemptError::Fatal)?;
 

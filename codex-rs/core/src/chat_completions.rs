@@ -346,7 +346,7 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let mut req_builder = provider.create_request_builder(client, &None).await?;
+        let mut req_builder = provider.create_request_builder(client, &None, None).await?;
 
         // Include subagent header only for subagent sessions.
         if let SessionSource::SubAgent(sub) = session_source.clone() {

@@ -241,6 +241,24 @@ pub struct Config {
     /// Can be overridden by provider-specific settings.
     pub presence_penalty: Option<f32>,
 
+    /// Global HTTP connection timeout in milliseconds.
+    /// This timeout applies to the TCP connection establishment phase.
+    /// Default: 30000 (30 seconds)
+    /// Note: This is a global setting and cannot be overridden per-provider due to reqwest architecture.
+    pub http_connect_timeout_ms: Option<u64>,
+
+    /// Global HTTP request total timeout in milliseconds.
+    /// This timeout applies to the entire HTTP request lifecycle (connection + send + receive).
+    /// Individual providers can override this using `request_timeout_ms`.
+    /// Default: 600000 (10 minutes)
+    pub http_request_timeout_ms: Option<u64>,
+
+    /// Global SSE stream idle timeout in milliseconds.
+    /// If no SSE event is received within this duration, the connection is considered lost
+    /// and reconnection is attempted. Individual providers can override this.
+    /// Default: 300000 (5 minutes)
+    pub stream_idle_timeout_ms: Option<u64>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -661,6 +679,18 @@ pub struct ConfigToml {
     #[serde(default)]
     pub presence_penalty: Option<f32>,
 
+    /// Global HTTP connection timeout in milliseconds.
+    #[serde(default)]
+    pub http_connect_timeout_ms: Option<u64>,
+
+    /// Global HTTP request total timeout in milliseconds.
+    #[serde(default)]
+    pub http_request_timeout_ms: Option<u64>,
+
+    /// Global SSE stream idle timeout in milliseconds.
+    #[serde(default)]
+    pub stream_idle_timeout_ms: Option<u64>,
+
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
@@ -729,6 +759,9 @@ impl From<ConfigToml> for UserSavedConfig {
             top_p: config_toml.top_p,
             frequency_penalty: config_toml.frequency_penalty,
             presence_penalty: config_toml.presence_penalty,
+            http_connect_timeout_ms: config_toml.http_connect_timeout_ms,
+            http_request_timeout_ms: config_toml.http_request_timeout_ms,
+            stream_idle_timeout_ms: config_toml.stream_idle_timeout_ms,
             tools: config_toml.tools.map(From::from),
             profile: config_toml.profile,
             profiles,
@@ -1231,6 +1264,15 @@ impl Config {
             top_p: config_profile.top_p.or(cfg.top_p),
             frequency_penalty: config_profile.frequency_penalty.or(cfg.frequency_penalty),
             presence_penalty: config_profile.presence_penalty.or(cfg.presence_penalty),
+            http_connect_timeout_ms: config_profile
+                .http_connect_timeout_ms
+                .or(cfg.http_connect_timeout_ms),
+            http_request_timeout_ms: config_profile
+                .http_request_timeout_ms
+                .or(cfg.http_request_timeout_ms),
+            stream_idle_timeout_ms: config_profile
+                .stream_idle_timeout_ms
+                .or(cfg.stream_idle_timeout_ms),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)

@@ -293,6 +293,9 @@ pub struct UserSavedConfig {
     pub top_p: Option<f32>,
     pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
+    pub http_connect_timeout_ms: Option<u64>,
+    pub http_request_timeout_ms: Option<u64>,
+    pub stream_idle_timeout_ms: Option<u64>,
     pub tools: Option<Tools>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, Profile>,
@@ -311,6 +314,9 @@ pub struct Profile {
     pub top_p: Option<f32>,
     pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
+    pub http_connect_timeout_ms: Option<u64>,
+    pub http_request_timeout_ms: Option<u64>,
+    pub stream_idle_timeout_ms: Option<u64>,
     pub chatgpt_base_url: Option<String>,
 }
 
