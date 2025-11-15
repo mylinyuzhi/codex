@@ -1,5 +1,6 @@
 pub mod apply_patch;
 pub mod edit;
+mod glob;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -20,6 +21,7 @@ pub use write_todos::WRITE_TODOS_TOOL;
 pub use apply_patch::ApplyPatchHandler;
 pub use edit::EditHandler;
 pub use edit::SmartEditHandler;
+pub use glob::GlobHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

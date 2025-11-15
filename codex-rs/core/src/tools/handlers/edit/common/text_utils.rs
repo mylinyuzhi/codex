@@ -53,9 +53,8 @@ pub fn exact_match_count(content: &str, pattern: &str) -> i32 {
 /// assert_eq!(unescape_string("\\\\\\ntest"), "\ntest");
 /// ```
 pub fn unescape_string(s: &str) -> String {
-    static UNESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"\\+(n|t|r|'|"|`|\\|\n)"#).expect("Invalid unescape regex")
-    });
+    static UNESCAPE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"\\+(n|t|r|'|"|`|\\|\n)"#).expect("Invalid unescape regex"));
 
     UNESCAPE_RE
         .replace_all(s, |caps: &regex_lite::Captures| {
