@@ -1,5 +1,6 @@
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
+use crate::tools::spec::ConfigEditToolType;
 use crate::tools::spec::ConfigShellToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
@@ -55,6 +56,9 @@ pub struct ModelFamily {
 
     /// Preferred shell tool type for this model family when features do not override it.
     pub shell_type: ConfigShellToolType,
+
+    /// Edit tool type for this model family (Simple, Smart, or Disabled).
+    pub edit_tool_type: ConfigEditToolType,
 }
 
 macro_rules! model_family {
@@ -76,6 +80,7 @@ macro_rules! model_family {
             effective_context_window_percent: 95,
             support_verbosity: false,
             shell_type: ConfigShellToolType::Default,
+            edit_tool_type: ConfigEditToolType::Simple,
         };
         // apply overrides
         $(
@@ -189,5 +194,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         effective_context_window_percent: 95,
         support_verbosity: false,
         shell_type: ConfigShellToolType::Default,
+        edit_tool_type: ConfigEditToolType::Simple,
     }
 }

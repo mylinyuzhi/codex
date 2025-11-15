@@ -23,6 +23,19 @@ pub enum ConfigShellToolType {
     UnifiedExec,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConfigEditToolType {
+    Disabled,  // Edit tool completely disabled
+    Simple,    // Exact matching + simple LLM correction
+    Smart,     // Flexible matching + semantic correction (requires instruction param)
+}
+
+impl Default for ConfigEditToolType {
+    fn default() -> Self {
+        Self::Simple
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
@@ -32,7 +45,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
     pub enable_write_todos: bool,
-    pub enable_smart_edit: bool,
+    pub edit_tool_type: ConfigEditToolType,
     pub model_family: ModelFamily,
 }
 
@@ -52,12 +65,17 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
-        let enable_smart_edit = features.enabled(Feature::SmartEdit);
 
         let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else {
             model_family.shell_type.clone()
+        };
+
+        let edit_tool_type = if features.enabled(Feature::SmartEdit) {
+            ConfigEditToolType::Smart
+        } else {
+            model_family.edit_tool_type.clone()
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -83,7 +101,7 @@ impl ToolsConfig {
             enable_write_todos: model_family
                 .experimental_supported_tools
                 .contains(&"write_todos".to_string()),
-            enable_smart_edit,
+            edit_tool_type,
             model_family: (*model_family).clone(),
         }
     }
@@ -1078,19 +1096,25 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    // Edit tool - mutually exclusive registration (simple or smart)
-    if config.enable_smart_edit {
-        // Register smart edit (flexible matching + semantic correction)
-        use crate::tools::handlers::SmartEditHandler;
-        let handler = Arc::new(SmartEditHandler);
-        builder.push_spec(create_edit_tool(true));
-        builder.register_handler("edit", handler);
-    } else {
-        // Register simple edit (exact matching + simple correction)
-        use crate::tools::handlers::EditHandler;
-        let handler = Arc::new(EditHandler);
-        builder.push_spec(create_edit_tool(false));
-        builder.register_handler("edit", handler);
+    // Edit tool - conditional registration based on type
+    match config.edit_tool_type {
+        ConfigEditToolType::Disabled => {
+            // Edit tool disabled - do not register
+        }
+        ConfigEditToolType::Simple => {
+            // Register simple edit (exact matching + simple correction)
+            use crate::tools::handlers::EditHandler;
+            let handler = Arc::new(EditHandler);
+            builder.push_spec(create_edit_tool(false));
+            builder.register_handler("edit", handler);
+        }
+        ConfigEditToolType::Smart => {
+            // Register smart edit (flexible matching + semantic correction)
+            use crate::tools::handlers::SmartEditHandler;
+            let handler = Arc::new(SmartEditHandler);
+            builder.push_spec(create_edit_tool(true));
+            builder.register_handler("edit", handler);
+        }
     }
 
     if config.web_search_request {
@@ -1328,6 +1352,7 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
+            create_edit_tool(false),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
         ] {
@@ -1374,6 +1399,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "edit",
                 "view_image",
             ],
         );
@@ -1394,6 +1420,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "edit",
                 "web_search",
                 "view_image",
             ],
@@ -1411,6 +1438,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "edit",
                 "view_image",
             ],
         );
@@ -1428,6 +1456,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "edit",
                 "view_image",
             ],
         );
@@ -1447,6 +1476,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "edit",
                 "web_search",
                 "view_image",
             ],
