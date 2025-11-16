@@ -48,6 +48,8 @@
 
 use super::AdapterContext;
 use super::ProviderAdapter;
+use super::RequestContext;
+use super::RequestMetadata;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::error::Result;
@@ -95,37 +97,26 @@ struct CompleteResponseOutputTokensDetails {
 ///
 /// # Dynamic Headers & Metadata
 ///
-/// This adapter uses the **default `build_request_metadata()` implementation**,
-/// which means it does NOT add any dynamic HTTP headers or query parameters.
+/// This adapter automatically adds an `extra` header with session tracking information:
+/// - **Header name:** `extra`
+/// - **Format:** JSON string `{"session_id": "{conversation_id}"}`
+/// - **Purpose:** Session tracking across requests, tied to conversation lifecycle
 ///
-/// For enterprise gateways that need dynamic headers (e.g., session tracking,
-/// log correlation), you have two options:
+/// Example outbound header:
+/// ```text
+/// extra: {"session_id":"550e8400-e29b-41d4-a716-446655440000"}
+/// ```
 ///
-/// 1. **Create a custom adapter** that extends this one:
-///    ```rust,ignore
-///    impl ProviderAdapter for CustomEnterpriseAdapter {
-///        fn build_request_metadata(
-///            &self,
-///            _prompt: &Prompt,
-///            _provider: &ModelProviderInfo,
-///            context: &RequestContext,
-///        ) -> Result<RequestMetadata> {
-///            let mut metadata = RequestMetadata::default();
-///            metadata.headers.insert(
-///                "x-log-id".to_string(),
-///                context.conversation_id.clone(),
-///            );
-///            Ok(metadata)
-///        }
-///    }
-///    ```
+/// For additional custom headers, you can:
 ///
-/// 2. **Use static headers** in provider configuration:
+/// 1. **Use static headers** in provider configuration:
 ///    ```toml
 ///    [model_providers.enterprise]
 ///    adapter = "gpt_openapi"
 ///    http_headers = { "x-team-id" = "ai-team" }
 ///    ```
+///
+/// 2. **Create a custom adapter** that extends this implementation
 ///
 /// # Implementation Notes
 ///
@@ -395,6 +386,28 @@ impl ProviderAdapter for GptOpenapiAdapter {
             )));
         }
         Ok(())
+    }
+
+    fn build_request_metadata(
+        &self,
+        _prompt: &Prompt,
+        _provider: &ModelProviderInfo,
+        context: &RequestContext,
+    ) -> Result<RequestMetadata> {
+        let mut metadata = RequestMetadata::default();
+
+        // Build extra header with session_id JSON
+        // Format: {"session_id": "{conversation_id}"}
+        let extra_json = json!({
+            "session_id": context.conversation_id
+        });
+
+        metadata.headers.insert(
+            "extra".to_string(),
+            extra_json.to_string(),
+        );
+
+        Ok(metadata)
     }
 
     fn transform_request(
