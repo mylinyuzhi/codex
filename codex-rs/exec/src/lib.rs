@@ -47,6 +47,32 @@ use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
+/// Build EnvFilter from logging configuration.
+/// Priority: RUST_LOG env var > config.logging.modules > config.logging.level
+fn build_env_filter(logging: &codex_core::config::types::LoggingConfig) -> EnvFilter {
+    // RUST_LOG env var takes precedence
+    if let Ok(filter) = EnvFilter::try_from_default_env() {
+        return filter;
+    }
+
+    // Use module-specific levels if configured
+    if !logging.modules.is_empty() {
+        return EnvFilter::new(logging.modules.join(","));
+    }
+
+    // Fall back to default level (for exec, default to error to reduce noise)
+    let default_level = if logging.level.is_empty() {
+        "error"
+    } else {
+        &logging.level
+    };
+
+    EnvFilter::new(format!(
+        "codex_core={},codex_exec={},codex_rmcp_client={}",
+        default_level, default_level, default_level
+    ))
+}
+
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
@@ -124,19 +150,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
-
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
@@ -197,6 +210,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         eprintln!("{err}");
         std::process::exit(1);
     }
+
+    // Build fmt layer with logging configuration from config file
+    let env_filter = build_env_filter(&config.logging);
+
+    // Build fmt_layer with location, target, and configurable timezone
+    let timer = codex_core::logging::ConfigurableTimer::new(config.logging.timezone.clone());
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(stderr_with_ansi)
+        .with_writer(std::io::stderr)
+        .with_line_number(config.logging.location)
+        .with_file(config.logging.location)
+        .with_target(config.logging.target)
+        .with_timer(timer)
+        .with_filter(env_filter);
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 

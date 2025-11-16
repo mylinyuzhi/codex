@@ -222,6 +222,43 @@ pub struct Config {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
+    /// Global default temperature parameter (0.0-2.0 for OpenAI, 0.0-1.0 for Anthropic).
+    /// Controls randomness in model output. Can be overridden by provider-specific settings.
+    pub temperature: Option<f32>,
+
+    /// Global default top_p parameter (0.0-1.0).
+    /// Nucleus sampling: only tokens with cumulative probability <= top_p are considered.
+    /// Can be overridden by provider-specific settings.
+    pub top_p: Option<f32>,
+
+    /// Global default frequency_penalty parameter (-2.0 to 2.0 for OpenAI).
+    /// Penalizes tokens based on their frequency in the text so far, reducing repetition.
+    /// Can be overridden by provider-specific settings.
+    pub frequency_penalty: Option<f32>,
+
+    /// Global default presence_penalty parameter (-2.0 to 2.0 for OpenAI).
+    /// Penalizes tokens based on whether they appear in the text so far, encouraging topic diversity.
+    /// Can be overridden by provider-specific settings.
+    pub presence_penalty: Option<f32>,
+
+    /// Global HTTP connection timeout in milliseconds.
+    /// This timeout applies to the TCP connection establishment phase.
+    /// Default: 30000 (30 seconds)
+    /// Note: This is a global setting and cannot be overridden per-provider due to reqwest architecture.
+    pub http_connect_timeout_ms: Option<u64>,
+
+    /// Global HTTP request total timeout in milliseconds.
+    /// This timeout applies to the entire HTTP request lifecycle (connection + send + receive).
+    /// Individual providers can override this using `request_timeout_ms`.
+    /// Default: 600000 (10 minutes)
+    pub http_request_timeout_ms: Option<u64>,
+
+    /// Global SSE stream idle timeout in milliseconds.
+    /// If no SSE event is received within this duration, the connection is considered lost
+    /// and reconnection is attempted. Individual providers can override this.
+    /// Default: 300000 (5 minutes)
+    pub stream_idle_timeout_ms: Option<u64>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -277,6 +314,9 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    /// Logging configuration for tracing subscriber (location, timezone, levels).
+    pub logging: crate::config::types::LoggingConfig,
 }
 
 impl Config {
@@ -623,6 +663,34 @@ pub struct ConfigToml {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
+    /// Global default temperature parameter (0.0-2.0 for OpenAI, 0.0-1.0 for Anthropic).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+
+    /// Global default top_p parameter (0.0-1.0).
+    #[serde(default)]
+    pub top_p: Option<f32>,
+
+    /// Global default frequency_penalty parameter (-2.0 to 2.0 for OpenAI).
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+
+    /// Global default presence_penalty parameter (-2.0 to 2.0 for OpenAI).
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+
+    /// Global HTTP connection timeout in milliseconds.
+    #[serde(default)]
+    pub http_connect_timeout_ms: Option<u64>,
+
+    /// Global HTTP request total timeout in milliseconds.
+    #[serde(default)]
+    pub http_request_timeout_ms: Option<u64>,
+
+    /// Global SSE stream idle timeout in milliseconds.
+    #[serde(default)]
+    pub stream_idle_timeout_ms: Option<u64>,
+
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
@@ -648,6 +716,10 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
+
+    /// Logging configuration for tracing subscriber.
+    #[serde(default)]
+    pub logging: Option<crate::config::types::LoggingConfig>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
@@ -683,6 +755,13 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
+            temperature: config_toml.temperature,
+            top_p: config_toml.top_p,
+            frequency_penalty: config_toml.frequency_penalty,
+            presence_penalty: config_toml.presence_penalty,
+            http_connect_timeout_ms: config_toml.http_connect_timeout_ms,
+            http_request_timeout_ms: config_toml.http_request_timeout_ms,
+            stream_idle_timeout_ms: config_toml.stream_idle_timeout_ms,
             tools: config_toml.tools.map(From::from),
             profile: config_toml.profile,
             profiles,
@@ -1056,8 +1135,11 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
+        // Derive model family from provider.model_name if available, otherwise from config.model
+        // This ensures adapter-based providers get correct model capabilities
+        let model_for_family = model_provider.model_name.as_ref().unwrap_or(&model);
         let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
+            find_family_for_model(model_for_family).unwrap_or_else(|| derive_default_model_family(model_for_family));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -1181,6 +1263,19 @@ impl Config {
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
+            temperature: config_profile.temperature.or(cfg.temperature),
+            top_p: config_profile.top_p.or(cfg.top_p),
+            frequency_penalty: config_profile.frequency_penalty.or(cfg.frequency_penalty),
+            presence_penalty: config_profile.presence_penalty.or(cfg.presence_penalty),
+            http_connect_timeout_ms: config_profile
+                .http_connect_timeout_ms
+                .or(cfg.http_connect_timeout_ms),
+            http_request_timeout_ms: config_profile
+                .http_request_timeout_ms
+                .or(cfg.http_request_timeout_ms),
+            stream_idle_timeout_ms: config_profile
+                .stream_idle_timeout_ms
+                .or(cfg.stream_idle_timeout_ms),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -1243,7 +1338,27 @@ impl Config {
                     exporter,
                 }
             },
+            logging: cfg.logging.unwrap_or_default(),
         };
+
+        // Validate adapter compatibility with provider settings
+        // This ensures config errors are caught at load time, not during requests
+        if let Some(adapter_name) = &config.model_provider.adapter {
+            if let Ok(adapter) = crate::adapters::get_adapter(adapter_name) {
+                adapter.validate_provider(&config.model_provider).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Adapter validation failed for provider '{}': {}",
+                            config.model_provider_id, e
+                        ),
+                    )
+                })?;
+            }
+            // If adapter not found, validation will fail later during actual usage
+            // We don't fail here to avoid breaking config loading for unknown adapters
+        }
+
         Ok(config)
     }
 
@@ -2939,6 +3054,7 @@ model_verbosity = "high"
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
+                logging: types::LoggingConfig::default(),
                 notify: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
@@ -3012,6 +3128,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -3100,6 +3217,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -3174,6 +3292,7 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            logging: types::LoggingConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),

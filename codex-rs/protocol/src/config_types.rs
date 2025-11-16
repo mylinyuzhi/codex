@@ -172,3 +172,37 @@ fn default_timeout_secs() -> u64 {
 fn default_user_agent() -> String {
     format!("codex-rs/{}", env!("CARGO_PKG_VERSION"))
 }
+
+/// Common LLM sampling parameters that apply across different model providers.
+/// These parameters control the model's generation behavior and can be set at
+/// both global (Config) and provider (ModelProviderInfo) levels, with provider
+/// settings overriding global defaults.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, JsonSchema, TS)]
+pub struct ModelParameters {
+    /// Controls randomness in the output. Higher values make output more random.
+    /// Range: 0.0-2.0 (OpenAI), 0.0-1.0 (Anthropic)
+    #[serde(default)]
+    pub temperature: Option<f32>,
+
+    /// Nucleus sampling: only tokens with cumulative probability <= top_p are considered.
+    /// Range: 0.0-1.0
+    #[serde(default)]
+    pub top_p: Option<f32>,
+
+    /// Penalizes tokens based on their frequency in the text so far.
+    /// Reduces repetition. Range: -2.0 to 2.0 (OpenAI)
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+
+    /// Penalizes tokens based on whether they appear in the text so far.
+    /// Encourages topic diversity. Range: -2.0 to 2.0 (OpenAI)
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+
+    /// Maximum number of tokens to generate in the completion.
+    /// Overrides model-specific defaults.
+    /// Note: Different APIs may use different parameter names (max_tokens, max_output_tokens, etc.)
+    /// but we use the industry-standard 'max_tokens' in configuration.
+    #[serde(default)]
+    pub max_tokens: Option<i64>,
+}

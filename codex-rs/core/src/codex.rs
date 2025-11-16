@@ -1936,10 +1936,14 @@ async fn run_turn(
         .get_last_response_id()
         .map(String::from);
 
+    // Resolve effective parameters from config and provider settings
+    let effective_parameters = turn_context.client.resolve_parameters();
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls,
+        effective_parameters,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
         previous_response_id,

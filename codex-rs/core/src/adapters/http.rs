@@ -60,6 +60,7 @@ impl AdapterHttpClient {
         session_source: SessionSource,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        global_stream_idle_timeout: Option<u64>,
     ) -> Result<ResponseStream> {
         // Get adapter from registry
         let mut adapter = get_adapter(adapter_name)
@@ -109,8 +110,14 @@ impl AdapterHttpClient {
             })?;
 
         // Use unified streaming method for both Chat and Responses APIs
-        self.stream_http(transformed_request, adapter, request_metadata, provider)
-            .await
+        self.stream_http(
+            transformed_request,
+            adapter,
+            request_metadata,
+            provider,
+            global_stream_idle_timeout,
+        )
+        .await
     }
 
     /// Unified HTTP streaming for both Chat and Responses APIs
@@ -124,6 +131,7 @@ impl AdapterHttpClient {
         adapter: Arc<dyn ProviderAdapter>,
         request_metadata: RequestMetadata,
         provider: &ModelProviderInfo,
+        global_stream_idle_timeout: Option<u64>,
     ) -> Result<ResponseStream> {
         let base_url = provider
             .base_url
@@ -203,10 +211,13 @@ impl AdapterHttpClient {
         let byte_stream = response.bytes_stream();
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
 
+        // Get effective stream idle timeout
+        let idle_timeout = provider.effective_stream_idle_timeout(global_stream_idle_timeout);
+
         // Spawn task to process SSE stream with adapter
         let otel = self.otel_event_manager.clone();
         tokio::spawn(async move {
-            process_sse_with_adapter(byte_stream, tx_event, adapter, otel).await;
+            process_sse_with_adapter(byte_stream, tx_event, adapter, idle_timeout, otel).await;
         });
 
         Ok(ResponseStream { rx_event })
@@ -221,6 +232,7 @@ async fn process_sse_with_adapter<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     adapter: Arc<dyn ProviderAdapter>,
+    idle_timeout: Duration,
     _otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = reqwest::Result<Bytes>> + Unpin,
@@ -241,7 +253,6 @@ async fn process_sse_with_adapter<S>(
     //   3. Request completes → function returns → context drops → memory freed
     let mut adapter_context = AdapterContext::new();
     let mut stream = stream.eventsource();
-    let idle_timeout = Duration::from_secs(30);
 
     loop {
         let response = timeout(idle_timeout, stream.next()).await;

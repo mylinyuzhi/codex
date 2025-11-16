@@ -1,13 +1,19 @@
 //! GPT OpenAPI adapter for enterprise LLM gateway
 //!
 //! This adapter is designed for enterprise internal LLM gateways that are
-//! compatible with OpenAI format. It uses the Responses API and performs
-//! minimal transformation since the gateway already speaks OpenAI protocol.
+//! compatible with OpenAI Responses API format. It performs minimal transformation
+//! since the gateway already speaks OpenAI protocol.
+//!
+//! # Requirements
+//!
+//! **This adapter ONLY supports `wire_api = "responses"`**. Configuration validation
+//! will reject providers with `wire_api = "chat"`. If your gateway uses Chat Completions
+//! format, use the `passthrough` adapter instead.
 //!
 //! # Use Cases
 //!
 //! - **Enterprise LLM Gateway**: Internal API gateway that proxies to various LLM providers
-//! - **OpenAI-compatible**: Gateway that already uses OpenAI-compatible request/response format
+//! - **Responses API Gateway**: Gateway that uses OpenAI Responses API format
 //! - **Multi-tenant**: One adapter implementation with multiple provider configurations
 //!
 //! # Example Configuration
@@ -19,6 +25,7 @@
 //! base_url = "https://api.enterprise.com/v1"
 //! env_key = "ENTERPRISE_API_KEY"
 //! adapter = "gpt_openapi"
+//! wire_api = "responses"  # Required: gpt_openapi only supports Responses API
 //! model_name = "gpt-4"
 //!
 //! [model_providers.enterprise_prod.adapter_config]
@@ -31,6 +38,7 @@
 //! base_url = "https://api-staging.enterprise.com/v1"
 //! env_key = "ENTERPRISE_STAGING_KEY"
 //! adapter = "gpt_openapi"
+//! wire_api = "responses"  # Required: gpt_openapi only supports Responses API
 //! model_name = "gpt-3.5-turbo"
 //!
 //! [model_providers.enterprise_staging.adapter_config]
@@ -50,13 +58,17 @@ use serde_json::json;
 /// GPT OpenAPI adapter for enterprise LLM gateways
 ///
 /// This adapter is optimized for enterprise internal gateways that are already
-/// OpenAI-compatible. It performs minimal transformation and uses the Responses API.
+/// OpenAI Responses API compatible. It performs minimal transformation.
+///
+/// # Requirements
+///
+/// **ONLY supports `wire_api = "responses"`**. Config validation will reject `wire_api = "chat"`.
 ///
 /// # Features
 ///
 /// - **Minimal overhead**: Direct passthrough of requests/responses
 /// - **Multi-configuration**: One adapter, multiple provider configurations
-/// - **Responses API**: Uses OpenAI Responses API format
+/// - **Responses API only**: Uses OpenAI Responses API format exclusively
 /// - **Flexible**: Supports different model names and endpoints per provider
 ///
 /// # Dynamic Headers & Metadata
@@ -96,9 +108,10 @@ use serde_json::json;
 /// # Implementation Notes
 ///
 /// The adapter assumes the gateway:
-/// - Accepts OpenAI-compatible request format
-/// - Returns OpenAI-compatible streaming responses
+/// - Accepts OpenAI Responses API request format (with `input`, `previous_response_id`, etc.)
+/// - Returns OpenAI Responses API streaming responses (events like `response.created`, `response.output_item.delta`)
 /// - Supports standard SSE (Server-Sent Events) streaming
+/// - Uses `/responses` endpoint (automatically determined by `wire_api` setting)
 #[derive(Debug)]
 pub struct GptOpenapiAdapter;
 
@@ -126,6 +139,24 @@ impl ProviderAdapter for GptOpenapiAdapter {
         true
     }
 
+    fn validate_provider(&self, provider: &ModelProviderInfo) -> Result<()> {
+        // GptOpenapiAdapter only supports Responses API format
+        // Reject configurations using Chat Completions API
+        if provider.wire_api != crate::model_provider_info::WireApi::Responses {
+            return Err(crate::error::CodexErr::Fatal(
+                format!(
+                    "GptOpenapiAdapter requires wire_api = \"responses\". \
+                     Current configuration uses wire_api = \"{:?}\". \
+                     Please update your config to set wire_api = \"responses\" \
+                     for provider '{}'.",
+                    provider.wire_api,
+                    provider.name
+                )
+            ));
+        }
+        Ok(())
+    }
+
     fn transform_request(
         &self,
         prompt: &Prompt,
@@ -144,6 +175,33 @@ impl ProviderAdapter for GptOpenapiAdapter {
             "input": prompt.input,
             "stream": true,
         });
+
+        // Bind tools if present
+        let tools_json = crate::tools::spec::create_tools_json_for_responses_api(&prompt.tools)?;
+        if !tools_json.is_empty() {
+            request["tools"] = json!(tools_json);
+            request["parallel_tool_calls"] = json!(prompt.parallel_tool_calls);
+        }
+
+        // Apply effective model parameters
+        // Note: Adapters decide how to map these to API-specific names
+        let params = &prompt.effective_parameters;
+        if let Some(temp) = params.temperature {
+            request["temperature"] = json!(temp);
+        }
+        if let Some(top_p) = params.top_p {
+            request["top_p"] = json!(top_p);
+        }
+        if let Some(freq_penalty) = params.frequency_penalty {
+            request["frequency_penalty"] = json!(freq_penalty);
+        }
+        if let Some(pres_penalty) = params.presence_penalty {
+            request["presence_penalty"] = json!(pres_penalty);
+        }
+        if let Some(max_tokens) = params.max_tokens {
+            // Note: Using max_output_tokens for Responses API
+            request["max_output_tokens"] = json!(max_tokens);
+        }
 
         // Add previous_response_id if present (for Responses API conversation continuity)
         if let Some(prev_id) = &prompt.previous_response_id {
@@ -169,56 +227,25 @@ impl ProviderAdapter for GptOpenapiAdapter {
         chunk: &str,
         context: &mut AdapterContext,
     ) -> Result<Vec<ResponseEvent>> {
-        // Auto-detect API format and use appropriate parser
-        // Enterprise gateways may use either Chat Completions or Responses API
+        // GptOpenapiAdapter only supports Responses API format
+        // (wire_api validation ensures this is configured correctly)
 
         if chunk.trim().is_empty() {
             return Ok(vec![]);
         }
 
-        // Determine parser type from context or by inspecting chunk
-        let parser_type = if let Some(ptype) = context.get_str("parser_type") {
-            ptype
+        // Use Responses API parser
+        let state_key = "responses_parser_state";
+        let mut parser = if let Some(state_json) = context.state.get(state_key) {
+            serde_json::from_value(state_json.clone())?
         } else {
-            // First chunk - auto-detect format
-            let detected = if chunk.contains(r#""event":"response."#) {
-                "responses"
-            } else {
-                "chat"
-            };
-            context.set("parser_type", json!(detected));
-            detected
+            super::openai_common::ResponsesApiParserState::new()
         };
 
-        let events = if parser_type == "responses" {
-            // Use Responses API parser
-            let state_key = "responses_parser_state";
-            let mut parser = if let Some(state_json) = context.state.get(state_key) {
-                serde_json::from_value(state_json.clone())?
-            } else {
-                super::openai_common::ResponsesApiParserState::new()
-            };
-
-            let events = parser.parse_chunk(chunk)?;
-            context
-                .state
-                .insert(state_key.to_string(), serde_json::to_value(&parser)?);
-            events
-        } else {
-            // Use Chat Completions parser
-            let state_key = "chat_parser_state";
-            let mut parser = if let Some(state_json) = context.state.get(state_key) {
-                serde_json::from_value(state_json.clone())?
-            } else {
-                super::openai_common::ChatCompletionsParserState::new()
-            };
-
-            let events = parser.parse_chunk(chunk)?;
-            context
-                .state
-                .insert(state_key.to_string(), serde_json::to_value(&parser)?);
-            events
-        };
+        let events = parser.parse_chunk(chunk)?;
+        context
+            .state
+            .insert(state_key.to_string(), serde_json::to_value(&parser)?);
 
         Ok(events)
     }
@@ -239,6 +266,37 @@ mod tests {
     fn test_default_trait() {
         let adapter = GptOpenapiAdapter::default();
         assert_eq!(adapter.name(), "gpt_openapi");
+    }
+
+    #[test]
+    fn test_validate_provider_accepts_responses_api() {
+        let adapter = GptOpenapiAdapter::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.wire_api = crate::model_provider_info::WireApi::Responses;
+        provider.name = "test_provider".to_string();
+
+        let result = adapter.validate_provider(&provider);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_provider_rejects_chat_api() {
+        let adapter = GptOpenapiAdapter::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.wire_api = crate::model_provider_info::WireApi::Chat;
+        provider.name = "test_provider".to_string();
+
+        let result = adapter.validate_provider(&provider);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::Fatal(msg) => {
+                assert!(msg.contains("requires wire_api = \"responses\""));
+                assert!(msg.contains("test_provider"));
+            }
+            _ => panic!("Expected CodexErr::Fatal"),
+        }
     }
 
     #[test]
@@ -272,8 +330,8 @@ mod tests {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
 
-        // Real Chat Completions format
-        let chunk = r#"{"choices":[{"delta":{"content":"Hello from gateway"}}]}"#;
+        // Responses API format - JSON with event field
+        let chunk = r#"{"event":"response.output_text.delta","delta":"Hello from gateway"}"#;
         let events = adapter.transform_response_chunk(chunk, &mut ctx).unwrap();
 
         assert_eq!(events.len(), 1);
@@ -288,25 +346,24 @@ mod tests {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
 
-        // Add content first
+        // Add content first using Responses API format
         adapter
-            .transform_response_chunk(r#"{"choices":[{"delta":{"content":"Test"}}]}"#, &mut ctx)
+            .transform_response_chunk(
+                r#"{"event":"response.output_text.delta","delta":"Test"}"#,
+                &mut ctx,
+            )
             .unwrap();
 
-        // Real Chat Completions format for completion
-        let chunk = r#"{"id":"resp-gateway-123","choices":[{"finish_reason":"stop"}]}"#;
+        // Responses API format for completion - just returns Completed event
+        let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123"},"usage":{"input_tokens":10,"output_tokens":5}}"#;
         let events = adapter.transform_response_chunk(chunk, &mut ctx).unwrap();
 
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         match &events[0] {
-            ResponseEvent::OutputItemDone(_) => {}
-            _ => panic!("Expected OutputItemDone"),
-        }
-        match &events[1] {
             ResponseEvent::Completed { token_usage, .. } => {
-                assert!(token_usage.is_none());
+                assert!(token_usage.is_some());
             }
-            _ => panic!("Expected Completed"),
+            _ => panic!("Expected Completed, got {:?}", events[0]),
         }
     }
 
@@ -322,27 +379,36 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_events_in_single_chunk() {
+    fn test_responses_api_text_and_done() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
 
-        // Real Chat Completions format with both delta and finish_reason
-        let chunk =
-            r#"{"id":"resp-123","choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}"#;
-        let events = adapter.transform_response_chunk(chunk, &mut ctx).unwrap();
+        // First, add an output item to set current_item
+        adapter
+            .transform_response_chunk(
+                r#"{"event":"response.output_item.added","item":{"type":"message","id":"msg-1"}}"#,
+                &mut ctx,
+            )
+            .unwrap();
 
-        assert_eq!(events.len(), 3);
-        match &events[0] {
+        // Send text delta
+        let events1 = adapter
+            .transform_response_chunk(r#"{"event":"response.output_text.delta","delta":"Done"}"#, &mut ctx)
+            .unwrap();
+        assert_eq!(events1.len(), 1);
+        match &events1[0] {
             ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "Done"),
-            _ => panic!("Expected OutputTextDelta"),
+            _ => panic!("Expected OutputTextDelta, got {:?}", events1[0]),
         }
-        match &events[1] {
+
+        // Send output_item done event - now returns OutputItemDone because current_item exists
+        let events2 = adapter
+            .transform_response_chunk(r#"{"event":"response.output_item.done"}"#, &mut ctx)
+            .unwrap();
+        assert_eq!(events2.len(), 1);
+        match &events2[0] {
             ResponseEvent::OutputItemDone(_) => {}
-            _ => panic!("Expected OutputItemDone"),
-        }
-        match &events[2] {
-            ResponseEvent::Completed { .. } => {}
-            _ => panic!("Expected Completed"),
+            _ => panic!("Expected OutputItemDone, got {:?}", events2[0]),
         }
     }
 
@@ -351,24 +417,26 @@ mod tests {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
 
-        // Add some content
+        // Add some content using Responses API format
         adapter
-            .transform_response_chunk(r#"{"choices":[{"delta":{"content":"Test"}}]}"#, &mut ctx)
+            .transform_response_chunk(
+                r#"{"event":"response.output_text.delta","delta":"Test"}"#,
+                &mut ctx,
+            )
             .unwrap();
 
-        // Send [DONE]
+        // Send response.done event - returns only Completed event
         let events = adapter
-            .transform_response_chunk("[DONE]", &mut ctx)
+            .transform_response_chunk(
+                r#"{"event":"response.done","response":{"id":"resp-123"}}"#,
+                &mut ctx,
+            )
             .unwrap();
 
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         match &events[0] {
-            ResponseEvent::OutputItemDone(_) => {}
-            _ => panic!("Expected OutputItemDone"),
-        }
-        match &events[1] {
             ResponseEvent::Completed { .. } => {}
-            _ => panic!("Expected Completed"),
+            _ => panic!("Expected Completed, got {:?}", events[0]),
         }
     }
 }

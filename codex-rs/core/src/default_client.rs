@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -30,6 +31,29 @@ use std::sync::OnceLock;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+
+/// Default HTTP connection timeout (30 seconds)
+const DEFAULT_HTTP_CONNECT_TIMEOUT_MS: u64 = 30_000;
+/// Default HTTP request total timeout (10 minutes)
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS: u64 = 600_000;
+
+/// Get HTTP connect timeout from environment or use default
+fn get_connect_timeout() -> Duration {
+    std::env::var("CODEX_HTTP_CONNECT_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(DEFAULT_HTTP_CONNECT_TIMEOUT_MS))
+}
+
+/// Get HTTP request timeout from environment or use default
+fn get_request_timeout() -> Duration {
+    std::env::var("CODEX_HTTP_REQUEST_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(DEFAULT_HTTP_REQUEST_TIMEOUT_MS))
+}
 
 #[derive(Clone, Debug)]
 pub struct CodexHttpClient {
@@ -111,6 +135,11 @@ impl CodexRequestBuilder {
         T: ?Sized + Serialize,
     {
         self.map(|builder| builder.json(value))
+    }
+
+    /// Set request timeout (overrides client-level timeout)
+    pub fn timeout(self, duration: Duration) -> Self {
+        self.map(|builder| builder.timeout(duration))
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
@@ -267,7 +296,10 @@ pub fn create_client() -> CodexHttpClient {
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers);
+        .default_headers(headers)
+        .connect_timeout(get_connect_timeout())  // HTTP connection timeout
+        .timeout(get_request_timeout());         // HTTP request total timeout (can be overridden per-request)
+
     if is_sandboxed() {
         builder = builder.no_proxy();
     }

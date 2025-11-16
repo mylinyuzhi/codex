@@ -9,6 +9,7 @@ use crate::CodexAuth;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use codex_app_server_protocol::AuthMode;
+use codex_protocol::config_types::ModelParameters;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -16,6 +17,12 @@ use std::env::VarError;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
+
+/// Default HTTP connection timeout (30 seconds)
+const DEFAULT_HTTP_CONNECT_TIMEOUT_MS: u64 = 30_000;
+/// Default HTTP request total timeout (10 minutes)
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS: u64 = 600_000;
+/// Default SSE stream idle timeout (5 minutes)
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -157,6 +164,45 @@ pub struct ModelProviderInfo {
     /// ```
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+
+    /// Optional: Common LLM sampling parameters for this provider
+    ///
+    /// These parameters control the model's generation behavior. If specified,
+    /// they override global defaults from the Config struct.
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.custom]
+    /// name = "Custom Provider"
+    /// base_url = "https://api.example.com/v1"
+    ///
+    /// [model_providers.custom.model_parameters]
+    /// temperature = 0.7
+    /// top_p = 0.95
+    /// max_output_tokens = 8192
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_parameters: Option<ModelParameters>,
+
+    /// HTTP request total timeout in milliseconds (per-provider override).
+    ///
+    /// Overrides the global `http_request_timeout_ms` setting for this provider.
+    /// Useful for slow gateways that need longer timeouts.
+    ///
+    /// If not set, uses global config or defaults to 600000ms (10 minutes).
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.slow_gateway]
+    /// name = "Slow Gateway"
+    /// base_url = "https://slow-api.enterprise.com/v1"
+    /// request_timeout_ms = 900000  # 15 minutes
+    /// stream_idle_timeout_ms = 600000  # 10 minutes
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout_ms: Option<u64>,
 }
 
 impl ModelProviderInfo {
@@ -165,6 +211,7 @@ impl ModelProviderInfo {
     ///   • provider-specific headers (static + env based)
     ///   • Bearer auth header when an API key is available.
     ///   • Auth token for OAuth.
+    ///   • Per-provider HTTP request timeout (if configured).
     ///
     /// If the provider declares an `env_key` but the variable is missing/empty, returns an [`Err`] identical to the
     /// one produced by [`ModelProviderInfo::api_key`].
@@ -172,6 +219,7 @@ impl ModelProviderInfo {
         &'a self,
         client: &'a CodexHttpClient,
         auth: &Option<CodexAuth>,
+        global_timeout_config: Option<u64>,
     ) -> crate::error::Result<CodexRequestBuilder> {
         let effective_auth = if let Some(secret_key) = &self.experimental_bearer_token {
             Some(CodexAuth::from_api_key(secret_key))
@@ -197,7 +245,14 @@ impl ModelProviderInfo {
             builder = builder.bearer_auth(auth.get_token().await?);
         }
 
-        Ok(self.apply_http_headers(builder))
+        let mut builder = self.apply_http_headers(builder);
+
+        // Apply per-provider request timeout if configured
+        if let Some(timeout) = self.effective_request_timeout(global_timeout_config) {
+            builder = builder.timeout(timeout);
+        }
+
+        Ok(builder)
     }
 
     fn get_query_string(&self) -> String {
@@ -320,6 +375,25 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
+
+    /// Get effective HTTP request timeout for this provider.
+    ///
+    /// Priority: provider.request_timeout_ms > global_config > default (600s)
+    pub fn effective_request_timeout(&self, global_config: Option<u64>) -> Option<Duration> {
+        self.request_timeout_ms
+            .or(global_config)
+            .map(Duration::from_millis)
+    }
+
+    /// Get effective SSE stream idle timeout for this provider.
+    ///
+    /// Priority: provider.stream_idle_timeout_ms > global_config > default (300s)
+    pub fn effective_stream_idle_timeout(&self, global_config: Option<u64>) -> Duration {
+        self.stream_idle_timeout_ms
+            .or(global_config)
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
+    }
 }
 
 const DEFAULT_OLLAMA_PORT: u32 = 11434;
@@ -376,6 +450,8 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 adapter: None,
                 adapter_config: None,
                 model_name: None,
+                model_parameters: None,
+                request_timeout_ms: None,
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -424,6 +500,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         adapter: None,
         adapter_config: None,
         model_name: None,
+        model_parameters: None,
+        request_timeout_ms: None,
     }
 }
 
@@ -467,6 +545,7 @@ base_url = "http://localhost:11434/v1"
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -500,6 +579,7 @@ query_params = { api-version = "2025-04-01-preview" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -536,6 +616,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -562,6 +643,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 adapter: None,
                 adapter_config: None,
                 model_name: None,
+                model_parameters: None,
             }
         }
 
@@ -598,6 +680,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter: None,
             adapter_config: None,
             model_name: None,
+            model_parameters: None,
         };
         assert!(named_provider.is_azure_responses_endpoint());
 

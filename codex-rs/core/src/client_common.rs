@@ -36,10 +36,10 @@ pub struct Prompt {
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
-    pub(crate) tools: Vec<ToolSpec>,
+    pub tools: Vec<ToolSpec>,
 
     /// Whether parallel tool calls are permitted for this prompt.
-    pub(crate) parallel_tool_calls: bool,
+    pub parallel_tool_calls: bool,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
@@ -58,6 +58,11 @@ pub struct Prompt {
     /// Previous response ID for continuing conversations with context.
     /// Populated from SessionState when adapter supports it.
     pub previous_response_id: Option<String>,
+
+    /// Effective model sampling parameters resolved from Config and ModelProviderInfo.
+    /// Adapters can use these to control model behavior (temperature, top_p, etc.).
+    /// If a parameter is None, the adapter should not include it in the request.
+    pub effective_parameters: codex_protocol::config_types::ModelParameters,
 }
 
 impl Prompt {
