@@ -38,6 +38,7 @@ uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 [dev-dependencies]
 anyhow = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }
 
 [package.metadata.cargo-shear]
 # Required because:

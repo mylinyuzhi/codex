@@ -486,7 +486,10 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     ///     Ok(())
     /// }
     /// ```
-    fn validate_provider(&self, _provider: &crate::model_provider_info::ModelProviderInfo) -> Result<()> {
+    fn validate_provider(
+        &self,
+        _provider: &crate::model_provider_info::ModelProviderInfo,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -642,15 +645,28 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// Transform provider's SSE chunk into unified ResponseEvent(s)
+    /// Transform provider's SSE chunk or complete JSON response into unified ResponseEvent(s)
     ///
-    /// This method parses provider-specific streaming events and converts them
+    /// This method parses provider-specific responses and converts them
     /// to codex-rs `ResponseEvent` types.
     ///
     /// # Arguments
     ///
-    /// * `chunk` - Raw SSE data line (without "data: " prefix)
-    /// * `context` - Stateful context for multi-chunk parsing
+    /// * `chunk` - Raw data: SSE event (streaming) or complete JSON body (non-streaming)
+    /// * `context` - Stateful context for multi-chunk parsing (used in streaming mode)
+    /// * `provider` - Provider configuration (access `provider.streaming`, etc.)
+    ///
+    /// # Streaming vs Non-Streaming
+    ///
+    /// **Streaming mode** (`provider.streaming == true`):
+    /// - `chunk` is a single SSE event (e.g., `{"type":"response.output_item.done",...}`)
+    /// - Parser state stored in `context` across multiple chunks
+    /// - Called N times per request
+    ///
+    /// **Non-streaming mode** (`provider.streaming == false`):
+    /// - `chunk` is the complete JSON response body
+    /// - `context` not used (but passed for API uniformity)
+    /// - Called once per request
     ///
     /// # Returns
     ///
@@ -681,6 +697,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
         &self,
         chunk: &str,
         context: &mut AdapterContext,
+        provider: &crate::model_provider_info::ModelProviderInfo,
     ) -> Result<Vec<ResponseEvent>>;
 }
 

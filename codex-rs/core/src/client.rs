@@ -153,7 +153,9 @@ impl ModelClient {
                 presence_penalty: provider_params
                     .presence_penalty
                     .or(self.config.presence_penalty),
-                max_tokens: provider_params.max_tokens.or(self.config.model_max_output_tokens),
+                max_tokens: provider_params
+                    .max_tokens
+                    .or(self.config.model_max_output_tokens),
             }
         } else {
             // No provider overrides, use global config defaults
@@ -1168,19 +1170,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1235,19 +1229,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1275,19 +1261,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1317,19 +1295,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1355,19 +1325,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1393,19 +1355,11 @@ mod tests {
             name: "test".to_string(),
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
-            env_key_instructions: None,
-            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1500,19 +1454,11 @@ mod tests {
                 name: "test".to_string(),
                 base_url: Some("https://test.com".to_string()),
                 env_key: Some("TEST_API_KEY".to_string()),
-                env_key_instructions: None,
-                experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
-                query_params: None,
-                http_headers: None,
-                env_http_headers: None,
                 request_max_retries: Some(0),
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
-                requires_openai_auth: false,
-                adapter: None,
-                adapter_config: None,
-                model_name: None,
+                ..Default::default()
             };
 
             let otel_event_manager = otel_event_manager();

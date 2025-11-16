@@ -207,18 +207,58 @@ impl AdapterHttpClient {
             )));
         }
 
-        // Create SSE stream
-        let byte_stream = response.bytes_stream();
+        // Branch based on streaming configuration
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
 
-        // Get effective stream idle timeout
-        let idle_timeout = provider.effective_stream_idle_timeout(global_stream_idle_timeout);
+        if provider.streaming {
+            // ========== Streaming SSE path (existing logic) ==========
+            let byte_stream = response.bytes_stream();
+            let idle_timeout = provider.effective_stream_idle_timeout(global_stream_idle_timeout);
+            let provider_arc = Arc::new(provider.clone());
+            let otel = self.otel_event_manager.clone();
 
-        // Spawn task to process SSE stream with adapter
-        let otel = self.otel_event_manager.clone();
-        tokio::spawn(async move {
-            process_sse_with_adapter(byte_stream, tx_event, adapter, idle_timeout, otel).await;
-        });
+            tokio::spawn(async move {
+                process_sse_with_adapter(
+                    byte_stream,
+                    tx_event,
+                    adapter,
+                    provider_arc,
+                    idle_timeout,
+                    otel,
+                )
+                .await;
+            });
+        } else {
+            // ========== Non-streaming JSON path (new) ==========
+            let provider_arc = Arc::new(provider.clone());
+
+            tokio::spawn(async move {
+                match response.text().await {
+                    Ok(body) => {
+                        let mut ctx = AdapterContext::new();
+                        match adapter.transform_response_chunk(&body, &mut ctx, &provider_arc) {
+                            Ok(events) => {
+                                for event in events {
+                                    if tx_event.send(Ok(event)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_event.send(Err(e)).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Fatal(format!(
+                                "Failed to read response body: {e}"
+                            ))))
+                            .await;
+                    }
+                }
+            });
+        }
 
         Ok(ResponseStream { rx_event })
     }
@@ -232,6 +272,7 @@ async fn process_sse_with_adapter<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     adapter: Arc<dyn ProviderAdapter>,
+    provider: Arc<crate::model_provider_info::ModelProviderInfo>,
     idle_timeout: Duration,
     _otel_event_manager: OtelEventManager,
 ) where
@@ -270,7 +311,7 @@ async fn process_sse_with_adapter<S>(
                 }
 
                 // Use adapter to transform the chunk
-                match adapter.transform_response_chunk(&sse.data, &mut adapter_context) {
+                match adapter.transform_response_chunk(&sse.data, &mut adapter_context, &provider) {
                     Ok(events) => {
                         for event in events {
                             if tx_event.send(Ok(event)).await.is_err() {

@@ -210,6 +210,7 @@ mod tests {
             &self,
             _chunk: &str,
             _context: &mut AdapterContext,
+            _provider: &ModelProviderInfo,
         ) -> Result<Vec<ResponseEvent>> {
             Ok(vec![])
         }
