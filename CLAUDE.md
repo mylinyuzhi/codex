@@ -325,6 +325,7 @@ codex-rs/
 | No #[serde(default)] | Add for optional fields | Test TOML loading |
 | unsigned integers | Always use i32/i64 | `rg "u32\|u64" --type rust` |
 | format!("{}", var) | Use format!("{var}") | `just fmt` auto-fixes |
+| Running cargo from wrong directory | All cargo/just commands MUST run from `codex-rs/` subdirectory | `cd codex-rs && cargo build` |
 | Only `cargo check -p` | Always run `cargo build` before commit | `cargo build` |
 | Adding tool without full build | Run `cargo build` after tool changes | Checks EventMsg matches |
 | `.white()` in TUI | Never use - use default foreground | `rg "\.white\(\)" codex-rs/tui/` |

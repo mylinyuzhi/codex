@@ -101,6 +101,7 @@ async fn codex_mini_latest_tools() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
     config.features.disable(Feature::ApplyPatchFreeform);
+    config.features.enable(Feature::McpResourceTools);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));

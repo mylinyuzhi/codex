@@ -80,7 +80,7 @@ macro_rules! model_family {
             effective_context_window_percent: 95,
             support_verbosity: false,
             shell_type: ConfigShellToolType::Default,
-            edit_tool_type: ConfigEditToolType::Simple,
+            edit_tool_type: ConfigEditToolType::Disabled,
         };
         // apply overrides
         $(
