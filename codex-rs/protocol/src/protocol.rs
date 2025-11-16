@@ -572,6 +572,9 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Notification that incremental input mode is being used (for debugging/transparency)
+    IncrementalInputUsed(IncrementalInputUsedEvent),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1501,6 +1504,13 @@ pub enum TurnAbortReason {
     Interrupted,
     Replaced,
     ReviewEnded,
+}
+
+/// Event sent when incremental input is used instead of full history
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct IncrementalInputUsedEvent {
+    /// Number of items in incremental input
+    pub items_count: i64,
 }
 
 #[cfg(test)]

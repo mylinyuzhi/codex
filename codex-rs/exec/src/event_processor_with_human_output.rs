@@ -537,7 +537,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::TodoUpdate(_)
             | EventMsg::WebSearchToolCall(_)
-            | EventMsg::WebFetchToolCall(_) => {}
+            | EventMsg::WebFetchToolCall(_)
+            | EventMsg::IncrementalInputUsed(_) => {}
         }
         CodexStatus::Running
     }

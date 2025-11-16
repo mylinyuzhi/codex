@@ -904,6 +904,8 @@ async fn process_sse<S>(
                                     response_error = Some(CodexErr::ContextWindowExceeded);
                                 } else if is_quota_exceeded_error(&error) {
                                     response_error = Some(CodexErr::QuotaExceeded);
+                                } else if is_previous_response_not_found_error(&error) {
+                                    response_error = Some(CodexErr::PreviousResponseNotFound);
                                 } else {
                                     let delay = try_parse_retry_after(&error);
                                     let message = error.message.clone().unwrap_or_default();
@@ -1037,6 +1039,10 @@ fn is_context_window_error(error: &Error) -> bool {
 
 fn is_quota_exceeded_error(error: &Error) -> bool {
     error.code.as_deref() == Some("insufficient_quota")
+}
+
+fn is_previous_response_not_found_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("previous_response_not_found")
 }
 
 #[cfg(test)]

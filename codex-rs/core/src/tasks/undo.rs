@@ -92,7 +92,10 @@ impl SessionTask for UndoTask {
         match restore_result {
             Ok(Ok(())) => {
                 items.remove(idx);
-                sess.replace_history(items).await;
+
+                // Atomically replace history and clear tracking to avoid race conditions
+                sess.replace_history_and_clear_tracking(items).await;
+
                 let short_id: String = commit_id.chars().take(7).collect();
                 info!(commit_id = commit_id, "Undo restored ghost snapshot");
                 completed.success = true;
