@@ -31,6 +31,11 @@ const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
+/// Default value for streaming field (true = use SSE streaming)
+fn default_streaming() -> bool {
+    true
+}
+
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
 /// itself (and a handful of others) additionally expose the more modern
@@ -49,7 +54,7 @@ pub enum WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
     pub name: String,
@@ -70,6 +75,27 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+
+    /// Whether to use streaming responses (SSE), defaults to true.
+    ///
+    /// - `true`: Expects `text/event-stream` responses, receives events incrementally via SSE
+    /// - `false`: Expects complete JSON responses, receives all content at once
+    ///
+    /// Use cases:
+    /// - Background tasks, batch processing: Set to `false` to reduce latency
+    /// - Interactive UI: Keep `true` to display progress in real-time
+    ///
+    /// # Example Configuration
+    ///
+    /// ```toml
+    /// [model_providers.deepseek_batch]
+    /// name = "DeepSeek Batch"
+    /// base_url = "https://api.deepseek.com"
+    /// adapter = "gpt_openapi"
+    /// streaming = false  # Non-streaming for faster batch processing
+    /// ```
+    #[serde(default = "default_streaming")]
+    pub streaming: bool,
 
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
@@ -203,6 +229,32 @@ pub struct ModelProviderInfo {
     /// ```
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_timeout_ms: Option<u64>,
+}
+
+impl Default for ModelProviderInfo {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::default(),
+            streaming: true, // IMPORTANT: Default to true for streaming
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            adapter: None,
+            adapter_config: None,
+            model_name: None,
+            model_parameters: None,
+            request_timeout_ms: None,
+        }
+    }
 }
 
 impl ModelProviderInfo {
@@ -452,6 +504,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 model_name: None,
                 model_parameters: None,
                 request_timeout_ms: None,
+                streaming: true,
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -502,6 +555,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         model_name: None,
         model_parameters: None,
         request_timeout_ms: None,
+        streaming: true,
     }
 }
 
@@ -546,6 +600,8 @@ base_url = "http://localhost:11434/v1"
             adapter_config: None,
             model_name: None,
             model_parameters: None,
+            request_timeout_ms: None,
+            streaming: true,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -580,6 +636,8 @@ query_params = { api-version = "2025-04-01-preview" }
             adapter_config: None,
             model_name: None,
             model_parameters: None,
+            request_timeout_ms: None,
+            streaming: true,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -617,6 +675,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter_config: None,
             model_name: None,
             model_parameters: None,
+            request_timeout_ms: None,
+            streaming: true,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -644,6 +704,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 adapter_config: None,
                 model_name: None,
                 model_parameters: None,
+                request_timeout_ms: None,
+                streaming: true,
             }
         }
 
@@ -681,6 +743,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             adapter_config: None,
             model_name: None,
             model_parameters: None,
+            request_timeout_ms: None,
+            streaming: true,
         };
         assert!(named_provider.is_azure_responses_endpoint());
 

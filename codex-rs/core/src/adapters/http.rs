@@ -207,18 +207,58 @@ impl AdapterHttpClient {
             )));
         }
 
-        // Create SSE stream
-        let byte_stream = response.bytes_stream();
+        // Branch based on streaming configuration
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
 
-        // Get effective stream idle timeout
-        let idle_timeout = provider.effective_stream_idle_timeout(global_stream_idle_timeout);
+        if provider.streaming {
+            // ========== Streaming SSE path (existing logic) ==========
+            let byte_stream = response.bytes_stream();
+            let idle_timeout = provider.effective_stream_idle_timeout(global_stream_idle_timeout);
+            let provider_arc = Arc::new(provider.clone());
+            let otel = self.otel_event_manager.clone();
 
-        // Spawn task to process SSE stream with adapter
-        let otel = self.otel_event_manager.clone();
-        tokio::spawn(async move {
-            process_sse_with_adapter(byte_stream, tx_event, adapter, idle_timeout, otel).await;
-        });
+            tokio::spawn(async move {
+                process_sse_with_adapter(
+                    byte_stream,
+                    tx_event,
+                    adapter,
+                    provider_arc,
+                    idle_timeout,
+                    otel,
+                )
+                .await;
+            });
+        } else {
+            // ========== Non-streaming JSON path (new) ==========
+            let provider_arc = Arc::new(provider.clone());
+
+            tokio::spawn(async move {
+                match response.text().await {
+                    Ok(body) => {
+                        let mut ctx = AdapterContext::new();
+                        match adapter.transform_response_chunk(&body, &mut ctx, &provider_arc) {
+                            Ok(events) => {
+                                for event in events {
+                                    if tx_event.send(Ok(event)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_event.send(Err(e)).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Fatal(format!(
+                                "Failed to read response body: {e}"
+                            ))))
+                            .await;
+                    }
+                }
+            });
+        }
 
         Ok(ResponseStream { rx_event })
     }
@@ -232,6 +272,7 @@ async fn process_sse_with_adapter<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     adapter: Arc<dyn ProviderAdapter>,
+    provider: Arc<crate::model_provider_info::ModelProviderInfo>,
     idle_timeout: Duration,
     _otel_event_manager: OtelEventManager,
 ) where
@@ -259,6 +300,9 @@ async fn process_sse_with_adapter<S>(
 
         match response {
             Ok(Some(Ok(sse))) => {
+                // Debug: Log received SSE event type
+                tracing::debug!(sse_event = %sse.event, "Received SSE event");
+
                 // Skip comments and ping events
                 if sse.event == "comment" || sse.event == "ping" {
                     continue;
@@ -266,20 +310,26 @@ async fn process_sse_with_adapter<S>(
 
                 // Skip empty data
                 if sse.data.trim().is_empty() {
+                    tracing::debug!("Skipping empty SSE data");
                     continue;
                 }
 
                 // Use adapter to transform the chunk
-                match adapter.transform_response_chunk(&sse.data, &mut adapter_context) {
+                match adapter.transform_response_chunk(&sse.data, &mut adapter_context, &provider) {
                     Ok(events) => {
                         for event in events {
+                            let event_type = event_type_name(&event);
+                            tracing::debug!(event_type, "Sending ResponseEvent");
+
                             if tx_event.send(Ok(event)).await.is_err() {
                                 // Receiver dropped
+                                tracing::debug!("Receiver dropped, exiting SSE loop");
                                 return;
                             }
                         }
                     }
                     Err(e) => {
+                        tracing::error!(error = %e, "Adapter failed to transform response");
                         let _ = tx_event
                             .send(Err(CodexErr::Fatal(format!(
                                 "Adapter failed to transform response: {e}"
@@ -290,6 +340,7 @@ async fn process_sse_with_adapter<S>(
                 }
             }
             Ok(Some(Err(e))) => {
+                tracing::error!(error = %e, "SSE stream error");
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(e.to_string(), None)))
                     .await;
@@ -297,14 +348,31 @@ async fn process_sse_with_adapter<S>(
             }
             Ok(None) => {
                 // Stream ended normally
+                tracing::debug!("SSE stream ended normally");
                 return;
             }
             Err(_) => {
+                tracing::debug!("SSE stream idle timeout");
                 let _ = tx_event
                     .send(Err(CodexErr::Stream("SSE stream timeout".into(), None)))
                     .await;
                 return;
             }
         }
+    }
+}
+
+/// Get event type name for debug logging (without content)
+fn event_type_name(event: &ResponseEvent) -> &'static str {
+    match event {
+        ResponseEvent::Created => "Created",
+        ResponseEvent::OutputItemDone(_) => "OutputItemDone",
+        ResponseEvent::OutputItemAdded(_) => "OutputItemAdded",
+        ResponseEvent::Completed { .. } => "Completed",
+        ResponseEvent::OutputTextDelta(_) => "OutputTextDelta",
+        ResponseEvent::ReasoningSummaryDelta(_) => "ReasoningSummaryDelta",
+        ResponseEvent::ReasoningContentDelta(_) => "ReasoningContentDelta",
+        ResponseEvent::ReasoningSummaryPartAdded => "ReasoningSummaryPartAdded",
+        ResponseEvent::RateLimits(_) => "RateLimits",
     }
 }

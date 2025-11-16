@@ -120,6 +120,237 @@ impl GptOpenapiAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// Parse complete (non-streaming) Responses API JSON response
+    ///
+    /// Expected format:
+    /// ```json
+    /// {
+    ///   "id": "resp-123",
+    ///   "model": "gpt-4",
+    ///   "output": [
+    ///     {
+    ///       "type": "message",
+    ///       "id": "msg-1",
+    ///       "content": [
+    ///         { "type": "text", "text": "Hello" }
+    ///       ]
+    ///     }
+    ///   ],
+    ///   "usage": {
+    ///     "input_tokens": 10,
+    ///     "output_tokens": 5
+    ///   }
+    /// }
+    /// ```
+    fn parse_complete_responses_json(body: &str) -> Result<Vec<ResponseEvent>> {
+        let data: JsonValue = serde_json::from_str(body)?;
+
+        let mut events = Vec::new();
+
+        // Extract response ID
+        let response_id = data
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Parse output items
+        if let Some(output_array) = data.get("output").and_then(|o| o.as_array()) {
+            for item_data in output_array {
+                if let Some(item) = Self::parse_output_item(item_data)? {
+                    events.push(ResponseEvent::OutputItemDone(item));
+                }
+            }
+        }
+
+        // Parse token usage
+        let token_usage = data.get("usage").map(|u| {
+            let input_tokens = u
+                .get("input_tokens")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let output_tokens = u
+                .get("output_tokens")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let cached_input_tokens = u
+                .get("input_tokens_cache_read")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let reasoning_output_tokens = u
+                .get("reasoning_output_tokens")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let total_tokens = input_tokens + output_tokens;
+
+            crate::protocol::TokenUsage {
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                reasoning_output_tokens,
+                total_tokens,
+            }
+        });
+
+        // Add completion event
+        events.push(ResponseEvent::Completed {
+            response_id,
+            token_usage,
+        });
+
+        Ok(events)
+    }
+
+    /// Parse a single output item from complete response
+    ///
+    /// Returns None if item type is not recognized or parsing fails
+    fn parse_output_item(
+        item_data: &JsonValue,
+    ) -> Result<Option<codex_protocol::models::ResponseItem>> {
+        let item_type = item_data.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+        match item_type {
+            "message" => {
+                let id = item_data
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .map(std::string::ToString::to_string);
+
+                let role = item_data
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("assistant")
+                    .to_string();
+
+                // Parse content array
+                let mut content = Vec::new();
+                if let Some(content_array) = item_data.get("content").and_then(|c| c.as_array()) {
+                    for content_item in content_array {
+                        let content_type = content_item
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+
+                        match content_type {
+                            "text" => {
+                                if let Some(text) =
+                                    content_item.get("text").and_then(|t| t.as_str())
+                                {
+                                    content.push(codex_protocol::models::ContentItem::OutputText {
+                                        text: text.to_string(),
+                                    });
+                                }
+                            }
+                            _ => {
+                                // Skip unknown content types
+                            }
+                        }
+                    }
+                }
+
+                Ok(Some(codex_protocol::models::ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                }))
+            }
+
+            "function_call" => {
+                let id = item_data
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .map(std::string::ToString::to_string);
+
+                let name = item_data
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let call_id = item_data
+                    .get("call_id")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let arguments = item_data
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
+
+                Ok(Some(codex_protocol::models::ResponseItem::FunctionCall {
+                    id,
+                    name,
+                    call_id,
+                    arguments,
+                }))
+            }
+
+            "reasoning" => {
+                let id = item_data
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // Parse summary array
+                let mut summary = Vec::new();
+                if let Some(summary_array) = item_data.get("summary").and_then(|s| s.as_array()) {
+                    for summary_item in summary_array {
+                        if let Some(text) = summary_item.get("text").and_then(|t| t.as_str()) {
+                            summary.push(
+                                codex_protocol::models::ReasoningItemReasoningSummary::SummaryText {
+                                    text: text.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+
+                // Parse content array (optional)
+                let content = if let Some(content_array) =
+                    item_data.get("content").and_then(|c| c.as_array())
+                {
+                    let mut content_items = Vec::new();
+                    for content_item in content_array {
+                        if let Some(text) = content_item.get("text").and_then(|t| t.as_str()) {
+                            content_items.push(
+                                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                                    text: text.to_string(),
+                                },
+                            );
+                        }
+                    }
+                    if content_items.is_empty() {
+                        None
+                    } else {
+                        Some(content_items)
+                    }
+                } else {
+                    None
+                };
+
+                let encrypted_content = item_data
+                    .get("encrypted_content")
+                    .and_then(|e| e.as_str())
+                    .map(std::string::ToString::to_string);
+
+                Ok(Some(codex_protocol::models::ResponseItem::Reasoning {
+                    id,
+                    summary,
+                    content,
+                    encrypted_content,
+                }))
+            }
+
+            _ => {
+                // Unknown item type, skip it
+                Ok(None)
+            }
+        }
+    }
 }
 
 impl Default for GptOpenapiAdapter {
@@ -143,16 +374,13 @@ impl ProviderAdapter for GptOpenapiAdapter {
         // GptOpenapiAdapter only supports Responses API format
         // Reject configurations using Chat Completions API
         if provider.wire_api != crate::model_provider_info::WireApi::Responses {
-            return Err(crate::error::CodexErr::Fatal(
-                format!(
-                    "GptOpenapiAdapter requires wire_api = \"responses\". \
+            return Err(crate::error::CodexErr::Fatal(format!(
+                "GptOpenapiAdapter requires wire_api = \"responses\". \
                      Current configuration uses wire_api = \"{:?}\". \
                      Please update your config to set wire_api = \"responses\" \
                      for provider '{}'.",
-                    provider.wire_api,
-                    provider.name
-                )
-            ));
+                provider.wire_api, provider.name
+            )));
         }
         Ok(())
     }
@@ -173,7 +401,7 @@ impl ProviderAdapter for GptOpenapiAdapter {
         let mut request = json!({
             "model": model,
             "input": prompt.input,
-            "stream": true,
+            "stream": provider.streaming,
         });
 
         // Bind tools if present
@@ -226,6 +454,7 @@ impl ProviderAdapter for GptOpenapiAdapter {
         &self,
         chunk: &str,
         context: &mut AdapterContext,
+        provider: &ModelProviderInfo,
     ) -> Result<Vec<ResponseEvent>> {
         // GptOpenapiAdapter only supports Responses API format
         // (wire_api validation ensures this is configured correctly)
@@ -234,20 +463,28 @@ impl ProviderAdapter for GptOpenapiAdapter {
             return Ok(vec![]);
         }
 
-        // Use Responses API parser
-        let state_key = "responses_parser_state";
-        let mut parser = if let Some(state_json) = context.state.get(state_key) {
-            serde_json::from_value(state_json.clone())?
+        // Branch based on streaming configuration
+        if provider.streaming {
+            // ========== Streaming mode: Parse SSE chunks ==========
+            // Use Responses API parser with stateful context
+            let state_key = "responses_parser_state";
+            let mut parser = if let Some(state_json) = context.state.get(state_key) {
+                serde_json::from_value(state_json.clone())?
+            } else {
+                super::openai_common::ResponsesApiParserState::new()
+            };
+
+            let events = parser.parse_chunk(chunk)?;
+            context
+                .state
+                .insert(state_key.to_string(), serde_json::to_value(&parser)?);
+
+            Ok(events)
         } else {
-            super::openai_common::ResponsesApiParserState::new()
-        };
-
-        let events = parser.parse_chunk(chunk)?;
-        context
-            .state
-            .insert(state_key.to_string(), serde_json::to_value(&parser)?);
-
-        Ok(events)
+            // ========== Non-streaming mode: Parse complete JSON ==========
+            // chunk contains the full response body, parse it once
+            Self::parse_complete_responses_json(chunk)
+        }
     }
 }
 
@@ -320,8 +557,11 @@ mod tests {
     fn test_transform_response_empty_chunk() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
-        let events = adapter.transform_response_chunk("", &mut ctx).unwrap();
+        let events = adapter
+            .transform_response_chunk("", &mut ctx, &provider)
+            .unwrap();
         assert!(events.is_empty());
     }
 
@@ -329,10 +569,13 @@ mod tests {
     fn test_transform_response_text_delta() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
         // Responses API format - JSON with event field
         let chunk = r#"{"event":"response.output_text.delta","delta":"Hello from gateway"}"#;
-        let events = adapter.transform_response_chunk(chunk, &mut ctx).unwrap();
+        let events = adapter
+            .transform_response_chunk(chunk, &mut ctx, &provider)
+            .unwrap();
 
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -345,18 +588,22 @@ mod tests {
     fn test_transform_response_completion() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
         // Add content first using Responses API format
         adapter
             .transform_response_chunk(
                 r#"{"event":"response.output_text.delta","delta":"Test"}"#,
                 &mut ctx,
+                &provider,
             )
             .unwrap();
 
         // Responses API format for completion - just returns Completed event
         let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123"},"usage":{"input_tokens":10,"output_tokens":5}}"#;
-        let events = adapter.transform_response_chunk(chunk, &mut ctx).unwrap();
+        let events = adapter
+            .transform_response_chunk(chunk, &mut ctx, &provider)
+            .unwrap();
 
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -371,9 +618,10 @@ mod tests {
     fn test_transform_response_invalid_json() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
         let chunk = r#"{"invalid json"#;
-        let result = adapter.transform_response_chunk(chunk, &mut ctx);
+        let result = adapter.transform_response_chunk(chunk, &mut ctx, &provider);
 
         assert!(result.is_err());
     }
@@ -382,18 +630,24 @@ mod tests {
     fn test_responses_api_text_and_done() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
         // First, add an output item to set current_item
         adapter
             .transform_response_chunk(
                 r#"{"event":"response.output_item.added","item":{"type":"message","id":"msg-1"}}"#,
                 &mut ctx,
+                &provider,
             )
             .unwrap();
 
         // Send text delta
         let events1 = adapter
-            .transform_response_chunk(r#"{"event":"response.output_text.delta","delta":"Done"}"#, &mut ctx)
+            .transform_response_chunk(
+                r#"{"event":"response.output_text.delta","delta":"Done"}"#,
+                &mut ctx,
+                &provider,
+            )
             .unwrap();
         assert_eq!(events1.len(), 1);
         match &events1[0] {
@@ -403,7 +657,11 @@ mod tests {
 
         // Send output_item done event - now returns OutputItemDone because current_item exists
         let events2 = adapter
-            .transform_response_chunk(r#"{"event":"response.output_item.done"}"#, &mut ctx)
+            .transform_response_chunk(
+                r#"{"event":"response.output_item.done"}"#,
+                &mut ctx,
+                &provider,
+            )
             .unwrap();
         assert_eq!(events2.len(), 1);
         match &events2[0] {
@@ -416,12 +674,14 @@ mod tests {
     fn test_done_signal() {
         let adapter = GptOpenapiAdapter::new();
         let mut ctx = AdapterContext::new();
+        let provider = ModelProviderInfo::default();
 
         // Add some content using Responses API format
         adapter
             .transform_response_chunk(
                 r#"{"event":"response.output_text.delta","delta":"Test"}"#,
                 &mut ctx,
+                &provider,
             )
             .unwrap();
 
@@ -430,6 +690,7 @@ mod tests {
             .transform_response_chunk(
                 r#"{"event":"response.done","response":{"id":"resp-123"}}"#,
                 &mut ctx,
+                &provider,
             )
             .unwrap();
 

@@ -518,9 +518,9 @@ pub struct LoggingConfig {
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            location: false,          // Don't show file/line by default (keep logs clean)
-            target: false,            // Don't show module path by default
-            timezone: TimezoneConfig::Local,  // Use local timezone by default
+            location: false,                 // Don't show file/line by default (keep logs clean)
+            target: false,                   // Don't show module path by default
+            timezone: TimezoneConfig::Local, // Use local timezone by default
             level: "info".to_string(),
             modules: vec![],
         }

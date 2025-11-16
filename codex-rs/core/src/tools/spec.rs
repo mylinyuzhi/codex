@@ -25,9 +25,9 @@ pub enum ConfigShellToolType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigEditToolType {
-    Disabled,  // Edit tool completely disabled
-    Simple,    // Exact matching + simple LLM correction
-    Smart,     // Flexible matching + semantic correction (requires instruction param)
+    Disabled, // Edit tool completely disabled
+    Simple,   // Exact matching + simple LLM correction
+    Smart,    // Flexible matching + semantic correction (requires instruction param)
 }
 
 impl Default for ConfigEditToolType {

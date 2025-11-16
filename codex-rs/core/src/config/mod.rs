@@ -1138,8 +1138,8 @@ impl Config {
         // Derive model family from provider.model_name if available, otherwise from config.model
         // This ensures adapter-based providers get correct model capabilities
         let model_for_family = model_provider.model_name.as_ref().unwrap_or(&model);
-        let mut model_family =
-            find_family_for_model(model_for_family).unwrap_or_else(|| derive_default_model_family(model_for_family));
+        let mut model_family = find_family_for_model(model_for_family)
+            .unwrap_or_else(|| derive_default_model_family(model_for_family));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -1345,15 +1345,17 @@ impl Config {
         // This ensures config errors are caught at load time, not during requests
         if let Some(adapter_name) = &config.model_provider.adapter {
             if let Ok(adapter) = crate::adapters::get_adapter(adapter_name) {
-                adapter.validate_provider(&config.model_provider).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "Adapter validation failed for provider '{}': {}",
-                            config.model_provider_id, e
-                        ),
-                    )
-                })?;
+                adapter
+                    .validate_provider(&config.model_provider)
+                    .map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "Adapter validation failed for provider '{}': {}",
+                                config.model_provider_id, e
+                            ),
+                        )
+                    })?;
             }
             // If adapter not found, validation will fail later during actual usage
             // We don't fail here to avoid breaking config loading for unknown adapters
@@ -2975,18 +2977,10 @@ model_verbosity = "high"
             base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
-            env_key_instructions: None,
-            experimental_bearer_token: None,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
-            requires_openai_auth: false,
-            adapter: None,
-            adapter_config: None,
-            model_name: None,
+            ..Default::default()
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -3093,6 +3087,13 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                http_connect_timeout_ms: None,
+                http_request_timeout_ms: None,
+                stream_idle_timeout_ms: None,
             },
             o3_profile_config
         );
@@ -3167,6 +3168,13 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            temperature: None,
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            http_connect_timeout_ms: None,
+            http_request_timeout_ms: None,
+            stream_idle_timeout_ms: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -3256,6 +3264,13 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            temperature: None,
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            http_connect_timeout_ms: None,
+            http_request_timeout_ms: None,
+            stream_idle_timeout_ms: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -3331,6 +3346,13 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            temperature: None,
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            http_connect_timeout_ms: None,
+            http_request_timeout_ms: None,
+            stream_idle_timeout_ms: None,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

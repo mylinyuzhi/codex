@@ -297,8 +297,8 @@ pub fn create_client() -> CodexHttpClient {
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers)
-        .connect_timeout(get_connect_timeout())  // HTTP connection timeout
-        .timeout(get_request_timeout());         // HTTP request total timeout (can be overridden per-request)
+        .connect_timeout(get_connect_timeout()) // HTTP connection timeout
+        .timeout(get_request_timeout()); // HTTP request total timeout (can be overridden per-request)
 
     if is_sandboxed() {
         builder = builder.no_proxy();
