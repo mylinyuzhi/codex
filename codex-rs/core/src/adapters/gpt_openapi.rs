@@ -52,8 +52,30 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::error::Result;
 use crate::model_provider_info::ModelProviderInfo;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+
+/// Token usage details for complete (non-streaming) responses
+#[derive(Debug, Deserialize)]
+struct CompleteResponseUsage {
+    input_tokens: i64,
+    input_tokens_details: Option<CompleteResponseInputTokensDetails>,
+    output_tokens: i64,
+    output_tokens_details: Option<CompleteResponseOutputTokensDetails>,
+}
+
+/// Input token details for complete responses
+#[derive(Debug, Deserialize)]
+struct CompleteResponseInputTokensDetails {
+    cached_tokens: i64,
+}
+
+/// Output token details for complete responses
+#[derive(Debug, Deserialize)]
+struct CompleteResponseOutputTokensDetails {
+    reasoning_tokens: i64,
+}
 
 /// GPT OpenAPI adapter for enterprise LLM gateways
 ///
@@ -164,33 +186,23 @@ impl GptOpenapiAdapter {
             }
         }
 
-        // Parse token usage
-        let token_usage = data.get("usage").map(|u| {
-            let input_tokens = u
-                .get("input_tokens")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            let output_tokens = u
-                .get("output_tokens")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            let cached_input_tokens = u
-                .get("input_tokens_cache_read")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            let reasoning_output_tokens = u
-                .get("reasoning_output_tokens")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            let total_tokens = input_tokens + output_tokens;
-
-            crate::protocol::TokenUsage {
-                input_tokens,
-                cached_input_tokens,
-                output_tokens,
-                reasoning_output_tokens,
-                total_tokens,
-            }
+        // Parse token usage with proper nested structure handling
+        let token_usage = data.get("usage").and_then(|u| {
+            serde_json::from_value::<CompleteResponseUsage>(u.clone())
+                .ok()
+                .map(|usage| crate::protocol::TokenUsage {
+                    input_tokens: usage.input_tokens,
+                    cached_input_tokens: usage
+                        .input_tokens_details
+                        .map(|d| d.cached_tokens)
+                        .unwrap_or(0),
+                    output_tokens: usage.output_tokens,
+                    reasoning_output_tokens: usage
+                        .output_tokens_details
+                        .map(|d| d.reasoning_tokens)
+                        .unwrap_or(0),
+                    total_tokens: usage.input_tokens + usage.output_tokens,
+                })
         });
 
         // Add completion event
@@ -600,7 +612,7 @@ mod tests {
             .unwrap();
 
         // Responses API format for completion - just returns Completed event
-        let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123"},"usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123"},"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}}}"#;
         let events = adapter
             .transform_response_chunk(chunk, &mut ctx, &provider)
             .unwrap();
@@ -698,6 +710,63 @@ mod tests {
         match &events[0] {
             ResponseEvent::Completed { .. } => {}
             _ => panic!("Expected Completed, got {:?}", events[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_complete_responses_with_token_details() {
+        let adapter = GptOpenapiAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.streaming = false; // Non-streaming mode
+
+        // Complete non-streaming response with full token details
+        let body = r#"{
+            "id": "resp-123",
+            "model": "gpt-4",
+            "output": [{
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}]
+            }],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "input_tokens_details": {"cached_tokens": 20},
+                "output_tokens_details": {"reasoning_tokens": 15}
+            },
+            "status": "completed"
+        }"#;
+
+        let events = adapter
+            .transform_response_chunk(body, &mut ctx, &provider)
+            .unwrap();
+
+        // Should have OutputItemDone + Completed events
+        assert_eq!(events.len(), 2);
+
+        // First event should be OutputItemDone
+        match &events[0] {
+            ResponseEvent::OutputItemDone(_) => {}
+            _ => panic!("Expected OutputItemDone, got {:?}", events[0]),
+        }
+
+        // Second event should be Completed with full token details
+        match &events[1] {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            } => {
+                assert_eq!(response_id, "resp-123");
+                let usage = token_usage.as_ref().expect("Should have token usage");
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+                assert_eq!(usage.cached_input_tokens, 20);
+                assert_eq!(usage.reasoning_output_tokens, 15);
+                assert_eq!(usage.total_tokens, 150);
+            }
+            _ => panic!("Expected Completed, got {:?}", events[1]),
         }
     }
 }
