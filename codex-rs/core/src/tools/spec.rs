@@ -74,7 +74,7 @@ impl ToolsConfig {
             model_family.shell_type.clone()
         };
 
-        let edit_tool_type = if features.enabled(Feature::SmartEdit) {
+        let edit_tool_type = if features.enabled(Feature::EditTool) {
             ConfigEditToolType::Smart
         } else {
             model_family.edit_tool_type.clone()

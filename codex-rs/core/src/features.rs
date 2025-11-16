@@ -44,7 +44,7 @@ pub enum Feature {
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Enable the smart_edit tool with LLM-powered error correction.
-    SmartEdit,
+    EditTool,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
     McpResourceTools,
 }
@@ -297,7 +297,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::SmartEdit,
+        id: Feature::EditTool,
         key: "smart_edit",
         stage: Stage::Stable,
         default_enabled: false,
