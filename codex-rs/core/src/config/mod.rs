@@ -1135,8 +1135,11 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
+        // Derive model family from provider.model_name if available, otherwise from config.model
+        // This ensures adapter-based providers get correct model capabilities
+        let model_for_family = model_provider.model_name.as_ref().unwrap_or(&model);
         let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
+            find_family_for_model(model_for_family).unwrap_or_else(|| derive_default_model_family(model_for_family));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
