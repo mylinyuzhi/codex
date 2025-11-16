@@ -217,6 +217,35 @@ codex-rs/
 - **When to add code:** New compaction strategies, custom prompt templates, file filtering rules
 - **Tests:** `core/src/compact_strategies/file_recovery.rs` (unit tests), `core/tests/suite/compact.rs` (integration)
 
+### **Previous Response ID Support**
+**Responsibility:** Incremental conversation optimization for Responses API providers
+- **Module:** `core/src/previous_response_id/` → Input building logic
+- **State:** `core/src/state/session.rs` → LastResponseTracker (atomically stores response_id + history_len)
+- **Mechanism:** Send only new items since last response when adapter supports `previous_response_id`
+- **Decision:** Incremental if (1) `adapter.supports_previous_response_id()` AND (2) has tracking data
+- **Benefits:** Reduces network payload for long conversations
+- **Lifecycle:** Cleared on compact, undo, model switch, error recovery
+- **Error handling:** `CodexErr::PreviousResponseNotFound` triggers auto-retry with full history
+- **Integration points:**
+  - `codex.rs` → Response completion stores tracking, error recovery clears
+  - `compact.rs/undo.rs` → Clear tracking after history modification
+  - Adapters → Implement `supports_previous_response_id()` (default: false)
+- **When to add code:** New adapter support, tracking lifecycle events, error patterns
+
+### **Streaming vs Non-Streaming Mode**
+**Responsibility:** Support both SSE streaming and traditional request-response
+- **Config:** `streaming = true|false` in ModelProviderInfo (default: `true`)
+- **Implementation:** `core/src/model_provider_info.rs`, `adapters/http.rs`, `adapters/gpt_openapi.rs`
+- **Use cases:**
+  - `streaming = true` → Real-time token-by-token (default, better UX)
+  - `streaming = false` → Batch completion (batch processing providers)
+- **Config example:**
+  ```toml
+  [[model_providers]]
+  adapter = "gpt_openapi"
+  streaming = false
+  ```
+
 ### **Hook System**
 **Responsibility:** Event-driven lifecycle interception system allowing external scripts and native functions to block, validate, or augment tool execution at various lifecycle points
 - **Claude Code compatible:** Full protocol compatibility with 9 event types (PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, Notification, PreCompact, SessionStart, SessionEnd)

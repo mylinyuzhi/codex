@@ -1564,7 +1564,8 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::TodoUpdate(_)
             | EventMsg::WebSearchToolCall(_)
-            | EventMsg::WebFetchToolCall(_) => {}
+            | EventMsg::WebFetchToolCall(_)
+            | EventMsg::IncrementalInputUsed(_) => {}
         }
     }
 

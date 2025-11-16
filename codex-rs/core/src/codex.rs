@@ -251,7 +251,7 @@ impl Codex {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
-    state: Mutex<SessionState>,
+    pub(crate) state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -695,9 +695,9 @@ impl Session {
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
         let mut state = self.state.lock().await;
 
-        // Clear last_response_id if model is being changed
+        // Clear last_response tracking if model is being changed
         if updates.model.is_some() {
-            state.clear_last_response_id();
+            state.clear_last_response();
         }
 
         state.session_configuration = state.session_configuration.apply(&updates);
@@ -716,9 +716,9 @@ impl Session {
         let session_configuration = {
             let mut state = self.state.lock().await;
 
-            // Clear last_response_id if model is being changed
+            // Clear last_response tracking if model is being changed
             if updates.model.is_some() {
-                state.clear_last_response_id();
+                state.clear_last_response();
             }
 
             let session_configuration = state.session_configuration.clone().apply(&updates);
@@ -984,9 +984,11 @@ impl Session {
         state.record_items(items.iter());
     }
 
-    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+    /// Atomically replace history and clear response tracking.
+    /// Used by compact and undo operations to avoid race conditions.
+    pub(crate) async fn replace_history_and_clear_tracking(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
-        state.replace_history(items);
+        state.replace_history_and_clear_tracking(items);
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -1812,7 +1814,8 @@ pub(crate) async fn run_task(
         let turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.clone_history().await.get_history_for_prompt()
+            // Use incremental input if adapter supports previous_response_id
+            crate::previous_response_id::build_turn_input(&sess, &turn_context, &pending_input).await
         };
 
         let turn_input_messages = turn_input
@@ -1933,8 +1936,8 @@ async fn run_turn(
         .state
         .lock()
         .await
-        .get_last_response_id()
-        .map(String::from);
+        .get_last_response()
+        .map(|(id, _)| id.to_string());
 
     // Resolve effective parameters from config and provider settings
     let effective_parameters = turn_context.client.resolve_parameters();
@@ -1987,6 +1990,15 @@ async fn run_turn(
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
+            Err(CodexErr::PreviousResponseNotFound) => {
+                // Clear the invalid response tracking and retry with full history
+                sess.state.lock().await.clear_last_response();
+                tracing::warn!(
+                    "Previous response ID not found - cleared tracking and retrying with full history"
+                );
+                // Don't count this against retry budget - it's a logical error, not a network error
+                continue;
+            }
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -2192,8 +2204,12 @@ async fn try_run_turn(
                 response_id,
                 token_usage,
             } => {
-                // Store response_id for next turn's previous_response_id
-                sess.state.lock().await.set_last_response_id(response_id);
+                // Atomically capture history length and set tracking for next turn's incremental input
+                // Using single lock acquisition to avoid race conditions
+                sess.state
+                    .lock()
+                    .await
+                    .set_last_response_from_current_history(response_id);
 
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;

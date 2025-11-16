@@ -166,11 +166,9 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
-    sess.replace_history(new_history).await;
 
-    // Clear last_response_id after compact since conversation context has changed
-    // TODO: Fix this - Session.state is private, need public API
-    // sess.state.lock().await.clear_last_response_id();
+    // Atomically replace history and clear tracking to avoid race conditions
+    sess.replace_history_and_clear_tracking(new_history).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),

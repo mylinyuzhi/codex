@@ -8,14 +8,23 @@ use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 
+/// Tracks the state when a response completed, enabling incremental input optimization.
+/// Both response_id and history_len must be set atomically to ensure consistency.
+#[derive(Debug, Clone)]
+struct LastResponseTracker {
+    response_id: String,
+    history_len: usize,
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    /// Last response ID from the model, used for continuing conversations.
-    /// Cleared on compact or model switch.
-    last_response_id: Option<String>,
+    /// Tracks last response completion state for incremental input optimization.
+    /// Contains both response_id and history length at completion time.
+    /// Cleared on: compact, model switch, undo, error recovery.
+    last_response: Option<LastResponseTracker>,
 }
 
 impl SessionState {
@@ -25,7 +34,7 @@ impl SessionState {
             session_configuration,
             history: ContextManager::new(),
             latest_rate_limits: None,
-            last_response_id: None,
+            last_response: None,
         }
     }
 
@@ -42,8 +51,16 @@ impl SessionState {
         self.history.clone()
     }
 
-    pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
+    /// Atomically replace history and clear response tracking.
+    /// Used by compact and undo operations to ensure consistency.
+    pub(crate) fn replace_history_and_clear_tracking(&mut self, items: Vec<ResponseItem>) {
+        let item_count = items.len();
         self.history.replace(items);
+        self.clear_last_response();
+        tracing::debug!(
+            "History replaced ({} items) and tracking cleared atomically",
+            item_count
+        );
     }
 
     // Token/rate limit helpers
@@ -73,16 +90,41 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
-    // Previous response ID helpers
-    pub(crate) fn set_last_response_id(&mut self, id: String) {
-        self.last_response_id = Some(id);
+    // Previous response tracking helpers
+
+    /// Atomically set both response_id and history_len when a response completes.
+    /// This ensures the two values are always consistent.
+    pub(crate) fn set_last_response(&mut self, response_id: String, history_len: usize) {
+        self.last_response = Some(LastResponseTracker {
+            response_id,
+            history_len,
+        });
     }
 
-    pub(crate) fn get_last_response_id(&self) -> Option<&str> {
-        self.last_response_id.as_deref()
+    /// Atomically capture current history length and set last_response tracking.
+    /// This is the preferred method to avoid race conditions between getting history length
+    /// and setting the tracking data.
+    pub(crate) fn set_last_response_from_current_history(&mut self, response_id: String) {
+        let history_len = self.history.get_history().len();
+        tracing::debug!(
+            "Tracking set: response_id={}, history_len={} (for next turn's incremental input)",
+            response_id,
+            history_len
+        );
+        self.set_last_response(response_id, history_len);
     }
 
-    pub(crate) fn clear_last_response_id(&mut self) {
-        self.last_response_id = None;
+    /// Get both response_id and history_len atomically.
+    /// Returns None if no response has completed, or Some((response_id, history_len)) if available.
+    pub(crate) fn get_last_response(&self) -> Option<(&str, usize)> {
+        self.last_response
+            .as_ref()
+            .map(|tracker| (tracker.response_id.as_str(), tracker.history_len))
+    }
+
+    /// Clear all response tracking data atomically.
+    /// Called when: compact, model switch, undo, or error recovery.
+    pub(crate) fn clear_last_response(&mut self) {
+        self.last_response = None;
     }
 }
