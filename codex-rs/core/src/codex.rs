@@ -1815,7 +1815,8 @@ pub(crate) async fn run_task(
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             // Use incremental input if adapter supports previous_response_id
-            crate::previous_response_id::build_turn_input(&sess, &turn_context, &pending_input).await
+            crate::previous_response_id::build_turn_input(&sess, &turn_context, &pending_input)
+                .await
         };
 
         let turn_input_messages = turn_input

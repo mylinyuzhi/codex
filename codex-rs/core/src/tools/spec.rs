@@ -45,6 +45,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
     pub enable_write_todos: bool,
+    pub enable_mcp_resource_tools: bool,
     pub edit_tool_type: ConfigEditToolType,
     pub model_family: ModelFamily,
 }
@@ -65,6 +66,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let enable_mcp_resource_tools = features.enabled(Feature::McpResourceTools);
 
         let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
@@ -101,6 +103,7 @@ impl ToolsConfig {
             enable_write_todos: model_family
                 .experimental_supported_tools
                 .contains(&"write_todos".to_string()),
+            enable_mcp_resource_tools,
             edit_tool_type,
             model_family: (*model_family).clone(),
         }
@@ -1021,12 +1024,15 @@ pub(crate) fn build_specs(
     builder.register_handler("container.exec", shell_handler.clone());
     builder.register_handler("local_shell", shell_handler);
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    // MCP resource tools are opt-in via feature flag
+    if config.enable_mcp_resource_tools {
+        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
+        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
+        builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+        builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    }
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);

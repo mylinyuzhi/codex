@@ -45,6 +45,8 @@ pub enum Feature {
     WindowsSandbox,
     /// Enable the smart_edit tool with LLM-powered error correction.
     SmartEdit,
+    /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
+    McpResourceTools,
 }
 
 impl Feature {
@@ -297,6 +299,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SmartEdit,
         key: "smart_edit",
+        stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::McpResourceTools,
+        key: "mcp_resource_tools",
         stage: Stage::Stable,
         default_enabled: false,
     },

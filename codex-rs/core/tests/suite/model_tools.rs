@@ -61,6 +61,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.features.disable(Feature::ViewImageTool);
     config.features.disable(Feature::WebSearchRequest);
     config.features.disable(Feature::UnifiedExec);
+    config.features.enable(Feature::McpResourceTools);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));

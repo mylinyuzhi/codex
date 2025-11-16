@@ -1,4 +1,5 @@
-use crate::codex::{Session, TurnContext};
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::protocol::EventMsg;
 use crate::protocol::IncrementalInputUsedEvent;
 use codex_protocol::models::ResponseItem;
@@ -45,7 +46,9 @@ pub async fn build_turn_input(
     // Atomically get both response_id and history_len, then release lock immediately
     let last_response = {
         let state = session.state.lock().await;
-        state.get_last_response().map(|(id, len)| (id.to_string(), len))
+        state
+            .get_last_response()
+            .map(|(id, len)| (id.to_string(), len))
     };
 
     // Decision: use incremental if adapter supports AND we have tracking data
@@ -56,14 +59,19 @@ pub async fn build_turn_input(
         adapter_supports_incremental,
         last_response.is_some(),
         pending_input.len(),
-        if use_incremental { "incremental" } else { "full" }
+        if use_incremental {
+            "incremental"
+        } else {
+            "full"
+        }
     );
 
     if use_incremental {
         let (response_id, history_len) = last_response.as_ref().unwrap();
 
         // Build incremental input (only new items since last response)
-        let mut incremental_input = build_incremental_input(session, response_id, *history_len).await;
+        let mut incremental_input =
+            build_incremental_input(session, response_id, *history_len).await;
 
         // Append any pending input (tool outputs, user messages during execution)
         incremental_input.extend_from_slice(pending_input);
@@ -143,10 +151,7 @@ async fn build_incremental_input(
     }
 
     // Extract new items added since last response
-    let incremental: Vec<_> = history
-        .into_iter()
-        .skip(expected_history_len)
-        .collect();
+    let incremental: Vec<_> = history.into_iter().skip(expected_history_len).collect();
 
     let new_items_count = incremental.len();
 
@@ -165,7 +170,8 @@ async fn build_incremental_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::{ContentItem, ResponseItem};
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -208,7 +214,10 @@ mod tests {
 
         assert_eq!(incremental.len(), 2);
         assert!(matches!(incremental[0], ResponseItem::FunctionCall { .. }));
-        assert!(matches!(incremental[1], ResponseItem::FunctionCallOutput { .. }));
+        assert!(matches!(
+            incremental[1],
+            ResponseItem::FunctionCallOutput { .. }
+        ));
     }
 
     #[test]
