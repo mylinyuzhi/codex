@@ -4,6 +4,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -27,6 +28,19 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+
+/// Error response structure from provider APIs
+#[derive(Debug, Deserialize, Serialize)]
+struct ErrorResponse {
+    error: ErrorDetail,
+}
+
+/// Error detail structure
+#[derive(Debug, Deserialize, Serialize)]
+struct ErrorDetail {
+    code: Option<String>,
+    message: Option<String>,
+}
 
 /// HTTP client for adapter-based provider communication
 ///
@@ -195,13 +209,31 @@ impl AdapterHttpClient {
             .await
             .map_err(|e| CodexErr::Fatal(format!("Failed to connect to provider: {e}")))?;
 
-        // Check status
+        // Check status and parse specific error types
         if !response.status().is_success() {
             let status = response.status();
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to read error response".into());
+
+            // Try to parse as structured error response to detect specific error codes
+            if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&body) {
+                let error = &error_response.error;
+
+                // Check for specific error codes and return appropriate CodexErr types
+                if is_previous_response_not_found_error(error) {
+                    return Err(CodexErr::PreviousResponseNotFound);
+                }
+                if is_context_window_error(error) {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                if is_quota_exceeded_error(error) {
+                    return Err(CodexErr::QuotaExceeded);
+                }
+            }
+
+            // Fall back to generic Fatal error if not a recognized error code
             return Err(CodexErr::Fatal(format!(
                 "Provider returned error {status}: {body}"
             )));
@@ -375,4 +407,19 @@ fn event_type_name(event: &ResponseEvent) -> &'static str {
         ResponseEvent::ReasoningSummaryPartAdded => "ReasoningSummaryPartAdded",
         ResponseEvent::RateLimits(_) => "RateLimits",
     }
+}
+
+/// Check if error is a context window exceeded error
+fn is_context_window_error(error: &ErrorDetail) -> bool {
+    error.code.as_deref() == Some("context_length_exceeded")
+}
+
+/// Check if error is a quota exceeded error
+fn is_quota_exceeded_error(error: &ErrorDetail) -> bool {
+    error.code.as_deref() == Some("insufficient_quota")
+}
+
+/// Check if error is a previous response not found error
+fn is_previous_response_not_found_error(error: &ErrorDetail) -> bool {
+    error.code.as_deref() == Some("previous_response_not_found")
 }
