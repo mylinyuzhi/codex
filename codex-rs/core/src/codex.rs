@@ -1840,6 +1840,7 @@ pub(crate) async fn run_task(
                 let TurnRunResult {
                     processed_items,
                     total_token_usage,
+                    response_id,
                 } = turn_output;
                 let limit = turn_context
                     .client
@@ -1853,6 +1854,16 @@ pub(crate) async fn run_task(
                     .unwrap_or(false);
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
+
+                // Set tracking AFTER model outputs are recorded in history (done inside process_items).
+                // This ensures next turn's incremental input only includes NEW user inputs (tool outputs),
+                // not model outputs (FunctionCall, Reasoning) that server already has via previous_response_id.
+                if let Some(resp_id) = response_id {
+                    sess.state
+                        .lock()
+                        .await
+                        .set_last_response_from_current_history(resp_id);
+                }
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
@@ -1879,6 +1890,15 @@ pub(crate) async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
+
+                    // Warn if conversation ended without any assistant output
+                    if last_agent_message.is_none() {
+                        warn!(
+                            "Conversation ended without assistant message output. \
+                            Model may have returned empty content or only reasoning without text."
+                        );
+                    }
+
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
@@ -2045,6 +2065,7 @@ pub struct ProcessedResponseItem {
 struct TurnRunResult {
     processed_items: Vec<ProcessedResponseItem>,
     total_token_usage: Option<TokenUsage>,
+    response_id: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2205,12 +2226,9 @@ async fn try_run_turn(
                 response_id,
                 token_usage,
             } => {
-                // Atomically capture history length and set tracking for next turn's incremental input
-                // Using single lock acquisition to avoid race conditions
-                sess.state
-                    .lock()
-                    .await
-                    .set_last_response_from_current_history(response_id);
+                // NOTE: Tracking setup is now deferred until AFTER model outputs are recorded in history.
+                // This ensures incremental input only includes actual new user inputs (tool outputs),
+                // not model outputs that the server already has via previous_response_id.
 
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
@@ -2227,6 +2245,7 @@ async fn try_run_turn(
                 let result = TurnRunResult {
                     processed_items,
                     total_token_usage: token_usage.clone(),
+                    response_id: Some(response_id.clone()),
                 };
 
                 return Ok(result);

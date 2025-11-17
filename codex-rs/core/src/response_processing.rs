@@ -18,8 +18,11 @@ pub(crate) async fn process_items(
     for processed_response_item in processed_items {
         let crate::codex::ProcessedResponseItem { item, response } = processed_response_item;
         match (&item, &response) {
-            (ResponseItem::Message { role, .. }, None) if role == "assistant" => {
+            (ResponseItem::Message { role, content, .. }, None) if role == "assistant" => {
                 // If the model returned a message, we need to record it.
+                if content.is_empty() {
+                    warn!("Model returned empty assistant message - conversation may terminate without output");
+                }
                 items_to_record_in_conversation_history.push(item);
             }
             (
