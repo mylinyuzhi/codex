@@ -19,6 +19,7 @@ mod deprecation_notice;
 mod exec;
 mod fork_conversation;
 mod grep_files;
+mod incremental_input;
 mod items;
 mod json_result;
 mod list_dir;
