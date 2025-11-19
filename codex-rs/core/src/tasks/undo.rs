@@ -93,7 +93,7 @@ impl SessionTask for UndoTask {
             Ok(Ok(())) => {
                 items.remove(idx);
 
-                // Atomically replace history and clear tracking to avoid race conditions
+                // Atomically replace history (no tracking needed with stateless filtering)
                 sess.replace_history_and_clear_tracking(items).await;
 
                 let short_id: String = commit_id.chars().take(7).collect();

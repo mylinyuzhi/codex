@@ -402,10 +402,9 @@ impl ProviderAdapter for GptOpenapiAdapter {
             "session_id": context.conversation_id
         });
 
-        metadata.headers.insert(
-            "extra".to_string(),
-            extra_json.to_string(),
-        );
+        metadata
+            .headers
+            .insert("extra".to_string(), extra_json.to_string());
 
         Ok(metadata)
     }
