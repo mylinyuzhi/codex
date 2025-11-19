@@ -8,23 +8,14 @@ use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 
-/// Tracks the state when a response completed, enabling incremental input optimization.
-/// Both response_id and history_len must be set atomically to ensure consistency.
-#[derive(Debug, Clone)]
-struct LastResponseTracker {
-    response_id: String,
-    history_len: usize,
-}
-
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    /// Tracks last response completion state for incremental input optimization.
-    /// Contains both response_id and history length at completion time.
-    /// Cleared on: compact, model switch, undo, error recovery.
-    last_response: Option<LastResponseTracker>,
+    /// Last response_id from server (for previous_response_id field in next request).
+    /// With stateless filtering, we only track the ID (not history_len).
+    last_response_id: Option<String>,
 }
 
 impl SessionState {
@@ -34,7 +25,7 @@ impl SessionState {
             session_configuration,
             history: ContextManager::new(),
             latest_rate_limits: None,
-            last_response: None,
+            last_response_id: None,
         }
     }
 
@@ -51,15 +42,32 @@ impl SessionState {
         self.history.clone()
     }
 
-    /// Atomically replace history and clear response tracking.
-    /// Used by compact and undo operations to ensure consistency.
+    /// Atomically replace history.
+    /// Used by compact and undo operations.
     pub(crate) fn replace_history_and_clear_tracking(&mut self, items: Vec<ResponseItem>) {
         let item_count = items.len();
+        let had_response_id = self.last_response_id.is_some();
+
+        if let Some(ref old_id) = self.last_response_id {
+            tracing::debug!(
+                "Replacing history ({} items) and clearing response_id (was: {})",
+                item_count,
+                old_id
+            );
+        } else {
+            tracing::debug!(
+                "Replacing history ({} items), no response_id to clear",
+                item_count
+            );
+        }
+
         self.history.replace(items);
-        self.clear_last_response();
+        self.last_response_id = None;
+
         tracing::debug!(
-            "History replaced ({} items) and tracking cleared atomically",
-            item_count
+            "History replacement complete: {} items, tracking_cleared={}",
+            item_count,
+            had_response_id
         );
     }
 
@@ -90,41 +98,32 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
-    // Previous response tracking helpers
+    // Previous response ID tracking (minimal, no history_len)
 
-    /// Atomically set both response_id and history_len when a response completes.
-    /// This ensures the two values are always consistent.
-    pub(crate) fn set_last_response(&mut self, response_id: String, history_len: usize) {
-        self.last_response = Some(LastResponseTracker {
-            response_id,
-            history_len,
-        });
-    }
-
-    /// Atomically capture current history length and set last_response tracking.
-    /// This is the preferred method to avoid race conditions between getting history length
-    /// and setting the tracking data.
-    pub(crate) fn set_last_response_from_current_history(&mut self, response_id: String) {
-        let history_len = self.history.get_history().len();
+    /// Set the last response_id from the server.
+    /// With stateless filtering, we only track the ID for the next request.
+    pub(crate) fn set_last_response(&mut self, response_id: String) {
         tracing::debug!(
-            "Tracking set: response_id={}, history_len={} (for next turn's incremental input)",
-            response_id,
-            history_len
+            "Setting last_response_id for incremental mode: response_id={}",
+            response_id
         );
-        self.set_last_response(response_id, history_len);
+        self.last_response_id = Some(response_id);
     }
 
-    /// Get both response_id and history_len atomically.
-    /// Returns None if no response has completed, or Some((response_id, history_len)) if available.
-    pub(crate) fn get_last_response(&self) -> Option<(&str, usize)> {
-        self.last_response
-            .as_ref()
-            .map(|tracker| (tracker.response_id.as_str(), tracker.history_len))
+    /// Get the last response_id.
+    /// Returns None if no response has completed, or Some(response_id) if available.
+    pub(crate) fn get_last_response(&self) -> Option<&str> {
+        self.last_response_id.as_deref()
     }
 
-    /// Clear all response tracking data atomically.
-    /// Called when: compact, model switch, undo, or error recovery.
+    /// Clear the last response_id.
+    /// Used when the tracked response is no longer valid (error recovery, invalidation).
     pub(crate) fn clear_last_response(&mut self) {
-        self.last_response = None;
+        if let Some(ref old_id) = self.last_response_id {
+            tracing::debug!("Clearing last_response_id (was: {})", old_id);
+        } else {
+            tracing::debug!("Clearing last_response_id (was already None)");
+        }
+        self.last_response_id = None;
     }
 }

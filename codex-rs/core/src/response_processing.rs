@@ -21,7 +21,9 @@ pub(crate) async fn process_items(
             (ResponseItem::Message { role, content, .. }, None) if role == "assistant" => {
                 // If the model returned a message, we need to record it.
                 if content.is_empty() {
-                    warn!("Model returned empty assistant message - conversation may terminate without output");
+                    warn!(
+                        "Model returned empty assistant message - conversation may terminate without output"
+                    );
                 }
                 items_to_record_in_conversation_history.push(item);
             }

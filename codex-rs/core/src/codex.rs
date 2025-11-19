@@ -694,12 +694,6 @@ impl Session {
 
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
         let mut state = self.state.lock().await;
-
-        // Clear last_response tracking if model is being changed
-        if updates.model.is_some() {
-            state.clear_last_response();
-        }
-
         state.session_configuration = state.session_configuration.apply(&updates);
     }
 
@@ -715,12 +709,6 @@ impl Session {
     ) -> Arc<TurnContext> {
         let session_configuration = {
             let mut state = self.state.lock().await;
-
-            // Clear last_response tracking if model is being changed
-            if updates.model.is_some() {
-                state.clear_last_response();
-            }
-
             let session_configuration = state.session_configuration.clone().apply(&updates);
             state.session_configuration = session_configuration.clone();
             session_configuration
@@ -1855,14 +1843,9 @@ pub(crate) async fn run_task(
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
-                // Set tracking AFTER model outputs are recorded in history (done inside process_items).
-                // This ensures next turn's incremental input only includes NEW user inputs (tool outputs),
-                // not model outputs (FunctionCall, Reasoning) that server already has via previous_response_id.
+                // Store response_id for next request (stateless filtering only needs ID, not history_len)
                 if let Some(resp_id) = response_id {
-                    sess.state
-                        .lock()
-                        .await
-                        .set_last_response_from_current_history(resp_id);
+                    sess.state.lock().await.set_last_response(resp_id);
                 }
 
                 if token_limit_reached {
@@ -1958,7 +1941,17 @@ async fn run_turn(
         .lock()
         .await
         .get_last_response()
-        .map(|(id, _)| id.to_string());
+        .map(|id| id.to_string());
+
+    // Log whether we're using incremental mode
+    if let Some(ref resp_id) = previous_response_id {
+        tracing::debug!(
+            "Building prompt with previous_response_id for incremental mode: response_id={}",
+            resp_id
+        );
+    } else {
+        tracing::debug!("Building prompt without previous_response_id (full history mode)");
+    }
 
     // Resolve effective parameters from config and provider settings
     let effective_parameters = turn_context.client.resolve_parameters();
@@ -2012,10 +2005,11 @@ async fn run_turn(
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(CodexErr::PreviousResponseNotFound) => {
-                // Clear the invalid response tracking and retry with full history
+                // Server doesn't recognize the previous_response_id (expired or invalid).
+                // Clear stale tracking and retry with full history.
                 sess.state.lock().await.clear_last_response();
                 tracing::warn!(
-                    "Previous response ID not found - cleared tracking and retrying with full history"
+                    "Previous response ID not found on server - cleared tracking, retrying with full history"
                 );
                 // Don't count this against retry budget - it's a logical error, not a network error
                 continue;
