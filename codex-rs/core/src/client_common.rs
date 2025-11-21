@@ -47,22 +47,9 @@ pub struct Prompt {
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 
-    /// Reasoning effort level for models that support reasoning.
-    /// This is injected by ModelClient when using adapters.
-    pub reasoning_effort: Option<ReasoningEffortConfig>,
-
-    /// Reasoning summary configuration for models that support reasoning.
-    /// This is injected by ModelClient when using adapters.
-    pub reasoning_summary: Option<ReasoningSummaryConfig>,
-
     /// Previous response ID for continuing conversations with context.
     /// Populated from SessionState when adapter supports it.
     pub previous_response_id: Option<String>,
-
-    /// Effective model sampling parameters resolved from Config and ModelProviderInfo.
-    /// Adapters can use these to control model behavior (temperature, top_p, etc.).
-    /// If a parameter is None, the adapter should not include it in the request.
-    pub effective_parameters: codex_protocol::config_types::ModelParameters,
 }
 
 impl Prompt {

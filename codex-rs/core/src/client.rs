@@ -180,17 +180,29 @@ impl ModelClient {
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         // Check if provider specifies a custom adapter
         if let Some(adapter_name) = &self.provider.adapter {
+            // Construct RequestContext with model configuration and session state
+            let context = crate::adapters::RequestContext {
+                // Runtime context
+                conversation_id: self.conversation_id.to_string(),
+                session_source: format!("{:?}", self.session_source),
+
+                // Model configuration parameters
+                effective_parameters: self.resolve_parameters(),
+                reasoning_effort: self.effort,
+                reasoning_summary: Some(self.summary),
+
+                // Session state (copy from prompt)
+                previous_response_id: prompt.previous_response_id.clone(),
+            };
+
             let adapter_client =
                 AdapterHttpClient::new(self.client.clone(), self.otel_event_manager.clone());
             return adapter_client
                 .stream_with_adapter(
                     prompt,
+                    context,
                     &self.provider,
                     adapter_name,
-                    self.conversation_id,
-                    self.session_source.clone(),
-                    self.effort,
-                    self.summary,
                     self.config.stream_idle_timeout_ms,
                 )
                 .await;

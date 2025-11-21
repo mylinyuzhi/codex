@@ -11,10 +11,6 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::protocol::SessionSource;
 
 use crate::adapters::AdapterConfig;
 use crate::adapters::AdapterContext;
@@ -69,12 +65,9 @@ impl AdapterHttpClient {
     pub async fn stream_with_adapter(
         &self,
         prompt: &Prompt,
+        context: crate::adapters::RequestContext,
         provider: &ModelProviderInfo,
         adapter_name: &str,
-        conversation_id: ConversationId,
-        session_source: SessionSource,
-        effort: Option<ReasoningEffortConfig>,
-        summary: ReasoningSummaryConfig,
         global_stream_idle_timeout: Option<u64>,
     ) -> Result<ResponseStream> {
         // Get adapter from registry
@@ -95,29 +88,18 @@ impl AdapterHttpClient {
             adapter.validate_config(&config)?;
         }
 
-        // Clone prompt and inject reasoning configuration
-        let mut enhanced_prompt = prompt.clone();
-        enhanced_prompt.reasoning_effort = effort;
-        enhanced_prompt.reasoning_summary = Some(summary);
-
-        // Transform request using adapter
+        // Transform request using adapter (no clone needed - context contains config)
         let transformed_request = adapter
-            .transform_request(&enhanced_prompt, provider)
+            .transform_request(prompt, &context, provider)
             .map_err(|e| {
                 CodexErr::Fatal(format!(
                     "Adapter '{adapter_name}' failed to transform request: {e}"
                 ))
             })?;
 
-        // Build runtime context for dynamic headers/params
-        let request_context = crate::adapters::RequestContext {
-            conversation_id: conversation_id.to_string(),
-            session_source: format!("{session_source:?}"),
-        };
-
         // Let adapter build dynamic metadata (headers, query params)
         let request_metadata = adapter
-            .build_request_metadata(&enhanced_prompt, provider, &request_context)
+            .build_request_metadata(prompt, provider, &context)
             .map_err(|e| {
                 CodexErr::Fatal(format!(
                     "Adapter '{adapter_name}' failed to build request metadata: {e}"

@@ -16,13 +16,23 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use codex_core::adapters::{get_adapter, BaseWireApi};
+//! use codex_core::adapters::{get_adapter, BaseWireApi, RequestContext};
 //!
 //! // Get an adapter
 //! let adapter = get_adapter("anthropic")?;
 //!
+//! // Create request context
+//! let context = RequestContext {
+//!     conversation_id: "conv-123".to_string(),
+//!     session_source: "TUI".to_string(),
+//!     effective_parameters: Default::default(),
+//!     reasoning_effort: None,
+//!     reasoning_summary: None,
+//!     previous_response_id: None,
+//! };
+//!
 //! // Transform request
-//! let request_body = adapter.transform_request(&prompt, &provider)?;
+//! let request_body = adapter.transform_request(&prompt, &context, &provider)?;
 //!
 //! // Use appropriate wire API based on adapter's base protocol
 //! match adapter.base_wire_api() {
@@ -237,6 +247,7 @@ impl AdapterContext {
 /// ```
 #[derive(Debug, Clone)]
 pub struct RequestContext {
+    // ===== Runtime context (existing) =====
     /// Unique identifier for the current conversation
     ///
     /// This is typically used for:
@@ -254,6 +265,41 @@ pub struct RequestContext {
     /// - Implement source-specific request handling
     /// - Debug/audit request origins
     pub session_source: String,
+
+    // ===== Model configuration parameters (new) =====
+    /// Effective model sampling parameters resolved from Config and ModelProviderInfo.
+    ///
+    /// Source: ModelClient.resolve_parameters()
+    /// Lifecycle: Per-turn (may change if provider config changes)
+    ///
+    /// Adapters use these to control model behavior (temperature, top_p, etc.).
+    /// If a parameter is None, the adapter should not include it in the request.
+    pub effective_parameters: codex_protocol::config_types::ModelParameters,
+
+    /// Reasoning effort level for models that support reasoning.
+    ///
+    /// Source: ModelClient.effort (from Config.model_reasoning_effort)
+    /// Lifecycle: Per-session (stable across turns)
+    ///
+    /// Values: None | Low | Medium | High
+    pub reasoning_effort: Option<codex_protocol::config_types::ReasoningEffort>,
+
+    /// Reasoning summary configuration.
+    ///
+    /// Source: ModelClient.summary (from Config.model_reasoning_summary)
+    /// Lifecycle: Per-session (stable across turns)
+    ///
+    /// Controls how reasoning content is presented (Detailed vs Concise).
+    pub reasoning_summary: Option<codex_protocol::config_types::ReasoningSummary>,
+
+    // ===== Session state (new) =====
+    /// Previous response ID for continuing conversations with context.
+    ///
+    /// Source: Copied from Prompt.previous_response_id
+    /// Lifecycle: Per-turn (dynamic)
+    ///
+    /// Used for incremental conversation mode to reduce payload size.
+    pub previous_response_id: Option<String>,
 }
 
 /// HTTP metadata that adapters can dynamically add to requests
@@ -524,6 +570,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// # Arguments
     ///
     /// * `prompt` - Unified prompt format containing conversation history and tools
+    /// * `context` - Request context containing model configuration parameters
     /// * `provider` - Provider configuration (for accessing base_url, headers, etc.)
     ///
     /// # Returns
@@ -535,6 +582,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// ```text
     /// OpenAI Chat Completions:
     ///   Prompt.input → {"messages": [...]}
+    ///   context.effective_parameters.temperature → {"temperature": 0.7}
     ///
     /// Anthropic Messages API:
     ///   Prompt.input → {"messages": [...], "anthropic_version": "2023-06-01"}
@@ -542,8 +590,12 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// Google Gemini:
     ///   Prompt.input → {"contents": [...], "generationConfig": {...}}
     /// ```
-    fn transform_request(&self, prompt: &Prompt, provider: &ModelProviderInfo)
-    -> Result<JsonValue>;
+    fn transform_request(
+        &self,
+        prompt: &Prompt,
+        context: &RequestContext,
+        provider: &ModelProviderInfo,
+    ) -> Result<JsonValue>;
 
     /// Build dynamic HTTP metadata (headers, query params) for the request
     ///

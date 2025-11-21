@@ -412,6 +412,7 @@ impl ProviderAdapter for GptOpenapiAdapter {
     fn transform_request(
         &self,
         prompt: &Prompt,
+        context: &crate::adapters::RequestContext,
         provider: &ModelProviderInfo,
     ) -> Result<JsonValue> {
         // Get model name from provider config
@@ -435,9 +436,9 @@ impl ProviderAdapter for GptOpenapiAdapter {
             request["parallel_tool_calls"] = json!(prompt.parallel_tool_calls);
         }
 
-        // Apply effective model parameters
+        // Apply effective model parameters from context
         // Note: Adapters decide how to map these to API-specific names
-        let params = &prompt.effective_parameters;
+        let params = &context.effective_parameters;
         if let Some(temp) = params.temperature {
             request["temperature"] = json!(temp);
         }
@@ -456,15 +457,15 @@ impl ProviderAdapter for GptOpenapiAdapter {
         }
 
         // Add previous_response_id if present (for Responses API conversation continuity)
-        if let Some(prev_id) = &prompt.previous_response_id {
+        if let Some(prev_id) = &context.previous_response_id {
             request["previous_response_id"] = json!(prev_id);
         }
 
         // Add reasoning parameters if present (for Responses API)
-        if let Some(effort) = prompt.reasoning_effort {
+        if let Some(effort) = context.reasoning_effort {
             request["reasoning"] = json!({
                 "effort": effort,
-                "summary": prompt.reasoning_summary,
+                "summary": context.reasoning_summary,
             });
 
             // Request encrypted content for reasoning models
@@ -570,7 +571,16 @@ mod tests {
         let mut provider = ModelProviderInfo::default();
         provider.model_name = Some("gpt-4".to_string());
 
-        let request = adapter.transform_request(&prompt, &provider).unwrap();
+        let context = crate::adapters::RequestContext {
+            conversation_id: "test-conv".to_string(),
+            session_source: "Test".to_string(),
+            effective_parameters: Default::default(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            previous_response_id: None,
+        };
+
+        let request = adapter.transform_request(&prompt, &context, &provider).unwrap();
 
         assert_eq!(request["stream"], json!(true));
         assert_eq!(request["model"], json!("gpt-4"));

@@ -201,6 +201,7 @@ mod tests {
         fn transform_request(
             &self,
             _prompt: &Prompt,
+            _context: &crate::adapters::RequestContext,
             _provider: &ModelProviderInfo,
         ) -> Result<JsonValue> {
             Ok(serde_json::json!({}))
