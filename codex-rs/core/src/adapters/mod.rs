@@ -16,13 +16,23 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use codex_core::adapters::{get_adapter, BaseWireApi};
+//! use codex_core::adapters::{get_adapter, BaseWireApi, RequestContext};
 //!
 //! // Get an adapter
 //! let adapter = get_adapter("anthropic")?;
 //!
+//! // Create request context
+//! let context = RequestContext {
+//!     conversation_id: "conv-123".to_string(),
+//!     session_source: "TUI".to_string(),
+//!     effective_parameters: Default::default(),
+//!     reasoning_effort: None,
+//!     reasoning_summary: None,
+//!     previous_response_id: None,
+//! };
+//!
 //! // Transform request
-//! let request_body = adapter.transform_request(&prompt, &provider)?;
+//! let request_body = adapter.transform_request(&prompt, &context, &provider)?;
 //!
 //! // Use appropriate wire API based on adapter's base protocol
 //! match adapter.base_wire_api() {
@@ -78,61 +88,17 @@ use std::collections::HashMap;
 ///
 /// ## Typical Memory Usage (per request)
 ///
-/// - **PassthroughAdapter/GptOpenapiAdapter**: 1-200 KB (accumulated response text)
-/// - **AnthropicAdapter**: < 100 bytes (simple metadata tracking)
+/// - **GptOpenapiAdapter**: 1-200 KB (accumulated response text)
 ///
 /// **Note**: Long responses may cause temporary memory peaks (e.g., 1-10 MB for
 /// large document generation), but this is **not a leak** as memory is released
 /// when the request completes.
-///
-/// # Usage Examples
-///
-/// ## Example 1: Storing Serialized Parser State
-///
-/// ```rust
-/// use codex_core::adapters::AdapterContext;
-/// use serde_json::json;
-///
-/// let mut ctx = AdapterContext::new();
-///
-/// // PassthroughAdapter pattern: serialize entire parser state
-/// let parser = ChatCompletionsParserState::new();
-/// ctx.state.insert(
-///     "chat_parser_state".to_string(),
-///     serde_json::to_value(&parser).unwrap()
-/// );
-///
-/// // Later: deserialize and continue parsing
-/// let mut parser: ChatCompletionsParserState =
-///     serde_json::from_value(ctx.state["chat_parser_state"].clone()).unwrap();
-/// ```
-///
-/// ## Example 2: Simple Key-Value Tracking
-///
-/// ```rust
-/// use codex_core::adapters::AdapterContext;
-/// use serde_json::json;
-///
-/// let mut ctx = AdapterContext::new();
-///
-/// // AnthropicAdapter pattern: track metadata
-/// ctx.set("message_id", json!("msg_123"));
-/// ctx.set("current_block_index", json!(0));
-///
-/// // Retrieve it later
-/// if let Some(block_id) = ctx.get_str("message_id") {
-///     println!("Processing message: {}", block_id);
-/// }
-///
-/// // Clean up when block finishes
-/// ctx.remove("current_block_index");
-/// ```
 #[derive(Debug, Default)]
 pub struct AdapterContext {
     /// Arbitrary state storage for multi-chunk parsing
     ///
     /// Adapters can use this to store:
-    /// - **Serialized parser state** (PassthroughAdapter, GptOpenapiAdapter)
+    /// - **Serialized parser state** (GptOpenapiAdapter)
     ///   - Accumulated assistant text across chunks
     ///   - Partial tool call arguments
     ///   - Reasoning content buffers
@@ -237,6 +203,7 @@ impl AdapterContext {
 /// ```
 #[derive(Debug, Clone)]
 pub struct RequestContext {
+    // ===== Runtime context (existing) =====
     /// Unique identifier for the current conversation
     ///
     /// This is typically used for:
@@ -254,6 +221,32 @@ pub struct RequestContext {
     /// - Implement source-specific request handling
     /// - Debug/audit request origins
     pub session_source: String,
+
+    // ===== Model configuration parameters (new) =====
+    /// Effective model sampling parameters resolved from Config and ModelProviderInfo.
+    ///
+    /// Source: ModelClient.resolve_parameters()
+    /// Lifecycle: Per-turn (may change if provider config changes)
+    ///
+    /// Adapters use these to control model behavior (temperature, top_p, etc.).
+    /// If a parameter is None, the adapter should not include it in the request.
+    pub effective_parameters: codex_protocol::config_types::ModelParameters,
+
+    /// Reasoning effort level for models that support reasoning.
+    ///
+    /// Source: ModelClient.effort (from Config.model_reasoning_effort)
+    /// Lifecycle: Per-session (stable across turns)
+    ///
+    /// Values: None | Low | Medium | High
+    pub reasoning_effort: Option<codex_protocol::config_types::ReasoningEffort>,
+
+    /// Reasoning summary configuration.
+    ///
+    /// Source: ModelClient.summary (from Config.model_reasoning_summary)
+    /// Lifecycle: Per-session (stable across turns)
+    ///
+    /// Controls how reasoning content is presented (Detailed vs Concise).
+    pub reasoning_summary: Option<codex_protocol::config_types::ReasoningSummary>,
 }
 
 /// HTTP metadata that adapters can dynamically add to requests
@@ -524,6 +517,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// # Arguments
     ///
     /// * `prompt` - Unified prompt format containing conversation history and tools
+    /// * `context` - Request context containing model configuration parameters
     /// * `provider` - Provider configuration (for accessing base_url, headers, etc.)
     ///
     /// # Returns
@@ -535,6 +529,7 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// ```text
     /// OpenAI Chat Completions:
     ///   Prompt.input → {"messages": [...]}
+    ///   context.effective_parameters.temperature → {"temperature": 0.7}
     ///
     /// Anthropic Messages API:
     ///   Prompt.input → {"messages": [...], "anthropic_version": "2023-06-01"}
@@ -542,8 +537,12 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     /// Google Gemini:
     ///   Prompt.input → {"contents": [...], "generationConfig": {...}}
     /// ```
-    fn transform_request(&self, prompt: &Prompt, provider: &ModelProviderInfo)
-    -> Result<JsonValue>;
+    fn transform_request(
+        &self,
+        prompt: &Prompt,
+        context: &RequestContext,
+        provider: &ModelProviderInfo,
+    ) -> Result<JsonValue>;
 
     /// Build dynamic HTTP metadata (headers, query params) for the request
     ///
@@ -633,7 +632,6 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     ///
     /// # Supported Adapters
     ///
-    /// - `PassthroughAdapter`: Returns `true` (OpenAI Responses API)
     /// - `GptOpenapiAdapter`: Returns `true` (OpenAI-compatible gateways)
     /// - Others: Return `false`
     ///

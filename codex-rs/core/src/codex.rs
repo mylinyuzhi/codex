@@ -1953,18 +1953,13 @@ async fn run_turn(
         tracing::debug!("Building prompt without previous_response_id (full history mode)");
     }
 
-    // Resolve effective parameters from config and provider settings
-    let effective_parameters = turn_context.client.resolve_parameters();
-
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls,
-        effective_parameters,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
         previous_response_id,
-        ..Default::default()
     };
 
     let mut retries = 0;
