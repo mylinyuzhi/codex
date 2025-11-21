@@ -190,9 +190,6 @@ impl ModelClient {
                 effective_parameters: self.resolve_parameters(),
                 reasoning_effort: self.effort,
                 reasoning_summary: Some(self.summary),
-
-                // Session state (copy from prompt)
-                previous_response_id: prompt.previous_response_id.clone(),
             };
 
             let adapter_client =

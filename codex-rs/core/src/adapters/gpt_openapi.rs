@@ -7,8 +7,7 @@
 //! # Requirements
 //!
 //! **This adapter ONLY supports `wire_api = "responses"`**. Configuration validation
-//! will reject providers with `wire_api = "chat"`. If your gateway uses Chat Completions
-//! format, use the `passthrough` adapter instead.
+//! will reject providers with `wire_api = "chat"`.
 //!
 //! # Use Cases
 //!
@@ -90,7 +89,6 @@ struct CompleteResponseOutputTokensDetails {
 ///
 /// # Features
 ///
-/// - **Minimal overhead**: Direct passthrough of requests/responses
 /// - **Multi-configuration**: One adapter, multiple provider configurations
 /// - **Responses API only**: Uses OpenAI Responses API format exclusively
 /// - **Flexible**: Supports different model names and endpoints per provider
@@ -412,7 +410,7 @@ impl ProviderAdapter for GptOpenapiAdapter {
     fn transform_request(
         &self,
         prompt: &Prompt,
-        context: &crate::adapters::RequestContext,
+        context: &RequestContext,
         provider: &ModelProviderInfo,
     ) -> Result<JsonValue> {
         // Get model name from provider config
@@ -457,7 +455,7 @@ impl ProviderAdapter for GptOpenapiAdapter {
         }
 
         // Add previous_response_id if present (for Responses API conversation continuity)
-        if let Some(prev_id) = &context.previous_response_id {
+        if let Some(prev_id) = &prompt.previous_response_id {
             request["previous_response_id"] = json!(prev_id);
         }
 
@@ -577,7 +575,6 @@ mod tests {
             effective_parameters: Default::default(),
             reasoning_effort: None,
             reasoning_summary: None,
-            previous_response_id: None,
         };
 
         let request = adapter.transform_request(&prompt, &context, &provider).unwrap();

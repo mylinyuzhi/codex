@@ -8,9 +8,6 @@
 //! ```rust
 //! use codex_core::adapters::{get_adapter, list_adapters};
 //!
-//! // Get a built-in adapter
-//! let adapter = get_adapter("passthrough")?;
-//!
 //! // List all registered adapters
 //! let adapters = list_adapters();
 //! for name in adapters {
@@ -133,16 +130,6 @@ pub fn register_adapter(adapter: Arc<dyn ProviderAdapter>) {
 ///
 /// Returns an error if no adapter with the given name is registered.
 ///
-/// # Example
-///
-/// ```rust
-/// use codex_core::adapters::get_adapter;
-///
-/// // Get a built-in adapter
-/// let adapter = get_adapter("passthrough")?;
-/// assert_eq!(adapter.name(), "passthrough");
-/// # Ok::<(), anyhow::Error>(())
-/// ```
 pub fn get_adapter(name: &str) -> Result<Arc<dyn ProviderAdapter>> {
     ADAPTER_REGISTRY.get(name).ok_or_else(|| {
         anyhow!(

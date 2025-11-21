@@ -88,61 +88,17 @@ use std::collections::HashMap;
 ///
 /// ## Typical Memory Usage (per request)
 ///
-/// - **PassthroughAdapter/GptOpenapiAdapter**: 1-200 KB (accumulated response text)
-/// - **AnthropicAdapter**: < 100 bytes (simple metadata tracking)
+/// - **GptOpenapiAdapter**: 1-200 KB (accumulated response text)
 ///
 /// **Note**: Long responses may cause temporary memory peaks (e.g., 1-10 MB for
 /// large document generation), but this is **not a leak** as memory is released
 /// when the request completes.
-///
-/// # Usage Examples
-///
-/// ## Example 1: Storing Serialized Parser State
-///
-/// ```rust
-/// use codex_core::adapters::AdapterContext;
-/// use serde_json::json;
-///
-/// let mut ctx = AdapterContext::new();
-///
-/// // PassthroughAdapter pattern: serialize entire parser state
-/// let parser = ChatCompletionsParserState::new();
-/// ctx.state.insert(
-///     "chat_parser_state".to_string(),
-///     serde_json::to_value(&parser).unwrap()
-/// );
-///
-/// // Later: deserialize and continue parsing
-/// let mut parser: ChatCompletionsParserState =
-///     serde_json::from_value(ctx.state["chat_parser_state"].clone()).unwrap();
-/// ```
-///
-/// ## Example 2: Simple Key-Value Tracking
-///
-/// ```rust
-/// use codex_core::adapters::AdapterContext;
-/// use serde_json::json;
-///
-/// let mut ctx = AdapterContext::new();
-///
-/// // AnthropicAdapter pattern: track metadata
-/// ctx.set("message_id", json!("msg_123"));
-/// ctx.set("current_block_index", json!(0));
-///
-/// // Retrieve it later
-/// if let Some(block_id) = ctx.get_str("message_id") {
-///     println!("Processing message: {}", block_id);
-/// }
-///
-/// // Clean up when block finishes
-/// ctx.remove("current_block_index");
-/// ```
 #[derive(Debug, Default)]
 pub struct AdapterContext {
     /// Arbitrary state storage for multi-chunk parsing
     ///
     /// Adapters can use this to store:
-    /// - **Serialized parser state** (PassthroughAdapter, GptOpenapiAdapter)
+    /// - **Serialized parser state** (GptOpenapiAdapter)
     ///   - Accumulated assistant text across chunks
     ///   - Partial tool call arguments
     ///   - Reasoning content buffers
@@ -291,15 +247,6 @@ pub struct RequestContext {
     ///
     /// Controls how reasoning content is presented (Detailed vs Concise).
     pub reasoning_summary: Option<codex_protocol::config_types::ReasoningSummary>,
-
-    // ===== Session state (new) =====
-    /// Previous response ID for continuing conversations with context.
-    ///
-    /// Source: Copied from Prompt.previous_response_id
-    /// Lifecycle: Per-turn (dynamic)
-    ///
-    /// Used for incremental conversation mode to reduce payload size.
-    pub previous_response_id: Option<String>,
 }
 
 /// HTTP metadata that adapters can dynamically add to requests
@@ -685,7 +632,6 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     ///
     /// # Supported Adapters
     ///
-    /// - `PassthroughAdapter`: Returns `true` (OpenAI Responses API)
     /// - `GptOpenapiAdapter`: Returns `true` (OpenAI-compatible gateways)
     /// - Others: Return `false`
     ///
