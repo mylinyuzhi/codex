@@ -28,7 +28,6 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
@@ -258,18 +257,14 @@ pub async fn run_main(
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to info for codex crates.
-    let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
-        })
-    };
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_target(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-        .with_filter(env_filter());
+    // Build file_layer with config-driven settings
+    let file_layer = codex_core::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE),
+        &config.ext.logging,
+        "codex_core=info,codex_tui=info,codex_rmcp_client=info"
+    );
 
     let feedback = codex_feedback::CodexFeedback::new();
     let targets = Targets::new().with_default(tracing::Level::TRACE);
