@@ -55,6 +55,8 @@ pub enum Feature {
     Skills,
     /// Send warnings to the model to correct it on the tool usage.
     ModelWarnings,
+    /// Smart Edit tool with instruction-based matching (Gemini-optimized).
+    SmartEdit,
 }
 
 impl Feature {
@@ -340,6 +342,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Skills,
         key: "skills",
         stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SmartEdit,
+        key: "smart_edit",
+        stage: Stage::Stable,
         default_enabled: false,
     },
 ];
