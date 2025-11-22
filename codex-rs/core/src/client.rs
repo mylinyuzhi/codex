@@ -155,6 +155,12 @@ impl ModelClient {
     }
 
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // Check for adapter first
+        if self.provider.ext.adapter.is_some() {
+            return crate::client_ext::stream_with_adapter(self, prompt).await;
+        }
+
+        // Existing wire_api routing (fallback)
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
@@ -520,6 +526,14 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    pub fn get_conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+
+    pub fn get_http_client(&self) -> CodexHttpClient {
+        self.client.clone()
     }
 
     pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
@@ -972,6 +986,8 @@ async fn process_sse<S>(
                                     response_error = Some(CodexErr::ContextWindowExceeded);
                                 } else if is_quota_exceeded_error(&error) {
                                     response_error = Some(CodexErr::QuotaExceeded);
+                                } else if is_previous_response_not_found_error(&error) {
+                                    response_error = Some(CodexErr::PreviousResponseNotFound);
                                 } else {
                                     let delay = try_parse_retry_after(&error);
                                     let message = error.message.clone().unwrap_or_default();
@@ -1109,6 +1125,9 @@ fn is_quota_exceeded_error(error: &Error) -> bool {
     error.code.as_deref() == Some("insufficient_quota")
 }
 
+fn is_previous_response_not_found_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("previous_response_not_found")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1250,6 +1269,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1314,6 +1334,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1351,6 +1372,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1390,6 +1412,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1425,6 +1448,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1460,6 +1484,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1564,6 +1589,7 @@ mod tests {
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
                 requires_openai_auth: false,
+                ext: Default::default(),
             };
 
             let otel_event_manager = otel_event_manager();

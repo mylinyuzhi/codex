@@ -46,6 +46,10 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Previous response ID for continuing conversations with context.
+    /// Populated from SessionState when adapter supports it.
+    pub previous_response_id: Option<String>,
 }
 
 impl Prompt {
