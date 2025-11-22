@@ -10,7 +10,10 @@ pub mod telemetry;
 
 pub use codex_client::RequestTelemetry;
 pub use codex_client::ReqwestTransport;
+pub use codex_client::RetryOn;
+pub use codex_client::RetryPolicy;
 pub use codex_client::TransportError;
+pub use codex_client::backoff;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;

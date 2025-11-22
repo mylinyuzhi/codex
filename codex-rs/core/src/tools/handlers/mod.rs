@@ -1,4 +1,5 @@
 pub mod apply_patch;
+pub mod ext;
 mod grep_files;
 mod list_dir;
 mod mcp;

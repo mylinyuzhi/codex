@@ -124,6 +124,7 @@ pub(crate) async fn assess_command(
         parallel_tool_calls: false,
         base_instructions_override: Some(system_prompt),
         output_schema: Some(sandbox_assessment_schema()),
+        previous_response_id: None,
     };
 
     let model_family = models_manager
