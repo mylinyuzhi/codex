@@ -89,6 +89,16 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 
+bytes = { workspace = true }
+codex-file-ignore = { workspace = true }
+codex-retrieval = { workspace = true }
+glob = { workspace = true }
+html2text = { workspace = true }
+ignore = { workspace = true }
+lru = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "ansi"] }
+opentelemetry-appender-tracing = { workspace = true }
+
 [features]
 deterministic_process_ids = []
 test-support = []

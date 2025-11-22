@@ -28,6 +28,7 @@ pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 pub mod features;
+pub mod features_ext;
 mod flags;
 pub mod git_info;
 pub mod landlock;
@@ -126,3 +127,9 @@ pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
 pub mod otel_init;
+
+mod error_ext;
+pub mod logging_ext;
+mod model_provider_info_ext;
+pub use model_provider_info_ext::ModelProviderInfoExt;
+pub mod model_family_ext;

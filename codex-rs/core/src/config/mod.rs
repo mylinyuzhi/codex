@@ -55,9 +55,13 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 pub mod edit;
+pub mod mod_ext;
 pub mod profile;
 pub mod service;
 pub mod types;
+pub mod types_ext;
+
+use mod_ext::ConfigTomlExt;
 
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
@@ -294,6 +298,8 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    pub ext: crate::config::mod_ext::ConfigExt,
 }
 
 impl Config {
@@ -686,6 +692,10 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+
+    /// Extension fields for additional configuration
+    #[serde(flatten, default)]
+    pub ext: ConfigTomlExt,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1033,7 +1043,7 @@ impl Config {
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
+        let mut model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
                 std::io::Error::new(
@@ -1042,6 +1052,9 @@ impl Config {
                 )
             })?
             .clone();
+
+        // Derive model_family from model_name for adapters to use proper system instructions
+        model_provider.ext.derive_model_family();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
@@ -1208,6 +1221,13 @@ impl Config {
                     trace_exporter,
                 }
             },
+            ext: crate::config::mod_ext::ConfigExt {
+                model_max_output_tokens: cfg.ext.model_max_output_tokens,
+                model_parameters: cfg.ext.model_parameters,
+                web_search_config: Default::default(),
+                web_fetch_config: Default::default(),
+                logging: cfg.ext.logging.unwrap_or_default(),
+            },
         };
         Ok(config)
     }
@@ -1311,6 +1331,7 @@ mod tests {
     use crate::config::edit::ConfigEdit;
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
+    use crate::config::mod_ext::ConfigExt;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
@@ -2845,6 +2866,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -2951,6 +2973,7 @@ model_verbosity = "high"
                 animations: true,
                 show_tooltips: true,
                 otel: OtelConfig::default(),
+                ext: ConfigExt::default(),
             },
             o3_profile_config
         );
@@ -3025,6 +3048,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -3114,6 +3138,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -3189,6 +3214,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

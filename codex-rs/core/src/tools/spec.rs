@@ -22,6 +22,12 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_smart_edit: bool,
+    pub include_rich_grep: bool,
+    pub include_enhanced_list_dir: bool,
+    pub include_web_fetch: bool,
+    pub include_code_search: bool,
+    pub include_mcp_resource_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -39,6 +45,13 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_smart_edit =
+            features.enabled(Feature::SmartEdit) && model_family.smart_edit_enabled;
+        let include_rich_grep = features.enabled(Feature::RichGrep);
+        let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
+        let include_web_fetch = features.enabled(Feature::WebFetch);
+        let include_code_search = features.enabled(Feature::CodeSearch);
+        let include_mcp_resource_tools = features.enabled(Feature::McpResourceTools);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -65,6 +78,12 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_smart_edit,
+            include_rich_grep,
+            include_enhanced_list_dir,
+            include_web_fetch,
+            include_code_search,
+            include_mcp_resource_tools,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -474,7 +493,7 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
-fn create_grep_files_tool() -> ToolSpec {
+pub(crate) fn create_grep_files_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "pattern".to_string(),
@@ -622,7 +641,7 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
-fn create_list_dir_tool() -> ToolSpec {
+pub(crate) fn create_list_dir_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "dir_path".to_string(),
@@ -1030,12 +1049,15 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    // Register MCP resource tools when feature is explicitly enabled
+    if config.include_mcp_resource_tools {
+        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
+        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
+        builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+        builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    }
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
@@ -1056,9 +1078,12 @@ pub(crate) fn build_specs(
         .experimental_supported_tools
         .contains(&"grep_files".to_string())
     {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
-        builder.register_handler("grep_files", grep_files_handler);
+        if !crate::tools::spec_ext::try_register_rich_grep(&mut builder, config) {
+            // Original minimal grep (file paths only)
+            let grep_files_handler = Arc::new(GrepFilesHandler);
+            builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+            builder.register_handler("grep_files", grep_files_handler);
+        }
     }
 
     if config
@@ -1075,9 +1100,11 @@ pub(crate) fn build_specs(
         .iter()
         .any(|tool| tool == "list_dir")
     {
-        let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
-        builder.register_handler("list_dir", list_dir_handler);
+        if !crate::tools::spec_ext::try_register_enhanced_list_dir(&mut builder, config) {
+            let list_dir_handler = Arc::new(ListDirHandler);
+            builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+            builder.register_handler("list_dir", list_dir_handler);
+        }
     }
 
     if config
@@ -1097,6 +1124,9 @@ pub(crate) fn build_specs(
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
     }
+
+    // Register all extension tools (smart_edit, glob_files, think, write_file, web_fetch, code_search)
+    crate::tools::spec_ext::register_ext_tools(&mut builder, config);
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -1227,7 +1257,8 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&config, None).build();
+        // Use Some(empty) to simulate "MCP servers configured but no tools"
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
         // Build actual map name -> spec
         use std::collections::BTreeMap;
@@ -1246,6 +1277,9 @@ mod tests {
         );
 
         // Build expected from the same helpers used by the builder.
+        use crate::tools::ext::glob_files::create_glob_files_tool;
+        use crate::tools::ext::think::create_think_tool;
+        use crate::tools::ext::write_file::create_write_file_tool;
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
         for spec in [
             create_exec_command_tool(),
@@ -1257,6 +1291,9 @@ mod tests {
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
+            create_glob_files_tool(),
+            create_think_tool(),
+            create_write_file_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1301,6 +1338,9 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1318,6 +1358,9 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1339,6 +1382,9 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1360,6 +1406,9 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1376,6 +1425,9 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1393,6 +1445,9 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1409,6 +1464,9 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1426,6 +1484,9 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1444,6 +1505,9 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
@@ -1464,6 +1528,9 @@ mod tests {
                 "update_plan",
                 "web_search",
                 "view_image",
+                "glob_files",
+                "think",
+                "write_file",
             ],
         );
     }
