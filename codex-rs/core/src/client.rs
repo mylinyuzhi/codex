@@ -117,6 +117,12 @@ impl ModelClient {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // Check for adapter first
+        if self.provider.ext.adapter.is_some() {
+            return crate::client_ext::stream_with_adapter(self, prompt).await;
+        }
+
+        // Existing wire_api routing (fallback)
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::Chat => {
@@ -320,6 +326,10 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    pub fn get_conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
