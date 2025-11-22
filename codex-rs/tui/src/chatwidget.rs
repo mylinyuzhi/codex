@@ -10,8 +10,8 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
-use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::features::all_features;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -2122,7 +2122,12 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::SubagentActivity(_)
+            | EventMsg::CompactCompleted(_)
+            | EventMsg::MicroCompactCompleted(_)
+            | EventMsg::CompactFailed(_)
+            | EventMsg::CompactThresholdExceeded(_) => {}
         }
     }
 
@@ -2847,8 +2852,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
-            .iter()
+        let features: Vec<BetaFeatureItem> = all_features()
             .filter_map(|spec| {
                 let name = spec.stage.beta_menu_name()?;
                 let description = spec.stage.beta_menu_description()?;

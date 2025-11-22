@@ -89,6 +89,11 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
-        | EventMsg::SkillsUpdateAvailable => false,
+        | EventMsg::SkillsUpdateAvailable
+        | EventMsg::SubagentActivity(_)
+        | EventMsg::CompactCompleted(_)
+        | EventMsg::MicroCompactCompleted(_)
+        | EventMsg::CompactFailed(_)
+        | EventMsg::CompactThresholdExceeded(_) => false,
     }
 }

@@ -45,7 +45,7 @@ use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::features::FEATURES;
+use crate::features::all_features;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -106,6 +106,31 @@ impl ModelClient {
 
     pub fn provider(&self) -> &ModelProviderInfo {
         &self.provider
+    }
+
+    /// Get the auth manager for this client.
+    pub fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.auth_manager.clone()
+    }
+
+    /// Get the otel manager for this client.
+    pub fn otel_manager(&self) -> &OtelManager {
+        &self.otel_manager
+    }
+
+    /// Get the reasoning effort config.
+    pub fn reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.effort
+    }
+
+    /// Get the reasoning summary config.
+    pub fn reasoning_summary(&self) -> ReasoningSummaryConfig {
+        self.summary
+    }
+
+    /// Get the session source.
+    pub fn session_source(&self) -> &SessionSource {
+        &self.session_source
     }
 
     /// Streams a single model turn using either the Responses or Chat
@@ -395,12 +420,12 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+        previous_response_id: prompt.previous_response_id.clone(),
     }
 }
 
 fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
-    let enabled = FEATURES
-        .iter()
+    let enabled = all_features()
         .filter_map(|spec| {
             if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
                 Some(spec.key)

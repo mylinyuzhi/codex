@@ -595,7 +595,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
-            | EventMsg::UndoStarted(_) => {}
+            | EventMsg::UndoStarted(_)
+            | EventMsg::SubagentActivity(_)
+            | EventMsg::CompactCompleted(_)
+            | EventMsg::MicroCompactCompleted(_)
+            | EventMsg::CompactFailed(_)
+            | EventMsg::CompactThresholdExceeded(_) => {}
         }
         CodexStatus::Running
     }
