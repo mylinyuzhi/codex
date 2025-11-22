@@ -481,6 +481,10 @@ impl Session {
             features: &per_turn_config.features,
         });
 
+        // Log loaded tools
+        let (tools, _) = crate::tools::spec::build_specs(&tools_config, None).build();
+        crate::tools::log_loaded_tools(&tools, &session_configuration.model);
+
         TurnContext {
             sub_id,
             client,
@@ -1613,6 +1617,12 @@ mod handlers {
     }
 
     pub async fn override_turn_context(sess: &Session, updates: SessionSettingsUpdate) {
+        // Clear response_id if model is being changed (forces full message send with new model)
+        if updates.model.is_some() {
+            let mut state = sess.state.lock().await;
+            state.clear_last_response_id();
+        }
+
         sess.update_settings(updates).await;
     }
 
@@ -1840,6 +1850,12 @@ mod handlers {
     }
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+        // Clear response_id before compacting (forces full message send after compact)
+        {
+            let mut state = sess.state.lock().await;
+            state.clear_last_response_id();
+        }
+
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
@@ -2222,12 +2238,19 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
 
+    // Get previous_response_id from session state for conversation continuity
+    let previous_response_id = {
+        let state = sess.state.lock().await;
+        state.get_last_response_id().map(String::from)
+    };
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        previous_response_id,
     };
 
     let mut retries = 0;
@@ -2266,6 +2289,16 @@ async fn run_turn(
             Err(e @ CodexErr::InvalidImageRequest()) => return Err(e),
             Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
+            Err(CodexErr::PreviousResponseNotFound) => {
+                // Server doesn't recognize the previous_response_id (expired or invalid).
+                // Clear stale tracking and retry with full history.
+                sess.state.lock().await.clear_last_response_id();
+                tracing::warn!(
+                    "Previous response ID not found on server - cleared tracking, retrying with full history"
+                );
+                // Don't count this against retry budget - it's a logical error, not a network error
+                continue;
+            }
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -2411,9 +2444,15 @@ async fn try_run_turn(
                 sess.update_rate_limits(&turn_context, snapshot).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                // Store response_id for next turn (universal field, always store)
+                if !response_id.is_empty() {
+                    let mut state = sess.state.lock().await;
+                    state.set_last_response_id(Some(response_id.clone()));
+                }
+
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 let unified_diff = {

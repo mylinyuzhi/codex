@@ -10,7 +10,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
-const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
+pub(crate) const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 
 const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt_5_codex_prompt.md");
 const GPT_5_1_INSTRUCTIONS: &str = include_str!("../../gpt_5_1_prompt.md");
@@ -36,7 +36,7 @@ pub struct ModelFamily {
     pub context_window: Option<i64>,
 
     /// Token threshold for automatic compaction if config does not override it.
-    auto_compact_token_limit: Option<i64>,
+    pub(crate) auto_compact_token_limit: Option<i64>,
 
     // Whether the `reasoning` field can be set when making a request to this
     // model family. Note it has `effort` and `summary` subfields (though
@@ -79,6 +79,9 @@ pub struct ModelFamily {
     pub shell_type: ConfigShellToolType,
 
     pub truncation_policy: TruncationPolicy,
+
+    /// Enable Smart Edit tool (instruction-based editing, Gemini-optimized).
+    pub smart_edit_enabled: bool,
 }
 
 impl ModelFamily {
@@ -122,30 +125,33 @@ impl ModelFamily {
     }
 }
 
+/// Macro to construct a ModelFamily with defaults.
+#[macro_export]
 macro_rules! model_family {
     (
         $slug:expr, $family:expr $(, $key:ident : $value:expr )* $(,)?
     ) => {{
         // defaults
         #[allow(unused_mut)]
-        let mut mf = ModelFamily {
+        let mut mf = $crate::openai_models::model_family::ModelFamily {
             slug: $slug.to_string(),
             family: $family.to_string(),
             needs_special_apply_patch_instructions: false,
-            context_window: Some(CONTEXT_WINDOW_272K),
+            context_window: Some($crate::openai_models::model_family::CONTEXT_WINDOW_272K),
             auto_compact_token_limit: None,
             supports_reasoning_summaries: false,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
+            reasoning_summary_format: $crate::config::types::ReasoningSummaryFormat::None,
             supports_parallel_tool_calls: false,
             apply_patch_tool_type: None,
-            base_instructions: BASE_INSTRUCTIONS.to_string(),
+            base_instructions: $crate::openai_models::model_family::BASE_INSTRUCTIONS.to_string(),
             experimental_supported_tools: Vec::new(),
             effective_context_window_percent: 95,
             support_verbosity: false,
-            shell_type: ConfigShellToolType::Default,
+            shell_type: codex_protocol::openai_models::ConfigShellToolType::Default,
             default_verbosity: None,
             default_reasoning_effort: None,
-            truncation_policy: TruncationPolicy::Bytes(10_000),
+            truncation_policy: $crate::truncate::TruncationPolicy::Bytes(10_000),
+            smart_edit_enabled: false,
         };
 
         // apply overrides
@@ -322,6 +328,9 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Bytes(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
+    // Gemini models (extension)
+    } else if slug.starts_with("gemini-2.5-pro") {
+        crate::model_family_ext::gemini_2_5_pro()
     } else {
         derive_default_model_family(slug)
     }
@@ -346,6 +355,7 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         default_verbosity: None,
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
+        smart_edit_enabled: false,
     }
 }
 

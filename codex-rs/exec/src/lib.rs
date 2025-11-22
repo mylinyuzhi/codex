@@ -48,7 +48,6 @@ use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
@@ -102,18 +101,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
+    // Logging will be initialized after config is loaded (to use config.ext.logging)
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -221,6 +209,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
+    // Build stderr layer with config-driven settings
+    let fmt_layer = codex_core::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(stderr_with_ansi)
+            .with_writer(std::io::stderr),
+        &config.ext.logging,
+        "error"
+    );
+
+    // Compose with OTEL layer if available
     if let Some(provider) = otel.as_ref() {
         let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
             tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),

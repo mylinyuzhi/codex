@@ -45,7 +45,7 @@ pub enum WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
     pub name: String,
@@ -96,6 +96,11 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Extended provider configuration (adapter support, streaming, model parameters).
+    /// Flattened into this struct for convenient access.
+    #[serde(flatten)]
+    pub ext: crate::model_provider_info_ext::ModelProviderInfoExt,
 }
 
 impl ModelProviderInfo {
@@ -244,6 +249,7 @@ impl ModelProviderInfo {
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
+            ext: Default::default(),
         }
     }
 }
@@ -313,6 +319,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        ext: Default::default(),
     }
 }
 
@@ -341,6 +348,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -371,6 +379,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -404,6 +413,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -435,6 +445,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                ext: Default::default(),
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -457,6 +468,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -481,6 +493,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                ext: Default::default(),
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
