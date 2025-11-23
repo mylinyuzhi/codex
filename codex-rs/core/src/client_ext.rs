@@ -91,6 +91,16 @@ pub async fn stream_with_adapter(client: &ModelClient, prompt: &Prompt) -> Resul
         CodexErr::Fatal("stream_with_adapter called but adapter not configured".into())
     })?;
 
+    // Calculate effective verbosity (same logic as client.rs for Responses API)
+    let verbosity = if client.config().model_family.support_verbosity {
+        client
+            .config()
+            .model_verbosity
+            .or(client.config().model_family.default_verbosity)
+    } else {
+        None
+    };
+
     // Build RequestContext with effective parameters
     let context = RequestContext {
         conversation_id: client.get_conversation_id().to_string(),
@@ -98,6 +108,7 @@ pub async fn stream_with_adapter(client: &ModelClient, prompt: &Prompt) -> Resul
         effective_parameters: resolve_parameters(&client.config(), &provider),
         reasoning_effort: client.get_reasoning_effort(),
         reasoning_summary: Some(client.get_reasoning_summary()),
+        verbosity,
     };
 
     // Create adapter HTTP client
