@@ -190,6 +190,19 @@ pub struct RequestContext {
     ///
     /// Controls how reasoning content is presented (Detailed vs Concise).
     pub reasoning_summary: Option<codex_protocol::config_types::ReasoningSummary>,
+
+    /// Verbosity level for models that support it (GPT-5 family).
+    ///
+    /// Source: Config.model_verbosity or ModelFamily.default_verbosity
+    /// Lifecycle: Per-session (stable across turns)
+    ///
+    /// Controls output length and detail level:
+    /// - Low: Concise responses
+    /// - Medium: Balanced detail (default for GPT-5.1)
+    /// - High: Detailed responses with explanations
+    ///
+    /// Only effective for models with ModelFamily.support_verbosity = true.
+    pub verbosity: Option<codex_protocol::config_types::Verbosity>,
 }
 
 /// HTTP metadata that adapters can dynamically add to requests
