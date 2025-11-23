@@ -53,7 +53,6 @@ impl GptAdapter {
         Self
     }
 
-
     /// Parse complete (non-streaming) Responses API JSON response
     fn parse_complete_responses_json(body: &str) -> Result<Vec<ResponseEvent>> {
         let data: JsonValue = serde_json::from_str(body)?;
@@ -413,7 +412,7 @@ impl ProviderAdapter for GptAdapter {
         // Add previous_response_id if present (for Responses API conversation continuity)
         if let Some(prev_id) = &prompt.previous_response_id {
             request["previous_response_id"] = json!(prev_id);
-        }else{
+        } else {
             tracing::debug!(
                 "instructions" = prompt.base_instructions_override,
                 "Using instructions"
@@ -433,7 +432,9 @@ impl ProviderAdapter for GptAdapter {
 
         // Add output_schema and verbosity if present (for structured outputs)
         // Use verbosity from RequestContext to support enterprise gateways
-        if let Some(text_controls) = create_text_param_for_request(context.verbosity, &prompt.output_schema) {
+        if let Some(text_controls) =
+            create_text_param_for_request(context.verbosity, &prompt.output_schema)
+        {
             request["text"] = serde_json::to_value(&text_controls)?;
         }
 
@@ -796,10 +797,16 @@ mod tests {
             .unwrap();
 
         // Verify text.format is present
-        assert!(request.get("text").is_some(), "Request should have 'text' field");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field"
+        );
 
         let text = request.get("text").unwrap();
-        assert!(text.get("format").is_some(), "text should have 'format' field");
+        assert!(
+            text.get("format").is_some(),
+            "text should have 'format' field"
+        );
 
         let format = text.get("format").unwrap();
         assert_eq!(format.get("type"), Some(&json!("json_schema")));
@@ -808,7 +815,10 @@ mod tests {
         assert_eq!(format.get("schema"), Some(&schema));
 
         // Verify verbosity is not present (since context.verbosity is None)
-        assert!(text.get("verbosity").is_none(), "verbosity should not be present when context.verbosity is None");
+        assert!(
+            text.get("verbosity").is_none(),
+            "verbosity should not be present when context.verbosity is None"
+        );
     }
 
     #[test]
@@ -840,7 +850,10 @@ mod tests {
             .unwrap();
 
         // Verify text.verbosity is present
-        assert!(request.get("text").is_some(), "Request should have 'text' field when verbosity is set");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field when verbosity is set"
+        );
 
         let text = request.get("text").unwrap();
         assert_eq!(
@@ -850,7 +863,10 @@ mod tests {
         );
 
         // Verify format is not present (since no output_schema)
-        assert!(text.get("format").is_none(), "format should not be present without output_schema");
+        assert!(
+            text.get("format").is_none(),
+            "format should not be present without output_schema"
+        );
     }
 
     #[test]
@@ -891,7 +907,10 @@ mod tests {
             .unwrap();
 
         // Verify both verbosity and format are present
-        assert!(request.get("text").is_some(), "Request should have 'text' field");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field"
+        );
 
         let text = request.get("text").unwrap();
 
@@ -935,6 +954,9 @@ mod tests {
             .unwrap();
 
         // Verify text field is not present when no output_schema
-        assert!(request.get("text").is_none(), "text should not be present without output_schema");
+        assert!(
+            request.get("text").is_none(),
+            "text should not be present without output_schema"
+        );
     }
 }
