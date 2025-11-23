@@ -124,4 +124,24 @@ pub struct ModelParameters {
     /// but we use the industry-standard 'max_tokens' in configuration.
     #[serde(default)]
     pub max_tokens: Option<i64>,
+
+    /// Enable thinking process in response (Gemini-specific).
+    /// When true, the model will include its thinking process in the response.
+    /// Ignored by non-Gemini adapters.
+    #[serde(default)]
+    pub include_thoughts: Option<bool>,
+
+    /// Thinking token budget for Gemini models (Gemini-specific).
+    ///
+    /// Special values:
+    /// - `-1` (default): Dynamic thinking - model decides when and how much to think
+    /// - `0`: Disable thinking (Gemini 2.5 Flash only; 2.5 Pro does not support disabling)
+    /// - `> 0`: Fixed token budget
+    ///   - Gemini 2.5 Pro: 128 to 32768
+    ///   - Gemini 2.5 Flash: 1 to 24576
+    ///
+    /// If not set, Gemini uses dynamic thinking by default (equivalent to -1).
+    /// Ignored by non-Gemini adapters.
+    #[serde(default)]
+    pub budget_tokens: Option<i32>,
 }
