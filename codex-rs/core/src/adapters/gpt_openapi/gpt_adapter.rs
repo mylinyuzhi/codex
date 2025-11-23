@@ -52,36 +52,6 @@ impl GptAdapter {
         Self
     }
 
-    /// Filter incremental messages when previous_response_id exists
-    ///
-    /// When a previous_response_id is present, we only need to send
-    /// messages that were added after the previous response was generated.
-    /// This reduces token usage and improves performance for long conversations.
-    ///
-    /// Slice reference to incremental items, or full input if previous response not found
-    fn filter_incremental_input<'a>(
-        &self,
-        full_input: &'a [codex_protocol::models::ResponseItem],
-        previous_response_id: &str,
-    ) -> &'a [codex_protocol::models::ResponseItem] {
-        use codex_protocol::models::ResponseItem;
-
-        for (idx, item) in full_input.iter().enumerate() {
-            if let ResponseItem::Message { id, role, .. } = item {
-                if role == "assistant" && id.as_deref() == Some(previous_response_id) {
-                    return &full_input[idx + 1..];
-                }
-            }
-        }
-
-        // Safety fallback: If we didn't find the previous response,
-        // send full input to avoid losing context
-        tracing::warn!(
-            "previous_response_id '{}' not found in history, sending full input as fallback",
-            previous_response_id
-        );
-        full_input
-    }
 
     /// Parse complete (non-streaming) Responses API JSON response
     fn parse_complete_responses_json(body: &str) -> Result<Vec<ResponseEvent>> {
@@ -95,6 +65,8 @@ impl GptAdapter {
             .and_then(|i| i.as_str())
             .unwrap_or("")
             .to_string();
+
+        tracing::debug!("response_id '{}'", response_id);
 
         // Parse output items
         if let Some(output_array) = data.get("output").and_then(|o| o.as_array()) {
@@ -169,7 +141,7 @@ impl GptAdapter {
                             .unwrap_or("");
 
                         match content_type {
-                            "text" => {
+                            "output_text" => {
                                 if let Some(text) =
                                     content_item.get("text").and_then(|t| t.as_str())
                                 {
@@ -355,28 +327,48 @@ impl ProviderAdapter for GptAdapter {
             )
         })?;
 
-        // Filter incremental messages if previous_response_id exists
-        // This reduces token usage for long conversations by only sending new messages
+        // Apply incremental filtering when previous_response_id exists
         let input = if let Some(prev_id) = &prompt.previous_response_id {
-            let filtered = self.filter_incremental_input(&prompt.input, prev_id);
-
-            // Log incremental mode with input composition
-            let item_types = crate::adapters::openai_common::get_response_item_types(filtered);
-
-            tracing::debug!(
-                previous_response_id = %prev_id,
-                original_input_len = prompt.input.len(),
-                filtered_input_len = filtered.len(),
-                item_types = ?item_types,
-                "Using incremental input mode"
-            );
-
-            filtered
+            match crate::adapters::filter_incremental_input(&prompt.input) {
+                None => {
+                    // No LLM items found - first turn, use full input
+                    tracing::debug!(
+                        previous_response_id = %prev_id,
+                        input_len = prompt.input.len(),
+                        "First turn (no LLM items) - using full input"
+                    );
+                    &prompt.input[..]
+                }
+                Some(slice) if slice.is_empty() => {
+                    // LLM item is last - no user input after, error state
+                    let item_types = crate::adapters::get_item_type_names(&prompt.input);
+                    tracing::warn!(
+                        previous_response_id = %prev_id,
+                        original_len = prompt.input.len(),
+                        item_types = ?item_types,
+                        "Incremental mode error: no user input after last LLM response",
+                    );
+                    return Err(crate::error::CodexErr::Fatal(format!(
+                        "Incremental mode error: no user input after last LLM response (previous_response_id={})",
+                        prev_id
+                    )));
+                }
+                Some(slice) => {
+                    // Normal incremental mode - use filtered slice
+                    let item_types = crate::adapters::get_item_type_names(slice);
+                    tracing::debug!(
+                        previous_response_id = %prev_id,
+                        original_len = prompt.input.len(),
+                        filtered_len = slice.len(),
+                        filtered_count = prompt.input.len() - slice.len(),
+                        item_types = ?item_types,
+                        "Using incremental input mode"
+                    );
+                    slice
+                }
+            }
         } else {
-            tracing::debug!(
-                input_len = prompt.input.len(),
-                "Using full input mode (no previous_response_id)"
-            );
+            // No previous_response_id - use full input
             &prompt.input[..]
         };
 
@@ -386,6 +378,8 @@ impl ProviderAdapter for GptAdapter {
             "input": input,  // Use filtered input
             "stream": provider.ext.streaming,
             "store": true,
+            // ResponseAPI required always pass instructions
+            "instructions": prompt.base_instructions_override,
         });
 
         // Bind tools if present
@@ -418,8 +412,11 @@ impl ProviderAdapter for GptAdapter {
         // Add previous_response_id if present (for Responses API conversation continuity)
         if let Some(prev_id) = &prompt.previous_response_id {
             request["previous_response_id"] = json!(prev_id);
-        }else {
-            request["instructions"] = json!(prompt.base_instructions_override);
+        }else{
+            tracing::debug!(
+                "instructions" = prompt.base_instructions_override,
+                "Using instructions"
+            )
         }
 
         // Add reasoning parameters if present (for Responses API)

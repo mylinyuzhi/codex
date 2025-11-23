@@ -50,30 +50,6 @@ use serde_json::Value as JsonValue;
 ///
 /// **Important**: Memory is automatically freed when the request completes
 /// (AdapterContext drops). No manual cleanup needed.
-///
-/// # Example
-///
-/// ```rust
-/// use codex_core::adapters::openai_common::ChatCompletionsParserState;
-///
-/// let mut state = ChatCompletionsParserState::new();
-///
-/// // Process first chunk - assistant_text accumulates
-/// let events1 = state.parse_chunk(r#"{"choices":[{"delta":{"content":"Hello"}}]}"#)?;
-/// // events1: [OutputTextDelta("Hello")]
-/// // Internal state: assistant_text = "Hello"
-///
-/// // Process second chunk - assistant_text continues to grow
-/// let events2 = state.parse_chunk(r#"{"choices":[{"delta":{"content":" world"}}]}"#)?;
-/// // events2: [OutputTextDelta(" world")]
-/// // Internal state: assistant_text = "Hello world"
-///
-/// // Process completion - emits full accumulated message
-/// let events3 = state.parse_chunk(r#"{"choices":[{"finish_reason":"stop"}]}"#)?;
-/// // events3: [OutputItemDone(Message { text: "Hello world" }), Completed]
-/// // Internal state: assistant_text cleared (moved into Message)
-/// # Ok::<(), anyhow::Error>(())
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionsParserState {
     /// Accumulated assistant message content
@@ -130,15 +106,6 @@ impl ChatCompletionsParserState {
     }
 
     /// Parse a single Chat Completions SSE chunk
-    ///
-    /// This is the core logic extracted from `chat_completions.rs:process_chat_sse()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `chunk` - Raw SSE data (without "data: " prefix)
-    ///
-    /// # Returns
-    ///
     /// Vector of ResponseEvent. Can be:
     /// - Empty if chunk contains no actionable data
     /// - One or more events if chunk contains deltas or completion signals

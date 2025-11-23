@@ -377,11 +377,16 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
 // Re-export submodules
 pub mod gpt_openapi;
 pub(crate) mod http;
+pub mod item_utils;
 pub mod openai_common;
 pub mod registry;
 
 pub use gpt_openapi::GeminiAdapter;
 pub use gpt_openapi::GptAdapter;
+pub use item_utils::filter_incremental_input;
+pub use item_utils::get_item_type_name;
+pub use item_utils::get_item_type_names;
+pub use item_utils::is_llm_generated;
 pub use registry::get_adapter;
 pub use registry::list_adapters;
 pub use registry::register_adapter;

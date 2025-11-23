@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_gemini_adapter_name() {
         let adapter = GeminiAdapter::new();
-        assert_eq!(adapter.name(), "gemini");
+        assert_eq!(adapter.name(), "gemini_openapi");
     }
 
     #[test]
