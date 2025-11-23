@@ -16,6 +16,7 @@ use crate::adapters::RequestContext;
 use crate::adapters::RequestMetadata;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::client_common::create_text_param_for_request;
 use crate::error::Result;
 use crate::model_provider_info::ModelProviderInfo;
 use serde::Deserialize;
@@ -430,6 +431,12 @@ impl ProviderAdapter for GptAdapter {
             request["include"] = json!(["reasoning.encrypted_content"]);
         }
 
+        // Add output_schema and verbosity if present (for structured outputs)
+        // Use verbosity from RequestContext to support enterprise gateways
+        if let Some(text_controls) = create_text_param_for_request(context.verbosity, &prompt.output_schema) {
+            request["text"] = serde_json::to_value(&text_controls)?;
+        }
+
         Ok(request)
     }
 
@@ -535,6 +542,7 @@ mod tests {
             effective_parameters: Default::default(),
             reasoning_effort: None,
             reasoning_summary: None,
+            verbosity: None,
         };
 
         let request = adapter
@@ -749,5 +757,184 @@ mod tests {
             }
             _ => panic!("Expected Completed, got {:?}", events[1]),
         }
+    }
+
+    #[test]
+    fn test_transform_request_with_output_schema() {
+        let adapter = GptAdapter::new();
+
+        // Create a test schema
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"}
+            },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+
+        let prompt = Prompt {
+            input: vec![],
+            output_schema: Some(schema.clone()),
+            ..Default::default()
+        };
+
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.model_name = Some("gpt-5.1".to_string());
+
+        let context = crate::adapters::RequestContext {
+            conversation_id: "test-conv".to_string(),
+            session_source: "Test".to_string(),
+            effective_parameters: Default::default(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: None,
+        };
+
+        let request = adapter
+            .transform_request(&prompt, &context, &provider)
+            .unwrap();
+
+        // Verify text.format is present
+        assert!(request.get("text").is_some(), "Request should have 'text' field");
+
+        let text = request.get("text").unwrap();
+        assert!(text.get("format").is_some(), "text should have 'format' field");
+
+        let format = text.get("format").unwrap();
+        assert_eq!(format.get("type"), Some(&json!("json_schema")));
+        assert_eq!(format.get("strict"), Some(&json!(true)));
+        assert_eq!(format.get("name"), Some(&json!("codex_output_schema")));
+        assert_eq!(format.get("schema"), Some(&schema));
+
+        // Verify verbosity is not present (since context.verbosity is None)
+        assert!(text.get("verbosity").is_none(), "verbosity should not be present when context.verbosity is None");
+    }
+
+    #[test]
+    fn test_transform_request_with_verbosity() {
+        use codex_protocol::config_types::Verbosity;
+
+        let adapter = GptAdapter::new();
+
+        let prompt = Prompt {
+            input: vec![],
+            output_schema: None,
+            ..Default::default()
+        };
+
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.model_name = Some("gpt-5.1".to_string());
+
+        let context = crate::adapters::RequestContext {
+            conversation_id: "test-conv".to_string(),
+            session_source: "Test".to_string(),
+            effective_parameters: Default::default(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: Some(Verbosity::Low),
+        };
+
+        let request = adapter
+            .transform_request(&prompt, &context, &provider)
+            .unwrap();
+
+        // Verify text.verbosity is present
+        assert!(request.get("text").is_some(), "Request should have 'text' field when verbosity is set");
+
+        let text = request.get("text").unwrap();
+        assert_eq!(
+            text.get("verbosity").and_then(|v| v.as_str()),
+            Some("low"),
+            "verbosity should be 'low'"
+        );
+
+        // Verify format is not present (since no output_schema)
+        assert!(text.get("format").is_none(), "format should not be present without output_schema");
+    }
+
+    #[test]
+    fn test_transform_request_with_verbosity_and_output_schema() {
+        use codex_protocol::config_types::Verbosity;
+
+        let adapter = GptAdapter::new();
+
+        // Create a test schema
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"}
+            },
+            "required": ["result"]
+        });
+
+        let prompt = Prompt {
+            input: vec![],
+            output_schema: Some(schema.clone()),
+            ..Default::default()
+        };
+
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.model_name = Some("gpt-5.1".to_string());
+
+        let context = crate::adapters::RequestContext {
+            conversation_id: "test-conv".to_string(),
+            session_source: "Test".to_string(),
+            effective_parameters: Default::default(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: Some(Verbosity::High),
+        };
+
+        let request = adapter
+            .transform_request(&prompt, &context, &provider)
+            .unwrap();
+
+        // Verify both verbosity and format are present
+        assert!(request.get("text").is_some(), "Request should have 'text' field");
+
+        let text = request.get("text").unwrap();
+
+        // Check verbosity
+        assert_eq!(
+            text.get("verbosity").and_then(|v| v.as_str()),
+            Some("high"),
+            "verbosity should be 'high'"
+        );
+
+        // Check format
+        assert!(text.get("format").is_some(), "format should be present");
+        let format = text.get("format").unwrap();
+        assert_eq!(format.get("schema"), Some(&schema));
+    }
+
+    #[test]
+    fn test_transform_request_without_output_schema() {
+        let adapter = GptAdapter::new();
+
+        let prompt = Prompt {
+            input: vec![],
+            output_schema: None,
+            ..Default::default()
+        };
+
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.model_name = Some("gpt-4".to_string());
+
+        let context = crate::adapters::RequestContext {
+            conversation_id: "test-conv".to_string(),
+            session_source: "Test".to_string(),
+            effective_parameters: Default::default(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: None,
+        };
+
+        let request = adapter
+            .transform_request(&prompt, &context, &provider)
+            .unwrap();
+
+        // Verify text field is not present when no output_schema
+        assert!(request.get("text").is_none(), "text should not be present without output_schema");
     }
 }
