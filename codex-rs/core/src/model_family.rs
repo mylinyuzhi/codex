@@ -70,6 +70,9 @@ pub struct ModelFamily {
     pub shell_type: ConfigShellToolType,
 
     pub truncation_policy: TruncationPolicy,
+
+    /// Enable Smart Edit tool (instruction-based editing, Gemini-optimized).
+    pub smart_edit_enabled: bool,
 }
 
 macro_rules! model_family {
@@ -94,6 +97,7 @@ macro_rules! model_family {
             default_verbosity: None,
             default_reasoning_effort: None,
             truncation_policy: TruncationPolicy::Bytes(10_000),
+            smart_edit_enabled: false,
         };
 
         // apply overrides
@@ -237,12 +241,16 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )
+    // Gemini models (extension)
+    } else if slug.starts_with("gemini-2.5-pro") {
+        Some(crate::model_family_ext::gemini_2_5_pro())
     } else {
         None
     }
 }
 
 pub fn derive_default_model_family(model: &str) -> ModelFamily {
+    // Default model family
     ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),
@@ -259,5 +267,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         default_verbosity: None,
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
+        smart_edit_enabled: false,
     }
 }
