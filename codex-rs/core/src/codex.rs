@@ -431,6 +431,10 @@ impl Session {
             features: &config.features,
         });
 
+        // Log loaded tools
+        let (tools, _) = crate::tools::spec::build_specs(&tools_config, None).build();
+        crate::tools::log_loaded_tools(&tools, &session_configuration.model);
+
         TurnContext {
             sub_id,
             client,
