@@ -526,6 +526,54 @@ impl ResponsesApiParserState {
             }
 
             "response.done" => {
+                // Check response.status field
+                if let Some(response) = data.get("response") {
+                    let Some(status) = response.get("status").and_then(|s| s.as_str()) else {
+                        return Err(crate::error::CodexErr::Stream(
+                            "Missing status field in response.done event".into(),
+                            None,
+                        )
+                        .into());
+                    };
+
+                    // Handle different status values
+                    match status {
+                        "completed" => {
+                            // Continue with normal processing
+                        }
+                        "failed" => {
+                            if let Some(error) = response.get("error") {
+                                return Err(Self::parse_error_from_response(error)?);
+                            }
+                            return Err(crate::error::CodexErr::Stream(
+                                "Response failed without error details".into(),
+                                None,
+                            )
+                            .into());
+                        }
+                        "incomplete" => {
+                            let reason = response
+                                .get("incomplete_details")
+                                .and_then(|d| d.get("reason"))
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("unknown");
+                            return Err(crate::error::CodexErr::Stream(
+                                format!("Response incomplete: {reason}"),
+                                None,
+                            )
+                            .into());
+                        }
+                        _ => {
+                            // Unknown status - reject it
+                            return Err(crate::error::CodexErr::Stream(
+                                format!("Unknown response status: {status}"),
+                                None,
+                            )
+                            .into());
+                        }
+                    }
+                }
+
                 // Extract token usage
                 let token_usage = data.get("usage").map(|u| {
                     let input_tokens = u
@@ -563,6 +611,29 @@ impl ResponsesApiParserState {
 
             _ => Ok(vec![]),
         }
+    }
+
+    /// Parse error object from streaming response and classify into appropriate CodexErr
+    ///
+    /// Aligns with buildin implementation in client.rs:983-995
+    fn parse_error_from_response(error: &JsonValue) -> Result<crate::error::CodexErr> {
+        let code = error.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown error");
+
+        // Align with buildin error classification
+        let err = match code {
+            "context_length_exceeded" => crate::error::CodexErr::ContextWindowExceeded,
+            "insufficient_quota" => crate::error::CodexErr::QuotaExceeded,
+            _ => {
+                // Generic error with message
+                crate::error::CodexErr::Stream(message.to_string(), None)
+            }
+        };
+
+        Ok(err)
     }
 }
 

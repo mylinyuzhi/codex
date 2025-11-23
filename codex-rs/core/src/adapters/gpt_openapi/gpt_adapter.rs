@@ -53,7 +53,6 @@ impl GptAdapter {
         Self
     }
 
-
     /// Parse complete (non-streaming) Responses API JSON response
     fn parse_complete_responses_json(body: &str) -> Result<Vec<ResponseEvent>> {
         let data: JsonValue = serde_json::from_str(body)?;
@@ -68,6 +67,49 @@ impl GptAdapter {
             .to_string();
 
         tracing::debug!("response_id '{}'", response_id);
+
+        // Check status field (must be present and valid)
+        let Some(status) = data.get("status").and_then(|s| s.as_str()) else {
+            return Err(crate::error::CodexErr::Stream(
+                "Missing status field in response".into(),
+                None,
+            ));
+        };
+
+        // Handle different status values
+        match status {
+            "completed" => {
+                // Continue with normal processing
+            }
+            "failed" => {
+                if let Some(error) = data.get("error") {
+                    return Err(Self::parse_error_response(error)?);
+                }
+                return Err(crate::error::CodexErr::Stream(
+                    "Response failed without error details".into(),
+                    None,
+                ));
+            }
+            "incomplete" => {
+                let reason = data
+                    .get("incomplete_details")
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("unknown");
+
+                return Err(crate::error::CodexErr::Stream(
+                    format!("Response incomplete: {reason}"),
+                    None,
+                ));
+            }
+            _ => {
+                // Unknown status - reject it
+                return Err(crate::error::CodexErr::Stream(
+                    format!("Unknown response status: {status}"),
+                    None,
+                ));
+            }
+        }
 
         // Parse output items
         if let Some(output_array) = data.get("output").and_then(|o| o.as_array()) {
@@ -260,6 +302,29 @@ impl GptAdapter {
             }
         }
     }
+
+    /// Parse error object and classify into appropriate CodexErr
+    ///
+    /// Aligns with buildin implementation in client.rs:983-995
+    fn parse_error_response(error: &JsonValue) -> Result<crate::error::CodexErr> {
+        let code = error.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown error");
+
+        // Align with buildin error classification (client.rs:985-990)
+        let err = match code {
+            "context_length_exceeded" => crate::error::CodexErr::ContextWindowExceeded,
+            "insufficient_quota" => crate::error::CodexErr::QuotaExceeded,
+            _ => {
+                // Generic error with message
+                crate::error::CodexErr::Stream(message.to_string(), None)
+            }
+        };
+
+        Ok(err)
+    }
 }
 
 impl Default for GptAdapter {
@@ -413,7 +478,7 @@ impl ProviderAdapter for GptAdapter {
         // Add previous_response_id if present (for Responses API conversation continuity)
         if let Some(prev_id) = &prompt.previous_response_id {
             request["previous_response_id"] = json!(prev_id);
-        }else{
+        } else {
             tracing::debug!(
                 "instructions" = prompt.base_instructions_override,
                 "Using instructions"
@@ -433,7 +498,9 @@ impl ProviderAdapter for GptAdapter {
 
         // Add output_schema and verbosity if present (for structured outputs)
         // Use verbosity from RequestContext to support enterprise gateways
-        if let Some(text_controls) = create_text_param_for_request(context.verbosity, &prompt.output_schema) {
+        if let Some(text_controls) =
+            create_text_param_for_request(context.verbosity, &prompt.output_schema)
+        {
             request["text"] = serde_json::to_value(&text_controls)?;
         }
 
@@ -796,10 +863,16 @@ mod tests {
             .unwrap();
 
         // Verify text.format is present
-        assert!(request.get("text").is_some(), "Request should have 'text' field");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field"
+        );
 
         let text = request.get("text").unwrap();
-        assert!(text.get("format").is_some(), "text should have 'format' field");
+        assert!(
+            text.get("format").is_some(),
+            "text should have 'format' field"
+        );
 
         let format = text.get("format").unwrap();
         assert_eq!(format.get("type"), Some(&json!("json_schema")));
@@ -808,7 +881,10 @@ mod tests {
         assert_eq!(format.get("schema"), Some(&schema));
 
         // Verify verbosity is not present (since context.verbosity is None)
-        assert!(text.get("verbosity").is_none(), "verbosity should not be present when context.verbosity is None");
+        assert!(
+            text.get("verbosity").is_none(),
+            "verbosity should not be present when context.verbosity is None"
+        );
     }
 
     #[test]
@@ -840,7 +916,10 @@ mod tests {
             .unwrap();
 
         // Verify text.verbosity is present
-        assert!(request.get("text").is_some(), "Request should have 'text' field when verbosity is set");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field when verbosity is set"
+        );
 
         let text = request.get("text").unwrap();
         assert_eq!(
@@ -850,7 +929,10 @@ mod tests {
         );
 
         // Verify format is not present (since no output_schema)
-        assert!(text.get("format").is_none(), "format should not be present without output_schema");
+        assert!(
+            text.get("format").is_none(),
+            "format should not be present without output_schema"
+        );
     }
 
     #[test]
@@ -891,7 +973,10 @@ mod tests {
             .unwrap();
 
         // Verify both verbosity and format are present
-        assert!(request.get("text").is_some(), "Request should have 'text' field");
+        assert!(
+            request.get("text").is_some(),
+            "Request should have 'text' field"
+        );
 
         let text = request.get("text").unwrap();
 
@@ -935,6 +1020,150 @@ mod tests {
             .unwrap();
 
         // Verify text field is not present when no output_schema
-        assert!(request.get("text").is_none(), "text should not be present without output_schema");
+        assert!(
+            request.get("text").is_none(),
+            "text should not be present without output_schema"
+        );
+    }
+
+    #[test]
+    fn test_parse_incomplete_response() {
+        let adapter = GptAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.streaming = false;
+
+        let body = r#"{
+            "id": "resp-123",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [],
+            "usage": {"input_tokens": 10, "output_tokens": 100}
+        }"#;
+
+        let result = adapter.transform_response_chunk(body, &mut ctx, &provider);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::Stream(msg, _) => {
+                assert!(msg.contains("incomplete"));
+                assert!(msg.contains("max_output_tokens"));
+            }
+            _ => panic!("Expected CodexErr::Stream, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_parse_failed_response() {
+        let adapter = GptAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.streaming = false;
+
+        let body = r#"{
+            "id": "resp-123",
+            "status": "failed",
+            "error": {
+                "code": "rate_limit_exceeded",
+                "message": "Too many requests"
+            },
+            "output": []
+        }"#;
+
+        let result = adapter.transform_response_chunk(body, &mut ctx, &provider);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::Stream(msg, _) => {
+                assert!(msg.contains("Too many requests"));
+            }
+            _ => panic!("Expected CodexErr::Stream, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_parse_failed_context_window() {
+        let adapter = GptAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.streaming = false;
+
+        let body = r#"{
+            "id": "resp-123",
+            "status": "failed",
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "Input too long"
+            },
+            "output": []
+        }"#;
+
+        let result = adapter.transform_response_chunk(body, &mut ctx, &provider);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::ContextWindowExceeded => {}
+            _ => panic!("Expected ContextWindowExceeded, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_parse_missing_status() {
+        let adapter = GptAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.streaming = false;
+
+        let body = r#"{
+            "id": "resp-123",
+            "output": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }"#;
+
+        let result = adapter.transform_response_chunk(body, &mut ctx, &provider);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::Stream(msg, _) => {
+                assert!(msg.contains("Missing status"));
+            }
+            _ => panic!(
+                "Expected CodexErr::Stream for missing status, got {:?}",
+                err
+            ),
+        }
+    }
+
+    #[test]
+    fn test_parse_unknown_status() {
+        let adapter = GptAdapter::new();
+        let mut ctx = AdapterContext::new();
+        let mut provider = ModelProviderInfo::default();
+        provider.ext.streaming = false;
+
+        let body = r#"{
+            "id": "resp-123",
+            "status": "processing",
+            "output": []
+        }"#;
+
+        let result = adapter.transform_response_chunk(body, &mut ctx, &provider);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            crate::error::CodexErr::Stream(msg, _) => {
+                assert!(msg.contains("Unknown response status"));
+                assert!(msg.contains("processing"));
+            }
+            _ => panic!(
+                "Expected CodexErr::Stream for unknown status, got {:?}",
+                err
+            ),
+        }
     }
 }

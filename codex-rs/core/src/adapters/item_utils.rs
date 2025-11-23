@@ -78,9 +78,7 @@ pub fn get_item_type_names(items: &[ResponseItem]) -> Vec<&'static str> {
 ///     Some(slice) => /* use filtered slice */,
 /// }
 /// ```
-pub fn filter_incremental_input<'a>(
-    full_input: &'a [ResponseItem],
-) -> Option<&'a [ResponseItem]> {
+pub fn filter_incremental_input<'a>(full_input: &'a [ResponseItem]) -> Option<&'a [ResponseItem]> {
     let last_llm_idx = full_input.iter().rposition(is_llm_generated)?;
     Some(&full_input[last_llm_idx + 1..])
 }
@@ -88,7 +86,8 @@ pub fn filter_incremental_input<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::{ContentItem, FunctionCallOutputPayload};
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
 
     #[test]
     fn test_is_llm_generated_identifies_assistant_messages() {
@@ -185,10 +184,7 @@ mod tests {
                 success: Some(true),
             },
         };
-        assert_eq!(
-            get_item_type_name(&function_output),
-            "FunctionCallOutput"
-        );
+        assert_eq!(get_item_type_name(&function_output), "FunctionCallOutput");
     }
 
     #[test]
