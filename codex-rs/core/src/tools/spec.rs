@@ -35,6 +35,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_smart_edit: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -52,6 +53,8 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_smart_edit =
+            features.enabled(Feature::SmartEdit) && model_family.smart_edit_enabled;
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -78,6 +81,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_smart_edit,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1093,6 +1097,13 @@ pub(crate) fn build_specs(
     if config.include_view_image_tool {
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
+    }
+
+    if config.include_smart_edit {
+        use crate::tools::ext::smart_edit::create_smart_edit_tool;
+        use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
+        builder.push_spec(create_smart_edit_tool());
+        builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
     }
 
     if let Some(mcp_tools) = mcp_tools {
