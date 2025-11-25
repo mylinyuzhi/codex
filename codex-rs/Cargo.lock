@@ -1129,6 +1129,7 @@ dependencies = [
  "keyring",
  "landlock",
  "libc",
+ "lru",
  "maplit",
  "mcp-types",
  "once_cell",
