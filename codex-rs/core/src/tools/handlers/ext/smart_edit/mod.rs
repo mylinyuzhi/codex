@@ -69,7 +69,7 @@ impl ToolHandler for SmartEditHandler {
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "Invalid payload type for smart_edit".to_string(),
-                ))
+                ));
             }
         };
 

@@ -141,7 +141,7 @@ impl AdapterHttpClient {
         } else {
             match provider.wire_api {
                 WireApi::Responses => "/responses".to_string(),
-                WireApi::Chat => "/chat/completions".to_string(),
+                WireApi::Chat => "/crawl".to_string(),
             }
         };
 

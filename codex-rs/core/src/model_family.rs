@@ -241,20 +241,15 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )
+    // Gemini models (extension)
+    } else if slug.starts_with("gemini-2.5-pro") {
+        Some(crate::model_family_ext::gemini_2_5_pro())
     } else {
         None
     }
 }
 
 pub fn derive_default_model_family(model: &str) -> ModelFamily {
-    // Check for Gemini models (extension)
-    if model.starts_with("gemini-2.5-pro") {
-        return crate::model_family_ext::gemini_2_5_pro();
-    }
-    if model.starts_with("gemini-2.0-flash-thinking") || model.starts_with("gemini-2.0-flash-exp") {
-        return crate::model_family_ext::gemini_2_0_flash_thinking();
-    }
-
     // Default model family
     ModelFamily {
         slug: model.to_string(),

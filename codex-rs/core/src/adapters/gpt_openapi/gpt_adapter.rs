@@ -18,6 +18,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::create_text_param_for_request;
 use crate::error::Result;
+use crate::model_family::derive_default_model_family;
 use crate::model_provider_info::ModelProviderInfo;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -438,6 +439,19 @@ impl ProviderAdapter for GptAdapter {
             &prompt.input[..]
         };
 
+        // Get model_family: provider's own (derived from model_name) OR default (with BASE_INSTRUCTIONS)
+        let default_family = derive_default_model_family("");
+        let model_family = provider
+            .ext
+            .model_family
+            .as_ref()
+            .unwrap_or(&default_family);
+
+        // Get system instructions with proper fallback:
+        // 1. User override (Config.base_instructions) - highest priority
+        // 2. Model family base_instructions (model-specific or BASE_INSTRUCTIONS)
+        let system_instructions = prompt.get_full_instructions(model_family);
+
         // Minimal transformation - pass through in OpenAI-compatible format
         let mut request = json!({
             "model": model,
@@ -445,7 +459,7 @@ impl ProviderAdapter for GptAdapter {
             "stream": provider.ext.streaming,
             "store": true,
             // ResponseAPI required always pass instructions
-            "instructions": prompt.base_instructions_override,
+            "instructions": system_instructions.as_ref(),
         });
 
         // Bind tools if present
@@ -480,7 +494,7 @@ impl ProviderAdapter for GptAdapter {
             request["previous_response_id"] = json!(prev_id);
         } else {
             tracing::debug!(
-                "instructions" = prompt.base_instructions_override,
+                instructions = %system_instructions,
                 "Using instructions"
             )
         }

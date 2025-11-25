@@ -31,27 +31,69 @@ pub fn is_llm_generated(item: &ResponseItem) -> bool {
     }
 }
 
-/// Get human-readable type name for a ResponseItem.
-pub fn get_item_type_name(item: &ResponseItem) -> &'static str {
+/// Truncate content for summary display.
+///
+/// - Replaces newlines with spaces
+/// - Truncates to max_len characters with "..." suffix
+/// - Handles Unicode safely
+fn truncate_content(s: &str, max_len: usize) -> String {
+    let s = s.replace('\n', " ");
+    if s.chars().count() <= max_len {
+        s
+    } else {
+        format!("{}...", s.chars().take(max_len).collect::<String>())
+    }
+}
+
+/// Get human-readable type name with summary for a ResponseItem.
+///
+/// Enhanced output includes:
+/// - FunctionCall: includes tool name, e.g., `FunctionCall(read_file)`
+/// - CustomToolCall: includes tool name, e.g., `CustomToolCall(mcp_search)`
+/// - FunctionCallOutput: includes status and content summary, e.g., `FunctionCallOutput(✓, "content...")`
+/// - CustomToolCallOutput: includes content summary, e.g., `CustomToolCallOutput("result...")`
+pub fn get_item_type_name(item: &ResponseItem) -> String {
     match item {
-        ResponseItem::Message { role, .. } if role == "assistant" => "Message(assistant)",
-        ResponseItem::Message { role, .. } if role == "user" => "Message(user)",
-        ResponseItem::Message { .. } => "Message(other)",
-        ResponseItem::Reasoning { .. } => "Reasoning",
-        ResponseItem::FunctionCall { .. } => "FunctionCall",
-        ResponseItem::FunctionCallOutput { .. } => "FunctionCallOutput",
-        ResponseItem::CustomToolCall { .. } => "CustomToolCall",
-        ResponseItem::CustomToolCallOutput { .. } => "CustomToolCallOutput",
-        ResponseItem::LocalShellCall { .. } => "LocalShellCall",
-        ResponseItem::WebSearchCall { .. } => "WebSearchCall",
-        ResponseItem::GhostSnapshot { .. } => "GhostSnapshot",
-        ResponseItem::CompactionSummary { .. } => "CompactionSummary",
-        ResponseItem::Other => "Other",
+        ResponseItem::Message { role, .. } if role == "assistant" => {
+            "Message(assistant)".to_string()
+        }
+        ResponseItem::Message { role, .. } if role == "user" => "Message(user)".to_string(),
+        ResponseItem::Message { .. } => "Message(other)".to_string(),
+        ResponseItem::Reasoning { .. } => "Reasoning".to_string(),
+
+        // FunctionCall: include tool name
+        ResponseItem::FunctionCall { name, .. } => format!("FunctionCall({name})"),
+
+        // FunctionCallOutput: include success status + content summary
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            let status = match output.success {
+                Some(true) => "Y",
+                Some(false) => "N",
+                None => "?",
+            };
+            let content = truncate_content(&output.content, 20);
+            format!("FunctionCallOutput({status}, \"{content}\")")
+        }
+
+        // CustomToolCall: include tool name
+        ResponseItem::CustomToolCall { name, .. } => format!("CustomToolCall({name})"),
+
+        // CustomToolCallOutput: include output summary
+        ResponseItem::CustomToolCallOutput { output, .. } => {
+            let content = truncate_content(output, 20);
+            format!("CustomToolCallOutput(\"{content}\")")
+        }
+
+        ResponseItem::LocalShellCall { .. } => "LocalShellCall".to_string(),
+        ResponseItem::WebSearchCall { .. } => "WebSearchCall".to_string(),
+        ResponseItem::GhostSnapshot { .. } => "GhostSnapshot".to_string(),
+        ResponseItem::CompactionSummary { .. } => "CompactionSummary".to_string(),
+        ResponseItem::Other => "Other".to_string(),
     }
 }
 
 /// Get type name breakdown for a slice of ResponseItems.
-pub fn get_item_type_names(items: &[ResponseItem]) -> Vec<&'static str> {
+pub fn get_item_type_names(items: &[ResponseItem]) -> Vec<String> {
     items.iter().map(get_item_type_name).collect()
 }
 
@@ -167,24 +209,125 @@ mod tests {
     }
 
     #[test]
-    fn test_get_item_type_name_for_tool_items() {
+    fn test_get_item_type_name_for_function_call_with_name() {
         let function_call = ResponseItem::FunctionCall {
             id: Some("fc_1".to_string()),
             name: "read_file".to_string(),
             arguments: "{}".to_string(),
             call_id: "call_1".to_string(),
         };
-        assert_eq!(get_item_type_name(&function_call), "FunctionCall");
+        assert_eq!(
+            get_item_type_name(&function_call),
+            "FunctionCall(read_file)"
+        );
+    }
 
+    #[test]
+    fn test_get_item_type_name_for_function_output_success() {
+        let function_output = ResponseItem::FunctionCallOutput {
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "File content here".to_string(),
+                content_items: None,
+                success: Some(true),
+            },
+        };
+        assert_eq!(
+            get_item_type_name(&function_output),
+            "FunctionCallOutput(✓, \"File content here\")"
+        );
+    }
+
+    #[test]
+    fn test_get_item_type_name_for_function_output_failure() {
+        let function_output = ResponseItem::FunctionCallOutput {
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "Error occurred".to_string(),
+                content_items: None,
+                success: Some(false),
+            },
+        };
+        assert_eq!(
+            get_item_type_name(&function_output),
+            "FunctionCallOutput(✗, \"Error occurred\")"
+        );
+    }
+
+    #[test]
+    fn test_get_item_type_name_for_function_output_truncated() {
+        let function_output = ResponseItem::FunctionCallOutput {
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "This is a very long content that should be truncated".to_string(),
+                content_items: None,
+                success: Some(false),
+            },
+        };
+        assert_eq!(
+            get_item_type_name(&function_output),
+            "FunctionCallOutput(✗, \"This is a very long ...\")"
+        );
+    }
+
+    #[test]
+    fn test_get_item_type_name_for_function_output_unknown_status() {
         let function_output = ResponseItem::FunctionCallOutput {
             call_id: "call_1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "output".to_string(),
                 content_items: None,
+                success: None,
+            },
+        };
+        assert_eq!(
+            get_item_type_name(&function_output),
+            "FunctionCallOutput(?, \"output\")"
+        );
+    }
+
+    #[test]
+    fn test_get_item_type_name_for_custom_tool_call() {
+        let custom_call = ResponseItem::CustomToolCall {
+            id: Some("ct_1".to_string()),
+            status: None,
+            call_id: "call_1".to_string(),
+            name: "mcp_search".to_string(),
+            input: "{}".to_string(),
+        };
+        assert_eq!(
+            get_item_type_name(&custom_call),
+            "CustomToolCall(mcp_search)"
+        );
+    }
+
+    #[test]
+    fn test_get_item_type_name_for_custom_tool_output() {
+        let custom_output = ResponseItem::CustomToolCallOutput {
+            call_id: "call_1".to_string(),
+            output: "Search result".to_string(),
+        };
+        assert_eq!(
+            get_item_type_name(&custom_output),
+            "CustomToolCallOutput(\"Search result\")"
+        );
+    }
+
+    #[test]
+    fn test_truncate_content_with_newlines() {
+        let function_output = ResponseItem::FunctionCallOutput {
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "line1\nline2\nline3".to_string(),
+                content_items: None,
                 success: Some(true),
             },
         };
-        assert_eq!(get_item_type_name(&function_output), "FunctionCallOutput");
+        // Newlines should be replaced with spaces
+        assert_eq!(
+            get_item_type_name(&function_output),
+            "FunctionCallOutput(✓, \"line1 line2 line3\")"
+        );
     }
 
     #[test]
@@ -210,7 +353,10 @@ mod tests {
         ];
 
         let names = get_item_type_names(&items);
-        assert_eq!(names, vec!["Message(user)", "Reasoning", "FunctionCall"]);
+        assert_eq!(
+            names,
+            vec!["Message(user)", "Reasoning", "FunctionCall(tool)"]
+        );
     }
 
     #[test]

@@ -1074,7 +1074,7 @@ impl Config {
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
+        let mut model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
                 std::io::Error::new(
@@ -1083,6 +1083,9 @@ impl Config {
                 )
             })?
             .clone();
+
+        // Derive model_family from model_name for adapters to use proper system instructions
+        model_provider.ext.derive_model_family();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
 

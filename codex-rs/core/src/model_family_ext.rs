@@ -50,34 +50,6 @@ pub fn gemini_2_5_pro() -> ModelFamily {
     }
 }
 
-/// Gemini 2.0 Flash Thinking Experimental - Smart Edit optimized
-///
-/// Fast Gemini model with thinking capabilities, also optimized for smart edit.
-pub fn gemini_2_0_flash_thinking() -> ModelFamily {
-    ModelFamily {
-        slug: "gemini-2.0-flash-thinking-exp".to_string(),
-        family: "Gemini 2.0 Flash Thinking".to_string(),
-
-        // Smart Edit: Enabled
-        smart_edit_enabled: true,
-
-        // Similar capabilities to 2.5 Pro
-        needs_special_apply_patch_instructions: false,
-        supports_reasoning_summaries: false,
-        reasoning_summary_format: crate::config::types::ReasoningSummaryFormat::None,
-        supports_parallel_tool_calls: true,
-        apply_patch_tool_type: None,
-        base_instructions: include_str!("../prompt.md").to_string(),
-        experimental_supported_tools: Vec::new(),
-        effective_context_window_percent: 95,
-        support_verbosity: false,
-        default_verbosity: None,
-        default_reasoning_effort: None,
-        shell_type: ConfigShellToolType::Default,
-        truncation_policy: TruncationPolicy::Bytes(10_000),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,12 +60,5 @@ mod tests {
         assert!(family.smart_edit_enabled);
         assert_eq!(family.family, "Gemini 2.5 Pro");
         assert_eq!(family.slug, "gemini-2.5-pro");
-    }
-
-    #[test]
-    fn test_gemini_2_0_flash_thinking_has_smart_edit() {
-        let family = gemini_2_0_flash_thinking();
-        assert!(family.smart_edit_enabled);
-        assert_eq!(family.family, "Gemini 2.0 Flash Thinking");
     }
 }

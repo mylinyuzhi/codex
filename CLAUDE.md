@@ -126,6 +126,11 @@ core/src/tools/spec.rs             → Tool registration
 core/src/config/mod.rs             → Config schema
 protocol/src/protocol.rs           → SQ/EQ message types
 tui/styles.md                      → TUI styling guide
+core/src/adapters/mod.rs           → ProviderAdapter trait, AdapterContext
+core/src/adapters/registry.rs      → Global adapter registry
+core/src/adapters/http.rs          → HTTP transport with streaming
+core/src/adapters/gpt_openapi/     → Built-in adapters (GptAdapter, GeminiAdapter)
+core/src/client_ext.rs             → Adapter integration entry point
 ```
 
 ## Development Workflow
@@ -192,6 +197,94 @@ cargo check 2>&1 | tee errors.txt     # Find all at once
 rg "Config \{" core/src --type rust   # Locate all inits
 # Fix simultaneously (saves 70% time)
 ```
+
+## Multi-Provider Adapters
+
+### Architecture
+
+```
+Config (adapter = "gpt_openapi")
+    ↓
+ModelClient::stream() [client.rs:159]
+    ↓ if provider.ext.adapter.is_some()
+client_ext::stream_with_adapter()
+    ↓
+AdapterHttpClient::stream_with_adapter() [http.rs]
+    ↓
+adapter.transform_request() → HTTP → adapter.transform_response_chunk()
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `adapters/mod.rs` | `ProviderAdapter` trait, `AdapterContext`, `RequestContext` |
+| `adapters/registry.rs` | Global lazy registry, `get_adapter()`, `register_adapter()` |
+| `adapters/http.rs` | HTTP layer, SSE streaming, endpoint routing |
+| `adapters/gpt_openapi/gpt_adapter.rs` | OpenAI Responses API adapter |
+| `adapters/gpt_openapi/gemini_adapter.rs` | Google Gemini Chat API adapter |
+| `client_ext.rs` | Parameter resolution, adapter entry point |
+
+### Built-in Adapters
+
+| Adapter | Name | Wire API | Features |
+|---------|------|----------|----------|
+| GptAdapter | `"gpt_openapi"` | `responses` | SSE streaming, `previous_response_id` |
+| GeminiAdapter | `"gemini_openapi"` | `chat` | Thinking budgets, non-streaming only |
+
+### Configuration
+
+```toml
+[model_providers.my_provider]
+adapter = "gpt_openapi"           # Selects adapter
+wire_api = "responses"            # Must match adapter requirement
+base_url = "https://..."
+model_name = "gpt-4"              # REQUIRED when using adapter
+
+[model_providers.my_provider.adapter_config]
+custom_key = "value"              # Adapter-specific settings
+
+[model_providers.my_provider.model_parameters]
+temperature = 0.7                 # Sampling parameters
+```
+
+### Adding New Adapters
+
+1. Create `adapters/gpt_openapi/my_adapter.rs`:
+   - Implement `ProviderAdapter` trait (must be `Send + Sync`)
+   - Key methods: `name()`, `transform_request()`, `transform_response_chunk()`
+   - Validate wire_api in `validate_provider()`
+
+2. Export in `adapters/gpt_openapi/mod.rs`
+
+3. Register in `adapters/registry.rs`:
+   ```rust
+   registry.register(Arc::new(MyAdapter::new()));
+   ```
+
+4. **Tests: Keep minimal** - only test:
+   - Request transformation (1-2 cases)
+   - Response parsing (1 success, 1 error case)
+   - Config validation (1 valid, 1 invalid)
+
+### ProviderAdapter Trait (Key Methods)
+
+```rust
+trait ProviderAdapter: Send + Sync + Debug {
+    fn name(&self) -> &str;                    // Unique ID for registry
+    fn validate_provider(&self, ...) -> Result<()>;  // Check wire_api compatibility
+    fn transform_request(&self, prompt, context, provider) -> Result<JsonValue>;
+    fn transform_response_chunk(&self, chunk, ctx, provider) -> Result<Vec<ResponseEvent>>;
+    fn supports_previous_response_id(&self) -> bool;  // Conversation continuity
+}
+```
+
+### Error Types
+
+- Config mismatch (wrong wire_api) → `CodexErr::Fatal`
+- `context_length_exceeded` → `CodexErr::ContextWindowExceeded`
+- `insufficient_quota` → `CodexErr::QuotaExceeded`
+- `previous_response_not_found` → `CodexErr::PreviousResponseNotFound`
 
 ## Testing Patterns
 
