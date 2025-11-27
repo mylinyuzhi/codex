@@ -9,7 +9,6 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
-use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_provider_info::ModelProviderInfo;
@@ -112,9 +111,8 @@ pub async fn stream_with_adapter(client: &ModelClient, prompt: &Prompt) -> Resul
         verbosity,
     };
 
-    // Create adapter HTTP client (using on-demand client creation like upstream)
-    let adapter_client =
-        AdapterHttpClient::new(create_client(), client.get_otel_event_manager());
+    // Create adapter HTTP client (creates HTTP client on-demand per request for retry)
+    let adapter_client = AdapterHttpClient::new(client.get_otel_event_manager());
 
     // Delegate to adapter HTTP layer
     adapter_client

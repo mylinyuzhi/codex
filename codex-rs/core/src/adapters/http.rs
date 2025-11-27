@@ -2,12 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use codex_client::RequestTelemetry;
+use codex_client::RetryOn;
+use codex_client::RetryPolicy;
+use codex_client::TransportError;
+use codex_client::backoff;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use http::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio::time::timeout;
 
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -20,9 +27,10 @@ use crate::adapters::get_adapter;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::default_client::CodexHttpClient;
+use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::error::RetryLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 
@@ -39,21 +47,78 @@ struct ErrorDetail {
     message: Option<String>,
 }
 
+/// Telemetry adapter bridging codex-client RequestTelemetry to OtelEventManager.
+struct AdapterTelemetry {
+    otel_event_manager: OtelEventManager,
+}
+
+impl AdapterTelemetry {
+    fn new(otel_event_manager: OtelEventManager) -> Self {
+        Self { otel_event_manager }
+    }
+}
+
+impl RequestTelemetry for AdapterTelemetry {
+    fn on_request(
+        &self,
+        attempt: u64,
+        status: Option<StatusCode>,
+        error: Option<&TransportError>,
+        duration: Duration,
+    ) {
+        let error_message = error.map(std::string::ToString::to_string);
+        self.otel_event_manager.record_api_request(
+            attempt,
+            status.map(|s| s.as_u16()),
+            error_message.as_deref(),
+            duration,
+        );
+    }
+}
+
+/// Build retry policy from provider configuration.
+///
+/// Uses existing `ModelProviderInfo` fields:
+/// - `request_max_retries` - max retry attempts (default: 3)
+/// - Base delay is fixed at 200ms to match codex-api behavior
+fn build_retry_policy(provider: &ModelProviderInfo) -> RetryPolicy {
+    RetryPolicy {
+        max_attempts: provider.request_max_retries.unwrap_or(3),
+        base_delay: Duration::from_millis(200), // Match codex-api default
+        retry_on: RetryOn {
+            retry_429: true,  // Always retry rate limits
+            retry_5xx: true,  // Always retry server errors
+            retry_transport: true,
+        },
+    }
+}
+
+/// Map TransportError to CodexErr.
+fn map_transport_error(err: TransportError) -> CodexErr {
+    match err {
+        TransportError::RetryLimit => CodexErr::RetryLimit(RetryLimitReachedError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            request_id: None,
+        }),
+        TransportError::Timeout => CodexErr::Timeout,
+        TransportError::Network(msg) | TransportError::Build(msg) => CodexErr::Stream(msg, None),
+        TransportError::Http { status, body, .. } => {
+            CodexErr::Fatal(format!("HTTP error {status}: {}", body.unwrap_or_default()))
+        }
+    }
+}
+
 /// HTTP client for adapter-based provider communication
 ///
 /// Handles HTTP request/response transformation and streaming for providers
 /// that use custom adapters (non-OpenAI providers).
 pub(crate) struct AdapterHttpClient {
-    http_client: CodexHttpClient,
     otel_event_manager: OtelEventManager,
 }
 
 impl AdapterHttpClient {
-    pub fn new(http_client: CodexHttpClient, otel_event_manager: OtelEventManager) -> Self {
-        Self {
-            http_client,
-            otel_event_manager,
-        }
+    pub fn new(otel_event_manager: OtelEventManager) -> Self {
+        Self { otel_event_manager }
     }
 
     /// Stream with a custom adapter
@@ -162,35 +227,29 @@ impl AdapterHttpClient {
             url = format!("{url}?{query_string}");
         }
 
-        // Build HTTP request
-        let mut request_builder = self
-            .http_client
-            .post(&url)
-            .header("content-type", "application/json")
-            .json(&transformed_request);
+        // Build request parameters for retry-safe sending
+        let api_key = provider.api_key().ok().flatten();
 
-        // Add authentication
-        if let Ok(Some(api_key)) = provider.api_key() {
-            request_builder = request_builder.bearer_auth(api_key);
-        }
-
-        // Add static headers from provider config
-        if let Some(headers) = &provider.http_headers {
-            for (key, value) in headers {
-                request_builder = request_builder.header(key, value);
+        // Collect all headers (static from provider + dynamic from adapter)
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let Some(provider_headers) = &provider.http_headers {
+            for (key, value) in provider_headers {
+                headers.push((key.clone(), value.clone()));
             }
         }
-
-        // Add dynamic headers from adapter
         for (key, value) in &request_metadata.headers {
-            request_builder = request_builder.header(key, value);
+            headers.push((key.clone(), value.clone()));
         }
 
-        // Send request
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|e| CodexErr::Fatal(format!("Failed to connect to provider: {e}")))?;
+        let request_params = RequestParams {
+            url,
+            body: transformed_request,
+            headers,
+            api_key,
+        };
+
+        // Send request with retry support
+        let response = self.send_with_retry(request_params, provider).await?;
 
         // Check status and parse specific error types
         if !response.status().is_success() {
@@ -283,6 +342,110 @@ impl AdapterHttpClient {
 
         Ok(ResponseStream { rx_event })
     }
+
+    /// Send HTTP request with retry and telemetry support.
+    ///
+    /// Implements exponential backoff with jitter for retrying failed requests.
+    /// Retries on 429 (rate limit), 5xx (server errors), and transport errors.
+    ///
+    /// Note: Rebuilds the request on each attempt to avoid needing `try_clone()`.
+    /// This follows the extension pattern to avoid modifying default_client.rs.
+    async fn send_with_retry(
+        &self,
+        request_params: RequestParams,
+        provider: &ModelProviderInfo,
+    ) -> Result<reqwest::Response> {
+        let policy = build_retry_policy(provider);
+        let telemetry = AdapterTelemetry::new(self.otel_event_manager.clone());
+
+        for attempt in 0..=policy.max_attempts {
+            let start = Instant::now();
+
+            // Rebuild request on each attempt (avoids try_clone dependency)
+            let client = build_reqwest_client();
+            let mut builder = client
+                .post(&request_params.url)
+                .header("content-type", "application/json")
+                .json(&request_params.body);
+
+            // Add authentication
+            if let Some(ref api_key) = request_params.api_key {
+                builder = builder.bearer_auth(api_key);
+            }
+
+            // Add headers
+            for (key, value) in &request_params.headers {
+                builder = builder.header(key.as_str(), value.as_str());
+            }
+
+            match builder.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    telemetry.on_request(attempt, Some(status), None, start.elapsed());
+
+                    // Check if this is a retryable HTTP error (429 or 5xx)
+                    if status.as_u16() == 429 && policy.retry_on.retry_429 {
+                        if attempt < policy.max_attempts {
+                            tracing::debug!(
+                                attempt,
+                                status = %status,
+                                "Retrying after rate limit"
+                            );
+                            tokio::time::sleep(backoff(policy.base_delay, attempt + 1)).await;
+                            continue;
+                        }
+                    }
+                    if status.is_server_error() && policy.retry_on.retry_5xx {
+                        if attempt < policy.max_attempts {
+                            tracing::debug!(
+                                attempt,
+                                status = %status,
+                                "Retrying after server error"
+                            );
+                            tokio::time::sleep(backoff(policy.base_delay, attempt + 1)).await;
+                            continue;
+                        }
+                    }
+
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    let transport_err = TransportError::Network(e.to_string());
+                    telemetry.on_request(attempt, None, Some(&transport_err), start.elapsed());
+
+                    if !policy
+                        .retry_on
+                        .should_retry(&transport_err, attempt, policy.max_attempts)
+                    {
+                        return Err(map_transport_error(transport_err));
+                    }
+
+                    tracing::debug!(
+                        attempt,
+                        error = %e,
+                        "Retrying after transport error"
+                    );
+                    tokio::time::sleep(backoff(policy.base_delay, attempt + 1)).await;
+                }
+            }
+        }
+
+        Err(CodexErr::RetryLimit(RetryLimitReachedError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            request_id: None,
+        }))
+    }
+}
+
+/// Request parameters for retry-safe request building.
+///
+/// Contains all the information needed to rebuild a request on each retry attempt.
+/// This avoids the need for `try_clone()` which would require modifying default_client.rs.
+struct RequestParams {
+    url: String,
+    body: Value,
+    headers: Vec<(String, String)>,
+    api_key: Option<String>,
 }
 
 /// Process SSE stream using a custom adapter

@@ -250,7 +250,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
 }
 
 pub fn derive_default_model_family(model: &str) -> ModelFamily {
-    // Default model family
     ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),
