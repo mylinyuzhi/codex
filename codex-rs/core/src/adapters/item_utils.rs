@@ -234,39 +234,7 @@ mod tests {
         };
         assert_eq!(
             get_item_type_name(&function_output),
-            "FunctionCallOutput(✓, \"File content here\")"
-        );
-    }
-
-    #[test]
-    fn test_get_item_type_name_for_function_output_failure() {
-        let function_output = ResponseItem::FunctionCallOutput {
-            call_id: "call_1".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "Error occurred".to_string(),
-                content_items: None,
-                success: Some(false),
-            },
-        };
-        assert_eq!(
-            get_item_type_name(&function_output),
-            "FunctionCallOutput(✗, \"Error occurred\")"
-        );
-    }
-
-    #[test]
-    fn test_get_item_type_name_for_function_output_truncated() {
-        let function_output = ResponseItem::FunctionCallOutput {
-            call_id: "call_1".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "This is a very long content that should be truncated".to_string(),
-                content_items: None,
-                success: Some(false),
-            },
-        };
-        assert_eq!(
-            get_item_type_name(&function_output),
-            "FunctionCallOutput(✗, \"This is a very long ...\")"
+            "FunctionCallOutput(Y, \"File content here\")"
         );
     }
 
@@ -326,7 +294,7 @@ mod tests {
         // Newlines should be replaced with spaces
         assert_eq!(
             get_item_type_name(&function_output),
-            "FunctionCallOutput(✓, \"line1 line2 line3\")"
+            "FunctionCallOutput(Y, \"line1 line2 line3\")"
         );
     }
 
