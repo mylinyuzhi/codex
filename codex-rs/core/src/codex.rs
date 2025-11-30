@@ -2053,8 +2053,9 @@ async fn run_turn(
             mcp_tools
                 .into_iter()
                 .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
+                .collect::<HashMap<_, _>>(),
+        )
+        .filter(|m| !m.is_empty()),
     ));
 
     let model_supports_parallel = turn_context

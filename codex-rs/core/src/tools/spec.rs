@@ -1031,12 +1031,15 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    // Only register MCP resource tools when MCP tools are available
+    if mcp_tools.is_some() {
+        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
+        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
+        builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+        builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    }
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
@@ -1234,7 +1237,8 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&config, None).build();
+        // Use Some(empty) to simulate "MCP servers configured but no tools"
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
         // Build actual map name -> spec
         use std::collections::BTreeMap;

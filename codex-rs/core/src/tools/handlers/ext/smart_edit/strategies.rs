@@ -348,8 +348,9 @@ mod tests {
 
     #[test]
     fn test_try_all_strategies_flexible() {
-        let content = "    indented code";
-        let result = try_all_strategies("indented code", "updated code", content);
+        // Multi-line: exact fails (search has no leading spaces), flexible works
+        let content = "    line1\n    line2";
+        let result = try_all_strategies("line1\nline2", "updated", content);
         assert_eq!(result.strategy, "flexible");
         assert_eq!(result.occurrences, 1);
     }
@@ -374,6 +375,7 @@ mod tests {
         assert_eq!(escape_regex("hello"), "hello");
         assert_eq!(escape_regex("a.b"), "a\\.b");
         assert_eq!(escape_regex("(test)"), "\\(test\\)");
-        assert_eq!(escape_regex("[a-z]+"), "\\[a\\-z\\]\\+");
+        // Hyphen not escaped - only special inside char class, but we escape brackets
+        assert_eq!(escape_regex("[a-z]+"), "\\[a-z\\]\\+");
     }
 }

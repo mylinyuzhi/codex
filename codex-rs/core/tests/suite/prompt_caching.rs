@@ -154,9 +154,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     let expected_tools_names = vec![
         "shell_command",
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
         "update_plan",
         "apply_patch",
         "view_image",

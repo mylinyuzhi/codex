@@ -682,7 +682,7 @@ mod tests {
             .unwrap();
 
         // Responses API format for completion - just returns Completed event
-        let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123"},"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}}}"#;
+        let chunk = r#"{"event":"response.done","response":{"id":"resp-gateway-123","status":"completed"},"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}}}"#;
         let events = adapter
             .transform_response_chunk(chunk, &mut ctx, &provider)
             .unwrap();
@@ -770,7 +770,7 @@ mod tests {
         // Send response.done event - returns only Completed event
         let events = adapter
             .transform_response_chunk(
-                r#"{"event":"response.done","response":{"id":"resp-123"}}"#,
+                r#"{"event":"response.done","response":{"id":"resp-123","status":"completed"}}"#,
                 &mut ctx,
                 &provider,
             )
