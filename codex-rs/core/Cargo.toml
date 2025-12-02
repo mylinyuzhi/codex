@@ -42,6 +42,8 @@ dunce = { workspace = true }
 env-flags = { workspace = true }
 encoding_rs = { workspace = true }
 eventsource-stream = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 indexmap = { workspace = true }
@@ -89,6 +91,7 @@ opentelemetry-appender-tracing = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
+walkdir = { workspace = true }
 which = { workspace = true }
 wildmatch = { workspace = true }
 

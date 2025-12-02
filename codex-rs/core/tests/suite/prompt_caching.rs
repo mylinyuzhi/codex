@@ -152,12 +152,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let expected_tools_names = vec![
-        "shell_command",
-        "update_plan",
-        "apply_patch",
-        "view_image",
-    ];
+    let expected_tools_names = vec!["shell_command", "update_plan", "apply_patch", "view_image"];
     let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {

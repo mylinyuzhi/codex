@@ -36,6 +36,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub include_smart_edit: bool,
+    pub include_rich_grep: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -55,6 +56,7 @@ impl ToolsConfig {
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
         let include_smart_edit =
             features.enabled(Feature::SmartEdit) && model_family.smart_edit_enabled;
+        let include_rich_grep = features.enabled(Feature::RichGrep);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -82,6 +84,7 @@ impl ToolsConfig {
             web_search_request: include_web_search_request,
             include_view_image_tool,
             include_smart_edit,
+            include_rich_grep,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1060,9 +1063,18 @@ pub(crate) fn build_specs(
         .experimental_supported_tools
         .contains(&"grep_files".to_string())
     {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
-        builder.register_handler("grep_files", grep_files_handler);
+        if config.include_rich_grep {
+            // Rich ripgrep with line content output
+            use crate::tools::ext::ripgrep::create_ripgrep_tool;
+            use crate::tools::handlers::ext::ripgrep::RipGrepHandler;
+            builder.push_spec_with_parallel_support(create_ripgrep_tool(), true);
+            builder.register_handler("grep_files", Arc::new(RipGrepHandler));
+        } else {
+            // Original minimal grep (file paths only)
+            let grep_files_handler = Arc::new(GrepFilesHandler);
+            builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+            builder.register_handler("grep_files", grep_files_handler);
+        }
     }
 
     if config
@@ -1107,6 +1119,14 @@ pub(crate) fn build_specs(
         use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
         builder.push_spec(create_smart_edit_tool());
         builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
+    }
+
+    // glob_files is always enabled - no feature flag required
+    {
+        use crate::tools::ext::glob_files::create_glob_files_tool;
+        use crate::tools::handlers::ext::glob_files::GlobFilesHandler;
+        builder.push_spec_with_parallel_support(create_glob_files_tool(), true);
+        builder.register_handler("glob_files", Arc::new(GlobFilesHandler));
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -1257,6 +1277,7 @@ mod tests {
         );
 
         // Build expected from the same helpers used by the builder.
+        use crate::tools::ext::glob_files::create_glob_files_tool;
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
         for spec in [
             create_exec_command_tool(),
@@ -1268,6 +1289,7 @@ mod tests {
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
+            create_glob_files_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1312,6 +1334,7 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1329,6 +1352,7 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1350,6 +1374,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1371,6 +1396,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1387,6 +1413,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1404,6 +1431,7 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1420,6 +1448,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1437,6 +1466,7 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1455,6 +1485,7 @@ mod tests {
                 "update_plan",
                 "apply_patch",
                 "view_image",
+                "glob_files",
             ],
         );
     }
@@ -1475,6 +1506,7 @@ mod tests {
                 "update_plan",
                 "web_search",
                 "view_image",
+                "glob_files",
             ],
         );
     }
