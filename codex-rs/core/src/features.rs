@@ -57,6 +57,8 @@ pub enum Feature {
     ModelWarnings,
     /// Smart Edit tool with instruction-based matching (Gemini-optimized).
     SmartEdit,
+    /// Rich grep tool with line content output (ripgrep JSON mode).
+    RichGrep,
 }
 
 impl Feature {
@@ -347,6 +349,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SmartEdit,
         key: "smart_edit",
+        stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RichGrep,
+        key: "rich_grep",
         stage: Stage::Stable,
         default_enabled: false,
     },

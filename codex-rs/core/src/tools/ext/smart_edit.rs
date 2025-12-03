@@ -130,7 +130,11 @@ mod tests {
 
         assert_eq!(tool.name, "smart_edit");
         assert!(!tool.strict);
-        assert!(tool.description.to_lowercase().contains("instruction-based"));
+        assert!(
+            tool.description
+                .to_lowercase()
+                .contains("instruction-based")
+        );
         assert!(tool.description.to_lowercase().contains("three-tier"));
 
         let JsonSchema::Object {
