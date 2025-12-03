@@ -59,6 +59,8 @@ pub enum Feature {
     SmartEdit,
     /// Rich grep tool with line content output (ripgrep JSON mode).
     RichGrep,
+    /// Enhanced list_dir with ignore file support (.gitignore, .agentignore).
+    EnhancedListDir,
 }
 
 impl Feature {
@@ -355,6 +357,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RichGrep,
         key: "rich_grep",
+        stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnhancedListDir,
+        key: "enhanced_list_dir",
         stage: Stage::Stable,
         default_enabled: false,
     },

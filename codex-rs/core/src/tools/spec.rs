@@ -37,6 +37,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub include_smart_edit: bool,
     pub include_rich_grep: bool,
+    pub include_enhanced_list_dir: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -57,6 +58,7 @@ impl ToolsConfig {
         let include_smart_edit =
             features.enabled(Feature::SmartEdit) && model_family.smart_edit_enabled;
         let include_rich_grep = features.enabled(Feature::RichGrep);
+        let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -85,6 +87,7 @@ impl ToolsConfig {
             include_view_image_tool,
             include_smart_edit,
             include_rich_grep,
+            include_enhanced_list_dir,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -484,7 +487,7 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
-fn create_grep_files_tool() -> ToolSpec {
+pub(crate) fn create_grep_files_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "pattern".to_string(),
@@ -632,7 +635,7 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
-fn create_list_dir_tool() -> ToolSpec {
+pub(crate) fn create_list_dir_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "dir_path".to_string(),
@@ -1063,13 +1066,7 @@ pub(crate) fn build_specs(
         .experimental_supported_tools
         .contains(&"grep_files".to_string())
     {
-        if config.include_rich_grep {
-            // Rich ripgrep with line content output
-            use crate::tools::ext::ripgrep::create_ripgrep_tool;
-            use crate::tools::handlers::ext::ripgrep::RipGrepHandler;
-            builder.push_spec_with_parallel_support(create_ripgrep_tool(), true);
-            builder.register_handler("grep_files", Arc::new(RipGrepHandler));
-        } else {
+        if !crate::tools::spec_ext::try_register_rich_grep(&mut builder, config) {
             // Original minimal grep (file paths only)
             let grep_files_handler = Arc::new(GrepFilesHandler);
             builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
@@ -1091,9 +1088,11 @@ pub(crate) fn build_specs(
         .iter()
         .any(|tool| tool == "list_dir")
     {
-        let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
-        builder.register_handler("list_dir", list_dir_handler);
+        if !crate::tools::spec_ext::try_register_enhanced_list_dir(&mut builder, config) {
+            let list_dir_handler = Arc::new(ListDirHandler);
+            builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+            builder.register_handler("list_dir", list_dir_handler);
+        }
     }
 
     if config
@@ -1114,20 +1113,11 @@ pub(crate) fn build_specs(
         builder.register_handler("view_image", view_image_handler);
     }
 
-    if config.include_smart_edit {
-        use crate::tools::ext::smart_edit::create_smart_edit_tool;
-        use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
-        builder.push_spec(create_smart_edit_tool());
-        builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
-    }
+    // smart_edit: ext only
+    crate::tools::spec_ext::register_smart_edit(&mut builder, config);
 
-    // glob_files is always enabled - no feature flag required
-    {
-        use crate::tools::ext::glob_files::create_glob_files_tool;
-        use crate::tools::handlers::ext::glob_files::GlobFilesHandler;
-        builder.push_spec_with_parallel_support(create_glob_files_tool(), true);
-        builder.register_handler("glob_files", Arc::new(GlobFilesHandler));
-    }
+    // glob_files: ext only, always enabled
+    crate::tools::spec_ext::register_glob_files(&mut builder);
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();

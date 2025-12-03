@@ -1,10 +1,14 @@
 //! Extension for tool loading logging
 //!
 //! Provides utilities to log loaded tools with metadata like shell variants
-//! and execution modes.
+//! and execution modes. Also provides ext tool registration to minimize
+//! modifications to spec.rs for easier upstream sync.
 
 use crate::client_common::tools::ToolSpec;
 use crate::tools::registry::ConfiguredToolSpec;
+use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::spec::ToolsConfig;
+use std::sync::Arc;
 use tracing::info;
 
 /// Log loaded tools with variant annotations
@@ -60,6 +64,55 @@ fn tool_variant(tool: &ToolSpec) -> Option<&'static str> {
         ToolSpec::WebSearch {} => Some("API"),
         ToolSpec::Freeform(_) => Some("freeform"),
     }
+}
+
+/// Try to register rich grep (ripgrep). Returns true if registered.
+/// If false, caller should register the original grep_files handler.
+pub fn try_register_rich_grep(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) -> bool {
+    if config.include_rich_grep {
+        use crate::tools::ext::ripgrep::create_ripgrep_tool;
+        use crate::tools::handlers::ext::ripgrep::RipGrepHandler;
+        builder.push_spec_with_parallel_support(create_ripgrep_tool(), true);
+        builder.register_handler("grep_files", Arc::new(RipGrepHandler));
+        true
+    } else {
+        false
+    }
+}
+
+/// Try to register enhanced list_dir. Returns true if registered.
+/// If false, caller should register the original list_dir handler.
+pub fn try_register_enhanced_list_dir(
+    builder: &mut ToolRegistryBuilder,
+    config: &ToolsConfig,
+) -> bool {
+    if config.include_enhanced_list_dir {
+        use crate::tools::ext::list_dir::create_enhanced_list_dir_tool;
+        use crate::tools::handlers::ext::list_dir::EnhancedListDirHandler;
+        builder.push_spec_with_parallel_support(create_enhanced_list_dir_tool(), true);
+        builder.register_handler("list_dir", Arc::new(EnhancedListDirHandler));
+        true
+    } else {
+        false
+    }
+}
+
+/// Register smart_edit tool if enabled.
+pub fn register_smart_edit(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
+    if config.include_smart_edit {
+        use crate::tools::ext::smart_edit::create_smart_edit_tool;
+        use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
+        builder.push_spec(create_smart_edit_tool());
+        builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
+    }
+}
+
+/// Register glob_files tool (always enabled).
+pub fn register_glob_files(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::glob_files::create_glob_files_tool;
+    use crate::tools::handlers::ext::glob_files::GlobFilesHandler;
+    builder.push_spec_with_parallel_support(create_glob_files_tool(), true);
+    builder.register_handler("glob_files", Arc::new(GlobFilesHandler));
 }
 
 #[cfg(test)]

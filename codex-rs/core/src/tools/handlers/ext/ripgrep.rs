@@ -184,13 +184,21 @@ fn find_agent_ignore_files(root: &Path) -> Vec<PathBuf> {
     let mut ignore_files = Vec::new();
 
     // 1. Walk UP to parent directories (for project-level ignores)
+    // Stop at git root or max depth to avoid walking all the way to filesystem root
+    const MAX_PARENT_DEPTH: usize = 20;
     let mut current = Some(root.to_path_buf());
+    let mut depth = 0;
     while let Some(dir) = current {
         for name in &[".agentignore", ".agentsignore"] {
             let path = dir.join(name);
             if path.exists() {
                 ignore_files.push(path);
             }
+        }
+        depth += 1;
+        // Stop at git root or max depth
+        if depth >= MAX_PARENT_DEPTH || dir.join(".git").exists() {
+            break;
         }
         current = dir.parent().map(|p| p.to_path_buf());
     }
@@ -533,9 +541,16 @@ mod tests {
         let dir = temp.path();
 
         // Create test files with searchable content
-        fs::write(dir.join("main.rs"), "fn main() {\n    println!(\"hello\");\n}").expect("write");
-        fs::write(dir.join("lib.rs"), "pub fn helper() {\n    // helper function\n}")
-            .expect("write");
+        fs::write(
+            dir.join("main.rs"),
+            "fn main() {\n    println!(\"hello\");\n}",
+        )
+        .expect("write");
+        fs::write(
+            dir.join("lib.rs"),
+            "pub fn helper() {\n    // helper function\n}",
+        )
+        .expect("write");
         fs::write(dir.join("ignored.log"), "fn should_be_ignored() {}").expect("write");
 
         // Create .agentignore to filter .log files
