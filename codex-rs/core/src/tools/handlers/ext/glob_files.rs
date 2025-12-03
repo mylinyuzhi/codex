@@ -106,16 +106,12 @@ impl ToolHandler for GlobFilesHandler {
         let walker = ignore_service.create_walk_builder(&search_path);
 
         // 5. Compile glob pattern
-        let glob_pattern = if args.case_sensitive {
-            Pattern::new(&args.pattern)
-        } else {
-            // For case-insensitive, we'll handle it during matching
-            Pattern::new(&args.pattern)
-        }
-        .map_err(|e| FunctionCallError::RespondToModel(format!("Invalid glob pattern: {e}")))?;
+        // Note: case_sensitive is handled at match time in matches_with(), not at pattern compile
+        let glob_pattern = Pattern::new(&args.pattern)
+            .map_err(|e| FunctionCallError::RespondToModel(format!("Invalid glob pattern: {e}")))?;
 
         // 6. Collect matching files
-        let mut entries: Vec<FileEntry> = Vec::new();
+        let mut entries: Vec<FileEntry> = Vec::with_capacity(INTERNAL_LIMIT);
 
         for entry_result in walker.build() {
             let entry = match entry_result {
