@@ -126,6 +126,30 @@ pub fn register_think(builder: &mut ToolRegistryBuilder) {
     builder.register_handler("think", Arc::new(ThinkHandler));
 }
 
+/// Register write_file tool (always enabled for all models).
+///
+/// Write File creates new files or overwrites existing files.
+/// This is a mutating tool that requires approval.
+pub fn register_write_file(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::write_file::create_write_file_tool;
+    use crate::tools::handlers::ext::write_file::WriteFileHandler;
+    builder.push_spec(create_write_file_tool());
+    builder.register_handler("write_file", Arc::new(WriteFileHandler));
+}
+
+/// Register web_fetch tool if feature is enabled.
+///
+/// Web Fetch fetches content from URLs and converts HTML to plain text.
+/// This is a mutating tool that requires approval.
+pub fn register_web_fetch(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
+    if config.include_web_fetch {
+        use crate::tools::ext::web_fetch::create_web_fetch_tool;
+        use crate::tools::handlers::ext::web_fetch::WebFetchHandler;
+        builder.push_spec_with_parallel_support(create_web_fetch_tool(), true);
+        builder.register_handler("web_fetch", Arc::new(WebFetchHandler));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

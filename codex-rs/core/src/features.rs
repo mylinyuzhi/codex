@@ -61,6 +61,8 @@ pub enum Feature {
     RichGrep,
     /// Enhanced list_dir with ignore file support (.gitignore, .agentignore).
     EnhancedListDir,
+    /// Enable the web_fetch tool for fetching URL content.
+    WebFetch,
 }
 
 impl Feature {
@@ -364,6 +366,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::EnhancedListDir,
         key: "enhanced_list_dir",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebFetch,
+        key: "web_fetch",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

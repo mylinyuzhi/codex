@@ -38,6 +38,7 @@ pub(crate) struct ToolsConfig {
     pub include_smart_edit: bool,
     pub include_rich_grep: bool,
     pub include_enhanced_list_dir: bool,
+    pub include_web_fetch: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -59,6 +60,7 @@ impl ToolsConfig {
             features.enabled(Feature::SmartEdit) && model_family.smart_edit_enabled;
         let include_rich_grep = features.enabled(Feature::RichGrep);
         let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
+        let include_web_fetch = features.enabled(Feature::WebFetch);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -88,6 +90,7 @@ impl ToolsConfig {
             include_smart_edit,
             include_rich_grep,
             include_enhanced_list_dir,
+            include_web_fetch,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1122,6 +1125,12 @@ pub(crate) fn build_specs(
     // think: ext only, always enabled for all models
     crate::tools::spec_ext::register_think(&mut builder);
 
+    // write_file: ext only, always enabled for all models
+    crate::tools::spec_ext::register_write_file(&mut builder);
+
+    // web_fetch: ext only, requires feature flag
+    crate::tools::spec_ext::register_web_fetch(&mut builder, config);
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1272,6 +1281,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         use crate::tools::ext::glob_files::create_glob_files_tool;
         use crate::tools::ext::think::create_think_tool;
+        use crate::tools::ext::write_file::create_write_file_tool;
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
         for spec in [
             create_exec_command_tool(),
@@ -1285,6 +1295,7 @@ mod tests {
             create_view_image_tool(),
             create_glob_files_tool(),
             create_think_tool(),
+            create_write_file_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1331,6 +1342,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1350,6 +1362,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1373,6 +1386,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1396,6 +1410,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1414,6 +1429,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1433,6 +1449,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1451,6 +1468,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1470,6 +1488,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1490,6 +1509,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
@@ -1512,6 +1532,7 @@ mod tests {
                 "view_image",
                 "glob_files",
                 "think",
+                "write_file",
             ],
         );
     }
