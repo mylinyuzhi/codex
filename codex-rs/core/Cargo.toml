@@ -43,6 +43,7 @@ env-flags = { workspace = true }
 encoding_rs = { workspace = true }
 eventsource-stream = { workspace = true }
 glob = { workspace = true }
+html2text = { workspace = true }
 ignore = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
