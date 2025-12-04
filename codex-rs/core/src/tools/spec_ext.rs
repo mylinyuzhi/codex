@@ -115,6 +115,17 @@ pub fn register_glob_files(builder: &mut ToolRegistryBuilder) {
     builder.register_handler("glob_files", Arc::new(GlobFilesHandler));
 }
 
+/// Register think tool (always enabled for all models).
+///
+/// Think is a no-op tool that logs thoughts for transparency.
+/// Useful for complex reasoning, brainstorming, and planning.
+pub fn register_think(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::think::create_think_tool;
+    use crate::tools::handlers::ext::think::ThinkHandler;
+    builder.push_spec_with_parallel_support(create_think_tool(), true);
+    builder.register_handler("think", Arc::new(ThinkHandler));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
