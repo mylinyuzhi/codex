@@ -97,8 +97,7 @@ pub fn create_ripgrep_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "grep_files".to_string(),
         description: "Search file contents using ripgrep. Returns matching lines with file paths \
-             and line numbers, sorted by modification time (newest first). \
-             Respects .gitignore and .agentignore files automatically."
+             and line numbers, sorted by modification time (newest first)."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

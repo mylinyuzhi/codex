@@ -56,7 +56,8 @@ async fn model_selects_expected_tools() {
             "local_shell".to_string(),
             "update_plan".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "codex-mini-latest should expose the local shell tool",
     );
@@ -69,7 +70,8 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "gpt-5-codex should expose the apply_patch tool",
     );
@@ -82,7 +84,8 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "gpt-5.1-codex should expose the apply_patch tool",
     );
@@ -94,7 +97,8 @@ async fn model_selects_expected_tools() {
             "shell".to_string(),
             "update_plan".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "gpt-5 should expose the shell tool",
     );
@@ -107,7 +111,8 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "gpt-5.1 should expose the apply_patch tool",
     );
@@ -120,7 +125,8 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string(),
-            "glob_files".to_string()
+            "glob_files".to_string(),
+            "think".to_string()
         ],
         "exp-5.1 should expose the apply_patch tool",
     );

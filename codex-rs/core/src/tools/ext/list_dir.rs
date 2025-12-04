@@ -54,7 +54,6 @@ pub fn create_enhanced_list_dir_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "list_dir".to_string(),
         description: "Lists entries in a local directory with ignore file support. \
-            Respects .gitignore and .agentignore patterns automatically. \
             Returns entries with 1-indexed numbers, directories first, with symlink indicators."
             .to_string(),
         strict: false,

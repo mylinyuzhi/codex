@@ -1119,6 +1119,9 @@ pub(crate) fn build_specs(
     // glob_files: ext only, always enabled
     crate::tools::spec_ext::register_glob_files(&mut builder);
 
+    // think: ext only, always enabled for all models
+    crate::tools::spec_ext::register_think(&mut builder);
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1268,6 +1271,7 @@ mod tests {
 
         // Build expected from the same helpers used by the builder.
         use crate::tools::ext::glob_files::create_glob_files_tool;
+        use crate::tools::ext::think::create_think_tool;
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
         for spec in [
             create_exec_command_tool(),
@@ -1280,6 +1284,7 @@ mod tests {
             ToolSpec::WebSearch {},
             create_view_image_tool(),
             create_glob_files_tool(),
+            create_think_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1325,6 +1330,7 @@ mod tests {
                 "apply_patch",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1343,6 +1349,7 @@ mod tests {
                 "apply_patch",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1365,6 +1372,7 @@ mod tests {
                 "web_search",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1387,6 +1395,7 @@ mod tests {
                 "web_search",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1404,6 +1413,7 @@ mod tests {
                 "update_plan",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1422,6 +1432,7 @@ mod tests {
                 "apply_patch",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1439,6 +1450,7 @@ mod tests {
                 "update_plan",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1457,6 +1469,7 @@ mod tests {
                 "apply_patch",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1476,6 +1489,7 @@ mod tests {
                 "apply_patch",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
@@ -1497,6 +1511,7 @@ mod tests {
                 "web_search",
                 "view_image",
                 "glob_files",
+                "think",
             ],
         );
     }
