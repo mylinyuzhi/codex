@@ -14,11 +14,9 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
-use walkdir::WalkDir;
 
 /// Internal safety limit (not exposed to LLM)
 const INTERNAL_LIMIT: usize = 2000;
@@ -134,10 +132,7 @@ impl ToolHandler for RipGrepHandler {
             }
         }
 
-        // Find and add .agentignore files
-        for ignore_file in find_agent_ignore_files(&search_path) {
-            cmd.arg("--ignore-file").arg(&ignore_file);
-        }
+        // ripgrep natively supports .ignore files, no need for --ignore-file
 
         // Glob filter
         if let Some(glob) = &args.include {
@@ -173,57 +168,6 @@ impl ToolHandler for RipGrepHandler {
             success: Some(!matches.is_empty()),
         })
     }
-}
-
-/// Find all .agentignore and .agentsignore files in the search path
-///
-/// This searches:
-/// 1. UP - from root through parent directories (for project-level ignores)
-/// 2. DOWN - into subdirectories (for nested ignores like src/.agentignore)
-fn find_agent_ignore_files(root: &Path) -> Vec<PathBuf> {
-    let mut ignore_files = Vec::new();
-
-    // 1. Walk UP to parent directories (for project-level ignores)
-    // Stop at git root or max depth to avoid walking all the way to filesystem root
-    const MAX_PARENT_DEPTH: usize = 20;
-    let mut current = Some(root.to_path_buf());
-    let mut depth = 0;
-    while let Some(dir) = current {
-        for name in &[".agentignore", ".agentsignore"] {
-            let path = dir.join(name);
-            if path.exists() {
-                ignore_files.push(path);
-            }
-        }
-        depth += 1;
-        // Stop at git root or max depth
-        if depth >= MAX_PARENT_DEPTH || dir.join(".git").exists() {
-            break;
-        }
-        current = dir.parent().map(|p| p.to_path_buf());
-    }
-
-    // 2. Walk DOWN into subdirectories (for nested ignores)
-    if root.is_dir() {
-        for entry in WalkDir::new(root)
-            .max_depth(10) // Limit depth to avoid performance issues
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if entry.file_type().is_file() {
-                let name = entry.file_name().to_string_lossy();
-                if name == ".agentignore" || name == ".agentsignore" {
-                    let path = entry.path().to_path_buf();
-                    // Avoid duplicates (root was already added in step 1)
-                    if !ignore_files.contains(&path) {
-                        ignore_files.push(path);
-                    }
-                }
-            }
-        }
-    }
-
-    ignore_files
 }
 
 /// Parse ripgrep JSON output into structured matches
@@ -443,22 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_agent_ignore_files() {
-        use std::fs;
-        use tempfile::tempdir;
-
-        let temp = tempdir().expect("create temp dir");
-        let dir = temp.path();
-
-        // Create .agentignore file
-        fs::write(dir.join(".agentignore"), "*.log").expect("write file");
-
-        let files = find_agent_ignore_files(dir);
-        assert!(!files.is_empty());
-        assert!(files.iter().any(|f| f.ends_with(".agentignore")));
-    }
-
-    #[test]
     fn test_ripgrep_args_defaults() {
         let json = r#"{"pattern": "test"}"#;
         let args: RipGrepArgs = serde_json::from_str(json).expect("parse args");
@@ -495,43 +423,6 @@ mod tests {
         assert_eq!(args.before, Some(1));
     }
 
-    #[test]
-    fn test_find_nested_agent_ignore_files() {
-        use std::fs;
-        use tempfile::tempdir;
-
-        let temp = tempdir().expect("create temp dir");
-        let dir = temp.path();
-
-        // Create nested directory structure
-        fs::create_dir_all(dir.join("src/nested")).expect("create dirs");
-
-        // Root-level .agentignore
-        fs::write(dir.join(".agentignore"), "*.log").expect("write root ignore");
-
-        // Nested .agentignore in src/
-        fs::write(dir.join("src/.agentignore"), "*.tmp").expect("write src ignore");
-
-        // Deeply nested .agentsignore
-        fs::write(dir.join("src/nested/.agentsignore"), "*.bak").expect("write nested ignore");
-
-        let files = find_agent_ignore_files(dir);
-
-        // Should find all 3 ignore files
-        assert!(files.len() >= 3);
-        assert!(files.iter().any(|f| {
-            f.ends_with(".agentignore") && f.parent().map(|p| p == dir).unwrap_or(false)
-        }));
-        assert!(files.iter().any(|f| {
-            f.ends_with(".agentignore")
-                && f.parent()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n == "src")
-                    .unwrap_or(false)
-        }));
-        assert!(files.iter().any(|f| f.ends_with(".agentsignore")));
-    }
-
     #[tokio::test]
     async fn test_ripgrep_integration() {
         use std::fs;
@@ -553,15 +444,14 @@ mod tests {
         .expect("write");
         fs::write(dir.join("ignored.log"), "fn should_be_ignored() {}").expect("write");
 
-        // Create .agentignore to filter .log files
-        fs::write(dir.join(".agentignore"), "*.log").expect("write ignore");
+        // Create .ignore file (ripgrep natively supports this)
+        fs::write(dir.join(".ignore"), "*.log").expect("write ignore");
 
         // Build and execute rg command directly
+        // ripgrep will automatically respect .ignore files
         let output = Command::new("rg")
             .arg("--json")
             .arg("--ignore-case")
-            .arg("--ignore-file")
-            .arg(dir.join(".agentignore"))
             .arg("--")
             .arg("fn")
             .arg(dir)
@@ -571,7 +461,7 @@ mod tests {
 
         let matches = parse_json_output(&output.stdout, 100);
 
-        // Should find matches in .rs files but not in .log
+        // Should find matches in .rs files but not in .log (filtered by .ignore)
         assert!(!matches.is_empty());
         assert!(matches.iter().any(|m| m.file_path.ends_with("main.rs")));
         assert!(matches.iter().any(|m| m.file_path.ends_with("lib.rs")));

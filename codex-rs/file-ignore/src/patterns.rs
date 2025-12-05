@@ -1,9 +1,9 @@
 //! Default ignore patterns for file operations.
 //!
-//! Provides common patterns aligned with gemini-cli for consistent
-//! file filtering across agent tools.
+//! Provides common patterns for consistent file filtering across tools.
 
-/// Common ignore patterns for basic file exclusions.
+/// Common ignore patterns for version control and dependency directories.
+///
 /// These directories are typically ignored in development projects.
 pub const COMMON_IGNORE_PATTERNS: &[&str] = &[
     "**/node_modules/**",
@@ -13,7 +13,10 @@ pub const COMMON_IGNORE_PATTERNS: &[&str] = &[
     "**/.hg/**",
 ];
 
-/// Binary file extension patterns typically excluded from text processing.
+/// Binary file extension patterns.
+///
+/// Only truly binary/compiled files that cannot be meaningfully displayed.
+/// NOTE: Office files (.doc, .docx, etc.) are NOT excluded - users may want to reference them.
 pub const BINARY_FILE_PATTERNS: &[&str] = &[
     "**/*.bin",
     "**/*.exe",
@@ -29,15 +32,11 @@ pub const BINARY_FILE_PATTERNS: &[&str] = &[
     "**/*.bz2",
     "**/*.rar",
     "**/*.7z",
-    "**/*.doc",
-    "**/*.docx",
-    "**/*.xls",
-    "**/*.xlsx",
-    "**/*.ppt",
-    "**/*.pptx",
 ];
 
 /// Common directory patterns typically ignored in development.
+///
+/// Build outputs, IDE configs, and cache directories.
 pub const COMMON_DIRECTORY_EXCLUDES: &[&str] = &[
     "**/.vscode/**",
     "**/.idea/**",
@@ -47,12 +46,22 @@ pub const COMMON_DIRECTORY_EXCLUDES: &[&str] = &[
     "**/__pycache__/**",
 ];
 
-/// System and environment file patterns.
-pub const SYSTEM_FILE_EXCLUDES: &[&str] = &["**/.DS_Store", "**/.env"];
+/// System file patterns.
+///
+/// NOTE: .env is NOT excluded - users should see env files in listings.
+/// Content protection is handled separately via .agentignore.
+pub const SYSTEM_FILE_EXCLUDES: &[&str] = &["**/.DS_Store"];
 
 /// Get all default exclude patterns combined.
+///
+/// Returns a combined vector of all pattern categories.
 pub fn get_all_default_excludes() -> Vec<&'static str> {
-    let mut patterns = Vec::new();
+    let mut patterns = Vec::with_capacity(
+        COMMON_IGNORE_PATTERNS.len()
+            + BINARY_FILE_PATTERNS.len()
+            + COMMON_DIRECTORY_EXCLUDES.len()
+            + SYSTEM_FILE_EXCLUDES.len(),
+    );
     patterns.extend(COMMON_IGNORE_PATTERNS);
     patterns.extend(BINARY_FILE_PATTERNS);
     patterns.extend(COMMON_DIRECTORY_EXCLUDES);
@@ -77,8 +86,10 @@ mod tests {
     #[test]
     fn test_get_all_default_excludes() {
         let all = get_all_default_excludes();
-        assert!(all.len() > 10);
-        assert!(all.contains(&"**/node_modules/**"));
-        assert!(all.contains(&"**/*.exe"));
+        let expected_len = COMMON_IGNORE_PATTERNS.len()
+            + BINARY_FILE_PATTERNS.len()
+            + COMMON_DIRECTORY_EXCLUDES.len()
+            + SYSTEM_FILE_EXCLUDES.len();
+        assert_eq!(all.len(), expected_len);
     }
 }

@@ -4,14 +4,14 @@
 //! a glob pattern, respecting .gitignore and .agentignore files.
 
 use crate::function_tool::FunctionCallError;
-use crate::ignore_service::AgentIgnoreService;
-use crate::ignore_service::IgnoreConfig;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
+use codex_file_ignore::IgnoreConfig;
+use codex_file_ignore::IgnoreService;
 use glob::Pattern;
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -100,7 +100,7 @@ impl ToolHandler for GlobFilesHandler {
             follow_links: false,
             custom_excludes: Vec::new(),
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         // 4. Build walker with ignore rules
         let walker = ignore_service.create_walk_builder(&search_path);
@@ -240,8 +240,8 @@ fn compare_mtime_desc(a: &Option<SystemTime>, b: &Option<SystemTime>) -> Orderin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ignore_service::AgentIgnoreService;
-    use crate::ignore_service::IgnoreConfig;
+    use codex_file_ignore::IgnoreConfig;
+    use codex_file_ignore::IgnoreService;
     use std::fs;
     use tempfile::tempdir;
 
@@ -358,7 +358,7 @@ mod tests {
             include_hidden: false,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
         let walker = ignore_service.create_walk_builder(dir);
 
         let files: Vec<String> = walker
@@ -395,7 +395,7 @@ mod tests {
         // Nested: un-ignore .log in src/
         fs::write(dir.join("src/.agentignore"), "!*.log")?;
 
-        let ignore_service = AgentIgnoreService::new(IgnoreConfig::default());
+        let ignore_service = IgnoreService::new(IgnoreConfig::default());
         let walker = ignore_service.create_walk_builder(dir);
 
         let files: Vec<String> = walker
