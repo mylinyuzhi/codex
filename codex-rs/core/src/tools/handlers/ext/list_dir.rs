@@ -4,14 +4,14 @@
 //! while respecting .gitignore and .agentignore files.
 
 use crate::function_tool::FunctionCallError;
-use crate::ignore_service::AgentIgnoreService;
-use crate::ignore_service::IgnoreConfig;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
+use codex_file_ignore::IgnoreConfig;
+use codex_file_ignore::IgnoreService;
 use serde::Deserialize;
 use std::cmp::Ordering;
 use std::path::Path;
@@ -150,7 +150,7 @@ impl ToolHandler for EnhancedListDirHandler {
             follow_links: false,
             custom_excludes: Vec::new(),
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         // Collect entries using walk builder with ignore support
         let entries = collect_entries_with_ignore(&path, depth, &ignore_service)?;
@@ -206,7 +206,7 @@ impl ToolHandler for EnhancedListDirHandler {
 fn collect_entries_with_ignore(
     root: &Path,
     max_depth: usize,
-    ignore_service: &AgentIgnoreService,
+    ignore_service: &IgnoreService,
 ) -> Result<Vec<DirEntry>, FunctionCallError> {
     let mut walker = ignore_service.create_walk_builder(root);
     // Set max_depth on walker for efficiency
@@ -381,7 +381,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 2, &ignore_service).expect("collect");
 
@@ -408,7 +408,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 2, &ignore_service).expect("collect");
 
@@ -433,7 +433,7 @@ mod tests {
             include_hidden: true, // Key: include hidden files
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 2, &ignore_service).expect("collect");
 
@@ -461,7 +461,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         // Test depth 1
         let entries = collect_entries_with_ignore(dir, 1, &ignore_service).expect("collect");
@@ -497,7 +497,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 1, &ignore_service).expect("collect");
 
@@ -530,7 +530,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 1, &ignore_service).expect("collect");
 
@@ -557,7 +557,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 1, &ignore_service).expect("collect");
         assert_eq!(entries.len(), 10);
@@ -586,7 +586,7 @@ mod tests {
             include_hidden: true,
             ..Default::default()
         };
-        let ignore_service = AgentIgnoreService::new(ignore_config);
+        let ignore_service = IgnoreService::new(ignore_config);
 
         let entries = collect_entries_with_ignore(dir, 2, &ignore_service).expect("collect");
         assert!(entries.is_empty());

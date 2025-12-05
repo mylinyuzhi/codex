@@ -28,6 +28,7 @@ codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
+codex-file-ignore = { workspace = true }
 codex-git = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
@@ -93,7 +94,6 @@ opentelemetry-appender-tracing = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
-walkdir = { workspace = true }
 which = { workspace = true }
 wildmatch = { workspace = true }
 

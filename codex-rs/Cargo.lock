@@ -1149,6 +1149,7 @@ dependencies = [
  "codex-client",
  "codex-core",
  "codex-execpolicy",
+ "codex-file-ignore",
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
@@ -1327,11 +1328,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-ignore"
+version = "0.0.0"
+dependencies = [
+ "ignore",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "codex-file-search"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-file-ignore",
  "ignore",
  "nucleo-matcher",
  "serde",

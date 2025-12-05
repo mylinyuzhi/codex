@@ -21,6 +21,7 @@ members = [
     "execpolicy-legacy",
     "keyring-store",
     "file-search",
+    "file-ignore",
     "linux-sandbox",
     "lmstudio",
     "login",
@@ -74,6 +75,7 @@ codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
+codex-file-ignore = { path = "file-ignore" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
