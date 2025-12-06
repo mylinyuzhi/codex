@@ -150,6 +150,18 @@ pub fn register_web_fetch(builder: &mut ToolRegistryBuilder, config: &ToolsConfi
     }
 }
 
+/// Register code_search tool.
+///
+/// Code Search searches the indexed codebase using BM25 and optional vector search.
+/// Retrieval has its own independent configuration system (~/.codex/retrieval.toml).
+/// Tool is always registered; handler checks availability at runtime.
+pub fn register_code_search(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::code_search::create_code_search_tool;
+    use crate::tools::handlers::ext::code_search::CodeSearchHandler;
+    builder.push_spec_with_parallel_support(create_code_search_tool(), true);
+    builder.register_handler("code_search", Arc::new(CodeSearchHandler::new()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

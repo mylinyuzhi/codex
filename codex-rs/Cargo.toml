@@ -30,6 +30,7 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "retrieval",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
@@ -87,6 +88,7 @@ codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-retrieval = { path = "retrieval" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }

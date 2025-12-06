@@ -3,6 +3,7 @@
 //! Contains extension tool specifications that can be conditionally registered
 //! based on features and model family capabilities.
 
+pub mod code_search;
 pub mod glob_files;
 pub mod list_dir;
 pub mod ripgrep;

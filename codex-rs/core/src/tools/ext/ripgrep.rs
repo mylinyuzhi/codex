@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// - Pattern matching (regex or literal)
 /// - Context lines support (-A/-B/-C)
 /// - Case sensitivity option
-/// - .gitignore and .agentignore respect (always enabled)
+/// - .gitignore and .ignore respect (always enabled)
 /// - Modification time sorting (recent files first)
 /// - Rich output with file path + line number + line content
 pub fn create_ripgrep_tool() -> ToolSpec {

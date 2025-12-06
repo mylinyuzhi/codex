@@ -59,10 +59,12 @@ pub enum Feature {
     SmartEdit,
     /// Rich grep tool with line content output (ripgrep JSON mode).
     RichGrep,
-    /// Enhanced list_dir with ignore file support (.gitignore, .agentignore).
+    /// Enhanced list_dir with ignore file support (.gitignore, .ignore).
     EnhancedListDir,
     /// Enable the web_fetch tool for fetching URL content.
     WebFetch,
+    /// Enable code_search tool (experimental, requires retrieval.toml configuration).
+    CodeSearch,
 }
 
 impl Feature {
@@ -371,6 +373,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WebFetch,
         key: "web_fetch",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeSearch,
+        key: "code_search",
         stage: Stage::Experimental,
         default_enabled: false,
     },

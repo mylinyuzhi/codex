@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// Glob Files finds files by name pattern with:
 /// - Glob pattern matching (e.g., "**/*.rs")
 /// - Case sensitivity option
-/// - .gitignore and .agentignore respect (always enabled)
+/// - .gitignore and .ignore respect (always enabled)
 /// - Modification time sorting (recent files first)
 pub fn create_glob_files_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
