@@ -27,7 +27,7 @@
 //!
 //! let config = IgnoreConfig {
 //!     respect_gitignore: true,
-//!     respect_agent_ignore: true,
+//!     respect_ignore: true,
 //!     include_hidden: false,
 //!     follow_links: false,
 //!     custom_excludes: vec!["*.log".to_string()],

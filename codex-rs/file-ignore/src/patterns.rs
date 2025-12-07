@@ -49,7 +49,7 @@ pub const COMMON_DIRECTORY_EXCLUDES: &[&str] = &[
 /// System file patterns.
 ///
 /// NOTE: .env is NOT excluded - users should see env files in listings.
-/// Content protection is handled separately via .agentignore.
+/// Content protection is handled separately via .ignore.
 pub const SYSTEM_FILE_EXCLUDES: &[&str] = &["**/.DS_Store"];
 
 /// Get all default exclude patterns combined.

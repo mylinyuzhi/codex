@@ -15,16 +15,12 @@ pub struct IgnoreConfig {
     /// Default: `true`
     pub respect_gitignore: bool,
 
-    /// Whether to respect agent-specific ignore files.
+    /// Whether to respect `.ignore` files (ripgrep native support).
     ///
-    /// When `true`, applies rules from:
-    /// - `.agentignore` files
-    /// - `.agentsignore` files
-    ///
-    /// These files use the same syntax as `.gitignore`.
+    /// Uses the same syntax as `.gitignore`.
     ///
     /// Default: `true`
-    pub respect_agent_ignore: bool,
+    pub respect_ignore: bool,
 
     /// Whether to include hidden files (dotfiles).
     ///
@@ -53,7 +49,7 @@ impl Default for IgnoreConfig {
     fn default() -> Self {
         Self {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: false,
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -71,7 +67,7 @@ impl IgnoreConfig {
     pub fn ignoring_none() -> Self {
         Self {
             respect_gitignore: false,
-            respect_agent_ignore: false,
+            respect_ignore: false,
             include_hidden: true,
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -84,9 +80,9 @@ impl IgnoreConfig {
         self
     }
 
-    /// Builder method: set whether to respect agent ignore files.
-    pub fn with_agent_ignore(mut self, respect: bool) -> Self {
-        self.respect_agent_ignore = respect;
+    /// Builder method: set whether to respect `.ignore` files.
+    pub fn with_ignore(mut self, respect: bool) -> Self {
+        self.respect_ignore = respect;
         self
     }
 
@@ -117,7 +113,7 @@ mod tests {
     fn test_default_config() {
         let config = IgnoreConfig::default();
         assert!(config.respect_gitignore);
-        assert!(config.respect_agent_ignore);
+        assert!(config.respect_ignore);
         assert!(!config.include_hidden);
         assert!(!config.follow_links);
         assert!(config.custom_excludes.is_empty());
@@ -127,14 +123,14 @@ mod tests {
     fn test_respecting_all() {
         let config = IgnoreConfig::respecting_all();
         assert!(config.respect_gitignore);
-        assert!(config.respect_agent_ignore);
+        assert!(config.respect_ignore);
     }
 
     #[test]
     fn test_ignoring_none() {
         let config = IgnoreConfig::ignoring_none();
         assert!(!config.respect_gitignore);
-        assert!(!config.respect_agent_ignore);
+        assert!(!config.respect_ignore);
         assert!(config.include_hidden);
     }
 
@@ -142,13 +138,13 @@ mod tests {
     fn test_builder_pattern() {
         let config = IgnoreConfig::default()
             .with_gitignore(true)
-            .with_agent_ignore(true)
+            .with_ignore(true)
             .with_hidden(true)
             .with_follow_links(true)
             .with_excludes(vec!["*.log".to_string()]);
 
         assert!(config.respect_gitignore);
-        assert!(config.respect_agent_ignore);
+        assert!(config.respect_ignore);
         assert!(config.include_hidden);
         assert!(config.follow_links);
         assert_eq!(config.custom_excludes, vec!["*.log"]);

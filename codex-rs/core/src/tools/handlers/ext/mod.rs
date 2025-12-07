@@ -1,5 +1,6 @@
 //! Extension handlers for downstream features
 
+pub mod code_search;
 pub mod glob_files;
 pub mod list_dir;
 pub mod ripgrep;

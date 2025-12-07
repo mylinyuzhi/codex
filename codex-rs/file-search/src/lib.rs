@@ -157,7 +157,7 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = if respect_gitignore {
-        // Use IgnoreService for comprehensive ignore support (.gitignore + .agentignore)
+        // Use IgnoreService for comprehensive ignore support (.gitignore + .ignore)
         let config = IgnoreConfig::default()
             .with_hidden(false) // Don't show hidden files
             .with_follow_links(true) // Follow symlinks (original behavior)

@@ -87,7 +87,7 @@ impl IgnoreService {
         }
 
         // Configure .ignore files (ripgrep native support)
-        if self.config.respect_agent_ignore {
+        if self.config.respect_ignore {
             builder.add_custom_ignore_filename(".ignore");
         }
 
@@ -227,7 +227,7 @@ mod tests {
     fn test_with_defaults() {
         let service = IgnoreService::with_defaults();
         assert!(service.config().respect_gitignore);
-        assert!(service.config().respect_agent_ignore);
+        assert!(service.config().respect_ignore);
     }
 
     #[test]
@@ -393,9 +393,11 @@ mod tests {
 
         // Should find all 3 ignore files
         assert!(files.len() >= 3);
-        assert!(files.iter().any(|f| {
-            f.ends_with(".ignore") && f.parent().map(|p| p == dir).unwrap_or(false)
-        }));
+        assert!(
+            files.iter().any(|f| {
+                f.ends_with(".ignore") && f.parent().map(|p| p == dir).unwrap_or(false)
+            })
+        );
         assert!(files.iter().any(|f| {
             f.ends_with(".ignore")
                 && f.parent()

@@ -1,7 +1,7 @@
 //! Enhanced List Directory Tool Specification
 //!
 //! Extension module for list_dir tool with ignore file support.
-//! Respects .gitignore and .agentignore patterns.
+//! Respects .gitignore and .ignore patterns.
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 /// Create enhanced list_dir tool specification
 ///
 /// Enhanced list_dir with:
-/// - .gitignore and .agentignore respect (always enabled)
+/// - .gitignore and .ignore respect (always enabled)
 /// - Depth control for recursive listing
 /// - Pagination with offset/limit
 /// - Directories-first sorting

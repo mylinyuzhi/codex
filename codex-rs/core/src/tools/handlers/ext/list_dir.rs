@@ -1,7 +1,7 @@
 //! Enhanced List Directory Handler
 //!
 //! This module provides the EnhancedListDirHandler which lists directory entries
-//! while respecting .gitignore and .agentignore files.
+//! while respecting .gitignore and .ignore files.
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -145,7 +145,7 @@ impl ToolHandler for EnhancedListDirHandler {
         // Only ignore rules filter files out
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true, // Show dotfiles (only ignore rules filter)
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -377,7 +377,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_respects_agentignore() {
+    async fn test_respects_ignore() {
         let temp = tempdir().expect("create temp dir");
         let dir = temp.path();
 
@@ -399,12 +399,12 @@ mod tests {
         fs::write(dir.join("keep.rs"), "rust code").expect("write keep.rs");
         fs::write(dir.join("secret.env"), "secrets").expect("write secret.env");
 
-        // Create .agentignore
-        fs::write(dir.join(".agentignore"), "*.env").expect("write .agentignore");
+        // Create .ignore
+        fs::write(dir.join(".ignore"), "*.env").expect("write .ignore");
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -429,7 +429,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true, // Key: include hidden files
             ..Default::default()
         };
@@ -457,7 +457,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -493,7 +493,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -526,7 +526,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -553,7 +553,7 @@ mod tests {
 
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };
@@ -582,7 +582,7 @@ mod tests {
         // Empty directory (no files created)
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true,
             ..Default::default()
         };

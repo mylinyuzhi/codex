@@ -1,7 +1,7 @@
 //! Glob Files Handler - Find files by pattern matching
 //!
 //! This module provides the GlobFilesHandler which finds files matching
-//! a glob pattern, respecting .gitignore and .agentignore files.
+//! a glob pattern, respecting .gitignore and .ignore files.
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -95,7 +95,7 @@ impl ToolHandler for GlobFilesHandler {
         // 3. Create ignore service with fixed config (always respect ignores)
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: true, // glob should find hidden files (dot files)
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -327,8 +327,8 @@ mod tests {
         fs::create_dir(dir.join("src"))?;
         fs::write(dir.join("src/main.rs"), "main")?;
 
-        // Create agentignore to test filtering
-        fs::write(dir.join(".agentignore"), "*.txt")?;
+        // Create ignore to test filtering
+        fs::write(dir.join(".ignore"), "*.txt")?;
 
         // Test pattern matching
         let pattern = Pattern::new("**/*.rs")?;
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agentignore_filters_files() -> anyhow::Result<()> {
+    async fn test_ignore_filters_files() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let dir = temp.path();
 
@@ -348,13 +348,13 @@ mod tests {
         fs::write(dir.join("keep.rs"), "rust code")?;
         fs::write(dir.join("ignore.log"), "log file")?;
 
-        // Create .agentignore to filter .log files
-        fs::write(dir.join(".agentignore"), "*.log")?;
+        // Create .ignore to filter .log files
+        fs::write(dir.join(".ignore"), "*.log")?;
 
         // Walk and verify
         let ignore_config = IgnoreConfig {
             respect_gitignore: true,
-            respect_agent_ignore: true,
+            respect_ignore: true,
             include_hidden: false,
             ..Default::default()
         };
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_nested_agentignore_override() -> anyhow::Result<()> {
+    async fn test_nested_ignore_override() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let dir = temp.path();
 
@@ -391,9 +391,9 @@ mod tests {
         fs::write(dir.join("src/main.rs"), "main")?;
 
         // Root: ignore all .log
-        fs::write(dir.join(".agentignore"), "*.log")?;
+        fs::write(dir.join(".ignore"), "*.log")?;
         // Nested: un-ignore .log in src/
-        fs::write(dir.join("src/.agentignore"), "!*.log")?;
+        fs::write(dir.join("src/.ignore"), "!*.log")?;
 
         let ignore_service = IgnoreService::new(IgnoreConfig::default());
         let walker = ignore_service.create_walk_builder(dir);
@@ -412,7 +412,7 @@ mod tests {
 
         // root.log should be ignored
         assert!(!files.iter().any(|f| f == "root.log"));
-        // src/keep.log should be kept (nested .agentignore overrides)
+        // src/keep.log should be kept (nested .ignore overrides)
         assert!(files.iter().any(|f| f.contains("keep.log")));
         // src/main.rs should be kept
         assert!(files.iter().any(|f| f.contains("main.rs")));

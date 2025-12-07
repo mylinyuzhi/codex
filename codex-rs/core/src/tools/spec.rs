@@ -39,6 +39,7 @@ pub(crate) struct ToolsConfig {
     pub include_rich_grep: bool,
     pub include_enhanced_list_dir: bool,
     pub include_web_fetch: bool,
+    pub include_code_search: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -61,6 +62,7 @@ impl ToolsConfig {
         let include_rich_grep = features.enabled(Feature::RichGrep);
         let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
         let include_web_fetch = features.enabled(Feature::WebFetch);
+        let include_code_search = features.enabled(Feature::CodeSearch);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -91,6 +93,7 @@ impl ToolsConfig {
             include_rich_grep,
             include_enhanced_list_dir,
             include_web_fetch,
+            include_code_search,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1130,6 +1133,12 @@ pub(crate) fn build_specs(
 
     // web_fetch: ext only, requires feature flag
     crate::tools::spec_ext::register_web_fetch(&mut builder, config);
+
+    // code_search: ext only, controlled by Feature::CodeSearch (experimental)
+    // Retrieval has its own independent config system (~/.codex/retrieval.toml)
+    if config.include_code_search {
+        crate::tools::spec_ext::register_code_search(&mut builder);
+    }
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
