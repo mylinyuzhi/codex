@@ -318,6 +318,7 @@ impl GptAdapter {
         let err = match code {
             "context_length_exceeded" => crate::error::CodexErr::ContextWindowExceeded,
             "insufficient_quota" => crate::error::CodexErr::QuotaExceeded,
+            "previous_response_not_found" => crate::error::CodexErr::PreviousResponseNotFound,
             _ => {
                 // Generic error with message
                 crate::error::CodexErr::Stream(message.to_string(), None)

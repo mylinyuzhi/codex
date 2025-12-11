@@ -305,6 +305,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         tools: Vec::<Value>::new(),
         parallel_tool_calls: false,
         output_schema: None,
+        previous_response_id: None,
     };
 
     let options = ResponsesOptions::default();

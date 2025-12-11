@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    streaming: StreamingClient<T, A>,
+    pub(crate) streaming: StreamingClient<T, A>,
 }
 
 #[derive(Default)]
@@ -88,7 +88,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         self.stream_request(request).await
     }
 
-    fn path(&self) -> &'static str {
+    pub(crate) fn path(&self) -> &'static str {
         match self.streaming.provider().wire {
             WireApi::Responses | WireApi::Compact => "responses",
             WireApi::Chat => "chat/completions",

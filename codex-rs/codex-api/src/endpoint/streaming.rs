@@ -47,6 +47,18 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         &self.provider
     }
 
+    pub(crate) fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    pub(crate) fn auth(&self) -> &A {
+        &self.auth
+    }
+
+    pub(crate) fn request_telemetry(&self) -> Option<Arc<dyn RequestTelemetry>> {
+        self.request_telemetry.clone()
+    }
+
     pub(crate) async fn stream(
         &self,
         path: &str,

@@ -1,5 +1,7 @@
+pub mod adapters;
 pub mod auth;
 pub mod common;
+pub mod common_ext;
 pub mod endpoint;
 pub mod error;
 pub mod provider;
@@ -22,6 +24,10 @@ pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
 pub use crate::common::create_text_param_for_request;
+pub use crate::common_ext::filter_incremental_input;
+pub use crate::common_ext::is_llm_generated;
+pub use crate::common_ext::parse_complete_response;
+pub use crate::common_ext::NonStreamingResponse;
 pub use crate::endpoint::chat::AggregateStreamExt;
 pub use crate::endpoint::chat::ChatClient;
 pub use crate::endpoint::compact::CompactClient;
@@ -37,3 +43,9 @@ pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;
 pub use crate::telemetry::SseTelemetry;
+
+// Adapter exports
+pub use crate::adapters::AdapterConfig;
+pub use crate::adapters::GenerateResult;
+pub use crate::adapters::ProviderAdapter;
+pub use crate::adapters::genai::GeminiAdapter;

@@ -82,6 +82,11 @@ pub enum CodexErr {
     #[error("previous response id not found - will retry with full history")]
     PreviousResponseNotFound,
 
+    /// Returned when the API cannot verify encrypted reasoning content.
+    /// This typically means the conversation's reasoning chain is broken and may need to restart.
+    #[error("encrypted reasoning content could not be verified - conversation may need to restart")]
+    EncryptedContentInvalid,
+
     #[error("no conversation with id: {0}")]
     ConversationNotFound(ConversationId),
 
