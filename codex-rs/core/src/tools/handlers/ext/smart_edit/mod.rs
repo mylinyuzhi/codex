@@ -14,7 +14,6 @@ pub(crate) mod common;
 mod correction;
 mod strategies;
 
-use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -22,13 +21,18 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
+use common::count_non_overlapping_occurrences;
 use common::detect_line_ending;
 use common::hash_content;
+use common::unescape_string_for_llm_bug;
 use correction::attempt_llm_correction;
+use correction::correct_new_string_escaping;
+use correction::is_potentially_over_escaped;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
 use strategies::ReplacementResult;
+use strategies::trim_pair_if_possible;
 use strategies::try_all_strategies;
 
 /// Smart Edit tool arguments
@@ -83,6 +87,13 @@ impl ToolHandler for SmartEditHandler {
 
         // 3. Handle file creation (empty old_string)
         if args.old_string.is_empty() {
+            // Check if file already exists - reject to prevent accidental overwrite
+            if file_path.exists() {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "Cannot create file: {} already exists. Use non-empty old_string to edit existing files.",
+                    file_path.display()
+                )));
+            }
             return create_new_file(&file_path, &args.new_string);
         }
 
@@ -93,24 +104,47 @@ impl ToolHandler for SmartEditHandler {
         let normalized = content.replace("\r\n", "\n");
         let initial_hash = hash_content(&normalized);
 
-        // 6. Try three-tier strategies
-        let result = try_all_strategies(&args.old_string, &args.new_string, &normalized);
+        // 6. PRE-CORRECTION: Check if simple unescape can fix the issue
+        //    This avoids unnecessary LLM calls for common over-escaping issues
+        let (working_old, working_new) = pre_correct_escaping(
+            &args.old_string,
+            &args.new_string,
+            &normalized,
+            args.expected_replacements,
+        );
+
+        // 7. Try three-tier strategies with (potentially corrected) strings
+        let result = try_all_strategies(&working_old, &working_new, &normalized);
 
         if check_success(&result, args.expected_replacements) {
             // Success! Write file and return
             return write_file_and_respond(&file_path, &result, &line_ending);
         }
 
-        // 7. Detect concurrent modifications
+        // 8. FALLBACK: Try trim_pair_if_possible
+        if let Some((trimmed_old, trimmed_new)) = trim_pair_if_possible(
+            &working_old,
+            &working_new,
+            &normalized,
+            args.expected_replacements,
+        ) {
+            let trim_result = try_all_strategies(&trimmed_old, &trimmed_new, &normalized);
+            if check_success(&trim_result, args.expected_replacements) {
+                tracing::info!("Smart edit: trim_pair_if_possible succeeded");
+                return write_file_and_respond(&file_path, &trim_result, &line_ending);
+            }
+        }
+
+        // 9. Detect concurrent modifications
         let (content_for_llm, error_msg) =
             detect_concurrent_modification(&file_path, &normalized, &initial_hash, &result)?;
 
-        // 8. LLM correction with instruction context
+        // 10. LLM correction with instruction context
         let corrected = attempt_llm_correction(
             &invocation.turn.client, // Use existing ModelClient
             &args.instruction,
-            &args.old_string,
-            &args.new_string,
+            &working_old,
+            &working_new,
             &content_for_llm,
             &error_msg,
         )
@@ -126,7 +160,7 @@ impl ToolHandler for SmartEditHandler {
             });
         }
 
-        // 9. Retry with corrected parameters
+        // 11. Retry with corrected parameters
         let retry_result =
             try_all_strategies(&corrected.search, &corrected.replace, &content_for_llm);
 
@@ -149,6 +183,50 @@ impl ToolHandler for SmartEditHandler {
             )))
         }
     }
+}
+
+/// Pre-correct escaping issues before trying strategies
+///
+/// This function implements the pre-correction flow from gemini-cli's `ensureCorrectEdit()`:
+/// 1. Check if old_string has the expected occurrence count
+/// 2. If occurrences == 0, try unescaping old_string
+/// 3. If unescaping helps, also unescape new_string
+/// 4. If new_string appears over-escaped, correct it
+///
+/// Returns (working_old_string, working_new_string) - may be unchanged or corrected.
+fn pre_correct_escaping(
+    old_string: &str,
+    new_string: &str,
+    content: &str,
+    expected: i32,
+) -> (String, String) {
+    // Check current occurrence count
+    let occurrences = count_non_overlapping_occurrences(content, old_string);
+
+    // If matches expected, check if new_string needs escaping correction
+    if occurrences == expected {
+        if is_potentially_over_escaped(new_string) {
+            let corrected_new = correct_new_string_escaping(new_string);
+            return (old_string.to_string(), corrected_new);
+        }
+        return (old_string.to_string(), new_string.to_string());
+    }
+
+    // If no match, try unescaping old_string
+    if occurrences == 0 {
+        let unescaped_old = unescape_string_for_llm_bug(old_string);
+        let unescaped_occurrences = count_non_overlapping_occurrences(content, &unescaped_old);
+
+        if unescaped_occurrences == expected {
+            tracing::info!("Smart edit: pre-correction unescape fixed old_string match");
+            // Unescaping old_string worked - also unescape new_string for consistency
+            let unescaped_new = unescape_string_for_llm_bug(new_string);
+            return (unescaped_old, unescaped_new);
+        }
+    }
+
+    // No pre-correction helped - return original strings
+    (old_string.to_string(), new_string.to_string())
 }
 
 /// Validate arguments
@@ -174,10 +252,25 @@ fn check_success(result: &ReplacementResult, expected: i32) -> bool {
 }
 
 /// Create a new file with the given content
+///
+/// Automatically creates parent directories if they don't exist,
+/// matching gemini-cli's ensureParentDirectoriesExist() behavior.
 fn create_new_file(
     file_path: &std::path::Path,
     content: &str,
 ) -> Result<ToolOutput, FunctionCallError> {
+    // Ensure parent directories exist
+    if let Some(parent) = file_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "Failed to create parent directories for {}: {e}",
+                    file_path.display()
+                ))
+            })?;
+        }
+    }
+
     fs::write(file_path, content).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
             "Failed to create file {}: {e}",
@@ -317,11 +410,6 @@ fn detect_concurrent_modification(
     }
 }
 
-/// Convert CodexErr to FunctionCallError
-fn codex_err_to_function_call_error(e: CodexErr) -> FunctionCallError {
-    FunctionCallError::RespondToModel(e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,5 +474,43 @@ mod tests {
         assert!(check_success(&result, 2));
         assert!(!check_success(&result, 1));
         assert!(!check_success(&result, 3));
+    }
+
+    // Tests for pre_correct_escaping
+
+    #[test]
+    fn test_pre_correct_no_change_needed() {
+        // old_string already matches, no escaping issues
+        let content = "hello world";
+        let (old, new) = pre_correct_escaping("hello", "hi", content, 1);
+        assert_eq!(old, "hello");
+        assert_eq!(new, "hi");
+    }
+
+    #[test]
+    fn test_pre_correct_unescape_fixes_match() {
+        // old_string doesn't match, but unescaping fixes it
+        let content = "line1\nline2";
+        let (old, new) = pre_correct_escaping("line1\\nline2", "line1\\nupdated", content, 1);
+        assert_eq!(old, "line1\nline2");
+        assert_eq!(new, "line1\nupdated");
+    }
+
+    #[test]
+    fn test_pre_correct_new_string_escaping() {
+        // old_string matches, but new_string is over-escaped
+        let content = "hello world";
+        let (old, new) = pre_correct_escaping("hello", "hi\\nthere", content, 1);
+        assert_eq!(old, "hello");
+        assert_eq!(new, "hi\nthere");
+    }
+
+    #[test]
+    fn test_pre_correct_no_help() {
+        // Neither escaping correction helps - return original
+        let content = "hello world";
+        let (old, new) = pre_correct_escaping("notfound", "replacement", content, 1);
+        assert_eq!(old, "notfound");
+        assert_eq!(new, "replacement");
     }
 }

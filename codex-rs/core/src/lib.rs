@@ -126,10 +126,8 @@ pub use event_mapping::parse_turn_item;
 pub mod compact;
 pub mod otel_init;
 
-mod client_ext;
 mod error_ext;
 pub mod logging_ext;
 mod model_provider_info_ext;
 pub use model_provider_info_ext::ModelProviderInfoExt;
-pub mod adapters;
 pub mod model_family_ext;

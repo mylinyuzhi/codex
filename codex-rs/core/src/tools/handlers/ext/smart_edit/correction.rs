@@ -212,6 +212,56 @@ Analyze why the search string didn't match and provide corrected values in JSON 
     Ok(correction)
 }
 
+/// Correct over-escaped new_string when old_string was found
+///
+/// This function handles cases where the search string matched but the
+/// replacement string appears to have LLM over-escaping issues.
+///
+/// Uses simple heuristic first (unescape_string_for_llm_bug), which handles
+/// most cases without needing an LLM call.
+///
+/// Ported from gemini-cli's `correctNewStringEscaping()`.
+///
+/// # Arguments
+/// * `new_string` - The replacement string that might be over-escaped
+///
+/// # Returns
+/// The corrected replacement string (may be unchanged if no escaping issues found)
+pub fn correct_new_string_escaping(new_string: &str) -> String {
+    use super::common::unescape_string_for_llm_bug;
+
+    let unescaped = unescape_string_for_llm_bug(new_string);
+
+    // If unescaping changed something, use the unescaped version
+    if unescaped != new_string {
+        tracing::info!(
+            original_len = new_string.len(),
+            unescaped_len = unescaped.len(),
+            "Smart edit: corrected over-escaped new_string"
+        );
+        return unescaped;
+    }
+
+    // No escaping issues found, return original
+    new_string.to_string()
+}
+
+/// Check if a string appears to be potentially over-escaped
+///
+/// Returns true if the string contains patterns that suggest LLM over-escaping:
+/// - `\\n`, `\\t`, `\\r` (escaped control characters)
+/// - `\\"`, `\\'`, `\\`` (escaped quotes)
+/// - `\\\\` (escaped backslash)
+pub fn is_potentially_over_escaped(s: &str) -> bool {
+    s.contains("\\n")
+        || s.contains("\\t")
+        || s.contains("\\r")
+        || s.contains("\\\"")
+        || s.contains("\\'")
+        || s.contains("\\`")
+        || s.contains("\\\\")
+}
+
 /// System prompt for LLM correction
 const CORRECTION_SYSTEM_PROMPT: &str = r#"You are an expert code-editing assistant specializing in debugging failed search-and-replace operations.
 
@@ -338,5 +388,46 @@ mod tests {
         assert_eq!(parsed.replace, edit.replace);
         assert_eq!(parsed.no_changes_required, edit.no_changes_required);
         assert_eq!(parsed.explanation, edit.explanation);
+    }
+
+    // Tests for correct_new_string_escaping
+
+    #[test]
+    fn test_correct_new_string_escaping_no_change() {
+        // No escaping issues - should return unchanged
+        let result = correct_new_string_escaping("hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_correct_new_string_escaping_newline() {
+        // Over-escaped newline should be fixed
+        let result = correct_new_string_escaping("line1\\nline2");
+        assert_eq!(result, "line1\nline2");
+    }
+
+    #[test]
+    fn test_correct_new_string_escaping_mixed() {
+        // Multiple escape sequences
+        let result = correct_new_string_escaping("hello\\t\\\"world\\\"\\n");
+        assert_eq!(result, "hello\t\"world\"\n");
+    }
+
+    // Tests for is_potentially_over_escaped
+
+    #[test]
+    fn test_is_potentially_over_escaped_true() {
+        assert!(is_potentially_over_escaped("hello\\nworld"));
+        assert!(is_potentially_over_escaped("tab\\there"));
+        assert!(is_potentially_over_escaped("quote\\\"here"));
+        assert!(is_potentially_over_escaped("back\\\\slash"));
+    }
+
+    #[test]
+    fn test_is_potentially_over_escaped_false() {
+        assert!(!is_potentially_over_escaped("hello world"));
+        assert!(!is_potentially_over_escaped("normal text"));
+        // Actual escaped chars in Rust string literals are not detected
+        assert!(!is_potentially_over_escaped("line1\nline2"));
     }
 }

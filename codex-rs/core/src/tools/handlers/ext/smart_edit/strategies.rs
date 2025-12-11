@@ -15,6 +15,22 @@ pub struct ReplacementResult {
     pub strategy: String,
 }
 
+/// Restore trailing newline behavior to match original content
+///
+/// If original had a trailing newline, ensure modified has one.
+/// If original didn't have a trailing newline, remove it from modified.
+/// This matches gemini-cli's restoreTrailingNewline() behavior.
+fn restore_trailing_newline(original: &str, modified: &str) -> String {
+    let had_trailing = original.ends_with('\n');
+    if had_trailing && !modified.ends_with('\n') {
+        format!("{modified}\n")
+    } else if !had_trailing && modified.ends_with('\n') {
+        modified.trim_end_matches('\n').to_string()
+    } else {
+        modified.to_string()
+    }
+}
+
 /// Try all strategies in order until one succeeds
 ///
 /// Returns immediately on first successful match, or returns failure result
@@ -80,7 +96,8 @@ pub fn try_all_strategies(old: &str, new: &str, content: &str) -> ReplacementRes
 fn try_exact_replacement(old: &str, new: &str, content: &str) -> Option<(String, i32)> {
     let occurrences = content.matches(old).count() as i32;
     if occurrences > 0 {
-        let new_content = content.replace(old, new);
+        let modified = content.replace(old, new);
+        let new_content = restore_trailing_newline(content, &modified);
         Some((new_content, occurrences))
     } else {
         None
@@ -155,7 +172,9 @@ fn try_flexible_replacement(old: &str, new: &str, content: &str) -> Option<(Stri
     }
 
     if occurrences > 0 {
-        Some((result_lines.join("\n"), occurrences))
+        let modified = result_lines.join("\n");
+        let new_content = restore_trailing_newline(content, &modified);
+        Some((new_content, occurrences))
     } else {
         None
     }
@@ -216,7 +235,8 @@ fn try_regex_replacement(old: &str, new: &str, content: &str) -> Option<(String,
     let new_block = new_lines.join("\n");
 
     // Replace only first occurrence
-    let new_content = regex.replace(content, new_block.as_str()).to_string();
+    let modified = regex.replace(content, new_block.as_str()).to_string();
+    let new_content = restore_trailing_newline(content, &modified);
 
     Some((new_content, 1)) // Always 1 occurrence for regex strategy
 }
@@ -226,6 +246,42 @@ fn extract_indentation(line: &str) -> &str {
     let trimmed = line.trim_start();
     let indent_len = line.len() - trimmed.len();
     &line[..indent_len]
+}
+
+/// Try trimmed versions of old_string and new_string if original doesn't match
+///
+/// This is a fallback strategy when the original old_string has leading/trailing
+/// whitespace that prevents matching. If the trimmed version matches the expected
+/// occurrence count, use trimmed versions for both old and new strings.
+///
+/// Ported from gemini-cli's `trimPairIfPossible()`.
+///
+/// # Arguments
+/// * `old` - Original search string
+/// * `new` - Original replacement string
+/// * `content` - File content to search in
+/// * `expected` - Expected number of occurrences
+///
+/// # Returns
+/// * `Some((trimmed_old, trimmed_new))` if trimmed version matches expected count
+/// * `None` if trimming doesn't help or isn't applicable
+pub fn trim_pair_if_possible(
+    old: &str,
+    new: &str,
+    content: &str,
+    expected: i32,
+) -> Option<(String, String)> {
+    let trimmed_old = old.trim();
+
+    // Only try if trimming actually changes the string
+    if trimmed_old.len() != old.len() {
+        let trimmed_occurrences = content.matches(trimmed_old).count() as i32;
+        if trimmed_occurrences == expected {
+            return Some((trimmed_old.to_string(), new.trim().to_string()));
+        }
+    }
+
+    None
 }
 
 /// Escape regex special characters
@@ -377,5 +433,73 @@ mod tests {
         assert_eq!(escape_regex("(test)"), "\\(test\\)");
         // Hyphen not escaped - only special inside char class, but we escape brackets
         assert_eq!(escape_regex("[a-z]+"), "\\[a-z\\]\\+");
+    }
+
+    #[test]
+    fn test_restore_trailing_newline_preserve() {
+        // Original has trailing newline, modified doesn't -> add it
+        let result = restore_trailing_newline("content\n", "modified");
+        assert_eq!(result, "modified\n");
+    }
+
+    #[test]
+    fn test_restore_trailing_newline_remove() {
+        // Original has no trailing newline, modified does -> remove it
+        let result = restore_trailing_newline("content", "modified\n");
+        assert_eq!(result, "modified");
+    }
+
+    #[test]
+    fn test_restore_trailing_newline_both_have() {
+        // Both have trailing newline -> keep as is
+        let result = restore_trailing_newline("content\n", "modified\n");
+        assert_eq!(result, "modified\n");
+    }
+
+    #[test]
+    fn test_restore_trailing_newline_neither_have() {
+        // Neither has trailing newline -> keep as is
+        let result = restore_trailing_newline("content", "modified");
+        assert_eq!(result, "modified");
+    }
+
+    // Tests for trim_pair_if_possible
+
+    #[test]
+    fn test_trim_pair_no_trimming_needed() {
+        // No leading/trailing whitespace - returns None
+        let result = trim_pair_if_possible("hello", "world", "hello there", 1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_trim_pair_trimming_helps() {
+        // Leading whitespace prevents match, trimming fixes it
+        let content = "hello world";
+        let result = trim_pair_if_possible("  hello  ", "  hi  ", content, 1);
+        assert!(result.is_some());
+        let (trimmed_old, trimmed_new) = result.unwrap();
+        assert_eq!(trimmed_old, "hello");
+        assert_eq!(trimmed_new, "hi");
+    }
+
+    #[test]
+    fn test_trim_pair_count_mismatch() {
+        // Trimmed version has wrong occurrence count
+        let content = "foo bar foo baz";
+        // Trimmed "foo" has 2 occurrences, but expected is 1
+        let result = trim_pair_if_possible("  foo  ", "  qux  ", content, 1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_trim_pair_multiple_occurrences() {
+        // Trimmed version matches expected multiple occurrences
+        let content = "foo bar foo baz foo";
+        let result = trim_pair_if_possible(" foo ", " qux ", content, 3);
+        assert!(result.is_some());
+        let (trimmed_old, trimmed_new) = result.unwrap();
+        assert_eq!(trimmed_old, "foo");
+        assert_eq!(trimmed_new, "qux");
     }
 }

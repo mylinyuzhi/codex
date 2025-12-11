@@ -8,7 +8,6 @@
 use codex_protocol::config_types_ext::ModelParameters;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 
 use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::model_family::find_family_for_model;
@@ -20,23 +19,22 @@ pub struct ModelProviderInfoExt {
     #[serde(default = "default_streaming")]
     pub streaming: bool,
 
-    /// Optional: Custom adapter for protocol transformation.
-    /// Adapters enable support for providers with different API formats (e.g.,
-    /// Anthropic Messages API, Google Gemini) while reusing the existing HTTP layer.
+    /// Optional: LLM provider implementation to use.
+    /// Providers handle request transformation and API communication.
+    /// Built-in options: "openai_responses", "openai_chat"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
+    pub provider: Option<String>,
 
-    /// Optional: Configuration for the adapter
-    ///
-    /// Provider-specific settings that customize the adapter's behavior.
-    /// The structure is flexible and adapter-specific.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_config: Option<HashMap<String, serde_json::Value>>,
+    /// Optional: Request interceptors to apply.
+    /// Interceptors modify requests before sending (e.g., header injection).
+    /// Built-in: "session_id_header" (injects session_id into "extra" header)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interceptors: Vec<String>,
 
     /// Optional: Model name for this provider configuration
     ///
     /// When set, this model name will be used in API requests for this provider.
-    /// This allows multiple ModelProviderInfo entries to share the same adapter
+    /// This allows multiple ModelProviderInfo entries to share the same provider
     /// and base_url but use different models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
@@ -58,7 +56,7 @@ pub struct ModelProviderInfoExt {
     pub request_timeout_ms: Option<u64>,
 
     /// Model family for this provider, derived from model_name.
-    /// Used by adapters to get proper system instructions fallback.
+    /// Used by providers to get proper system instructions fallback.
     #[serde(skip)]
     pub model_family: Option<ModelFamily>,
 }
@@ -71,8 +69,8 @@ impl Default for ModelProviderInfoExt {
     fn default() -> Self {
         Self {
             streaming: default_streaming(),
-            adapter: None,
-            adapter_config: None,
+            provider: None,
+            interceptors: Vec::new(),
             model_name: None,
             model_parameters: None,
             request_timeout_ms: None,

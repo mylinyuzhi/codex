@@ -113,12 +113,6 @@ impl ModelClient {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        // Check for adapter first
-        if self.provider.ext.adapter.is_some() {
-            return crate::client_ext::stream_with_adapter(self, prompt).await;
-        }
-
-        // Existing wire_api routing (fallback)
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::Chat => {
@@ -392,17 +386,25 @@ impl ModelClient {
 }
 
 /// Adapts the core `Prompt` type into the `codex-api` payload shape.
-fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
+pub(crate) fn build_api_prompt(
+    prompt: &Prompt,
+    instructions: String,
+    tools_json: Vec<Value>,
+) -> ApiPrompt {
     ApiPrompt {
         instructions,
         input: prompt.get_formatted_input(),
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+        previous_response_id: None,
     }
 }
 
-fn map_response_stream<S>(api_stream: S, otel_event_manager: OtelEventManager) -> ResponseStream
+pub(crate) fn map_response_stream<S>(
+    api_stream: S,
+    otel_event_manager: OtelEventManager,
+) -> ResponseStream
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
         + Unpin

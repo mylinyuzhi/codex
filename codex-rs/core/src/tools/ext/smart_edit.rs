@@ -5,13 +5,8 @@
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
-use crate::features::Feature;
-use crate::features::Features;
-use crate::openai_models::model_family::ModelFamily;
-use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec::JsonSchema;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 /// Create Smart Edit tool specification
 ///
@@ -92,33 +87,37 @@ pub fn create_smart_edit_tool() -> ToolSpec {
     })
 }
 
-/// Register Smart Edit tool if enabled
-///
-/// Conditionally registers smart_edit tool based on:
-/// 1. Feature::SmartEdit enabled in features
-/// 2. model_family.smart_edit_enabled is true
-pub fn register_smart_edit_tool(
-    builder: &mut ToolRegistryBuilder,
-    model_family: &ModelFamily,
-    features: &Features,
-) {
-    use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
-
-    if !features.enabled(Feature::SmartEdit) {
-        return;
-    }
-
-    if !model_family.smart_edit_enabled {
-        return;
-    }
-
-    builder.push_spec(create_smart_edit_tool());
-    builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::Feature;
+    use crate::features::Features;
+    use crate::openai_models::model_family::ModelFamily;
+    use crate::tools::handlers::ext::smart_edit::SmartEditHandler;
+    use crate::tools::registry::ToolRegistryBuilder;
+    use std::sync::Arc;
+
+    /// Register Smart Edit tool if enabled (test utility)
+    ///
+    /// Conditionally registers smart_edit tool based on:
+    /// 1. Feature::SmartEdit enabled in features
+    /// 2. model_family.smart_edit_enabled is true
+    fn register_smart_edit_tool(
+        builder: &mut ToolRegistryBuilder,
+        model_family: &ModelFamily,
+        features: &Features,
+    ) {
+        if !features.enabled(Feature::SmartEdit) {
+            return;
+        }
+
+        if !model_family.smart_edit_enabled {
+            return;
+        }
+
+        builder.push_spec(create_smart_edit_tool());
+        builder.register_handler("smart_edit", Arc::new(SmartEditHandler));
+    }
 
     #[test]
     fn test_create_smart_edit_tool_spec() {

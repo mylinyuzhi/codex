@@ -163,6 +163,15 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            adapter: self.ext.provider.clone(),
+            model_parameters: self
+                .ext
+                .model_parameters
+                .as_ref()
+                .and_then(|p| serde_json::to_value(p).ok()),
+            interceptors: self.ext.interceptors.clone(),
+            request_timeout: self.ext.request_timeout_ms.map(Duration::from_millis),
+            streaming: self.ext.streaming,
         })
     }
 

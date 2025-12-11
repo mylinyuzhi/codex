@@ -3,9 +3,44 @@
 //! This module contains all the data structures used for request/response
 //! communication with the Gemini API.
 
+use base64::Engine;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
+use serde::de::Error as DeError;
 use std::collections::HashMap;
+
+// ============================================================================
+// Base64 Serde Helpers (for bytes fields like thought_signature)
+// ============================================================================
+
+fn serialize_bytes_base64<S>(data: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match data {
+        Some(bytes) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            serializer.serialize_some(&encoded)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_bytes_base64<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        Some(s) => base64::engine::general_purpose::STANDARD
+            .decode(&s)
+            .map(Some)
+            .map_err(|e| DeError::custom(format!("base64 decode error: {e}"))),
+        None => Ok(None),
+    }
+}
 
 // ============================================================================
 // Enums
@@ -87,6 +122,8 @@ pub enum FunctionCallingMode {
     Auto,
     Any,
     None,
+    /// Validated function calls with constrained decoding.
+    Validated,
 }
 
 /// JSON Schema type.
@@ -101,6 +138,84 @@ pub enum SchemaType {
     Array,
     Object,
     Null,
+}
+
+/// The level of thinking tokens that the model should generate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ThinkingLevel {
+    #[default]
+    ThinkingLevelUnspecified,
+    Low,
+    High,
+}
+
+/// Programming language for code execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Language {
+    #[default]
+    LanguageUnspecified,
+    Python,
+}
+
+/// Outcome of the code execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Outcome {
+    #[default]
+    OutcomeUnspecified,
+    OutcomeOk,
+    OutcomeFailed,
+    OutcomeDeadlineExceeded,
+}
+
+/// Function calling behavior (blocking vs non-blocking).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Behavior {
+    #[default]
+    BehaviorUnspecified,
+    Blocking,
+    NonBlocking,
+}
+
+/// Specifies how the function response should be scheduled in the conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FunctionResponseScheduling {
+    #[default]
+    SchedulingUnspecified,
+    /// Only add the result to the conversation context, do not trigger generation.
+    Silent,
+    /// Add the result and prompt generation without interrupting ongoing generation.
+    WhenIdle,
+    /// Add the result, interrupt ongoing generation and prompt to generate output.
+    Interrupt,
+}
+
+/// Media modality for token counting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MediaModality {
+    #[default]
+    ModalityUnspecified,
+    Text,
+    Image,
+    Audio,
+    Video,
+    Document,
+}
+
+/// Media resolution for parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PartMediaResolution {
+    #[default]
+    MediaResolutionUnspecified,
+    MediaResolutionLow,
+    MediaResolutionMedium,
+    MediaResolutionHigh,
 }
 
 // ============================================================================
@@ -160,6 +275,35 @@ impl FileData {
     }
 }
 
+/// Partial argument value of the function call (for streaming).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialArg {
+    /// Represents a null value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub null_value: Option<String>,
+
+    /// Number value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_value: Option<f64>,
+
+    /// String value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub string_value: Option<String>,
+
+    /// Boolean value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bool_value: Option<bool>,
+
+    /// JSON path for the partial argument.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_path: Option<String>,
+
+    /// Whether this is not the last part of the same json_path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub will_continue: Option<bool>,
+}
+
 /// A function call predicted by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +319,14 @@ pub struct FunctionCall {
     /// The function parameters and values in JSON object format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<serde_json::Value>,
+
+    /// Partial argument values (for streaming function call arguments).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_args: Option<Vec<PartialArg>>,
+
+    /// Whether this is not the last part of the FunctionCall.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub will_continue: Option<bool>,
 }
 
 impl FunctionCall {
@@ -183,6 +335,8 @@ impl FunctionCall {
             id: None,
             name: Some(name.into()),
             args: Some(args),
+            partial_args: None,
+            will_continue: None,
         }
     }
 
@@ -190,6 +344,57 @@ impl FunctionCall {
         self.id = Some(id.into());
         self
     }
+}
+
+/// Raw media bytes for function response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionResponseBlob {
+    /// The IANA standard MIME type of the source data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+
+    /// Inline media bytes (base64 encoded in JSON).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_bytes_base64",
+        deserialize_with = "deserialize_bytes_base64"
+    )]
+    pub data: Option<Vec<u8>>,
+
+    /// Display name of the blob.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// URI based data for function response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionResponseFileData {
+    /// URI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_uri: Option<String>,
+
+    /// The IANA standard MIME type of the source data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+
+    /// Display name of the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// A datatype containing media that is part of a FunctionResponse message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionResponsePart {
+    /// Inline media bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_data: Option<FunctionResponseBlob>,
+
+    /// URI based data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_data: Option<FunctionResponseFileData>,
 }
 
 /// The result of a function call.
@@ -207,6 +412,18 @@ pub struct FunctionResponse {
     /// The function response in JSON object format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<serde_json::Value>,
+
+    /// Whether more responses are coming for this function call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub will_continue: Option<bool>,
+
+    /// Scheduling for the response in the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling: Option<FunctionResponseScheduling>,
+
+    /// Multi-part function response data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<FunctionResponsePart>>,
 }
 
 impl FunctionResponse {
@@ -215,6 +432,9 @@ impl FunctionResponse {
             id: None,
             name: Some(name.into()),
             response: Some(response),
+            will_continue: None,
+            scheduling: None,
+            parts: None,
         }
     }
 
@@ -222,6 +442,45 @@ impl FunctionResponse {
         self.id = Some(id.into());
         self
     }
+}
+
+/// Code authored and executed by the model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutableCode {
+    /// Programming language of the code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
+
+    /// The code to be executed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// Result of executing the code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeExecutionResult {
+    /// Outcome of the code execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
+
+    /// Output from the code execution (stdout/stderr).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+/// Video metadata for video parts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMetadata {
+    /// Start offset (duration string like "1.5s").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<String>,
+
+    /// End offset (duration string like "10.5s").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_offset: Option<String>,
 }
 
 /// A datatype containing media content.
@@ -255,8 +514,29 @@ pub struct Part {
     pub thought: Option<bool>,
 
     /// Opaque signature for reusing thought in subsequent requests.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_bytes_base64",
+        deserialize_with = "deserialize_bytes_base64"
+    )]
+    pub thought_signature: Option<Vec<u8>>,
+
+    /// Code authored and executed by the model.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thought_signature: Option<String>,
+    pub executable_code: Option<ExecutableCode>,
+
+    /// Result of code execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_execution_result: Option<CodeExecutionResult>,
+
+    /// Video metadata for video parts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_metadata: Option<VideoMetadata>,
+
+    /// Media resolution for the input media.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<PartMediaResolution>,
 }
 
 impl Part {
@@ -301,12 +581,22 @@ impl Part {
     }
 
     /// Create a thought part with a signature (for passing thoughts to subsequent requests).
-    pub fn with_thought_signature(signature: impl Into<String>) -> Self {
+    pub fn with_thought_signature(signature: impl Into<Vec<u8>>) -> Self {
         Self {
             thought: Some(true),
             thought_signature: Some(signature.into()),
             ..Default::default()
         }
+    }
+
+    /// Create a thought part with a base64-encoded signature string.
+    pub fn with_thought_signature_base64(signature: &str) -> Result<Self, base64::DecodeError> {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(signature)?;
+        Ok(Self {
+            thought: Some(true),
+            thought_signature: Some(bytes),
+            ..Default::default()
+        })
     }
 
     /// Check if this part is a thought/reasoning part.
@@ -424,6 +714,66 @@ pub struct Schema {
     /// Items schema for array types.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Box<Schema>>,
+
+    /// Default value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+
+    /// Format hint (e.g., "int32", "int64", "float", "email").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+
+    /// Minimum string length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<i32>,
+
+    /// Maximum string length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<i32>,
+
+    /// Minimum number value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+
+    /// Maximum number value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
+
+    /// Minimum array items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<i32>,
+
+    /// Maximum array items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<i32>,
+
+    /// Regex pattern for string validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+
+    /// Whether the value can be null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+
+    /// Union types (any of these schemas).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub any_of: Option<Vec<Schema>>,
+
+    /// Schema definitions for $ref.
+    #[serde(rename = "$defs", skip_serializing_if = "Option::is_none")]
+    pub defs: Option<HashMap<String, Schema>>,
+
+    /// Reference to a schema definition.
+    #[serde(rename = "$ref", skip_serializing_if = "Option::is_none")]
+    pub schema_ref: Option<String>,
+
+    /// Whether additional properties are allowed (bool or schema).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_properties: Option<serde_json::Value>,
+
+    /// Preferred order of properties in the output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_ordering: Option<Vec<String>>,
 }
 
 impl Schema {
@@ -494,9 +844,25 @@ pub struct FunctionDeclaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// The parameters to this function in JSON Schema format.
+    /// The parameters to this function in OpenAPI Schema format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Schema>,
+
+    /// Alternative: parameters in JSON Schema format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters_json_schema: Option<serde_json::Value>,
+
+    /// Return type schema in OpenAPI Schema format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<Schema>,
+
+    /// Alternative: return type in JSON Schema format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_json_schema: Option<serde_json::Value>,
+
+    /// Function behavior: BLOCKING (default) or NON_BLOCKING.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<Behavior>,
 }
 
 impl FunctionDeclaration {
@@ -528,6 +894,63 @@ pub struct GoogleSearch {}
 #[serde(rename_all = "camelCase")]
 pub struct CodeExecution {}
 
+/// RAG filter for retrieval.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RagFilter {
+    /// Metadata filter string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_filter: Option<String>,
+}
+
+/// RAG retrieval configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RagRetrievalConfig {
+    /// Number of top results to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+
+    /// Filter for retrieval.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<RagFilter>,
+}
+
+/// Vertex RAG store configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VertexRagStore {
+    /// RAG corpora resource names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_corpora: Option<Vec<String>>,
+
+    /// RAG retrieval configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_retrieval_config: Option<RagRetrievalConfig>,
+}
+
+/// Vertex AI Search configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VertexAISearch {
+    /// Datastore resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datastore: Option<String>,
+}
+
+/// Retrieval tool configuration (Vertex AI only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Retrieval {
+    /// Vertex AI Search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertex_ai_search: Option<VertexAISearch>,
+
+    /// Vertex RAG store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertex_rag_store: Option<VertexRagStore>,
+}
+
 /// Tool details that the model may use to generate a response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -543,6 +966,10 @@ pub struct Tool {
     /// Code execution tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_execution: Option<CodeExecution>,
+
+    /// Retrieval tool (Vertex AI only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<Retrieval>,
 }
 
 impl Tool {
@@ -579,9 +1006,13 @@ pub struct FunctionCallingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<FunctionCallingMode>,
 
-    /// Function names to call (only when mode is ANY).
+    /// Function names to call (only when mode is ANY or VALIDATED).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_function_names: Option<Vec<String>>,
+
+    /// When true, function call arguments are streamed out in partial_args.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_function_call_arguments: Option<bool>,
 }
 
 /// Tool configuration.
@@ -635,9 +1066,13 @@ pub struct ThinkingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_thoughts: Option<bool>,
 
-    /// Budget of thinking tokens.
+    /// Budget of thinking tokens. 0=DISABLED, -1=AUTO.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<i32>,
+
+    /// The level of thoughts tokens that the model should generate (LOW/HIGH).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
 }
 
 impl ThinkingConfig {
@@ -646,6 +1081,7 @@ impl ThinkingConfig {
         Self {
             include_thoughts: Some(true),
             thinking_budget: None,
+            thinking_level: None,
         }
     }
 
@@ -654,6 +1090,16 @@ impl ThinkingConfig {
         Self {
             include_thoughts: Some(true),
             thinking_budget: Some(budget),
+            thinking_level: None,
+        }
+    }
+
+    /// Create a config with a thinking level (LOW/HIGH).
+    pub fn with_level(level: ThinkingLevel) -> Self {
+        Self {
+            include_thoughts: Some(true),
+            thinking_budget: None,
+            thinking_level: Some(level),
         }
     }
 }
@@ -807,6 +1253,14 @@ pub struct GenerateContentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
 
+    /// Cached content resource name for context caching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content: Option<String>,
+
+    /// Alternative: response schema in raw JSON Schema format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_json_schema: Option<serde_json::Value>,
+
     /// Request extensions (headers, params, body) - not serialized.
     #[serde(skip)]
     pub extensions: Option<RequestExtensions>,
@@ -874,6 +1328,228 @@ pub struct PromptFeedback {
     pub safety_ratings: Option<Vec<SafetyRating>>,
 }
 
+// ============================================================================
+// Citation & Grounding Types
+// ============================================================================
+
+/// A citation source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CitationSource {
+    /// URI of the source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+
+    /// Title of the source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// License information.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+
+    /// Start index in the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_index: Option<i32>,
+
+    /// End index in the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_index: Option<i32>,
+}
+
+/// Citation metadata for a response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CitationMetadata {
+    /// List of citations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citations: Option<Vec<CitationSource>>,
+}
+
+/// Web source for grounding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingChunkWeb {
+    /// URI of the web source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+
+    /// Title of the web source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Retrieved context for grounding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingChunkRetrievedContext {
+    /// URI of the retrieved context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+
+    /// Title of the retrieved context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// A grounding chunk (web or retrieved context).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingChunk {
+    /// Web source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web: Option<GroundingChunkWeb>,
+
+    /// Retrieved context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieved_context: Option<GroundingChunkRetrievedContext>,
+}
+
+/// A segment of text in the response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    /// Start index of the segment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_index: Option<i32>,
+
+    /// End index of the segment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_index: Option<i32>,
+
+    /// Text of the segment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+
+    /// Part index in the content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_index: Option<i32>,
+}
+
+/// Grounding support for a segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingSupport {
+    /// The segment being grounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment: Option<Segment>,
+
+    /// Indices of grounding chunks that support this segment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_chunk_indices: Option<Vec<i32>>,
+
+    /// Confidence scores for each grounding chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_scores: Option<Vec<f64>>,
+}
+
+/// Search entry point for grounding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchEntryPoint {
+    /// Rendered HTML content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_content: Option<String>,
+
+    /// SDK blob for the search entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk_blob: Option<String>,
+}
+
+/// Retrieval metadata for grounding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalMetadata {
+    /// Dynamic retrieval score from Google Search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_search_dynamic_retrieval_score: Option<f64>,
+}
+
+/// Grounding metadata for a response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingMetadata {
+    /// Grounding chunks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_chunks: Option<Vec<GroundingChunk>>,
+
+    /// Grounding supports linking segments to chunks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_supports: Option<Vec<GroundingSupport>>,
+
+    /// Web search queries used for grounding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_search_queries: Option<Vec<String>>,
+
+    /// Search entry point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_entry_point: Option<SearchEntryPoint>,
+
+    /// Retrieval metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_metadata: Option<RetrievalMetadata>,
+}
+
+// ============================================================================
+// Logprobs Types
+// ============================================================================
+
+/// A candidate token with its log probability.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LogprobsCandidate {
+    /// The token string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+
+    /// Token ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<i32>,
+
+    /// Log probability of the token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_probability: Option<f64>,
+}
+
+/// Top candidate tokens at a position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TopCandidates {
+    /// List of top candidate tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<Vec<LogprobsCandidate>>,
+}
+
+/// Log probabilities result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LogprobsResult {
+    /// Top candidates at each position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_candidates: Option<Vec<TopCandidates>>,
+
+    /// Chosen candidates at each position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chosen_candidates: Option<Vec<LogprobsCandidate>>,
+}
+
+// ============================================================================
+// Token Counting Types
+// ============================================================================
+
+/// Token count for a specific modality.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModalityTokenCount {
+    /// The modality.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modality: Option<MediaModality>,
+
+    /// Token count for this modality.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<i32>,
+}
+
 /// Usage metadata in response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -897,6 +1573,22 @@ pub struct UsageMetadata {
     /// Thoughts token count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thoughts_token_count: Option<i32>,
+
+    /// Token count from tool use prompts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_prompt_token_count: Option<i32>,
+
+    /// Token breakdown by modality for the prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<Vec<ModalityTokenCount>>,
+
+    /// Token breakdown by modality for cached content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_tokens_details: Option<Vec<ModalityTokenCount>>,
+
+    /// Token breakdown by modality for candidates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates_tokens_details: Option<Vec<ModalityTokenCount>>,
 }
 
 /// A response candidate generated from the model.
@@ -911,6 +1603,10 @@ pub struct Candidate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<FinishReason>,
 
+    /// Human-readable description of the finish reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_message: Option<String>,
+
     /// Safety ratings for the candidate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_ratings: Option<Vec<SafetyRating>>,
@@ -922,6 +1618,22 @@ pub struct Candidate {
     /// Token count for this candidate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_count: Option<i32>,
+
+    /// Citation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citation_metadata: Option<CitationMetadata>,
+
+    /// Average log probability across all tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_logprobs: Option<f64>,
+
+    /// Grounding metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_metadata: Option<GroundingMetadata>,
+
+    /// Log probabilities result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs_result: Option<LogprobsResult>,
 }
 
 /// Response from generateContent API.
@@ -943,6 +1655,14 @@ pub struct GenerateContentResponse {
     /// Model version used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_version: Option<String>,
+
+    /// Unique response identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
+
+    /// Timestamp when the response was created (ISO 8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<String>,
 }
 
 impl GenerateContentResponse {
@@ -1023,7 +1743,8 @@ impl GenerateContentResponse {
 
     /// Get thought signatures from the response for use in subsequent requests.
     /// These can be passed back to the model to continue a thought chain.
-    pub fn thought_signatures(&self) -> Vec<String> {
+    /// Returns raw bytes (base64 decoded) for each thought signature.
+    pub fn thought_signatures(&self) -> Vec<Vec<u8>> {
         self.candidates
             .as_ref()
             .and_then(|c| c.first())
@@ -1471,5 +2192,216 @@ mod tests {
             merged.headers.as_ref().unwrap().get("A"),
             Some(&"1".to_string())
         );
+    }
+
+    // ========== Python SDK Alignment Tests ==========
+
+    #[test]
+    fn test_thinking_config_serialization() {
+        let config = ThinkingConfig {
+            include_thoughts: Some(true),
+            thinking_budget: Some(1024),
+            thinking_level: Some(ThinkingLevel::High),
+        };
+
+        let json = serde_json::to_value(&config).expect("serialization failed");
+
+        // Verify camelCase field names
+        assert_eq!(json["includeThoughts"], true);
+        assert_eq!(json["thinkingBudget"], 1024);
+        assert_eq!(json["thinkingLevel"], "HIGH");
+    }
+
+    #[test]
+    fn test_thought_signature_base64_roundtrip() {
+        // Test binary data with various byte values including 0x00 and 0xFF
+        let original_sig = vec![0x00, 0x01, 0x02, 0xFF, 0xFE];
+        let part = Part::with_thought_signature(original_sig.clone());
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&part).expect("serialization failed");
+
+        // Verify base64 encoding is present (0x00, 0x01, 0x02, 0xFF, 0xFE -> "AAEC//4=")
+        assert!(
+            json.contains("AAEC//4="),
+            "Expected base64 encoding in: {}",
+            json
+        );
+
+        // Deserialize back
+        let parsed: Part = serde_json::from_str(&json).expect("deserialization failed");
+        assert_eq!(
+            parsed.thought_signature,
+            Some(original_sig),
+            "Round-trip should preserve exact bytes"
+        );
+        assert_eq!(parsed.thought, Some(true));
+    }
+
+    #[test]
+    fn test_multiple_function_calls_in_response() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"functionCall": {"id": "call_1", "name": "tool_a", "args": {"x": 1}}},
+                        {"functionCall": {"id": "call_2", "name": "tool_b", "args": {"y": 2}}}
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }]
+        }"#;
+
+        let response: GenerateContentResponse =
+            serde_json::from_str(json).expect("deserialization failed");
+        let calls = response.function_calls().expect("no function calls");
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, Some("call_1".to_string()));
+        assert_eq!(calls[0].name, Some("tool_a".to_string()));
+        assert_eq!(calls[1].id, Some("call_2".to_string()));
+        assert_eq!(calls[1].name, Some("tool_b".to_string()));
+    }
+
+    #[test]
+    fn test_thinking_config_nested_in_generation_config() {
+        let gen_config = GenerationConfig {
+            temperature: Some(0.7),
+            thinking_config: Some(ThinkingConfig::with_budget(2048)),
+            ..Default::default()
+        };
+
+        let request = GenerateContentRequest {
+            contents: vec![Content::user("test")],
+            system_instruction: None,
+            generation_config: Some(gen_config),
+            safety_settings: None,
+            tools: None,
+            tool_config: None,
+        };
+
+        let json = serde_json::to_value(&request).expect("serialization failed");
+
+        // Verify thinkingConfig is nested inside generationConfig
+        assert_eq!(
+            json["generationConfig"]["thinkingConfig"]["thinkingBudget"], 2048,
+            "thinkingConfig should be nested in generationConfig"
+        );
+        // Verify thinkingConfig is NOT at top level
+        assert!(
+            json.get("thinkingConfig").is_none(),
+            "thinkingConfig should not be at top level"
+        );
+    }
+
+    #[test]
+    fn test_usage_metadata_full_fields() {
+        let json = r#"{
+            "candidates": [{
+                "content": {"parts": [{"text": "Hi"}], "role": "model"}
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50,
+                "totalTokenCount": 150,
+                "cachedContentTokenCount": 20,
+                "thoughtsTokenCount": 30,
+                "toolUsePromptTokenCount": 10
+            }
+        }"#;
+
+        let response: GenerateContentResponse =
+            serde_json::from_str(json).expect("deserialization failed");
+        let usage = response.usage_metadata.expect("no usage metadata");
+
+        assert_eq!(usage.prompt_token_count, Some(100));
+        assert_eq!(usage.candidates_token_count, Some(50));
+        assert_eq!(usage.total_token_count, Some(150));
+        assert_eq!(usage.cached_content_token_count, Some(20));
+        assert_eq!(usage.thoughts_token_count, Some(30));
+        assert_eq!(usage.tool_use_prompt_token_count, Some(10));
+    }
+
+    #[test]
+    fn test_function_call_with_thought_signature() {
+        // Test that function call parts can have thought_signature attached
+        let part = Part {
+            function_call: Some(FunctionCall {
+                id: Some("call_1".to_string()),
+                name: Some("search".to_string()),
+                args: Some(serde_json::json!({"query": "rust"})),
+                partial_args: None,
+                will_continue: None,
+            }),
+            thought_signature: Some(b"sig_for_call_1".to_vec()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&part).expect("serialization failed");
+        let parsed: Part = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert!(parsed.function_call.is_some());
+        assert!(parsed.thought_signature.is_some());
+        assert_eq!(
+            parsed.thought_signature.unwrap(),
+            b"sig_for_call_1".to_vec()
+        );
+    }
+
+    #[test]
+    fn test_thought_part_with_text_and_signature() {
+        // Test thought part containing both text and signature (common in reasoning)
+        let part = Part {
+            text: Some("Let me think about this...".to_string()),
+            thought: Some(true),
+            thought_signature: Some(b"thought_sig_123".to_vec()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&part).expect("serialization failed");
+        let parsed: Part = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(parsed.text, Some("Let me think about this...".to_string()));
+        assert_eq!(parsed.thought, Some(true));
+        assert!(parsed.is_thought());
+        assert!(parsed.thought_signature.is_some());
+    }
+
+    #[test]
+    fn test_response_thought_extraction() {
+        // Test response.thought_text() and response.thought_signatures()
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "Thinking step 1...", "thought": true, "thoughtSignature": "c2lnMQ=="},
+                        {"text": "Thinking step 2...", "thought": true},
+                        {"text": "Final answer here"}
+                    ],
+                    "role": "model"
+                }
+            }]
+        }"#;
+
+        let response: GenerateContentResponse =
+            serde_json::from_str(json).expect("deserialization failed");
+
+        // text() should exclude thought parts
+        let text = response.text().expect("no text");
+        assert_eq!(text, "Final answer here");
+
+        // thought_text() should only include thought parts
+        let thought = response.thought_text().expect("no thought text");
+        assert!(thought.contains("Thinking step 1"));
+        assert!(thought.contains("Thinking step 2"));
+
+        // has_thoughts() should return true
+        assert!(response.has_thoughts());
+
+        // thought_signatures() should extract the signature
+        let sigs = response.thought_signatures();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], b"sig1"); // "c2lnMQ==" decodes to "sig1"
     }
 }
