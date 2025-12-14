@@ -1,4 +1,5 @@
 mod cache;
 pub mod model_family;
+pub mod model_family_ext;
 pub mod model_presets;
 pub mod models_manager;

@@ -337,9 +337,9 @@ impl Codex {
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    conversation_id: ConversationId,
+    pub(crate) conversation_id: ConversationId,
     tx_event: Sender<Event>,
-    state: Mutex<SessionState>,
+    pub(crate) state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -427,7 +427,7 @@ pub(crate) struct SessionConfiguration {
     exec_policy: Arc<RwLock<ExecPolicy>>,
 
     // TODO(pakrym): Remove config from here
-    original_config_do_not_use: Arc<Config>,
+    pub(crate) original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
 }
@@ -761,7 +761,7 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
+    pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage()
     }
@@ -1946,6 +1946,9 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        // Clean up subagent stores for this conversation
+        crate::codex_ext::cleanup_session_resources(&sess.conversation_id);
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -2206,7 +2209,14 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if should_use_remote_compact_task(
+                    if sess.enabled(Feature::CompactV2) {
+                        // Use V2 compact dispatch (two-tier: micro-compact → full compact)
+                        crate::compact_v2::auto_compact_dispatch(
+                            sess.clone(),
+                            turn_context.clone(),
+                        )
+                        .await;
+                    } else if should_use_remote_compact_task(
                         sess.as_ref(),
                         &turn_context.client.get_provider(),
                     ) {
@@ -3384,6 +3394,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                CancellationToken::new(),
             )
             .await
             .expect_err("expected fatal error");
@@ -3572,6 +3583,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -3609,6 +3621,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -3662,6 +3675,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 

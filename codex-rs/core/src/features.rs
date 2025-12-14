@@ -76,6 +76,12 @@ pub enum Feature {
     CodeSearch,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
     McpResourceTools,
+    /// Enable subagent tools (Task, TaskOutput) for spawning specialized subagents.
+    Subagent,
+    /// Enable Compact V2 with two-tier architecture (micro-compact → full compact).
+    CompactV2,
+    /// Enable micro-compact (fast tool result compression without API call).
+    MicroCompact,
 }
 
 impl Feature {

@@ -126,10 +126,16 @@ pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
+pub mod compact_v2;
 pub mod otel_init;
 
 mod error_ext;
 pub mod logging_ext;
 mod model_provider_info_ext;
 pub use model_provider_info_ext::ModelProviderInfoExt;
-pub mod model_family_ext;
+
+// Subagent system (Claude Code compatible)
+pub mod subagent;
+
+// Extension modules for lifecycle management
+pub mod codex_ext;

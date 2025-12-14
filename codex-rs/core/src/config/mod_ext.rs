@@ -17,6 +17,9 @@ pub struct ConfigExt {
 
     /// Logging configuration for tracing subscriber (location, timezone, levels).
     pub logging: crate::config::types_ext::LoggingConfig,
+
+    /// Compact V2 configuration (thresholds, micro-compact, context restoration).
+    pub compact: crate::compact_v2::CompactConfig,
 }
 
 impl Default for ConfigExt {
@@ -27,6 +30,7 @@ impl Default for ConfigExt {
             web_search_config: codex_protocol::config_types_ext::WebSearchConfig::default(),
             web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig::default(),
             logging: crate::config::types_ext::LoggingConfig::default(),
+            compact: crate::compact_v2::CompactConfig::default(),
         }
     }
 }
@@ -45,6 +49,10 @@ pub struct ConfigTomlExt {
     /// Logging configuration for tracing subscriber.
     #[serde(default)]
     pub logging: Option<crate::config::types_ext::LoggingConfig>,
+
+    /// Compact V2 configuration (thresholds, micro-compact, context restoration).
+    #[serde(default)]
+    pub compact: Option<crate::compact_v2::CompactConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]

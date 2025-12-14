@@ -149,6 +149,20 @@ fn build_generation_config(prompt: &Prompt, config: &AdapterConfig) -> GenerateC
         if let Some(top_k) = extra.get("top_k").and_then(|v| v.as_i64()) {
             gen_config.top_k = Some(top_k as i32);
         }
+
+        // Handle thinking_level
+        if let Some(thinking_level) = extra.get("thinking_level").and_then(|v| v.as_str()) {
+            use google_genai::types::ThinkingConfig;
+            use google_genai::types::ThinkingLevel;
+            let level = match thinking_level {
+                "LOW" => ThinkingLevel::Low,
+                "HIGH" => ThinkingLevel::High,
+                _ => ThinkingLevel::ThinkingLevelUnspecified,
+            };
+            if level != ThinkingLevel::ThinkingLevelUnspecified {
+                gen_config.thinking_config = Some(ThinkingConfig::with_level(level));
+            }
+        }
     }
 
     gen_config
