@@ -180,7 +180,7 @@ macro_rules! model_family {
             context_window: Some($crate::openai_models::model_family::CONTEXT_WINDOW_272K),
             auto_compact_token_limit: None,
             supports_reasoning_summaries: false,
-            reasoning_summary_format: $crate::config::types::ReasoningSummaryFormat::None,
+            reasoning_summary_format: codex_protocol::openai_models::ReasoningSummaryFormat::None,
             supports_parallel_tool_calls: false,
             apply_patch_tool_type: None,
             base_instructions: $crate::openai_models::model_family::BASE_INSTRUCTIONS.to_string(),
@@ -204,7 +204,7 @@ macro_rules! model_family {
 
 /// Internal offline helper for `ModelsManager` that returns a `ModelFamily` for the given
 /// model slug.
-pub(super) fn find_family_for_model(slug: &str) -> ModelFamily {
+pub(crate) fn find_family_for_model(slug: &str) -> ModelFamily {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",

@@ -393,7 +393,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
-        previous_response_id: None,
+        previous_response_id: prompt.previous_response_id.clone(),
     }
 }
 

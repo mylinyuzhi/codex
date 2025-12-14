@@ -280,7 +280,7 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
             | ResponseItem::CustomToolCallOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::GhostSnapshot { .. }
-            | ResponseItem::CompactionSummary { .. }
+            | ResponseItem::Compaction { .. }
             | ResponseItem::Other => {}
         }
     }

@@ -75,7 +75,7 @@ pub fn is_llm_generated(item: &ResponseItem) -> bool {
         ResponseItem::CustomToolCallOutput { .. } => false,
         ResponseItem::Message { role, .. } if role == "user" => false,
         ResponseItem::GhostSnapshot { .. } => false,
-        ResponseItem::CompactionSummary { .. } => false,
+        ResponseItem::Compaction { .. } => false,
         ResponseItem::Other => false,
 
         // Edge case: message with unknown role (defensive)
