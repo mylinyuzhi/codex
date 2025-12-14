@@ -145,3 +145,31 @@ pub struct ModelParameters {
     #[serde(default)]
     pub budget_tokens: Option<i32>,
 }
+
+/// Subagent system configuration.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+pub struct SubagentConfig {
+    /// Enable the subagent feature (Task/TaskOutput tools).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Directory for custom agent definitions (e.g., .claude/agents/).
+    #[serde(default)]
+    pub agents_dir: Option<String>,
+
+    /// Default maximum time in seconds for subagent execution.
+    #[serde(default = "default_max_time_seconds")]
+    pub max_time_seconds: i32,
+
+    /// Default maximum turns for subagent execution.
+    #[serde(default = "default_max_turns")]
+    pub max_turns: i32,
+}
+
+fn default_max_time_seconds() -> i32 {
+    300
+}
+
+fn default_max_turns() -> i32 {
+    50
+}

@@ -1227,6 +1227,7 @@ impl Config {
                 web_search_config: Default::default(),
                 web_fetch_config: Default::default(),
                 logging: cfg.ext.logging.unwrap_or_default(),
+                compact: cfg.ext.compact.unwrap_or_default(),
             },
         };
         Ok(config)

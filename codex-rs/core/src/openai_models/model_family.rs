@@ -368,8 +368,8 @@ pub(crate) fn find_family_for_model(slug: &str) -> ModelFamily {
             context_window: Some(CONTEXT_WINDOW_272K),
         )
     // Gemini models (extension)
-    } else if slug.starts_with("gemini-2.5-pro") {
-        crate::model_family_ext::gemini_2_5_pro()
+    } else if slug.starts_with("gemini-3.0-pro") {
+        crate::openai_models::model_family_ext::gemini_3_0_pro()
     } else {
         derive_default_model_family(slug)
     }

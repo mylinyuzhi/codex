@@ -28,6 +28,7 @@ pub(crate) struct ToolsConfig {
     pub include_web_fetch: bool,
     pub include_code_search: bool,
     pub include_mcp_resource_tools: bool,
+    pub include_subagent: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -52,6 +53,7 @@ impl ToolsConfig {
         let include_web_fetch = features.enabled(Feature::WebFetch);
         let include_code_search = features.enabled(Feature::CodeSearch);
         let include_mcp_resource_tools = features.enabled(Feature::McpResourceTools);
+        let include_subagent = features.enabled(Feature::Subagent);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -84,6 +86,7 @@ impl ToolsConfig {
             include_web_fetch,
             include_code_search,
             include_mcp_resource_tools,
+            include_subagent,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }

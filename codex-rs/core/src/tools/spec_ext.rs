@@ -162,6 +162,30 @@ pub fn register_code_search(builder: &mut ToolRegistryBuilder) {
     builder.register_handler("code_search", Arc::new(CodeSearchHandler::new()));
 }
 
+/// Register subagent tools (Task, TaskOutput).
+///
+/// Task spawns specialized subagents for complex, multi-step tasks.
+/// TaskOutput retrieves results from background subagent tasks.
+///
+/// Note: Stores are managed globally via conversation_id in subagent/stores.rs.
+/// This avoids per-turn recreation and ensures background tasks persist across turns.
+pub fn register_subagent_tools(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
+    if config.include_subagent {
+        use crate::tools::ext::subagent::create_task_output_tool;
+        use crate::tools::ext::subagent::create_task_tool;
+        use crate::tools::handlers::ext::subagent::TaskHandler;
+        use crate::tools::handlers::ext::subagent::TaskOutputHandler;
+
+        // Task tool - spawns subagents (supports parallel execution)
+        builder.push_spec_with_parallel_support(create_task_tool(), true);
+        builder.register_handler("Task", Arc::new(TaskHandler::new()));
+
+        // TaskOutput tool - retrieves background task results (supports parallel execution)
+        builder.push_spec_with_parallel_support(create_task_output_tool(), true);
+        builder.register_handler("TaskOutput", Arc::new(TaskOutputHandler::new()));
+    }
+}
+
 /// Register all extension tools.
 /// This consolidates all ext tool registrations into a single call
 /// to minimize modifications to spec.rs::build_specs().
@@ -185,6 +209,9 @@ pub fn register_ext_tools(builder: &mut ToolRegistryBuilder, config: &ToolsConfi
     if config.include_code_search {
         register_code_search(builder);
     }
+
+    // subagent tools: requires feature flag
+    register_subagent_tools(builder, config);
 }
 
 #[cfg(test)]

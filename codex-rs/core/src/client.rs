@@ -107,6 +107,31 @@ impl ModelClient {
         &self.provider
     }
 
+    /// Get the auth manager for this client.
+    pub fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.auth_manager.clone()
+    }
+
+    /// Get the otel manager for this client.
+    pub fn otel_manager(&self) -> &OtelManager {
+        &self.otel_manager
+    }
+
+    /// Get the reasoning effort config.
+    pub fn reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.effort
+    }
+
+    /// Get the reasoning summary config.
+    pub fn reasoning_summary(&self) -> ReasoningSummaryConfig {
+        self.summary
+    }
+
+    /// Get the session source.
+    pub fn session_source(&self) -> &SessionSource {
+        &self.session_source
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///

@@ -47,4 +47,22 @@ pub(crate) const EXT_FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::Subagent,
+        key: "subagent",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CompactV2,
+        key: "compact_v2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MicroCompact,
+        key: "micro_compact",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
 ];
