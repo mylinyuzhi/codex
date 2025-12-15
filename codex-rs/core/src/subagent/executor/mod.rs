@@ -204,12 +204,13 @@ impl AgentExecutor {
         }
 
         // Add critical system reminder as user message (extra safety enforcement)
+        // Wrapped in XML tags for consistent system reminder format
         if let Some(reminder) = &self.context.definition.critical_system_reminder {
             conversation_history.push(codex_protocol::models::ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![codex_protocol::models::ContentItem::InputText {
-                    text: reminder.clone(),
+                    text: format!("<system-reminder>\n{reminder}\n</system-reminder>"),
                 }],
             });
         }
