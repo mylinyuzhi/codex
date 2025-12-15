@@ -94,6 +94,25 @@ pub fn is_system_message(item: &ResponseItem) -> bool {
     }
 }
 
+/// Check if message is a system reminder.
+///
+/// Used to filter system reminders during compaction.
+pub fn is_system_reminder_message(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { content, role, .. } if role == "user" => content.iter().any(|c| {
+            if let ContentItem::InputText { text } = c {
+                text.starts_with("<system-reminder>")
+                    || text.starts_with("<system-notification>")
+                    || text.starts_with("<session-memory>")
+                    || text.starts_with("<new-diagnostics>")
+            } else {
+                false
+            }
+        }),
+        _ => false,
+    }
+}
+
 /// Merge consecutive user messages into single messages.
 ///
 /// Matches Claude Code's message merging in WZ() function.
@@ -162,6 +181,10 @@ pub fn filter_for_summarization(items: &[ResponseItem]) -> Vec<ResponseItem> {
             }
             // Exclude previous summaries
             if is_summary_message_v2(item) {
+                return false;
+            }
+            // Exclude system reminders
+            if is_system_reminder_message(item) {
                 return false;
             }
             // Exclude ghost snapshots (internal use)

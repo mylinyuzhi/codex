@@ -58,8 +58,11 @@ pub mod edit;
 pub mod mod_ext;
 pub mod profile;
 pub mod service;
+pub mod system_reminder;
 pub mod types;
 pub mod types_ext;
+
+pub use system_reminder::SystemReminderConfig;
 
 use mod_ext::ConfigTomlExt;
 
