@@ -5,6 +5,23 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Minimum severity level for LSP diagnostics to be injected.
+///
+/// Only diagnostics at or above this severity level will be included in system reminders.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LspDiagnosticsMinSeverity {
+    /// Only inject errors (most restrictive, default for production).
+    #[default]
+    Error,
+    /// Inject errors and warnings.
+    Warning,
+    /// Inject errors, warnings, and info messages.
+    Info,
+    /// Inject all diagnostics including hints (least restrictive).
+    Hint,
+}
+
 /// System reminder configuration.
 ///
 /// Controls the behavior of the system reminder attachment system.
@@ -39,7 +56,7 @@ impl Default for SystemReminderConfig {
     }
 }
 
-/// Per-attachment enable/disable settings (Phase 1: 5 types).
+/// Per-attachment enable/disable settings (Phase 1: 6 types).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AttachmentSettings {
@@ -47,12 +64,17 @@ pub struct AttachmentSettings {
     pub critical_instruction: bool,
     /// Plan mode instructions (default: true).
     pub plan_mode: bool,
-    /// Todo list reminder (default: true).
-    pub todo_reminder: bool,
+    /// Plan tool reminder - update_plan tool usage (default: true).
+    pub plan_tool_reminder: bool,
     /// File change notifications (default: true).
     pub changed_files: bool,
     /// Background task status (default: true).
     pub background_task: bool,
+    /// LSP diagnostics notifications (default: true).
+    pub lsp_diagnostics: bool,
+    /// Minimum severity for LSP diagnostics (default: error only).
+    #[serde(default)]
+    pub lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
 }
 
 impl Default for AttachmentSettings {
@@ -60,9 +82,11 @@ impl Default for AttachmentSettings {
         Self {
             critical_instruction: true,
             plan_mode: true,
-            todo_reminder: true,
+            plan_tool_reminder: true,
             changed_files: true,
             background_task: true,
+            lsp_diagnostics: true,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         }
     }
 }
@@ -88,9 +112,10 @@ mod tests {
         let settings = AttachmentSettings::default();
         assert!(settings.critical_instruction);
         assert!(settings.plan_mode);
-        assert!(settings.todo_reminder);
+        assert!(settings.plan_tool_reminder);
         assert!(settings.changed_files);
         assert!(settings.background_task);
+        assert!(settings.lsp_diagnostics);
     }
 
     #[test]
@@ -103,7 +128,7 @@ mod tests {
             [attachments]
             critical_instruction = true
             plan_mode = false
-            todo_reminder = true
+            plan_tool_reminder = true
             changed_files = false
             background_task = true
         "#;
@@ -117,7 +142,7 @@ mod tests {
         assert_eq!(config.timeout_ms, Some(2000));
         assert!(config.attachments.critical_instruction);
         assert!(!config.attachments.plan_mode);
-        assert!(config.attachments.todo_reminder);
+        assert!(config.attachments.plan_tool_reminder);
         assert!(!config.attachments.changed_files);
         assert!(config.attachments.background_task);
     }

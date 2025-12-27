@@ -165,6 +165,29 @@ impl ToolHandler for ReadFileHandler {
             token_count,
         );
 
+        // Track file read for change detection (system reminders)
+        // Only track if stores exist for this conversation
+        if let Some(stores) = crate::subagent::get_stores(&session.conversation_id) {
+            // Read raw content for change detection (without line number formatting)
+            if let Ok(raw_content) = std::fs::read_to_string(&path) {
+                stores.file_tracker.track_read(
+                    path.clone(),
+                    raw_content,
+                    0, // Turn number not tracked in handler
+                    if offset == 1 {
+                        None
+                    } else {
+                        Some(offset as i32)
+                    },
+                    if limit >= 2000 {
+                        None
+                    } else {
+                        Some(limit as i32)
+                    },
+                );
+            }
+        }
+
         Ok(ToolOutput::Function {
             content,
             content_items: None,

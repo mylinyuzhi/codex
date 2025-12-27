@@ -2123,11 +2123,7 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::SubagentActivity(_)
-            | EventMsg::CompactCompleted(_)
-            | EventMsg::MicroCompactCompleted(_)
-            | EventMsg::CompactFailed(_)
-            | EventMsg::CompactThresholdExceeded(_) => {}
+            | EventMsg::Ext(_) => {}
         }
     }
 

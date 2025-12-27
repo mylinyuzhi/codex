@@ -5,12 +5,17 @@
 //! - Path relevance: query terms found in file path
 //! - Recency: recently modified files
 //!
-//! No external models or APIs required.
+//! No external models or APIs required. Fast and deterministic.
 
-use super::Reranker;
-use crate::types::SearchResult;
+use async_trait::async_trait;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+use super::Reranker;
+use super::RerankerCapabilities;
+use crate::config::RerankerConfig;
+use crate::error::Result;
+use crate::types::SearchResult;
 
 /// Configuration for rule-based reranker.
 #[derive(Debug, Clone)]
@@ -32,6 +37,17 @@ impl Default for RuleBasedRerankerConfig {
             path_relevance_boost: 1.5,
             recency_boost: 1.2,
             recency_days_threshold: 7,
+        }
+    }
+}
+
+impl From<RerankerConfig> for RuleBasedRerankerConfig {
+    fn from(config: RerankerConfig) -> Self {
+        Self {
+            exact_match_boost: config.exact_match_boost,
+            path_relevance_boost: config.path_relevance_boost,
+            recency_boost: config.recency_boost,
+            recency_days_threshold: config.recency_days_threshold,
         }
     }
 }
@@ -94,10 +110,24 @@ impl Default for RuleBasedReranker {
     }
 }
 
+#[async_trait]
 impl Reranker for RuleBasedReranker {
-    fn rerank(&self, query: &str, results: &mut [SearchResult]) {
+    fn name(&self) -> &str {
+        "rule_based"
+    }
+
+    fn capabilities(&self) -> RerankerCapabilities {
+        RerankerCapabilities {
+            requires_network: false,
+            supports_batch: true,
+            max_batch_size: None,
+            is_async: false,
+        }
+    }
+
+    async fn rerank(&self, query: &str, results: &mut [SearchResult]) -> Result<()> {
         if results.is_empty() || query.is_empty() {
-            return;
+            return Ok(());
         }
 
         for result in results.iter_mut() {
@@ -129,6 +159,8 @@ impl Reranker for RuleBasedReranker {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        Ok(())
     }
 }
 
@@ -164,6 +196,7 @@ mod tests {
             },
             score,
             score_type: ScoreType::Hybrid,
+            is_stale: None,
         }
     }
 
@@ -183,15 +216,15 @@ mod tests {
         assert_eq!(config.recency_days_threshold, 7);
     }
 
-    #[test]
-    fn test_rerank_exact_match_boost() {
+    #[tokio::test]
+    async fn test_rerank_exact_match_boost() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![
             make_result("1", "src/foo.rs", "fn bar() {}", 1.0, None),
             make_result("2", "src/other.rs", "fn test_foo() {}", 1.0, None),
         ];
 
-        reranker.rerank("foo", &mut results);
+        reranker.rerank("foo", &mut results).await.unwrap();
 
         // "foo" appears in filepath of result 1 and content of result 2
         // Result 2 has "foo" in content (exact match)
@@ -201,15 +234,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rerank_path_relevance_boost() {
+    #[tokio::test]
+    async fn test_rerank_path_relevance_boost() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![
             make_result("1", "src/utils.rs", "fn helper() {}", 1.0, None),
             make_result("2", "src/auth/login.rs", "fn validate() {}", 1.0, None),
         ];
 
-        reranker.rerank("auth", &mut results);
+        reranker.rerank("auth", &mut results).await.unwrap();
 
         // "auth" appears in filepath of result 2
         assert!(
@@ -218,8 +251,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rerank_recency_boost() {
+    #[tokio::test]
+    async fn test_rerank_recency_boost() {
         let reranker = RuleBasedReranker::new();
         let now = now_timestamp();
         let old_time = now - (30 * 86400); // 30 days ago
@@ -230,7 +263,7 @@ mod tests {
         ];
 
         // Query doesn't match any content/path, only recency applies
-        reranker.rerank("xyz", &mut results);
+        reranker.rerank("xyz", &mut results).await.unwrap();
 
         // Recent file should be boosted
         assert!(
@@ -239,8 +272,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rerank_combined_boosts() {
+    #[tokio::test]
+    async fn test_rerank_combined_boosts() {
         let reranker = RuleBasedReranker::new();
         let now = now_timestamp();
 
@@ -255,7 +288,7 @@ mod tests {
             ),
         ];
 
-        reranker.rerank("auth login", &mut results);
+        reranker.rerank("auth login", &mut results).await.unwrap();
 
         // Result 2 has: exact match (auth + login in content) + path match + recency
         assert!(
@@ -271,30 +304,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rerank_empty_results() {
+    #[tokio::test]
+    async fn test_rerank_empty_results() {
         let reranker = RuleBasedReranker::new();
         let mut results: Vec<SearchResult> = vec![];
 
         // Should not panic
-        reranker.rerank("foo", &mut results);
+        reranker.rerank("foo", &mut results).await.unwrap();
         assert!(results.is_empty());
     }
 
-    #[test]
-    fn test_rerank_empty_query() {
+    #[tokio::test]
+    async fn test_rerank_empty_query() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![make_result("1", "src/foo.rs", "fn bar() {}", 1.0, None)];
         let original_score = results[0].score;
 
-        reranker.rerank("", &mut results);
+        reranker.rerank("", &mut results).await.unwrap();
 
         // Score should not change with empty query
         assert_eq!(results[0].score, original_score);
     }
 
-    #[test]
-    fn test_rerank_preserves_order_when_no_boosts() {
+    #[tokio::test]
+    async fn test_rerank_preserves_order_when_no_boosts() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![
             make_result("1", "a.rs", "fn a() {}", 2.0, None),
@@ -302,15 +335,15 @@ mod tests {
         ];
 
         // Query doesn't match any content/path
-        reranker.rerank("xyz", &mut results);
+        reranker.rerank("xyz", &mut results).await.unwrap();
 
         // Original order preserved based on scores
         assert_eq!(results[0].chunk.id, "1");
         assert_eq!(results[1].chunk.id, "2");
     }
 
-    #[test]
-    fn test_custom_config() {
+    #[tokio::test]
+    async fn test_custom_config() {
         let config = RuleBasedRerankerConfig {
             exact_match_boost: 5.0,
             path_relevance_boost: 3.0,
@@ -328,21 +361,21 @@ mod tests {
             Some(now),
         )];
 
-        reranker.rerank("foo bar", &mut results);
+        reranker.rerank("foo bar", &mut results).await.unwrap();
 
         // exact_match(5.0) * path_relevance(3.0) * recency(2.0) = 30.0
         assert!(results[0].score >= 29.0, "Custom boosts should be applied");
     }
 
-    #[test]
-    fn test_case_insensitive_matching() {
+    #[tokio::test]
+    async fn test_case_insensitive_matching() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![
             make_result("1", "src/Utils.rs", "fn Helper() {}", 1.0, None),
             make_result("2", "src/other.rs", "fn other() {}", 1.0, None),
         ];
 
-        reranker.rerank("UTILS helper", &mut results);
+        reranker.rerank("UTILS helper", &mut results).await.unwrap();
 
         // Case-insensitive match should work
         assert!(
@@ -351,15 +384,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_partial_term_match() {
+    #[tokio::test]
+    async fn test_partial_term_match() {
         let reranker = RuleBasedReranker::new();
         let mut results = vec![
             make_result("1", "src/authentication.rs", "fn auth() {}", 1.0, None),
             make_result("2", "src/other.rs", "fn other() {}", 1.0, None),
         ];
 
-        reranker.rerank("auth", &mut results);
+        reranker.rerank("auth", &mut results).await.unwrap();
 
         // "auth" is substring of "authentication" in filepath
         assert!(

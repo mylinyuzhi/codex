@@ -73,8 +73,22 @@ impl SqliteStore {
                         path = %path.display(),
                         "Connection not in autocommit after poisoning recovery, attempting rollback"
                     );
-                    // Attempt to rollback any pending transaction
-                    let _ = inner.execute("ROLLBACK", []);
+                    // Attempt to rollback any pending transaction and log result
+                    match inner.execute("ROLLBACK", []) {
+                        Ok(_) => {
+                            tracing::info!(
+                                path = %path.display(),
+                                "Successfully rolled back pending transaction after mutex poisoning"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                path = %path.display(),
+                                error = %e,
+                                "ROLLBACK failed after mutex poisoning recovery - connection may be in inconsistent state"
+                            );
+                        }
+                    }
                 }
                 inner
             });
@@ -108,7 +122,22 @@ impl SqliteStore {
                         path = %path.display(),
                         "Connection not in autocommit after poisoning recovery, attempting rollback"
                     );
-                    let _ = inner.execute("ROLLBACK", []);
+                    // Attempt to rollback any pending transaction and log result
+                    match inner.execute("ROLLBACK", []) {
+                        Ok(_) => {
+                            tracing::info!(
+                                path = %path.display(),
+                                "Successfully rolled back pending transaction after mutex poisoning"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                path = %path.display(),
+                                error = %e,
+                                "ROLLBACK failed after mutex poisoning recovery - connection may be in inconsistent state"
+                            );
+                        }
+                    }
                 }
                 inner
             });

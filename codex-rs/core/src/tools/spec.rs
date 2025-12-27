@@ -16,6 +16,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+// Re-export ToolFilter from spec_ext
+pub use crate::tools::spec_ext::ToolFilter;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
@@ -27,14 +30,24 @@ pub(crate) struct ToolsConfig {
     pub include_enhanced_list_dir: bool,
     pub include_web_fetch: bool,
     pub include_code_search: bool,
+    pub include_lsp: bool,
     pub include_mcp_resource_tools: bool,
     pub include_subagent: bool,
+    pub include_background_shell: bool,
+    pub include_web_search: bool,
     pub experimental_supported_tools: Vec<String>,
+    /// Optional tool filter. When set, tools will be filtered accordingly.
+    /// Main session: None (no filtering). Subagent: from_agent_definition().
+    pub tool_filter: Option<ToolFilter>,
+    /// Web search configuration (provider, max_results, api_key).
+    pub web_search_config: codex_protocol::config_types_ext::WebSearchConfig,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
     pub(crate) features: &'a Features,
+    /// Optional web search config. If None, defaults are used.
+    pub(crate) web_search_config: Option<codex_protocol::config_types_ext::WebSearchConfig>,
 }
 
 impl ToolsConfig {
@@ -42,6 +55,7 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_family,
             features,
+            web_search_config,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -52,8 +66,10 @@ impl ToolsConfig {
         let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
         let include_web_fetch = features.enabled(Feature::WebFetch);
         let include_code_search = features.enabled(Feature::CodeSearch);
+        let include_lsp = features.enabled(Feature::Lsp);
         let include_mcp_resource_tools = features.enabled(Feature::McpResourceTools);
         let include_subagent = features.enabled(Feature::Subagent);
+        let include_web_search = features.enabled(Feature::WebSearch);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -80,6 +96,9 @@ impl ToolsConfig {
             }
         };
 
+        // Background shell is enabled when shell is enabled
+        let include_background_shell = shell_type != ConfigShellToolType::Disabled;
+
         Self {
             shell_type,
             apply_patch_tool_type,
@@ -90,9 +109,14 @@ impl ToolsConfig {
             include_enhanced_list_dir,
             include_web_fetch,
             include_code_search,
+            include_lsp,
             include_mcp_resource_tools,
             include_subagent,
+            include_background_shell,
+            include_web_search,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            tool_filter: None,
+            web_search_config: web_search_config.clone().unwrap_or_default(),
         }
     }
 }
@@ -312,6 +336,24 @@ fn create_shell_tool() -> ToolSpec {
             description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
+    properties.insert(
+        "run_in_background".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Run command in background, returning immediately with shell_id. Use BashOutput to get results, KillShell to terminate."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Description for background task (shown in notifications). Only used when run_in_background=true."
+                    .to_string(),
+            ),
+        },
+    );
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -385,10 +427,28 @@ fn create_shell_command_tool() -> ToolSpec {
             description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
+    properties.insert(
+        "run_in_background".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Run command in background, returning immediately with shell_id. Use BashOutput to get results, KillShell to terminate."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Description for background task (shown in notifications). Only used when run_in_background=true."
+                    .to_string(),
+            ),
+        },
+    );
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
@@ -1152,6 +1212,11 @@ pub(crate) fn build_specs(
         }
     }
 
+    // Apply tool filtering if configured.
+    if let Some(filter) = &config.tool_filter {
+        builder = builder.filter_with(filter);
+    }
+
     builder
 }
 
@@ -1263,6 +1328,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         // Use Some(empty) to simulate "MCP servers configured but no tools"
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
@@ -1301,6 +1367,8 @@ mod tests {
             create_glob_files_tool(),
             create_think_tool(),
             create_write_file_tool(),
+            crate::tools::ext::bash_output::create_bash_output_tool(),
+            crate::tools::ext::kill_shell::create_kill_shell_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1326,6 +1394,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1348,6 +1417,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1368,6 +1439,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1392,6 +1465,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1416,6 +1491,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1435,6 +1512,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1455,6 +1534,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1474,6 +1555,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1494,6 +1577,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1515,6 +1600,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1538,6 +1625,8 @@ mod tests {
                 "glob_files",
                 "think",
                 "write_file",
+                "BashOutput",
+                "KillShell",
             ],
         );
     }
@@ -1552,6 +1641,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
@@ -1574,6 +1664,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1594,6 +1685,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1625,6 +1717,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -1719,6 +1812,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1796,6 +1890,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
 
         let (tools, _) = build_specs(
@@ -1853,6 +1948,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
 
         let (tools, _) = build_specs(
@@ -1907,6 +2003,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
 
         let (tools, _) = build_specs(
@@ -1963,6 +2060,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
 
         let (tools, _) = build_specs(
@@ -2075,6 +2173,7 @@ Examples of valid command strings:
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(
             &tools_config,

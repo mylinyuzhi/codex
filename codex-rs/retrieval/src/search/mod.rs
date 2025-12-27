@@ -28,5 +28,4 @@ pub use ranking::apply_jaccard_boost;
 pub use ranking::extract_symbols;
 pub use ranking::jaccard_similarity;
 pub use ranking::rerank_by_jaccard;
-pub use recent::RecentFileEntry;
 pub use recent::RecentFilesCache;

@@ -45,6 +45,7 @@ tree-sitter-rust = "0.24"
 tree-sitter-go = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
 
 # Query preprocessing
 rust-stemmers = "1.2"
@@ -73,10 +74,18 @@ toml = { workspace = true }
 # LRU cache for recently edited files
 lru = "0.12"
 
+# Local neural reranking (optional)
+fastembed = { version = "4", optional = true }
+
 # Internal
 codex-file-ignore = { workspace = true }
 codex-utils-cache = { path = "../utils/cache" }
 dirs = { workspace = true }
+
+[features]
+default = []
+# Enable local neural reranking with fastembed (ONNX Runtime)
+neural-reranker = ["fastembed"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -36,13 +36,13 @@ impl Default for ThrottleConfig {
 
 /// Default throttle configurations matching Claude Code.
 ///
-/// GY2.TURNS_SINCE_WRITE = 5, GY2.TURNS_BETWEEN_REMINDERS = 3
+/// GY2.TURNS_SINCE_UPDATE = 5, GY2.TURNS_BETWEEN_REMINDERS = 3
 /// IH5.TURNS_BETWEEN_ATTACHMENTS = varies
 pub fn default_throttle_config(attachment_type: AttachmentType) -> ThrottleConfig {
     match attachment_type {
-        AttachmentType::TodoReminder => ThrottleConfig {
+        AttachmentType::PlanToolReminder => ThrottleConfig {
             min_turns_between: 3,       // TURNS_BETWEEN_REMINDERS
-            min_turns_after_trigger: 5, // TURNS_SINCE_WRITE
+            min_turns_after_trigger: 5, // TURNS_SINCE_UPDATE
             max_per_session: None,
         },
         AttachmentType::PlanMode => ThrottleConfig {
@@ -189,8 +189,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_throttle_config_todo_reminder() {
-        let config = default_throttle_config(AttachmentType::TodoReminder);
+    fn test_default_throttle_config_plan_tool_reminder() {
+        let config = default_throttle_config(AttachmentType::PlanToolReminder);
         assert_eq!(config.min_turns_between, 3);
         assert_eq!(config.min_turns_after_trigger, 5);
     }
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn test_throttle_manager_first_always_allowed() {
         let manager = ThrottleManager::new();
-        assert!(manager.should_generate(AttachmentType::TodoReminder, 1, None));
+        assert!(manager.should_generate(AttachmentType::PlanToolReminder, 1, None));
     }
 
     #[test]
@@ -212,15 +212,15 @@ mod tests {
         let manager = ThrottleManager::new();
 
         // First generation always allowed
-        assert!(manager.should_generate(AttachmentType::TodoReminder, 1, None));
-        manager.mark_generated(AttachmentType::TodoReminder, 1);
+        assert!(manager.should_generate(AttachmentType::PlanToolReminder, 1, None));
+        manager.mark_generated(AttachmentType::PlanToolReminder, 1);
 
         // Too soon (min_turns_between = 3)
-        assert!(!manager.should_generate(AttachmentType::TodoReminder, 2, None));
-        assert!(!manager.should_generate(AttachmentType::TodoReminder, 3, None));
+        assert!(!manager.should_generate(AttachmentType::PlanToolReminder, 2, None));
+        assert!(!manager.should_generate(AttachmentType::PlanToolReminder, 3, None));
 
         // After min_turns_between
-        assert!(manager.should_generate(AttachmentType::TodoReminder, 4, None));
+        assert!(manager.should_generate(AttachmentType::PlanToolReminder, 4, None));
     }
 
     #[test]
@@ -228,20 +228,20 @@ mod tests {
         let manager = ThrottleManager::new();
 
         // Trigger turn too recent (min_turns_after_trigger = 5)
-        assert!(!manager.should_generate(AttachmentType::TodoReminder, 3, Some(1)));
+        assert!(!manager.should_generate(AttachmentType::PlanToolReminder, 3, Some(1)));
 
         // After min_turns_after_trigger
-        assert!(manager.should_generate(AttachmentType::TodoReminder, 7, Some(1)));
+        assert!(manager.should_generate(AttachmentType::PlanToolReminder, 7, Some(1)));
     }
 
     #[test]
     fn test_throttle_manager_reset() {
         let manager = ThrottleManager::new();
-        manager.mark_generated(AttachmentType::TodoReminder, 1);
+        manager.mark_generated(AttachmentType::PlanToolReminder, 1);
         manager.reset();
 
         // After reset, should generate again from turn 1
-        assert!(manager.should_generate(AttachmentType::TodoReminder, 2, None));
+        assert!(manager.should_generate(AttachmentType::PlanToolReminder, 2, None));
     }
 
     #[test]

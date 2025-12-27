@@ -31,6 +31,7 @@ impl Bm25Searcher {
                 chunk,
                 score: 1.0 / (1.0 + i as f32), // Simple ranking for now
                 score_type: crate::types::ScoreType::Bm25,
+                is_stale: None,
             })
             .collect())
     }

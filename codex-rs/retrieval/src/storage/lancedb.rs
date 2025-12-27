@@ -26,6 +26,7 @@ use lancedb::query::QueryBase;
 use crate::config::default_embedding_dimension;
 use crate::error::Result;
 use crate::error::RetrievalErr;
+use crate::types::ChunkRef;
 use crate::types::CodeChunk;
 
 /// LanceDB store for code chunks and vectors.
@@ -109,31 +110,62 @@ impl LanceDbStore {
     }
 
     /// Get or create the chunks table.
+    ///
+    /// Uses optimistic creation with retry to handle race conditions:
+    /// 1. Try to open existing table
+    /// 2. If not found, try to create it
+    /// 3. If creation fails (another process created it), retry open
     async fn get_or_create_table(&self) -> Result<Table> {
-        if self.table_exists().await? {
-            self.db
-                .open_table(&self.table_name)
-                .execute()
-                .await
-                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
-                    table: self.table_name.clone(),
-                    cause: e.to_string(),
-                })
-        } else {
-            // Create empty table with schema
-            let schema = Arc::new(self.get_schema());
-            let empty_batch = RecordBatch::new_empty(schema.clone());
-            let reader =
-                arrow::record_batch::RecordBatchIterator::new(vec![Ok(empty_batch)], schema);
+        // First, try to open existing table
+        match self.db.open_table(&self.table_name).execute().await {
+            Ok(table) => return Ok(table),
+            Err(e) => {
+                // Check if error is "table not found" - if so, proceed to create
+                let err_str = e.to_string().to_lowercase();
+                if !err_str.contains("not found")
+                    && !err_str.contains("does not exist")
+                    && !err_str.contains("no such table")
+                {
+                    return Err(RetrievalErr::LanceDbQueryFailed {
+                        table: self.table_name.clone(),
+                        cause: e.to_string(),
+                    });
+                }
+            }
+        }
 
-            self.db
-                .create_table(&self.table_name, reader)
-                .execute()
-                .await
-                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
-                    table: self.table_name.clone(),
-                    cause: e.to_string(),
-                })
+        // Table doesn't exist, try to create it
+        let schema = Arc::new(self.get_schema());
+        let empty_batch = RecordBatch::new_empty(schema.clone());
+        let reader = arrow::record_batch::RecordBatchIterator::new(vec![Ok(empty_batch)], schema);
+
+        match self
+            .db
+            .create_table(&self.table_name, reader)
+            .execute()
+            .await
+        {
+            Ok(table) => Ok(table),
+            Err(e) => {
+                // Creation failed - might be due to race condition where another
+                // process created it. Try to open again.
+                let err_str = e.to_string().to_lowercase();
+                if err_str.contains("already exists") || err_str.contains("duplicate") {
+                    self.db
+                        .open_table(&self.table_name)
+                        .execute()
+                        .await
+                        .map_err(|e2| RetrievalErr::LanceDbQueryFailed {
+                            table: self.table_name.clone(),
+                            cause: format!("create failed ({e}), open retry failed ({e2})"),
+                        })
+                } else {
+                    Err(RetrievalErr::LanceDbQueryFailed {
+                        table: self.table_name.clone(),
+                        cause: e.to_string(),
+                    })
+                }
+            }
         }
     }
 
@@ -431,6 +463,138 @@ impl LanceDbStore {
         Ok(chunks)
     }
 
+    /// Parse a RecordBatch into ChunkRefs (without content).
+    ///
+    /// This is more efficient than `batch_to_chunks` when you only need
+    /// the reference information and will hydrate content later.
+    fn batch_to_chunk_refs(batch: &RecordBatch) -> Result<Vec<ChunkRef>> {
+        // Core fields (reuse column indices from batch_to_chunks)
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid id column".to_string(),
+            })?;
+
+        let source_ids = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid source_id column".to_string(),
+            })?;
+
+        let filepaths = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid filepath column".to_string(),
+            })?;
+
+        let languages = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid language column".to_string(),
+            })?;
+
+        // Skip column 4 (content) - not needed for ChunkRef
+
+        let start_lines = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid start_line column".to_string(),
+            })?;
+
+        let end_lines = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                table: "code_chunks".to_string(),
+                cause: "Invalid end_line column".to_string(),
+            })?;
+
+        let embeddings = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>();
+
+        // Extended metadata fields
+        let workspaces = batch
+            .column_by_name("workspace")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let content_hashes = batch
+            .column_by_name("content_hash")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let indexed_ats = batch
+            .column_by_name("indexed_at")
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+        let parent_symbols = batch
+            .column_by_name("parent_symbol")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let is_overviews = batch
+            .column_by_name("is_overview")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+
+        let mut refs = Vec::with_capacity(batch.num_rows());
+        for i in 0..batch.num_rows() {
+            let embedding = embeddings.and_then(|emb| {
+                if emb.is_null(i) {
+                    None
+                } else {
+                    let values = emb.value(i);
+                    let arr = values.as_any().downcast_ref::<Float32Array>()?;
+                    Some(arr.values().to_vec())
+                }
+            });
+
+            let workspace = workspaces
+                .map(|w| w.value(i).to_string())
+                .unwrap_or_else(|| source_ids.value(i).to_string());
+            let content_hash = content_hashes
+                .map(|h| h.value(i).to_string())
+                .unwrap_or_default();
+            let indexed_at = indexed_ats.map(|a| a.value(i)).unwrap_or(0);
+            let parent_symbol = parent_symbols.and_then(|ps| {
+                let val = ps.value(i);
+                if val.is_empty() {
+                    None
+                } else {
+                    Some(val.to_string())
+                }
+            });
+            let is_overview = is_overviews.map(|o| o.value(i)).unwrap_or(false);
+
+            refs.push(ChunkRef {
+                id: ids.value(i).to_string(),
+                source_id: source_ids.value(i).to_string(),
+                filepath: filepaths.value(i).to_string(),
+                language: languages.value(i).to_string(),
+                start_line: start_lines.value(i),
+                end_line: end_lines.value(i),
+                embedding,
+                workspace,
+                content_hash,
+                indexed_at,
+                parent_symbol,
+                is_overview,
+            });
+        }
+
+        Ok(refs)
+    }
+
     /// Search using full-text search (BM25).
     pub async fn search_fts(&self, query: &str, limit: i32) -> Result<Vec<CodeChunk>> {
         if !self.table_exists().await? {
@@ -529,21 +693,122 @@ impl LanceDbStore {
         Ok(chunks)
     }
 
-    /// Validate a filepath for safe use in SQL queries.
+    /// Search using full-text search (BM25), returning ChunkRefs.
+    ///
+    /// Use this when you plan to hydrate content from the file system
+    /// to ensure fresh content is returned.
+    pub async fn search_fts_refs(&self, query: &str, limit: i32) -> Result<Vec<ChunkRef>> {
+        if !self.table_exists().await? {
+            return Ok(Vec::new());
+        }
+
+        let table = self
+            .db
+            .open_table(&self.table_name)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let results = table
+            .query()
+            .full_text_search(FullTextSearchQuery::new(query.to_string()))
+            .limit(limit as usize)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let mut refs = Vec::new();
+        let mut stream = results;
+        while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+            let batch = batch.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+            refs.extend(Self::batch_to_chunk_refs(&batch)?);
+        }
+
+        Ok(refs)
+    }
+
+    /// Search using vector similarity, returning ChunkRefs.
+    ///
+    /// Use this when you plan to hydrate content from the file system
+    /// to ensure fresh content is returned.
+    pub async fn search_vector_refs(&self, embedding: &[f32], limit: i32) -> Result<Vec<ChunkRef>> {
+        if embedding.len() != self.dimension as usize {
+            return Err(RetrievalErr::EmbeddingDimensionMismatch {
+                expected: self.dimension,
+                actual: embedding.len() as i32,
+            });
+        }
+
+        if !self.table_exists().await? {
+            return Ok(Vec::new());
+        }
+
+        let table = self
+            .db
+            .open_table(&self.table_name)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let query_vec = embedding.to_vec();
+
+        let results = table
+            .vector_search(query_vec)
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?
+            .limit(limit as usize)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let mut refs = Vec::new();
+        let mut stream = results;
+        while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+            let batch = batch.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+            refs.extend(Self::batch_to_chunk_refs(&batch)?);
+        }
+
+        Ok(refs)
+    }
+
+    /// Validate a string for safe use in SQL queries.
     ///
     /// Only allows alphanumeric characters, path separators, underscores, hyphens, and dots.
     /// This prevents SQL injection by restricting the character set rather than
     /// trying to escape dangerous patterns.
-    fn validate_filepath(filepath: &str) -> Result<()> {
-        if filepath.is_empty() {
+    ///
+    /// Used for both filepaths and workspace identifiers.
+    fn validate_sql_identifier(value: &str, field_name: &str) -> Result<()> {
+        if value.is_empty() {
             return Err(RetrievalErr::FileNotIndexable {
-                path: filepath.into(),
-                reason: "Empty filepath".to_string(),
+                path: value.into(),
+                reason: format!("Empty {field_name}"),
             });
         }
 
         // Whitelist approach: only allow safe characters
-        let is_safe = filepath.chars().all(|c| {
+        // Restricted set - removed @, +, (, ) which could be problematic
+        let is_safe = value.chars().all(|c| {
             c.is_alphanumeric()
                 || c == '/'
                 || c == '\\'
@@ -551,45 +816,51 @@ impl LanceDbStore {
                 || c == '_'
                 || c == '-'
                 || c == ' '
-                || c == '@'
-                || c == '+'
-                || c == '('
-                || c == ')'
+                || c == ':' // For workspace identifiers like "ws:project"
         });
 
         if !is_safe {
             return Err(RetrievalErr::FileNotIndexable {
-                path: filepath.into(),
-                reason: "Filepath contains potentially unsafe characters".to_string(),
+                path: value.into(),
+                reason: format!("{field_name} contains potentially unsafe characters"),
             });
         }
 
-        // Also reject common SQL injection patterns as defense in depth
-        let dangerous_patterns = [
-            '\0', ';', // SQL statement terminators
-        ];
-        if filepath.chars().any(|c| dangerous_patterns.contains(&c)) {
+        // Reject SQL injection patterns as defense in depth
+        let dangerous_patterns = ['\0', ';', '\'', '"'];
+        if value.chars().any(|c| dangerous_patterns.contains(&c)) {
             return Err(RetrievalErr::FileNotIndexable {
-                path: filepath.into(),
-                reason: "Filepath contains dangerous SQL characters".to_string(),
+                path: value.into(),
+                reason: format!("{field_name} contains dangerous SQL characters"),
             });
         }
 
-        if filepath.contains("--") || filepath.contains("/*") || filepath.contains("*/") {
+        // Reject SQL comment patterns
+        if value.contains("--") || value.contains("/*") || value.contains("*/") {
             return Err(RetrievalErr::FileNotIndexable {
-                path: filepath.into(),
-                reason: "Filepath contains SQL comment markers".to_string(),
+                path: value.into(),
+                reason: format!("{field_name} contains SQL comment markers"),
             });
         }
 
         Ok(())
     }
 
+    /// Validate a filepath for safe use in SQL queries.
+    fn validate_filepath(filepath: &str) -> Result<()> {
+        Self::validate_sql_identifier(filepath, "filepath")
+    }
+
+    /// Validate a workspace identifier for safe use in SQL queries.
+    fn validate_workspace(workspace: &str) -> Result<()> {
+        Self::validate_sql_identifier(workspace, "workspace")
+    }
+
     /// Delete chunks by file path.
     ///
     /// Validates the filepath to prevent SQL injection attacks.
     pub async fn delete_by_path(&self, filepath: &str) -> Result<i32> {
-        // Validate filepath using whitelist approach
+        // Validate filepath using whitelist approach (rejects quotes, so no escape needed)
         Self::validate_filepath(filepath)?;
 
         if !self.table_exists().await? {
@@ -609,10 +880,9 @@ impl LanceDbStore {
         // Count before delete
         let count_before = table.count_rows(None).await.unwrap_or(0);
 
-        // Escape single quotes for SQL safety
-        let escaped_filepath = filepath.replace('\'', "''");
+        // Safe: filepath validated to not contain quotes or dangerous chars
         table
-            .delete(&format!("filepath = '{}'", escaped_filepath))
+            .delete(&format!("filepath = '{filepath}'"))
             .await
             .map_err(|e| RetrievalErr::LanceDbQueryFailed {
                 table: self.table_name.clone(),
@@ -651,7 +921,28 @@ impl LanceDbStore {
     }
 
     /// Create a vector index for faster similarity search.
+    ///
+    /// Uses automatic index type selection (no quantization).
+    /// For quantized indexes, use `create_vector_index_with_config`.
     pub async fn create_vector_index(&self) -> Result<()> {
+        self.create_vector_index_with_config(None).await
+    }
+
+    /// Create a vector index with optional quantization configuration.
+    ///
+    /// Quantization reduces index size at the cost of some precision:
+    /// - `None` or `QuantizationMethod::None`: Full precision (Index::Auto)
+    /// - `QuantizationMethod::Scalar`: 4x compression, <1% recall loss
+    /// - `QuantizationMethod::Product`: 4-8x compression, 1-3% recall loss
+    pub async fn create_vector_index_with_config(
+        &self,
+        config: Option<&crate::config::QuantizationConfig>,
+    ) -> Result<()> {
+        use crate::config::QuantizationMethod;
+        use lancedb::index::Index;
+        use lancedb::index::vector::IvfHnswSqIndexBuilder;
+        use lancedb::index::vector::IvfPqIndexBuilder;
+
         if !self.table_exists().await? {
             return Ok(());
         }
@@ -666,9 +957,22 @@ impl LanceDbStore {
                 cause: e.to_string(),
             })?;
 
-        // Create IVF-PQ index for large datasets
+        // Select index type based on quantization config
+        let index = match config.map(|c| c.method).unwrap_or(QuantizationMethod::None) {
+            QuantizationMethod::None => Index::Auto,
+            QuantizationMethod::Scalar => Index::IvfHnswSq(IvfHnswSqIndexBuilder::default()),
+            QuantizationMethod::Product => {
+                let cfg = config.expect("config required for Product quantization");
+                Index::IvfPq(
+                    IvfPqIndexBuilder::default()
+                        .num_sub_vectors(cfg.num_sub_vectors as u32)
+                        .num_bits(cfg.num_bits as u32),
+                )
+            }
+        };
+
         table
-            .create_index(&["embedding"], lancedb::index::Index::Auto)
+            .create_index(&["embedding"], index)
             .execute()
             .await
             .map_err(|e| RetrievalErr::LanceDbQueryFailed {
@@ -719,6 +1023,10 @@ impl LanceDbStore {
         workspace: &str,
         filepath: &str,
     ) -> Result<Option<FileMetadata>> {
+        // Validate inputs to prevent SQL injection
+        Self::validate_workspace(workspace)?;
+        Self::validate_filepath(filepath)?;
+
         if !self.table_exists().await? {
             return Ok(None);
         }
@@ -733,13 +1041,8 @@ impl LanceDbStore {
                 cause: e.to_string(),
             })?;
 
-        // Query for the first chunk of this file
-        let escaped_workspace = workspace.replace('\'', "''");
-        let escaped_filepath = filepath.replace('\'', "''");
-        let filter = format!(
-            "workspace = '{}' AND filepath = '{}'",
-            escaped_workspace, escaped_filepath
-        );
+        // Safe: workspace and filepath validated to not contain quotes or dangerous chars
+        let filter = format!("workspace = '{workspace}' AND filepath = '{filepath}'");
 
         let results = table
             .query()
@@ -780,6 +1083,9 @@ impl LanceDbStore {
     ///
     /// Returns unique file entries with their metadata.
     pub async fn get_workspace_files(&self, workspace: &str) -> Result<Vec<FileMetadata>> {
+        // Validate workspace to prevent SQL injection
+        Self::validate_workspace(workspace)?;
+
         if !self.table_exists().await? {
             return Ok(Vec::new());
         }
@@ -794,18 +1100,28 @@ impl LanceDbStore {
                 cause: e.to_string(),
             })?;
 
-        // Build filter
-        let escaped_workspace = workspace.replace('\'', "''");
-        let filter = format!("workspace = '{}'", escaped_workspace);
+        // Safe: workspace validated to not contain quotes or dangerous chars
+        let filter = format!("workspace = '{workspace}'");
 
-        let results = table.query().only_if(filter).execute().await.map_err(|e| {
-            RetrievalErr::LanceDbQueryFailed {
+        // Use select() to only fetch metadata columns (avoid loading content/embeddings)
+        let results = table
+            .query()
+            .only_if(filter)
+            .select(lancedb::query::Select::Columns(vec![
+                "filepath".to_string(),
+                "workspace".to_string(),
+                "content_hash".to_string(),
+                "mtime".to_string(),
+                "indexed_at".to_string(),
+            ]))
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
                 table: self.table_name.clone(),
                 cause: e.to_string(),
-            }
-        })?;
+            })?;
 
-        // Collect unique files
+        // Collect unique files - use HashMap to deduplicate by filepath
         let mut files: std::collections::HashMap<String, FileMetadata> =
             std::collections::HashMap::new();
 
@@ -816,15 +1132,38 @@ impl LanceDbStore {
                 cause: e.to_string(),
             })?;
 
-            let chunks = Self::batch_to_chunks(&batch)?;
-            for chunk in chunks {
-                files.entry(chunk.filepath.clone()).or_insert(FileMetadata {
-                    filepath: chunk.filepath,
-                    workspace: chunk.workspace,
-                    content_hash: chunk.content_hash,
-                    mtime: chunk.modified_time.unwrap_or(0),
-                    indexed_at: chunk.indexed_at,
-                });
+            // Parse only the columns we selected
+            let filepaths = batch
+                .column_by_name("filepath")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let workspaces = batch
+                .column_by_name("workspace")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let content_hashes = batch
+                .column_by_name("content_hash")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let mtimes = batch
+                .column_by_name("mtime")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+            let indexed_ats = batch
+                .column_by_name("indexed_at")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+
+            if let Some(filepaths) = filepaths {
+                for i in 0..batch.num_rows() {
+                    let filepath = filepaths.value(i).to_string();
+                    files.entry(filepath.clone()).or_insert(FileMetadata {
+                        filepath,
+                        workspace: workspaces
+                            .map(|w| w.value(i).to_string())
+                            .unwrap_or_default(),
+                        content_hash: content_hashes
+                            .map(|h| h.value(i).to_string())
+                            .unwrap_or_default(),
+                        mtime: mtimes.map(|m| m.value(i)).unwrap_or(0),
+                        indexed_at: indexed_ats.map(|a| a.value(i)).unwrap_or(0),
+                    });
+                }
             }
         }
 
@@ -833,6 +1172,9 @@ impl LanceDbStore {
 
     /// Delete all chunks for a workspace.
     pub async fn delete_workspace(&self, workspace: &str) -> Result<i32> {
+        // Validate workspace to prevent SQL injection
+        Self::validate_workspace(workspace)?;
+
         if !self.table_exists().await? {
             return Ok(0);
         }
@@ -849,9 +1191,9 @@ impl LanceDbStore {
 
         let count_before = table.count_rows(None).await.unwrap_or(0);
 
-        let escaped_workspace = workspace.replace('\'', "''");
+        // Safe: workspace validated to not contain quotes or dangerous chars
         table
-            .delete(&format!("workspace = '{}'", escaped_workspace))
+            .delete(&format!("workspace = '{workspace}'"))
             .await
             .map_err(|e| RetrievalErr::LanceDbQueryFailed {
                 table: self.table_name.clone(),

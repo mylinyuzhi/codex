@@ -1,15 +1,14 @@
 //! Subagent Tool Handlers
 //!
 //! Handlers for Task and TaskOutput tools that integrate with the subagent system.
+//! Uses the delegate pattern (run_subagent_delegate) to spawn full Codex sessions
+//! for subagent execution.
 
 use crate::function_tool::FunctionCallError;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::subagent::AgentExecutor;
-use crate::subagent::ModelClientBridge;
-use crate::subagent::ModelConfig;
-use crate::subagent::SubagentContext;
+use crate::subagent::SubagentConfigBuilder;
 use crate::subagent::SubagentStatus;
 use crate::subagent::get_or_create_stores;
+use crate::subagent::run_subagent_delegate;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -41,204 +40,16 @@ pub struct TaskArgs {
 
 /// Task Tool Handler
 ///
-/// Spawns subagents for complex, multi-step tasks.
-/// Stores are obtained from the global registry using conversation_id.
+/// Spawns subagents using the delegate pattern (run_subagent_delegate).
+/// This approach spawns full Codex sessions for subagent execution,
+/// enabling access to all tools, skills, compact, and MCP integration.
 #[derive(Debug, Default)]
 pub struct TaskHandler;
 
 impl TaskHandler {
     /// Create a new Task handler.
-    /// Stores are obtained from global registry at runtime via conversation_id.
     pub fn new() -> Self {
         Self
-    }
-
-    /// Resolve provider using priority chain.
-    ///
-    /// Priority order:
-    /// 1. Task tool parameter (override_provider)
-    /// 2. Environment variable CODEX_SUBAGENT_PROVIDER
-    /// 3. Agent definition model_config.provider
-    /// 4. None (inherit parent session's provider)
-    async fn resolve_provider(
-        &self,
-        invocation: &ToolInvocation,
-        override_provider: Option<&str>,
-        model_config: &ModelConfig,
-    ) -> Result<Option<ModelProviderInfo>, FunctionCallError> {
-        // Priority 1: Task tool parameter
-        if let Some(provider_name) = override_provider {
-            return self.get_provider_info(invocation, provider_name).await;
-        }
-
-        // Priority 2: Environment variable
-        if let Ok(env_provider) = std::env::var("CODEX_SUBAGENT_PROVIDER") {
-            return self.get_provider_info(invocation, &env_provider).await;
-        }
-
-        // Priority 3: Agent definition
-        if let Some(provider_name) = &model_config.provider {
-            return self.get_provider_info(invocation, provider_name).await;
-        }
-
-        // Priority 4: Inherit (return None)
-        Ok(None)
-    }
-
-    /// Get ModelProviderInfo from config by provider name.
-    async fn get_provider_info(
-        &self,
-        invocation: &ToolInvocation,
-        provider_name: &str,
-    ) -> Result<Option<ModelProviderInfo>, FunctionCallError> {
-        let state = invocation.session.state.lock().await;
-        let config = &state.session_configuration.original_config_do_not_use;
-
-        config
-            .model_providers
-            .get(provider_name)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| {
-                let available: Vec<&String> = config.model_providers.keys().collect();
-                FunctionCallError::RespondToModel(format!(
-                    "Unknown provider: '{}'. Available providers: {:?}",
-                    provider_name, available
-                ))
-            })
-    }
-
-    /// Resolve model name using priority chain.
-    ///
-    /// Priority order:
-    /// 1. Environment variable CODEX_SUBAGENT_MODEL
-    /// 2. Task tool parameter (override_model)
-    /// 3. Agent definition model_config.model
-    /// 4. Provider's default model (from provider_info.ext.model_name)
-    /// 5. Inherit parent session's model
-    fn resolve_model(
-        override_model: Option<&str>,
-        model_config: &ModelConfig,
-        provider_info: Option<&ModelProviderInfo>,
-        parent_model: &str,
-    ) -> String {
-        // Priority 1: Environment variable
-        if let Ok(env_model) = std::env::var("CODEX_SUBAGENT_MODEL") {
-            return env_model;
-        }
-
-        // Priority 2: Task tool parameter
-        if let Some(model) = override_model {
-            return Self::resolve_model_name(model);
-        }
-
-        // Priority 3: Agent definition
-        if let Some(def_model) = &model_config.model {
-            return Self::resolve_model_name(def_model);
-        }
-
-        // Priority 4: Provider's default model
-        if let Some(info) = provider_info {
-            if let Some(model_name) = &info.ext.model_name {
-                return model_name.clone();
-            }
-        }
-
-        // Priority 5: Parent model (inherit)
-        parent_model.to_string()
-    }
-
-    /// Map user-friendly model names to actual identifiers.
-    fn resolve_model_name(name: &str) -> String {
-        match name.to_lowercase().as_str() {
-            "sonnet" | "claude-sonnet" => "claude-sonnet".to_string(),
-            "haiku" | "claude-haiku" => "claude-haiku".to_string(),
-            "opus" | "claude-opus" => "claude-opus".to_string(),
-            _ => name.to_string(),
-        }
-    }
-
-    /// Create a new ModelClient with a custom provider.
-    ///
-    /// Applies model parameters (temperature, top_p) from the agent's ModelConfig
-    /// to the provider's configuration.
-    async fn create_model_client(
-        &self,
-        invocation: &ToolInvocation,
-        mut provider_info: ModelProviderInfo,
-        model_name: &str,
-        model_config: &ModelConfig,
-    ) -> Result<crate::client::ModelClient, FunctionCallError> {
-        use crate::client::ModelClient;
-        use crate::models_manager::model_family::find_family_for_model;
-        use codex_protocol::ConversationId;
-        use codex_protocol::config_types_ext::ModelParameters;
-
-        let parent_client = &invocation.turn.client;
-
-        // Get config from parent client
-        let config = parent_client.config();
-
-        // Reuse auth_manager and otel_manager from parent
-        let auth_manager = parent_client.auth_manager();
-        let otel_manager = parent_client.otel_manager().clone();
-
-        // Get model family from model name
-        let model_family = find_family_for_model(model_name);
-
-        // Generate new conversation_id for subagent (independent conversation)
-        let conversation_id = ConversationId::new();
-
-        // Apply model parameters from agent definition to provider
-        // Only override if agent definition has non-default values (Fix #5)
-        let existing_params = provider_info
-            .ext
-            .model_parameters
-            .take()
-            .unwrap_or_default();
-
-        // Default values from subagent/definition/mod.rs
-        const DEFAULT_TEMPERATURE: f32 = 0.7;
-        const DEFAULT_TOP_P: f32 = 0.95;
-
-        let merged_params = ModelParameters {
-            // Only use agent's temperature if it differs from default
-            temperature: if (model_config.temperature - DEFAULT_TEMPERATURE).abs() > f32::EPSILON {
-                Some(model_config.temperature)
-            } else {
-                existing_params.temperature
-            },
-            // Only use agent's top_p if it differs from default
-            top_p: if (model_config.top_p - DEFAULT_TOP_P).abs() > f32::EPSILON {
-                Some(model_config.top_p)
-            } else {
-                existing_params.top_p
-            },
-            // Keep other parameters from provider
-            frequency_penalty: existing_params.frequency_penalty,
-            presence_penalty: existing_params.presence_penalty,
-            max_tokens: existing_params.max_tokens,
-            budget_tokens: existing_params.budget_tokens,
-            include_thoughts: existing_params.include_thoughts,
-        };
-        provider_info.ext.model_parameters = Some(merged_params);
-
-        // Reuse reasoning config from parent
-        let effort = parent_client.reasoning_effort();
-        let summary = parent_client.reasoning_summary();
-        let session_source = parent_client.session_source().clone();
-
-        Ok(ModelClient::new(
-            config,
-            auth_manager,
-            model_family,
-            otel_manager,
-            provider_info,
-            effort,
-            summary,
-            conversation_id,
-            session_source,
-        ))
     }
 }
 
@@ -281,100 +92,69 @@ impl ToolHandler for TaskHandler {
                 ))
             })?;
 
-        // Get parent client and its model for inheritance
-        let parent_client = &invocation.turn.client;
-        let parent_model = parent_client.provider().name.as_str();
-
-        // Resolve provider (returns None if inheriting parent)
-        let resolved_provider = self
-            .resolve_provider(
-                &invocation,
-                args.model_provider.as_deref(),
-                &definition.model_config,
-            )
-            .await?;
-
-        // Resolve model name using priority chain
-        let resolved_model = Self::resolve_model(
-            args.model.as_deref(),
-            &definition.model_config,
-            resolved_provider.as_ref(),
-            parent_model,
-        );
-
-        // Create ModelClient - either new one with custom provider or clone parent's
-        let model_client = if let Some(provider_info) = resolved_provider {
-            // Create new ModelClient with custom provider and agent's model parameters
-            self.create_model_client(
-                &invocation,
-                provider_info,
-                &resolved_model,
-                &definition.model_config,
-            )
-            .await?
-        } else {
-            // Inherit parent's provider but apply agent's model parameters
-            let parent_provider = parent_client.provider().clone();
-            self.create_model_client(
-                &invocation,
-                parent_provider,
-                &resolved_model,
-                &definition.model_config,
-            )
-            .await?
+        // Get base config from parent session
+        let base_config = {
+            let state = invocation.session.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .clone()
         };
 
-        // Clone model name for use in bridge (before it's moved into context)
-        let model_name_for_bridge = resolved_model.clone();
+        // Build subagent config using the config builder
+        let subagent_config = SubagentConfigBuilder::new(base_config, definition.clone()).build();
 
-        // Subagent tool access is determined solely by agent definition - no parent
-        // tool intersection. Subagents can use any tool their definition allows.
-        // For background tasks, restrict to ASYNC_SAFE_TOOLS.
-        let context = SubagentContext::new(
-            definition,
-            invocation.turn.cwd.clone(),
-            invocation.cancellation_token.child_token(), // Propagate parent cancellation
-            resolved_model,
-        )
-        .with_async(args.run_in_background);
+        // Get auth_manager and models_manager from parent session services
+        let auth_manager = invocation.session.services.auth_manager.clone();
+        let models_manager = invocation.session.services.models_manager.clone();
 
-        // Create model bridge from the ModelClient with actual model name
-        let model_bridge = ModelClientBridge::new(model_client, model_name_for_bridge);
-        let executor = AgentExecutor::new(context).with_model_bridge(Arc::new(model_bridge));
+        // Create cancellation token for subagent (child of parent's token)
+        let cancel_token = invocation.cancellation_token.child_token();
 
         if args.run_in_background {
-            // Spawn background task with two-phase registration to prevent race conditions
-            let agent_id = executor.context.agent_id.clone();
+            // Generate agent ID for tracking
+            let agent_id = generate_agent_id(&args.subagent_type);
             let prompt = args.prompt.clone();
             let description = args.description.clone();
-            let transcript_store = stores.transcript_store.clone();
 
             // Phase 1: Pre-register with Pending status (before spawn)
-            // This ensures TaskOutput can find the task immediately after Task returns
             stores.background_store.register_pending(
                 agent_id.clone(),
                 description.clone(),
                 prompt.clone(),
             );
 
-            // Capture agent_id for error handling in closure (Fix #3)
-            let agent_id_for_error = agent_id.clone();
+            // Clone what we need for the spawned task
+            let agent_id_for_task = agent_id.clone();
+            let parent_session = invocation.session.clone();
+            let parent_ctx = invocation.turn.clone();
+            let transcript_store = stores.transcript_store.clone();
 
             let handle = tokio::spawn(async move {
-                executor
-                    .run_with_resume(prompt, None, &transcript_store)
-                    .await
-                    .unwrap_or_else(|e| crate::subagent::SubagentResult {
-                        status: SubagentStatus::Error,
-                        result: format!("Spawn error: {e}"),
-                        turns_used: 0,
-                        duration: Duration::ZERO,
-                        agent_id: agent_id_for_error, // Use captured agent_id instead of "unknown"
-                        total_tool_use_count: 0,
-                        total_duration_ms: 0,
-                        total_tokens: 0,
-                        usage: None,
-                    })
+                run_subagent_delegate(
+                    subagent_config,
+                    prompt,
+                    auth_manager,
+                    models_manager,
+                    parent_session,
+                    parent_ctx,
+                    cancel_token,
+                    None, // No event sender for background tasks
+                    Some(&transcript_store),
+                    None, // No resume for new background tasks
+                )
+                .await
+                .unwrap_or_else(|e| crate::subagent::SubagentResult {
+                    status: SubagentStatus::Error,
+                    result: format!("Spawn error: {e}"),
+                    turns_used: 0,
+                    duration: Duration::ZERO,
+                    agent_id: agent_id_for_task,
+                    total_tool_use_count: 0,
+                    total_duration_ms: 0,
+                    total_tokens: 0,
+                    usage: None,
+                })
             });
 
             // Phase 2: Set handle and transition to Running status
@@ -391,15 +171,21 @@ impl ToolHandler for TaskHandler {
                 success: Some(true),
             })
         } else {
-            // Synchronous execution
-            let result = executor
-                .run_with_resume(
-                    args.prompt,
-                    args.resume.as_deref(),
-                    &stores.transcript_store,
-                )
-                .await
-                .map_err(|e| FunctionCallError::RespondToModel(format!("Execution failed: {e}")))?;
+            // Synchronous execution using delegate
+            let result = run_subagent_delegate(
+                subagent_config,
+                args.prompt,
+                auth_manager,
+                models_manager,
+                invocation.session.clone(),
+                invocation.turn.clone(),
+                cancel_token,
+                None, // No event sender for synchronous execution
+                Some(&stores.transcript_store),
+                args.resume.as_deref(),
+            )
+            .await
+            .map_err(|e| FunctionCallError::RespondToModel(format!("Execution failed: {e}")))?;
 
             Ok(ToolOutput::Function {
                 content: serde_json::json!({
@@ -417,6 +203,17 @@ impl ToolHandler for TaskHandler {
             })
         }
     }
+}
+
+/// Generate a unique agent ID.
+fn generate_agent_id(agent_type: &str) -> String {
+    use std::time::SystemTime;
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let random: u32 = rand::random();
+    format!("{agent_type}-{timestamp:x}-{random:04x}")
 }
 
 /// Arguments for TaskOutput tool invocation
@@ -578,19 +375,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_model_name() {
-        // User-friendly names
-        assert_eq!(TaskHandler::resolve_model_name("sonnet"), "claude-sonnet");
-        assert_eq!(TaskHandler::resolve_model_name("haiku"), "claude-haiku");
-        assert_eq!(TaskHandler::resolve_model_name("opus"), "claude-opus");
-
-        // Already full names
-        assert_eq!(
-            TaskHandler::resolve_model_name("claude-sonnet"),
-            "claude-sonnet"
-        );
-
-        // Unknown model - pass through
-        assert_eq!(TaskHandler::resolve_model_name("gpt-4"), "gpt-4");
+    fn test_generate_agent_id() {
+        let id1 = generate_agent_id("Explore");
+        let id2 = generate_agent_id("Explore");
+        assert!(id1.starts_with("Explore-"));
+        assert!(id2.starts_with("Explore-"));
+        // IDs should be unique
+        assert_ne!(id1, id2);
     }
 }

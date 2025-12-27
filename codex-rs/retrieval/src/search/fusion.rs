@@ -244,6 +244,7 @@ pub fn fuse_results(
             chunk,
             score,
             score_type: ScoreType::Hybrid,
+            is_stale: None,
         })
         .collect();
 
@@ -323,6 +324,7 @@ pub fn fuse_all_results(
             chunk,
             score,
             score_type: ScoreType::Hybrid,
+            is_stale: None,
         })
         .collect();
 
@@ -402,6 +404,7 @@ mod tests {
             },
             score,
             score_type,
+            is_stale: None,
         }
     }
 
@@ -425,6 +428,7 @@ mod tests {
             },
             score,
             score_type: ScoreType::Bm25,
+            is_stale: None,
         }
     }
 

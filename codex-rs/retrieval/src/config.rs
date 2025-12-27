@@ -27,9 +27,13 @@ pub struct RetrievalConfig {
     #[serde(default)]
     pub search: SearchConfig,
 
-    /// Reranker configuration
+    /// Reranker configuration (legacy rule-based only)
     #[serde(default)]
     pub reranker: RerankerConfig,
+
+    /// Extended reranker configuration (supports local/remote neural reranking)
+    #[serde(default)]
+    pub extended_reranker: Option<ExtendedRerankerConfig>,
 
     /// Embedding configuration (optional, for vector search)
     #[serde(default)]
@@ -49,6 +53,7 @@ impl Default for RetrievalConfig {
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
             reranker: RerankerConfig::default(),
+            extended_reranker: None,
             embedding: None,
             query_rewrite: None,
         }
@@ -271,6 +276,195 @@ fn default_recency_days_threshold() -> i32 {
     7
 }
 
+// ============================================================================
+// Neural Reranker Configuration
+// ============================================================================
+
+/// Reranker backend type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RerankerBackend {
+    /// Rule-based reranking (default, no ML model required)
+    #[default]
+    RuleBased,
+    /// Local neural reranking using fastembed (ONNX Runtime)
+    Local,
+    /// Remote API-based reranking (Cohere, VoyageAI, etc.)
+    Remote,
+    /// Chain multiple rerankers (e.g., rule-based then neural)
+    Chain,
+}
+
+/// Local neural reranker configuration.
+///
+/// Uses fastembed-rs with ONNX Runtime for local inference.
+/// Models are downloaded on first use and cached locally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalRerankerConfig {
+    /// Model name (e.g., "bge-reranker-base", "jina-reranker-v2")
+    #[serde(default = "default_local_model")]
+    pub model: String,
+
+    /// Maximum batch size for reranking
+    #[serde(default = "default_local_batch_size")]
+    pub batch_size: i32,
+
+    /// Model cache directory (defaults to ~/.cache/codex/models)
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Show download progress when fetching model
+    #[serde(default)]
+    pub show_download_progress: bool,
+}
+
+impl Default for LocalRerankerConfig {
+    fn default() -> Self {
+        Self {
+            model: default_local_model(),
+            batch_size: default_local_batch_size(),
+            cache_dir: None,
+            show_download_progress: false,
+        }
+    }
+}
+
+fn default_local_model() -> String {
+    "bge-reranker-base".to_string()
+}
+
+fn default_local_batch_size() -> i32 {
+    32
+}
+
+/// Remote API reranker provider.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RerankerProvider {
+    /// Cohere Rerank API
+    Cohere,
+    /// Voyage AI Rerank API
+    VoyageAi,
+    /// Custom API endpoint (OpenAI-compatible)
+    Custom,
+}
+
+/// Remote API reranker configuration.
+///
+/// Supports Cohere, Voyage AI, and custom API endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteRerankerConfig {
+    /// API provider
+    pub provider: RerankerProvider,
+
+    /// Model name (e.g., "rerank-english-v3.0" for Cohere)
+    pub model: String,
+
+    /// Environment variable name containing the API key
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+
+    /// Custom API base URL (optional, uses provider default if not set)
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Request timeout in seconds
+    #[serde(default = "default_remote_timeout")]
+    pub timeout_secs: i32,
+
+    /// Maximum retry attempts
+    #[serde(default = "default_remote_max_retries")]
+    pub max_retries: i32,
+
+    /// Return top-N results (defaults to all)
+    #[serde(default)]
+    pub top_n: Option<i32>,
+}
+
+impl Default for RemoteRerankerConfig {
+    fn default() -> Self {
+        Self {
+            provider: RerankerProvider::Cohere,
+            model: "rerank-english-v3.0".to_string(),
+            api_key_env: default_api_key_env(),
+            base_url: None,
+            timeout_secs: default_remote_timeout(),
+            max_retries: default_remote_max_retries(),
+            top_n: None,
+        }
+    }
+}
+
+fn default_api_key_env() -> String {
+    "COHERE_API_KEY".to_string()
+}
+
+fn default_remote_timeout() -> i32 {
+    10
+}
+
+fn default_remote_max_retries() -> i32 {
+    2
+}
+
+/// Extended reranker configuration with backend selection.
+///
+/// Supports rule-based, local neural, remote API, and chained rerankers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtendedRerankerConfig {
+    /// Reranker backend type
+    #[serde(default)]
+    pub backend: RerankerBackend,
+
+    /// Rule-based reranker config (used when backend = "rule_based")
+    #[serde(default)]
+    pub rule_based: RerankerConfig,
+
+    /// Local neural reranker config (used when backend = "local")
+    #[serde(default)]
+    pub local: Option<LocalRerankerConfig>,
+
+    /// Remote API reranker config (used when backend = "remote")
+    #[serde(default)]
+    pub remote: Option<RemoteRerankerConfig>,
+
+    /// Chain of rerankers (used when backend = "chain")
+    /// Each entry specifies a backend and its config
+    #[serde(default)]
+    pub chain: Vec<ChainedRerankerConfig>,
+}
+
+impl Default for ExtendedRerankerConfig {
+    fn default() -> Self {
+        Self {
+            backend: RerankerBackend::RuleBased,
+            rule_based: RerankerConfig::default(),
+            local: None,
+            remote: None,
+            chain: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for a single reranker in a chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChainedRerankerConfig {
+    /// Backend type for this stage
+    pub backend: RerankerBackend,
+
+    /// Rule-based config (if backend = "rule_based")
+    #[serde(default)]
+    pub rule_based: Option<RerankerConfig>,
+
+    /// Local config (if backend = "local")
+    #[serde(default)]
+    pub local: Option<LocalRerankerConfig>,
+
+    /// Remote config (if backend = "remote")
+    #[serde(default)]
+    pub remote: Option<RemoteRerankerConfig>,
+}
+
 /// Search configuration.
 ///
 /// Based on Continue's retrieval configuration.
@@ -349,6 +543,20 @@ pub struct SearchConfig {
     /// This prevents a single highly-relevant file from dominating all results.
     #[serde(default = "default_max_chunks_per_file")]
     pub max_chunks_per_file: i32,
+
+    /// BM25 k1 parameter (term frequency saturation, code-optimized default)
+    ///
+    /// NOTE: Not currently used - LanceDB 0.22 doesn't expose BM25 params.
+    /// Added for future-proofing when LanceDB supports custom BM25 parameters.
+    #[serde(default = "default_bm25_k1")]
+    pub bm25_k1: f32,
+
+    /// BM25 b parameter (document length normalization, code-optimized default)
+    ///
+    /// NOTE: Not currently used - LanceDB 0.22 doesn't expose BM25 params.
+    /// Added for future-proofing when LanceDB supports custom BM25 parameters.
+    #[serde(default = "default_bm25_b")]
+    pub bm25_b: f32,
 }
 
 impl Default for SearchConfig {
@@ -371,6 +579,8 @@ impl Default for SearchConfig {
             truncate_strategy: TruncateStrategy::default(),
             max_token_length: default_max_token_length(),
             max_chunks_per_file: default_max_chunks_per_file(),
+            bm25_k1: default_bm25_k1(),
+            bm25_b: default_bm25_b(),
         }
     }
 }
@@ -420,6 +630,12 @@ fn default_max_token_length() -> i32 {
 fn default_max_chunks_per_file() -> i32 {
     2
 }
+fn default_bm25_k1() -> f32 {
+    0.8 // Lower than default 1.2, better for code with repeated keywords
+}
+fn default_bm25_b() -> f32 {
+    0.5 // Lower than default 0.75, less length normalization for functions
+}
 
 /// Token truncation strategy.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -430,6 +646,64 @@ pub enum TruncateStrategy {
     Tail,
     /// Smart truncation (preserve complete chunks)
     Smart,
+}
+
+// ============================================================================
+// Vector Quantization Configuration
+// ============================================================================
+
+/// Vector quantization method for index compression.
+///
+/// Quantization reduces embedding storage size at the cost of some precision.
+/// Use for large indexes (>100k chunks) to reduce memory and improve search speed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantizationMethod {
+    /// No quantization (full float32 precision)
+    #[default]
+    None,
+    /// Scalar Quantization (4x compression, <1% recall loss)
+    Scalar,
+    /// Product Quantization (4-8x compression, 1-3% recall loss)
+    Product,
+}
+
+/// Vector quantization configuration.
+///
+/// Applied when creating vector indexes in LanceDB.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuantizationConfig {
+    /// Quantization method
+    #[serde(default)]
+    pub method: QuantizationMethod,
+
+    /// Number of subquantizers for Product Quantization (typically 8-96)
+    ///
+    /// Higher values = more precision but larger index.
+    /// Must divide embedding dimension evenly.
+    #[serde(default = "default_pq_num_sub_vectors")]
+    pub num_sub_vectors: i32,
+
+    /// Bits per code for Product Quantization (typically 8)
+    #[serde(default = "default_pq_num_bits")]
+    pub num_bits: i32,
+}
+
+impl Default for QuantizationConfig {
+    fn default() -> Self {
+        Self {
+            method: QuantizationMethod::None,
+            num_sub_vectors: default_pq_num_sub_vectors(),
+            num_bits: default_pq_num_bits(),
+        }
+    }
+}
+
+fn default_pq_num_sub_vectors() -> i32 {
+    16 // Good balance for 1536-dim embeddings (1536 / 16 = 96 dims per subvector)
+}
+fn default_pq_num_bits() -> i32 {
+    8 // Standard PQ bits
 }
 
 /// Embedding provider configuration.
@@ -452,6 +726,13 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding requests
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: i32,
+
+    /// Vector quantization settings (optional)
+    ///
+    /// When set, applies quantization during vector index creation.
+    /// Recommended for large indexes (>100k chunks) to reduce storage.
+    #[serde(default)]
+    pub quantization: Option<QuantizationConfig>,
 }
 
 /// Default embedding dimension (OpenAI text-embedding-3-small).
@@ -740,14 +1021,8 @@ impl RetrievalConfig {
             });
         }
 
-        // Check: weights should sum to ~1.0
-        let total_weight =
-            self.search.bm25_weight + self.search.vector_weight + self.search.snippet_weight;
-        if (total_weight - 1.0).abs() > 0.01 {
-            warnings.push(ConfigWarning::WeightSumNotOne {
-                actual: total_weight,
-            });
-        }
+        // Note: RRF weights (bm25_weight, vector_weight, snippet_weight, recent_weight)
+        // are relative importance factors, not probabilities - they don't need to sum to 1.0
 
         // Indexing config validation
         if self.indexing.max_file_size_mb <= 0 {
@@ -843,8 +1118,6 @@ pub enum ConfigWarning {
     },
     /// Path does not exist
     PathNotExists { field: &'static str, path: PathBuf },
-    /// Weights don't sum to 1.0
-    WeightSumNotOne { actual: f32 },
     /// Embedding dimension mismatch with existing index
     DimensionMismatch { configured: i32, indexed: i32 },
     /// Invalid numeric value
@@ -862,9 +1135,6 @@ impl std::fmt::Display for ConfigWarning {
             }
             ConfigWarning::PathNotExists { field, path } => {
                 write!(f, "Config '{field}' path does not exist: {path:?}")
-            }
-            ConfigWarning::WeightSumNotOne { actual } => {
-                write!(f, "Search weights sum to {actual:.2}, expected 1.0")
             }
             ConfigWarning::DimensionMismatch {
                 configured,

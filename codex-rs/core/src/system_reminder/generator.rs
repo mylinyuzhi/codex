@@ -7,10 +7,13 @@ use super::throttle::ThrottleConfig;
 use super::types::AttachmentType;
 use super::types::ReminderTier;
 use super::types::SystemReminder;
+use crate::config::system_reminder::LspDiagnosticsMinSeverity;
 use crate::config::system_reminder::SystemReminderConfig;
 use crate::error::Result;
 use async_trait::async_trait;
+use codex_lsp::DiagnosticsStore;
 use std::path::Path;
+use std::sync::Arc;
 
 // ============================================
 // Generator Trait
@@ -72,48 +75,50 @@ pub struct GeneratorContext<'a> {
     pub plan_file_path: Option<&'a str>,
     /// Whether re-entering plan mode.
     pub is_plan_reentry: bool,
-    /// Current todo list state.
-    pub todo_state: &'a TodoState,
+    /// Current plan state (for reminder tracking).
+    pub plan_state: &'a PlanState,
     /// Background task status.
     pub background_tasks: &'a [BackgroundTaskInfo],
     /// Critical instruction from config.
     pub critical_instruction: Option<&'a str>,
+    /// LSP diagnostics store (optional, only available when LSP is enabled).
+    pub diagnostics_store: Option<Arc<DiagnosticsStore>>,
+    /// Minimum severity level for LSP diagnostics filtering.
+    pub lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
 }
 
 // ============================================
 // Supporting Types
 // ============================================
 
-/// Current state of the todo list.
+/// Current state of the plan (for reminder tracking).
 #[derive(Debug, Clone)]
-pub struct TodoState {
-    /// Whether the todo list is empty.
+pub struct PlanState {
+    /// Whether the plan is empty.
     pub is_empty: bool,
-    /// Turn number when todo was last written.
-    pub last_write_turn: i32,
-    /// Current todo items.
-    pub items: Vec<TodoItem>,
+    /// Inject call count when plan was last updated.
+    pub last_update_count: i32,
+    /// Current plan steps.
+    pub steps: Vec<PlanStep>,
 }
 
-impl Default for TodoState {
+impl Default for PlanState {
     fn default() -> Self {
         Self {
             is_empty: true,
-            last_write_turn: 0,
-            items: vec![],
+            last_update_count: 0,
+            steps: vec![],
         }
     }
 }
 
-/// A single todo item.
+/// A single plan step.
 #[derive(Debug, Clone)]
-pub struct TodoItem {
-    /// Content/description of the todo.
-    pub content: String,
+pub struct PlanStep {
+    /// Step description.
+    pub step: String,
     /// Status: "pending", "in_progress", "completed".
     pub status: String,
-    /// Active form of the content (for display).
-    pub active_form: String,
 }
 
 /// Information about a background task.
@@ -168,11 +173,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_todo_state_default() {
-        let state = TodoState::default();
+    fn test_plan_state_default() {
+        let state = PlanState::default();
         assert!(state.is_empty);
-        assert_eq!(state.last_write_turn, 0);
-        assert!(state.items.is_empty());
+        assert_eq!(state.last_update_count, 0);
+        assert!(state.steps.is_empty());
     }
 
     #[test]

@@ -370,6 +370,8 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    /// Critical instruction for system reminder injection.
+    pub(crate) critical_instruction: Option<String>,
 }
 
 impl TurnContext {
@@ -506,10 +508,16 @@ impl Session {
             session_configuration.session_source.clone(),
         );
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &per_turn_config.features,
+            web_search_config: Some(per_turn_config.ext.web_search_config.clone()),
         });
+
+        // Apply tool filter if configured (for subagent sessions)
+        if let Some(filter) = &per_turn_config.ext.tool_filter {
+            tools_config.tool_filter = Some(filter.clone());
+        }
 
         // Log loaded tools
         let (tools, _) = crate::tools::spec::build_specs(&tools_config, None).build();
@@ -535,6 +543,11 @@ impl Session {
                 per_turn_config.as_ref(),
                 model_family.truncation_policy,
             ),
+            critical_instruction: per_turn_config
+                .ext
+                .system_reminder
+                .critical_instruction
+                .clone(),
         }
     }
 
@@ -2116,6 +2129,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
+        web_search_config: None, // Reviews don't use web_search
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2165,6 +2179,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
+        critical_instruction: parent_turn_context.critical_instruction.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2289,11 +2304,21 @@ pub(crate) async fn run_task(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let turn_input: Vec<ResponseItem> = {
+        let mut turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.get_history_for_prompt()
         };
+
+        // Inject system reminders (background tasks, plan reminders, changed files, etc.)
+        // Count is tracked internally per main agent call
+        crate::codex_ext::maybe_inject_system_reminders(
+            &mut turn_input,
+            &turn_context.cwd,
+            Some(&sess.conversation_id),
+            turn_context.critical_instruction.as_deref(),
+        )
+        .await;
 
         let turn_input_messages = turn_input
             .iter()
@@ -2365,11 +2390,11 @@ pub(crate) async fn run_task(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
-    if sess.enabled(Feature::CompactV2) {
-        // Use V2 compact dispatch (two-tier: micro-compact → full compact)
-        crate::compact_v2::auto_compact_dispatch(sess.clone(), turn_context.clone()).await;
+    // Try V2 compact first (encapsulates Feature::CompactV2 check)
+    if crate::compact_v2::try_auto_compact(sess.clone(), turn_context.clone()).await {
         return;
     }
+    // Fall back to legacy compact
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {

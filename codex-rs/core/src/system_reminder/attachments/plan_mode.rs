@@ -126,14 +126,6 @@ impl AttachmentGenerator for PlanModeGenerator {
         ReminderTier::Core
     }
 
-    fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
-        config.enabled && config.attachments.plan_mode
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        default_throttle_config(AttachmentType::PlanMode)
-    }
-
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.is_plan_mode {
             return Ok(None);
@@ -155,7 +147,20 @@ impl AttachmentGenerator for PlanModeGenerator {
             self.build_main_agent_content(ctx)
         };
 
+        tracing::info!(
+            generator = "plan_mode",
+            is_reentry = ctx.is_plan_reentry,
+            "Generating plan mode reminder"
+        );
         Ok(Some(SystemReminder::new(AttachmentType::PlanMode, content)))
+    }
+
+    fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
+        config.enabled && config.attachments.plan_mode
+    }
+
+    fn throttle_config(&self) -> ThrottleConfig {
+        default_throttle_config(AttachmentType::PlanMode)
     }
 }
 
@@ -166,15 +171,16 @@ impl AttachmentGenerator for PlanModeGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use crate::system_reminder::file_tracker::FileTracker;
-    use crate::system_reminder::generator::TodoState;
+    use crate::system_reminder::generator::PlanState;
 
     fn make_context<'a>(
         is_plan_mode: bool,
         plan_file_path: Option<&'a str>,
         is_plan_reentry: bool,
         file_tracker: &'a FileTracker,
-        todo_state: &'a TodoState,
+        plan_state: &'a PlanState,
     ) -> GeneratorContext<'a> {
         GeneratorContext {
             turn_number: 1,
@@ -186,9 +192,11 @@ mod tests {
             is_plan_mode,
             plan_file_path,
             is_plan_reentry,
-            todo_state,
+            plan_state,
             background_tasks: &[],
             critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         }
     }
 
@@ -196,8 +204,8 @@ mod tests {
     async fn test_generates_when_plan_mode_active() {
         let generator = PlanModeGenerator::new();
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
-        let ctx = make_context(true, Some("/path/to/plan.md"), false, &tracker, &todo_state);
+        let plan_state = PlanState::default();
+        let ctx = make_context(true, Some("/path/to/plan.md"), false, &tracker, &plan_state);
 
         let result = generator.generate(&ctx).await.unwrap();
         assert!(result.is_some());
@@ -211,8 +219,8 @@ mod tests {
     async fn test_returns_none_when_not_plan_mode() {
         let generator = PlanModeGenerator::new();
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
-        let ctx = make_context(false, None, false, &tracker, &todo_state);
+        let plan_state = PlanState::default();
+        let ctx = make_context(false, None, false, &tracker, &plan_state);
 
         let result = generator.generate(&ctx).await.unwrap();
         assert!(result.is_none());
@@ -222,8 +230,8 @@ mod tests {
     async fn test_includes_reentry_content() {
         let generator = PlanModeGenerator::new();
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
-        let ctx = make_context(true, Some("/path/to/plan.md"), true, &tracker, &todo_state);
+        let plan_state = PlanState::default();
+        let ctx = make_context(true, Some("/path/to/plan.md"), true, &tracker, &plan_state);
 
         let result = generator.generate(&ctx).await.unwrap();
         assert!(result.is_some());

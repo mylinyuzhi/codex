@@ -68,6 +68,17 @@ pub enum RetrievalErr {
     #[error("Embedding failed: {cause}")]
     EmbeddingFailed { cause: String },
 
+    // Reranker errors
+    #[error("Reranker error: provider={provider}, cause={cause}")]
+    RerankerError { provider: String, cause: String },
+
+    #[error("Reranker API error: provider={provider}, status={status}, body={body}")]
+    RerankerApiError {
+        provider: String,
+        status: u16,
+        body: String,
+    },
+
     // Feature errors
     #[error("Feature not enabled: {0}")]
     FeatureNotEnabled(String),

@@ -91,8 +91,8 @@ pub enum ReminderTier {
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
     // === Core tier (Phase 1) ===
-    /// Periodic todo list reminder.
-    TodoReminder,
+    /// Periodic plan tool reminder (update_plan tool usage).
+    PlanToolReminder,
     /// Plan mode instructions.
     PlanMode,
     /// Plan mode re-entry instructions.
@@ -105,6 +105,8 @@ pub enum AttachmentType {
     // === Main agent only (Phase 1) ===
     /// Background shell task status.
     BackgroundTask,
+    /// LSP diagnostics notification.
+    LspDiagnostics,
 
     // === Phase 2 (Future) ===
     /// Tool call result metadata.
@@ -127,6 +129,7 @@ impl AttachmentType {
         match self {
             AttachmentType::AsyncAgentStatus => XmlTag::SystemNotification,
             AttachmentType::SessionMemory => XmlTag::SessionMemory,
+            AttachmentType::LspDiagnostics => XmlTag::NewDiagnostics,
             _ => XmlTag::SystemReminder,
         }
     }
@@ -138,7 +141,8 @@ impl AttachmentType {
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::SessionMemory
             | AttachmentType::TokenUsage
-            | AttachmentType::BudgetUsd => ReminderTier::MainAgentOnly,
+            | AttachmentType::BudgetUsd
+            | AttachmentType::LspDiagnostics => ReminderTier::MainAgentOnly,
             _ => ReminderTier::Core,
         }
     }
@@ -147,7 +151,7 @@ impl AttachmentType {
 impl fmt::Display for AttachmentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            AttachmentType::TodoReminder => "todo_reminder",
+            AttachmentType::PlanToolReminder => "plan_tool_reminder",
             AttachmentType::PlanMode => "plan_mode",
             AttachmentType::PlanModeReentry => "plan_mode_reentry",
             AttachmentType::ChangedFiles => "changed_files",
@@ -155,6 +159,7 @@ impl fmt::Display for AttachmentType {
             AttachmentType::ToolResult => "tool_result",
             AttachmentType::NestedMemory => "nested_memory",
             AttachmentType::BackgroundTask => "background_task",
+            AttachmentType::LspDiagnostics => "lsp_diagnostics",
             AttachmentType::AsyncAgentStatus => "async_agent_status",
             AttachmentType::SessionMemory => "session_memory",
             AttachmentType::TokenUsage => "token_usage",
@@ -197,6 +202,10 @@ impl SystemReminder {
 
     /// Wrap content with appropriate XML tag.
     pub fn wrap_xml(&self) -> String {
+        // LspDiagnostics content already includes XML tags from format_for_system_reminder()
+        if self.attachment_type == AttachmentType::LspDiagnostics {
+            return self.content.clone();
+        }
         self.attachment_type.xml_tag().wrap(&self.content)
     }
 
@@ -272,13 +281,13 @@ mod tests {
 
     #[test]
     fn test_system_reminder_is_meta() {
-        let reminder = SystemReminder::new(AttachmentType::TodoReminder, "content".to_string());
+        let reminder = SystemReminder::new(AttachmentType::PlanToolReminder, "content".to_string());
         assert!(reminder.is_meta);
     }
 
     #[test]
     fn test_attachment_type_tier_mapping() {
-        assert_eq!(AttachmentType::TodoReminder.tier(), ReminderTier::Core);
+        assert_eq!(AttachmentType::PlanToolReminder.tier(), ReminderTier::Core);
         assert_eq!(AttachmentType::PlanMode.tier(), ReminderTier::Core);
         assert_eq!(AttachmentType::ChangedFiles.tier(), ReminderTier::Core);
         assert_eq!(
@@ -298,7 +307,7 @@ mod tests {
     #[test]
     fn test_attachment_type_xml_tag() {
         assert_eq!(
-            AttachmentType::TodoReminder.xml_tag(),
+            AttachmentType::PlanToolReminder.xml_tag(),
             XmlTag::SystemReminder
         );
         assert_eq!(
@@ -313,8 +322,10 @@ mod tests {
 
     #[test]
     fn test_system_reminder_wrap_xml() {
-        let reminder =
-            SystemReminder::new(AttachmentType::TodoReminder, "reminder content".to_string());
+        let reminder = SystemReminder::new(
+            AttachmentType::PlanToolReminder,
+            "reminder content".to_string(),
+        );
         let wrapped = reminder.wrap_xml();
         assert!(wrapped.starts_with("<system-reminder>"));
         assert!(wrapped.contains("reminder content"));
@@ -361,11 +372,47 @@ mod tests {
 
     #[test]
     fn test_attachment_type_display() {
-        assert_eq!(format!("{}", AttachmentType::TodoReminder), "todo_reminder");
+        assert_eq!(
+            format!("{}", AttachmentType::PlanToolReminder),
+            "plan_tool_reminder"
+        );
         assert_eq!(format!("{}", AttachmentType::PlanMode), "plan_mode");
         assert_eq!(
             format!("{}", AttachmentType::BackgroundTask),
             "background_task"
         );
+        assert_eq!(
+            format!("{}", AttachmentType::LspDiagnostics),
+            "lsp_diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_lsp_diagnostics_tier() {
+        assert_eq!(
+            AttachmentType::LspDiagnostics.tier(),
+            ReminderTier::MainAgentOnly
+        );
+    }
+
+    #[test]
+    fn test_lsp_diagnostics_xml_tag() {
+        assert_eq!(
+            AttachmentType::LspDiagnostics.xml_tag(),
+            XmlTag::NewDiagnostics
+        );
+    }
+
+    #[test]
+    fn test_lsp_diagnostics_wrap_xml_passthrough() {
+        // LspDiagnostics should NOT double-wrap since content already has tags
+        let content = "<new-diagnostics>\nTest diagnostics\n</new-diagnostics>".to_string();
+        let reminder = SystemReminder {
+            attachment_type: AttachmentType::LspDiagnostics,
+            content: content.clone(),
+            tier: ReminderTier::MainAgentOnly,
+            is_meta: true,
+        };
+        assert_eq!(reminder.wrap_xml(), content);
     }
 }

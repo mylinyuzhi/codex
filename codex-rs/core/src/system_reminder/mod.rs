@@ -21,8 +21,8 @@ pub use generator::BackgroundTaskInfo;
 pub use generator::BackgroundTaskStatus;
 pub use generator::BackgroundTaskType;
 pub use generator::GeneratorContext;
-pub use generator::TodoItem;
-pub use generator::TodoState;
+pub use generator::PlanState;
+pub use generator::PlanStep;
 pub use throttle::ThrottleConfig;
 pub use throttle::ThrottleManager;
 pub use types::AttachmentType;
@@ -35,11 +35,13 @@ pub use types::SystemReminder;
 pub use types::XmlTag;
 
 use crate::config::system_reminder::SystemReminderConfig;
-use attachments::BackgroundTaskGenerator;
+use attachments::AgentTaskGenerator;
 use attachments::ChangedFilesGenerator;
 use attachments::CriticalInstructionGenerator;
+use attachments::LspDiagnosticsGenerator;
 use attachments::PlanModeGenerator;
-use attachments::TodoReminderGenerator;
+use attachments::PlanToolReminderGenerator;
+use attachments::ShellTaskGenerator;
 use futures::future::join_all;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,9 +71,11 @@ impl SystemReminderOrchestrator {
         let generators: Vec<Arc<dyn AttachmentGenerator>> = vec![
             Arc::new(CriticalInstructionGenerator::new()),
             Arc::new(PlanModeGenerator::new()),
-            Arc::new(TodoReminderGenerator::new()),
+            Arc::new(PlanToolReminderGenerator::new()),
             Arc::new(ChangedFilesGenerator::new()),
-            Arc::new(BackgroundTaskGenerator::new()),
+            Arc::new(ShellTaskGenerator::new()),
+            Arc::new(AgentTaskGenerator::new()),
+            Arc::new(LspDiagnosticsGenerator::new()),
         ];
 
         Self {
@@ -106,7 +110,11 @@ impl SystemReminderOrchestrator {
                     // Step 3: Execute with timeout (1 second max)
                     let result = match timeout(timeout_duration, g.generate(ctx)).await {
                         Ok(Ok(Some(reminder))) => {
-                            tracing::debug!("Generator {} produced reminder", g.name());
+                            tracing::info!(
+                                generator = g.name(),
+                                attachment_type = %reminder.attachment_type,
+                                "System reminder generated"
+                            );
                             Some(reminder)
                         }
                         Ok(Ok(None)) => {
@@ -142,7 +150,15 @@ impl SystemReminderOrchestrator {
             .collect();
 
         // Step 5: Run all generators in parallel
-        join_all(futures).await.into_iter().flatten().collect()
+        let results: Vec<SystemReminder> = join_all(futures).await.into_iter().flatten().collect();
+
+        // Step 6: Mark successful generations in throttle manager
+        for reminder in &results {
+            self.throttle_manager
+                .mark_generated(reminder.attachment_type, ctx.turn_number);
+        }
+
+        results
     }
 
     /// Check if a generator should run.
@@ -153,10 +169,35 @@ impl SystemReminderOrchestrator {
         }
 
         // Check tier requirements
-        match generator.tier() {
+        let tier_ok = match generator.tier() {
             ReminderTier::Core => true,
             ReminderTier::MainAgentOnly => ctx.is_main_agent,
             ReminderTier::UserPrompt => ctx.has_user_input,
+        };
+        if !tier_ok {
+            return false;
+        }
+
+        // Check throttle rules
+        let trigger_turn = self.get_trigger_turn(generator.attachment_type(), ctx);
+        self.throttle_manager.should_generate(
+            generator.attachment_type(),
+            ctx.turn_number,
+            trigger_turn,
+        )
+    }
+
+    /// Get the trigger turn for a given attachment type.
+    ///
+    /// For PlanToolReminder, this is the last time update_plan was called.
+    fn get_trigger_turn(
+        &self,
+        attachment_type: AttachmentType,
+        ctx: &GeneratorContext<'_>,
+    ) -> Option<i32> {
+        match attachment_type {
+            AttachmentType::PlanToolReminder => Some(ctx.plan_state.last_update_count),
+            _ => None,
         }
     }
 
@@ -200,13 +241,14 @@ impl std::fmt::Debug for SystemReminderOrchestrator {
 mod tests {
     use super::*;
     use crate::config::system_reminder::AttachmentSettings;
+    use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use std::path::Path;
 
     fn make_context(
         is_main_agent: bool,
         is_plan_mode: bool,
-    ) -> (FileTracker, TodoState, Vec<BackgroundTaskInfo>) {
-        (FileTracker::new(), TodoState::default(), vec![])
+    ) -> (FileTracker, PlanState, Vec<BackgroundTaskInfo>) {
+        (FileTracker::new(), PlanState::default(), vec![])
     }
 
     #[tokio::test]
@@ -217,7 +259,7 @@ mod tests {
         };
         let orchestrator = SystemReminderOrchestrator::new(config);
 
-        let (tracker, todo_state, bg_tasks) = make_context(true, false);
+        let (tracker, plan_state, bg_tasks) = make_context(true, false);
         let ctx = GeneratorContext {
             turn_number: 1,
             is_main_agent: true,
@@ -228,9 +270,11 @@ mod tests {
             is_plan_mode: false,
             plan_file_path: None,
             is_plan_reentry: false,
-            todo_state: &todo_state,
+            plan_state: &plan_state,
             background_tasks: &bg_tasks,
             critical_instruction: Some("test instruction"),
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -242,7 +286,7 @@ mod tests {
         let config = SystemReminderConfig::default();
         let orchestrator = SystemReminderOrchestrator::new(config);
 
-        let (tracker, todo_state, bg_tasks) = make_context(true, false);
+        let (tracker, plan_state, bg_tasks) = make_context(true, false);
         let ctx = GeneratorContext {
             turn_number: 1,
             is_main_agent: true,
@@ -253,9 +297,11 @@ mod tests {
             is_plan_mode: false,
             plan_file_path: None,
             is_plan_reentry: false,
-            todo_state: &todo_state,
+            plan_state: &plan_state,
             background_tasks: &bg_tasks,
             critical_instruction: Some("Always run tests"),
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -273,7 +319,7 @@ mod tests {
         let config = SystemReminderConfig::default();
         let orchestrator = SystemReminderOrchestrator::new(config);
 
-        let (tracker, todo_state, bg_tasks) = make_context(true, true);
+        let (tracker, plan_state, bg_tasks) = make_context(true, true);
         let ctx = GeneratorContext {
             turn_number: 1,
             is_main_agent: true,
@@ -284,9 +330,11 @@ mod tests {
             is_plan_mode: true,
             plan_file_path: Some("/path/to/plan.md"),
             is_plan_reentry: false,
-            todo_state: &todo_state,
+            plan_state: &plan_state,
             background_tasks: &bg_tasks,
             critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -306,15 +354,17 @@ mod tests {
             attachments: AttachmentSettings {
                 critical_instruction: false,
                 plan_mode: true,
-                todo_reminder: false,
+                plan_tool_reminder: false,
                 changed_files: false,
                 background_task: false,
+                lsp_diagnostics: false,
+                lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             },
             ..Default::default()
         };
         let orchestrator = SystemReminderOrchestrator::new(config);
 
-        let (tracker, todo_state, bg_tasks) = make_context(true, false);
+        let (tracker, plan_state, bg_tasks) = make_context(true, false);
         let ctx = GeneratorContext {
             turn_number: 1,
             is_main_agent: true,
@@ -325,9 +375,11 @@ mod tests {
             is_plan_mode: false,
             plan_file_path: None,
             is_plan_reentry: false,
-            todo_state: &todo_state,
+            plan_state: &plan_state,
             background_tasks: &bg_tasks,
             critical_instruction: Some("test"),
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -345,12 +397,12 @@ mod tests {
         let orchestrator = SystemReminderOrchestrator::default();
         orchestrator
             .throttle_manager()
-            .mark_generated(AttachmentType::TodoReminder, 1);
+            .mark_generated(AttachmentType::PlanToolReminder, 1);
         orchestrator.reset();
 
         // After reset, throttle state should be cleared
         assert!(orchestrator.throttle_manager().should_generate(
-            AttachmentType::TodoReminder,
+            AttachmentType::PlanToolReminder,
             2,
             None
         ));
@@ -360,6 +412,182 @@ mod tests {
     fn test_orchestrator_default() {
         let orchestrator = SystemReminderOrchestrator::default();
         assert!(orchestrator.config.enabled);
-        assert_eq!(orchestrator.generators.len(), 5);
+        assert_eq!(orchestrator.generators.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn test_plan_tool_reminder_throttle() {
+        // Test that plan_tool_reminder respects min_turns_between = 3
+        let config = SystemReminderConfig::default();
+        let orchestrator = SystemReminderOrchestrator::new(config);
+
+        let tracker = FileTracker::new();
+        let bg_tasks = vec![];
+
+        // Plan state: not empty, last update at turn 0
+        // This means calls_since_update = turn_number - 0 >= 5 will trigger
+        let plan_state = PlanState {
+            is_empty: false,
+            last_update_count: 0,
+            steps: vec![PlanStep {
+                step: "Test step".to_string(),
+                status: "pending".to_string(),
+            }],
+        };
+
+        // Turn 6: calls_since_update = 6 - 0 = 6 >= 5, should generate
+        let ctx1 = GeneratorContext {
+            turn_number: 6,
+            is_main_agent: true,
+            has_user_input: true,
+            cwd: Path::new("/test"),
+            agent_id: "test",
+            file_tracker: &tracker,
+            is_plan_mode: false,
+            plan_file_path: None,
+            is_plan_reentry: false,
+            plan_state: &plan_state,
+            background_tasks: &bg_tasks,
+            critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+        };
+
+        let reminders1 = orchestrator.generate_all(&ctx1).await;
+        let has_plan_reminder1 = reminders1
+            .iter()
+            .any(|r| r.attachment_type == AttachmentType::PlanToolReminder);
+        assert!(
+            has_plan_reminder1,
+            "Turn 6: should generate plan tool reminder"
+        );
+
+        // Turn 7: only 1 turn since last reminder (< min_turns_between=3), should NOT generate
+        let ctx2 = GeneratorContext {
+            turn_number: 7,
+            is_main_agent: true,
+            has_user_input: true,
+            cwd: Path::new("/test"),
+            agent_id: "test",
+            file_tracker: &tracker,
+            is_plan_mode: false,
+            plan_file_path: None,
+            is_plan_reentry: false,
+            plan_state: &plan_state,
+            background_tasks: &bg_tasks,
+            critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+        };
+
+        let reminders2 = orchestrator.generate_all(&ctx2).await;
+        let has_plan_reminder2 = reminders2
+            .iter()
+            .any(|r| r.attachment_type == AttachmentType::PlanToolReminder);
+        assert!(
+            !has_plan_reminder2,
+            "Turn 7: should NOT generate (only 1 turn since last, need 3)"
+        );
+
+        // Turn 10: 4 turns since last reminder (>= min_turns_between=3), should generate
+        let ctx3 = GeneratorContext {
+            turn_number: 10,
+            is_main_agent: true,
+            has_user_input: true,
+            cwd: Path::new("/test"),
+            agent_id: "test",
+            file_tracker: &tracker,
+            is_plan_mode: false,
+            plan_file_path: None,
+            is_plan_reentry: false,
+            plan_state: &plan_state,
+            background_tasks: &bg_tasks,
+            critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+        };
+
+        let reminders3 = orchestrator.generate_all(&ctx3).await;
+        let has_plan_reminder3 = reminders3
+            .iter()
+            .any(|r| r.attachment_type == AttachmentType::PlanToolReminder);
+        assert!(
+            has_plan_reminder3,
+            "Turn 10: should generate (4 turns since last, >= 3)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_tool_reminder_respects_trigger_turn() {
+        // Test that plan_tool_reminder requires min_turns_after_trigger = 5
+        let config = SystemReminderConfig::default();
+        let orchestrator = SystemReminderOrchestrator::new(config);
+
+        let tracker = FileTracker::new();
+        let bg_tasks = vec![];
+
+        // Plan state: last update at turn 3
+        let plan_state = PlanState {
+            is_empty: false,
+            last_update_count: 3,
+            steps: vec![PlanStep {
+                step: "Test step".to_string(),
+                status: "pending".to_string(),
+            }],
+        };
+
+        // Turn 5: calls_since_update = 5 - 3 = 2 < 5, should NOT generate
+        let ctx1 = GeneratorContext {
+            turn_number: 5,
+            is_main_agent: true,
+            has_user_input: true,
+            cwd: Path::new("/test"),
+            agent_id: "test",
+            file_tracker: &tracker,
+            is_plan_mode: false,
+            plan_file_path: None,
+            is_plan_reentry: false,
+            plan_state: &plan_state,
+            background_tasks: &bg_tasks,
+            critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+        };
+
+        let reminders1 = orchestrator.generate_all(&ctx1).await;
+        let has_plan_reminder1 = reminders1
+            .iter()
+            .any(|r| r.attachment_type == AttachmentType::PlanToolReminder);
+        assert!(
+            !has_plan_reminder1,
+            "Turn 5: should NOT generate (2 calls since update, need 5)"
+        );
+
+        // Turn 9: calls_since_update = 9 - 3 = 6 >= 5, should generate
+        let ctx2 = GeneratorContext {
+            turn_number: 9,
+            is_main_agent: true,
+            has_user_input: true,
+            cwd: Path::new("/test"),
+            agent_id: "test",
+            file_tracker: &tracker,
+            is_plan_mode: false,
+            plan_file_path: None,
+            is_plan_reentry: false,
+            plan_state: &plan_state,
+            background_tasks: &bg_tasks,
+            critical_instruction: None,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+        };
+
+        let reminders2 = orchestrator.generate_all(&ctx2).await;
+        let has_plan_reminder2 = reminders2
+            .iter()
+            .any(|r| r.attachment_type == AttachmentType::PlanToolReminder);
+        assert!(
+            has_plan_reminder2,
+            "Turn 9: should generate (6 calls since update, >= 5)"
+        );
     }
 }

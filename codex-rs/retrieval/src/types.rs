@@ -156,6 +156,187 @@ pub fn wrap_content_for_embedding(filepath: &str, content: &str) -> String {
     format!("```{filepath}\n{content}\n```")
 }
 
+/// Chunk reference - stores file location instead of content.
+///
+/// Unlike `CodeChunk`, this struct does NOT store the actual code content.
+/// Instead, it stores a reference (filepath + line range) and reads fresh
+/// content from the file system on demand via `read_content()`.
+///
+/// **Benefits over CodeChunk:**
+/// - Always returns current file content (no staleness)
+/// - Less storage (no code duplication)
+/// - Consistent with agent's file operations
+///
+/// **Industry practice:** Continue Dev, Cursor, GitHub Copilot all use this approach.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRef {
+    /// Unique ID: "{workspace}:{filepath}:{chunk_idx}"
+    pub id: String,
+    /// Workspace identifier
+    pub source_id: String,
+    /// Relative file path
+    pub filepath: String,
+    /// Programming language
+    pub language: String,
+    /// Start line number (1-indexed)
+    pub start_line: i32,
+    /// End line number (1-indexed)
+    pub end_line: i32,
+    /// Optional embedding vector
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
+    /// Workspace identifier
+    #[serde(default)]
+    pub workspace: String,
+    /// Content hash for staleness detection (SHA256 of original content)
+    #[serde(default)]
+    pub content_hash: String,
+    /// Index timestamp (Unix timestamp in seconds)
+    #[serde(default)]
+    pub indexed_at: i64,
+    /// Parent symbol context (e.g., "class UserService" or "impl UserRepo")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub parent_symbol: Option<String>,
+    /// Whether this is an overview chunk
+    #[serde(default)]
+    pub is_overview: bool,
+}
+
+/// Result of reading chunk content from file system.
+#[derive(Debug, Clone)]
+pub struct HydratedChunk {
+    /// The chunk reference
+    pub chunk_ref: ChunkRef,
+    /// Fresh content read from file
+    pub content: String,
+    /// Whether content matches the indexed hash (false = file was modified)
+    pub is_fresh: bool,
+}
+
+impl ChunkRef {
+    /// Read fresh content from file system.
+    ///
+    /// Reads lines `start_line..end_line` from the file and validates
+    /// against the stored content_hash to detect staleness.
+    ///
+    /// # Arguments
+    /// * `workspace_root` - Root directory of the workspace
+    ///
+    /// # Returns
+    /// * `Ok(HydratedChunk)` - Content read successfully, `is_fresh` indicates hash match
+    /// * `Err` - File not found or read error
+    pub fn read_content(&self, workspace_root: &Path) -> std::io::Result<HydratedChunk> {
+        let file_path = workspace_root.join(&self.filepath);
+        let file_content = std::fs::read_to_string(&file_path)?;
+        let lines: Vec<&str> = file_content.lines().collect();
+
+        // Convert 1-indexed lines to 0-indexed array indices
+        let start_idx = (self.start_line - 1).max(0) as usize;
+        let end_idx = (self.end_line as usize).min(lines.len());
+
+        let content = if start_idx < lines.len() {
+            lines[start_idx..end_idx].join("\n")
+        } else {
+            String::new()
+        };
+
+        // Check if content matches stored hash
+        // Handle both 16-char (SourceFileId format) and 64-char (full SHA256) hashes
+        let current_hash = compute_chunk_hash(&content);
+        let is_fresh =
+            self.content_hash.is_empty() || hashes_match(&current_hash, &self.content_hash);
+
+        Ok(HydratedChunk {
+            chunk_ref: self.clone(),
+            content,
+            is_fresh,
+        })
+    }
+
+    /// Prepare content for embedding with filepath and parent symbol context.
+    ///
+    /// Note: This reads the file synchronously. For async operations,
+    /// use `read_content()` and then `wrap_content_for_embedding()`.
+    pub fn embedding_content(&self, workspace_root: &Path) -> std::io::Result<String> {
+        let hydrated = self.read_content(workspace_root)?;
+        Ok(match &self.parent_symbol {
+            Some(parent) => {
+                format!(
+                    "```{}\n{} ...\n\n{}\n```",
+                    self.filepath, parent, hydrated.content
+                )
+            }
+            None => {
+                format!("```{}\n{}\n```", self.filepath, hydrated.content)
+            }
+        })
+    }
+
+    /// Convert to CodeChunk by reading content from file.
+    ///
+    /// Use this for backward compatibility with code that expects CodeChunk.
+    pub fn to_code_chunk(&self, workspace_root: &Path) -> std::io::Result<CodeChunk> {
+        let hydrated = self.read_content(workspace_root)?;
+        Ok(CodeChunk {
+            id: self.id.clone(),
+            source_id: self.source_id.clone(),
+            filepath: self.filepath.clone(),
+            language: self.language.clone(),
+            content: hydrated.content,
+            start_line: self.start_line,
+            end_line: self.end_line,
+            embedding: self.embedding.clone(),
+            modified_time: None,
+            workspace: self.workspace.clone(),
+            content_hash: self.content_hash.clone(),
+            indexed_at: self.indexed_at,
+            parent_symbol: self.parent_symbol.clone(),
+            is_overview: self.is_overview,
+        })
+    }
+}
+
+impl From<CodeChunk> for ChunkRef {
+    /// Convert CodeChunk to ChunkRef (drops content).
+    fn from(chunk: CodeChunk) -> Self {
+        Self {
+            id: chunk.id,
+            source_id: chunk.source_id,
+            filepath: chunk.filepath,
+            language: chunk.language,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            embedding: chunk.embedding,
+            workspace: chunk.workspace,
+            content_hash: chunk.content_hash,
+            indexed_at: chunk.indexed_at,
+            parent_symbol: chunk.parent_symbol,
+            is_overview: chunk.is_overview,
+        }
+    }
+}
+
+impl From<&CodeChunk> for ChunkRef {
+    /// Convert &CodeChunk to ChunkRef (clones required fields, drops content).
+    fn from(chunk: &CodeChunk) -> Self {
+        Self {
+            id: chunk.id.clone(),
+            source_id: chunk.source_id.clone(),
+            filepath: chunk.filepath.clone(),
+            language: chunk.language.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            embedding: chunk.embedding.clone(),
+            workspace: chunk.workspace.clone(),
+            content_hash: chunk.content_hash.clone(),
+            indexed_at: chunk.indexed_at,
+            parent_symbol: chunk.parent_symbol.clone(),
+            is_overview: chunk.is_overview,
+        }
+    }
+}
+
 /// Code tag extracted by tree-sitter-tags.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeTag {
@@ -199,6 +380,12 @@ pub struct SearchResult {
     pub score: f32,
     /// Score type (how it was computed)
     pub score_type: ScoreType,
+    /// Whether the content is stale (file modified since indexing).
+    ///
+    /// None = freshness not checked (no hydration performed)
+    /// Some(true) = content was stale but hydration refreshed it
+    /// Some(false) = content is fresh
+    pub is_stale: Option<bool>,
 }
 
 /// Type of score for search results.
@@ -212,6 +399,8 @@ pub enum ScoreType {
     Hybrid,
     /// Snippet exact match score
     Snippet,
+    /// Recently accessed file score
+    Recent,
 }
 
 /// Index tag for workspace tracking.
@@ -299,6 +488,23 @@ impl Default for SearchQuery {
 pub fn compute_chunk_hash(content: &str) -> String {
     let hash = Sha256::digest(content.as_bytes());
     format!("{:x}", hash)
+}
+
+/// Compare hashes that may have different lengths.
+///
+/// Supports comparing:
+/// - 16-char truncated hashes (from SourceFileId)
+/// - 64-char full SHA256 hashes (from compute_chunk_hash)
+///
+/// If lengths differ, compares the shorter prefix of the longer hash.
+fn hashes_match(hash_a: &str, hash_b: &str) -> bool {
+    if hash_a.len() == hash_b.len() {
+        hash_a == hash_b
+    } else {
+        // Compare using the shorter length
+        let min_len = hash_a.len().min(hash_b.len());
+        hash_a[..min_len] == hash_b[..min_len]
+    }
 }
 
 /// Calculate the optimal number of results based on available context.
@@ -526,5 +732,206 @@ mod tests {
         assert_ne!(hash1, hash3);
         // Full 64-char SHA256 hex
         assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn test_hashes_match() {
+        let full_hash = compute_chunk_hash("fn main() {}");
+        let short_hash = &full_hash[..16]; // 16-char truncated hash
+
+        // Same length hashes
+        assert!(hashes_match(&full_hash, &full_hash));
+        assert!(hashes_match(short_hash, short_hash));
+
+        // Different length hashes (16 vs 64 chars)
+        assert!(hashes_match(&full_hash, short_hash));
+        assert!(hashes_match(short_hash, &full_hash));
+
+        // Non-matching hashes
+        let other_hash = compute_chunk_hash("fn bar() {}");
+        assert!(!hashes_match(&full_hash, &other_hash));
+        assert!(!hashes_match(&full_hash[..16], &other_hash[..16]));
+    }
+
+    #[test]
+    fn test_chunk_ref_staleness_with_short_hash() {
+        use std::io::Write;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "fn foo() {{}}").unwrap();
+
+        // Use 16-char hash (SourceFileId format)
+        let expected_content = "fn foo() {}";
+        let full_hash = compute_chunk_hash(expected_content);
+        let short_hash = full_hash[..16].to_string();
+
+        let chunk_ref = ChunkRef {
+            id: "test:test.rs:0".to_string(),
+            source_id: "test".to_string(),
+            filepath: "test.rs".to_string(),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 1,
+            embedding: None,
+            workspace: "test".to_string(),
+            content_hash: short_hash, // 16-char hash
+            indexed_at: 0,
+            parent_symbol: None,
+            is_overview: false,
+        };
+
+        let hydrated = chunk_ref.read_content(dir.path()).unwrap();
+        assert!(
+            hydrated.is_fresh,
+            "16-char hash should match 64-char computed hash"
+        );
+
+        // Modify file
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "fn bar() {{}}").unwrap();
+
+        let hydrated = chunk_ref.read_content(dir.path()).unwrap();
+        assert!(
+            !hydrated.is_fresh,
+            "Should detect stale content with 16-char hash"
+        );
+    }
+
+    #[test]
+    fn test_chunk_ref_read_content() {
+        use std::io::Write;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "line1").unwrap();
+        writeln!(file, "line2").unwrap();
+        writeln!(file, "line3").unwrap();
+        writeln!(file, "line4").unwrap();
+
+        let chunk_ref = ChunkRef {
+            id: "test:test.rs:0".to_string(),
+            source_id: "test".to_string(),
+            filepath: "test.rs".to_string(),
+            language: "rust".to_string(),
+            start_line: 2,
+            end_line: 3,
+            embedding: None,
+            workspace: "test".to_string(),
+            content_hash: String::new(),
+            indexed_at: 0,
+            parent_symbol: None,
+            is_overview: false,
+        };
+
+        let hydrated = chunk_ref.read_content(dir.path()).unwrap();
+        assert_eq!(hydrated.content, "line2\nline3");
+        assert!(hydrated.is_fresh); // Empty hash = always fresh
+    }
+
+    #[test]
+    fn test_chunk_ref_staleness_detection() {
+        use std::io::Write;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "fn foo() {{}}").unwrap();
+
+        // Compute hash of expected content
+        let expected_content = "fn foo() {}";
+        let expected_hash = compute_chunk_hash(expected_content);
+
+        let chunk_ref = ChunkRef {
+            id: "test:test.rs:0".to_string(),
+            source_id: "test".to_string(),
+            filepath: "test.rs".to_string(),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 1,
+            embedding: None,
+            workspace: "test".to_string(),
+            content_hash: expected_hash,
+            indexed_at: 0,
+            parent_symbol: None,
+            is_overview: false,
+        };
+
+        let hydrated = chunk_ref.read_content(dir.path()).unwrap();
+        assert!(hydrated.is_fresh);
+
+        // Now modify the file
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "fn bar() {{}}").unwrap();
+
+        let hydrated = chunk_ref.read_content(dir.path()).unwrap();
+        assert!(!hydrated.is_fresh); // Content changed, hash doesn't match
+    }
+
+    #[test]
+    fn test_chunk_ref_to_code_chunk() {
+        use std::io::Write;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("main.rs");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "fn main() {{").unwrap();
+        writeln!(file, "    println!(\"hello\");").unwrap();
+        writeln!(file, "}}").unwrap();
+
+        let chunk_ref = ChunkRef {
+            id: "test:main.rs:0".to_string(),
+            source_id: "test".to_string(),
+            filepath: "main.rs".to_string(),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 3,
+            embedding: None,
+            workspace: "test".to_string(),
+            content_hash: String::new(),
+            indexed_at: 12345,
+            parent_symbol: Some("mod main".to_string()),
+            is_overview: false,
+        };
+
+        let code_chunk = chunk_ref.to_code_chunk(dir.path()).unwrap();
+        assert_eq!(code_chunk.id, "test:main.rs:0");
+        assert_eq!(code_chunk.filepath, "main.rs");
+        assert!(code_chunk.content.contains("fn main()"));
+        assert_eq!(code_chunk.parent_symbol, Some("mod main".to_string()));
+    }
+
+    #[test]
+    fn test_code_chunk_to_chunk_ref() {
+        let chunk = CodeChunk {
+            id: "ws:file.rs:0".to_string(),
+            source_id: "ws".to_string(),
+            filepath: "file.rs".to_string(),
+            language: "rust".to_string(),
+            content: "fn test() {}".to_string(),
+            start_line: 1,
+            end_line: 1,
+            embedding: Some(vec![0.1, 0.2]),
+            modified_time: Some(1700000000),
+            workspace: "ws".to_string(),
+            content_hash: "abc123".to_string(),
+            indexed_at: 1700000100,
+            parent_symbol: Some("impl Foo".to_string()),
+            is_overview: false,
+        };
+
+        let chunk_ref: ChunkRef = chunk.into();
+        assert_eq!(chunk_ref.id, "ws:file.rs:0");
+        assert_eq!(chunk_ref.filepath, "file.rs");
+        assert_eq!(chunk_ref.content_hash, "abc123");
+        assert_eq!(chunk_ref.embedding, Some(vec![0.1, 0.2]));
+        assert_eq!(chunk_ref.parent_symbol, Some("impl Foo".to_string()));
+        // Note: content is NOT in ChunkRef
     }
 }

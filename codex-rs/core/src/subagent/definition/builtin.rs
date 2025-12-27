@@ -7,10 +7,8 @@ use super::ApprovalMode;
 use super::ModelConfig;
 use super::PromptConfig;
 use super::ToolAccess;
+use crate::tools::names;
 use std::sync::LazyLock;
-
-// Model name constants for built-in agents
-const HAIKU_MODEL: &str = "claude-haiku";
 
 /// Built-in Explore agent for fast codebase exploration.
 pub static EXPLORE_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefinition {
@@ -23,23 +21,20 @@ pub static EXPLORE_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefi
             .to_string(),
     ),
     tools: ToolAccess::List(vec![
-        "Read".to_string(),
-        "Glob".to_string(),
-        "Grep".to_string(),
-        "WebFetch".to_string(),
-        "WebSearch".to_string(),
+        names::READ_FILE.to_string(),
+        names::GLOB_FILES.to_string(),
+        names::GREP_FILES.to_string(),
+        names::WEB_FETCH.to_string(),
+        names::WEB_SEARCH.to_string(),
     ]),
     disallowed_tools: vec![
-        "Edit".to_string(),
-        "Write".to_string(),
-        "Bash".to_string(),
-        "Task".to_string(),
+        names::SMART_EDIT.to_string(),
+        names::WRITE_FILE.to_string(),
+        names::SHELL_COMMAND.to_string(),
+        names::TASK.to_string(),
     ],
     source: AgentSource::Builtin,
-    model_config: ModelConfig {
-        model: Some(HAIKU_MODEL.to_string()),
-        ..Default::default()
-    },
+    model_config: ModelConfig::default(),
     fork_context: false,
     prompt_config: PromptConfig {
         system_prompt: Some(include_str!("../prompts/explore.md").to_string()),
@@ -71,20 +66,20 @@ pub static PLAN_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefinit
             .to_string(),
     ),
     tools: ToolAccess::List(vec![
-        "Read".to_string(),
-        "Glob".to_string(),
-        "Grep".to_string(),
-        "WebFetch".to_string(),
-        "WebSearch".to_string(),
+        names::READ_FILE.to_string(),
+        names::GLOB_FILES.to_string(),
+        names::GREP_FILES.to_string(),
+        names::WEB_FETCH.to_string(),
+        names::WEB_SEARCH.to_string(),
     ]),
     disallowed_tools: vec![
-        "Edit".to_string(),
-        "Write".to_string(),
-        "Bash".to_string(),
-        "Task".to_string(),
+        names::SMART_EDIT.to_string(),
+        names::WRITE_FILE.to_string(),
+        names::SHELL_COMMAND.to_string(),
+        names::TASK.to_string(),
     ],
     source: AgentSource::Builtin,
-    model_config: ModelConfig::default(), // Inherit parent's provider and model
+    model_config: ModelConfig::default(),
     fork_context: true,
     prompt_config: PromptConfig {
         system_prompt: Some(include_str!("../prompts/plan.md").to_string()),

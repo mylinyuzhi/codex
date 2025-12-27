@@ -13,6 +13,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+globset = { workspace = true }
 ignore = { workspace = true }
 walkdir = { workspace = true }
 

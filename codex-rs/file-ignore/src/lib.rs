@@ -36,11 +36,13 @@
 //! ```
 
 mod config;
+mod matcher;
 mod patterns;
 mod service;
 
 // Primary API
 pub use config::IgnoreConfig;
+pub use matcher::PatternMatcher;
 pub use service::IgnoreService;
 
 // Standalone functions for external tool integration

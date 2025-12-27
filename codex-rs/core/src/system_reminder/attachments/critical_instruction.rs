@@ -46,6 +46,22 @@ impl AttachmentGenerator for CriticalInstructionGenerator {
         ReminderTier::Core
     }
 
+    async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        // Only generate if critical instruction is configured
+        if let Some(instruction) = ctx.critical_instruction {
+            tracing::debug!(
+                generator = "critical_instruction",
+                "Generating critical instruction reminder"
+            );
+            Ok(Some(SystemReminder::new(
+                AttachmentType::CriticalInstruction,
+                instruction.to_string(),
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.enabled && config.attachments.critical_instruction
     }
@@ -58,18 +74,6 @@ impl AttachmentGenerator for CriticalInstructionGenerator {
             max_per_session: None,
         }
     }
-
-    async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Only generate if critical instruction is configured
-        if let Some(instruction) = ctx.critical_instruction {
-            Ok(Some(SystemReminder::new(
-                AttachmentType::CriticalInstruction,
-                instruction.to_string(),
-            )))
-        } else {
-            Ok(None)
-        }
-    }
 }
 
 // ============================================
@@ -79,14 +83,15 @@ impl AttachmentGenerator for CriticalInstructionGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use crate::system_reminder::file_tracker::FileTracker;
-    use crate::system_reminder::generator::TodoState;
+    use crate::system_reminder::generator::PlanState;
     use std::path::Path;
 
     fn make_context<'a>(
         critical_instruction: Option<&'a str>,
         file_tracker: &'a FileTracker,
-        todo_state: &'a TodoState,
+        plan_state: &'a PlanState,
     ) -> GeneratorContext<'a> {
         GeneratorContext {
             turn_number: 1,
@@ -98,9 +103,11 @@ mod tests {
             is_plan_mode: false,
             plan_file_path: None,
             is_plan_reentry: false,
-            todo_state,
+            plan_state,
             background_tasks: &[],
             critical_instruction,
+            diagnostics_store: None,
+            lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
         }
     }
 
@@ -108,8 +115,8 @@ mod tests {
     async fn test_generates_when_configured() {
         let generator = CriticalInstructionGenerator::new();
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
-        let ctx = make_context(Some("Always run tests"), &tracker, &todo_state);
+        let plan_state = PlanState::default();
+        let ctx = make_context(Some("Always run tests"), &tracker, &plan_state);
 
         let result = generator.generate(&ctx).await.unwrap();
         assert!(result.is_some());
@@ -126,8 +133,8 @@ mod tests {
     async fn test_returns_none_when_not_configured() {
         let generator = CriticalInstructionGenerator::new();
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
-        let ctx = make_context(None, &tracker, &todo_state);
+        let plan_state = PlanState::default();
+        let ctx = make_context(None, &tracker, &plan_state);
 
         let result = generator.generate(&ctx).await.unwrap();
         assert!(result.is_none());

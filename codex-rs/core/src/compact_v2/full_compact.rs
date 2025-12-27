@@ -30,6 +30,7 @@ use crate::protocol::CompactThresholdExceededEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ExtEventMsg;
 use crate::protocol::WarningEvent;
 use crate::util::backoff;
 use codex_protocol::models::ContentItem;
@@ -188,7 +189,7 @@ pub async fn run_full_compact_v2(
     sess.send_event(&turn_context, event).await;
 
     // Emit detailed CompactCompleted event
-    let completed_event = EventMsg::CompactCompleted(CompactCompletedEvent {
+    let completed_event = EventMsg::Ext(ExtEventMsg::CompactCompleted(CompactCompletedEvent {
         pre_compact_tokens: pre_tokens,
         post_compact_tokens: post_tokens,
         compaction_input_tokens: summarization_result.input_tokens,
@@ -196,7 +197,7 @@ pub async fn run_full_compact_v2(
         files_restored: restored_context.files.len() as i32,
         duration_ms,
         is_auto: is_auto_compact,
-    });
+    }));
     sess.send_event(&turn_context, completed_event).await;
 
     // Check if still above threshold after compact and emit warning
@@ -207,11 +208,13 @@ pub async fn run_full_compact_v2(
         } else {
             0.0
         };
-        let exceeded_event = EventMsg::CompactThresholdExceeded(CompactThresholdExceededEvent {
-            current_tokens: post_tokens,
-            threshold_tokens: threshold,
-            usage_percent,
-        });
+        let exceeded_event = EventMsg::Ext(ExtEventMsg::CompactThresholdExceeded(
+            CompactThresholdExceededEvent {
+                current_tokens: post_tokens,
+                threshold_tokens: threshold,
+                usage_percent,
+            },
+        ));
         sess.send_event(&turn_context, exceeded_event).await;
         tracing::warn!(
             "Post-compact tokens ({}) still exceed threshold ({})",
@@ -295,7 +298,7 @@ fn create_model_client_with_provider(
 
     ModelClient::new(
         existing_config,
-        existing_client.auth_manager(),
+        existing_client.get_auth_manager(),
         model_family,
         existing_client.get_otel_manager(),
         provider.clone(),
@@ -538,10 +541,10 @@ async fn emit_compact_failed(
     message: &str,
     is_auto: bool,
 ) {
-    let event = EventMsg::CompactFailed(CompactFailedEvent {
+    let event = EventMsg::Ext(ExtEventMsg::CompactFailed(CompactFailedEvent {
         message: message.to_string(),
         is_auto,
-    });
+    }));
     sess.send_event(turn_context, event).await;
 }
 

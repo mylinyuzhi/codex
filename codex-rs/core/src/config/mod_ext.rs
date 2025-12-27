@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::tools::spec_ext::ToolFilter;
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigExt {
@@ -21,6 +23,12 @@ pub struct ConfigExt {
 
     /// Compact V2 configuration (thresholds, micro-compact, context restoration).
     pub compact: crate::compact_v2::CompactConfig,
+
+    /// Tool filter. Main session: None. Subagent: from_agent_definition().
+    pub tool_filter: Option<ToolFilter>,
+
+    /// System reminder configuration for contextual injection.
+    pub system_reminder: crate::config::SystemReminderConfig,
 }
 
 impl Default for ConfigExt {
@@ -32,6 +40,8 @@ impl Default for ConfigExt {
             web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig::default(),
             logging: crate::config::types_ext::LoggingConfig::default(),
             compact: crate::compact_v2::CompactConfig::default(),
+            tool_filter: None,
+            system_reminder: crate::config::SystemReminderConfig::default(),
         }
     }
 }
@@ -54,6 +64,10 @@ pub struct ConfigTomlExt {
     /// Compact V2 configuration (thresholds, micro-compact, context restoration).
     #[serde(default)]
     pub compact: Option<crate::compact_v2::CompactConfig>,
+
+    /// System reminder configuration for contextual injection.
+    #[serde(default)]
+    pub system_reminder: Option<crate::config::SystemReminderConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -80,6 +94,9 @@ pub struct WebSearchConfigToml {
     pub provider: Option<codex_protocol::config_types_ext::WebSearchProvider>,
     #[serde(default)]
     pub max_results: Option<usize>,
+    /// API key for Tavily provider (falls back to TAVILY_API_KEY env var)
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

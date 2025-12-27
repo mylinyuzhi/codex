@@ -144,3 +144,6 @@ pub mod codex_ext;
 // System reminder module
 pub mod system_reminder;
 mod system_reminder_inject;
+
+// Background shell module
+pub mod shell_background;

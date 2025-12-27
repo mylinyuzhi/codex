@@ -92,14 +92,6 @@ pub fn deduplicate_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
 
     merged
 }
-
-/// Check if two chunks overlap in line range.
-#[allow(dead_code)]
-fn ranges_overlap(start1: i32, end1: i32, start2: i32, end2: i32) -> bool {
-    // Ranges overlap if one starts before the other ends
-    start1 <= end2 && start2 <= end1
-}
-
 /// Deduplicate results with a configurable overlap threshold.
 ///
 /// Two chunks are considered overlapping if they share at least `min_overlap_lines` lines.
@@ -209,6 +201,7 @@ mod tests {
             },
             score,
             score_type: ScoreType::Bm25,
+            is_stale: None,
         }
     }
 
@@ -280,14 +273,6 @@ mod tests {
         // With threshold 5, should not merge
         let deduped = deduplicate_with_threshold(results, 5);
         assert_eq!(deduped.len(), 2);
-    }
-
-    #[test]
-    fn test_ranges_overlap() {
-        assert!(ranges_overlap(1, 10, 5, 15)); // overlapping
-        assert!(ranges_overlap(1, 10, 10, 20)); // touching
-        assert!(!ranges_overlap(1, 10, 11, 20)); // gap
-        assert!(ranges_overlap(5, 15, 1, 10)); // reversed order
     }
 
     #[test]
@@ -398,6 +383,7 @@ mod tests {
             },
             score,
             score_type: ScoreType::Bm25,
+            is_stale: None,
         }
     }
 

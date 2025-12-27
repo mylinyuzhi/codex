@@ -2,6 +2,7 @@ pub mod context;
 pub mod events;
 pub(crate) mod ext;
 pub(crate) mod handlers;
+pub mod names;
 pub mod orchestrator;
 pub mod parallel;
 pub mod registry;

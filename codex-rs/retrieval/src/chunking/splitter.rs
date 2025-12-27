@@ -60,6 +60,8 @@ use crate::chunking::markdown::MarkdownChunker;
 use crate::chunking::markdown::is_markdown_file;
 use crate::error::Result;
 use crate::types::ChunkSpan;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use text_splitter::ChunkConfig;
 use text_splitter::CodeSplitter;
 use text_splitter::TextSplitter;
@@ -98,9 +100,12 @@ impl CodeChunkerService {
     /// Chunk a source file.
     ///
     /// For markdown files, uses MarkdownChunker which respects header hierarchy.
-    /// For supported languages (rust, go, python, java), uses CodeSplitter
-    /// which is tree-sitter based and respects syntax boundaries.
+    /// For supported languages (rust, go, python, java, typescript, javascript),
+    /// uses CodeSplitter which is tree-sitter based and respects syntax boundaries.
     /// Falls back to TextSplitter for unsupported languages.
+    ///
+    /// Import blocks at the start of files are kept together as a single chunk
+    /// to provide dependency context and enable queries like "what does this file import".
     pub fn chunk(&self, content: &str, language: &str) -> Result<Vec<ChunkSpan>> {
         // Load tokenizer (cl100k_base is OpenAI's tokenizer)
         let tokenizer = cl100k_base().expect("Failed to load cl100k_base tokenizer");
@@ -116,6 +121,10 @@ impl CodeChunkerService {
             let md_chunker = MarkdownChunker::new(estimated_chars);
             return Ok(md_chunker.chunk(content));
         }
+
+        // Detect and extract import block at the start of the file
+        let (import_chunk, remaining_content, line_offset) =
+            self.extract_import_block(content, language);
 
         // For supported languages, use token-aware CodeSplitter
         //
@@ -135,19 +144,32 @@ impl CodeChunkerService {
         //   3. Duplicate content distorts BM25/embedding search scores
         if let Some(ts_lang) = get_tree_sitter_language(language) {
             if let Ok(splitter) = CodeSplitter::new(ts_lang, chunk_config) {
-                let raw_chunks: Vec<(usize, &str)> = splitter.chunk_indices(content).collect();
+                let raw_chunks: Vec<(usize, &str)> =
+                    splitter.chunk_indices(&remaining_content).collect();
                 tracing::trace!(
                     language = %language,
                     chunks = raw_chunks.len(),
+                    import_chunk = import_chunk.is_some(),
                     max_tokens = self.max_tokens,
                     overlap = "disabled for code (AST boundaries sufficient)",
                     "CodeSplitter: AST-aware chunking"
                 );
 
-                let chunks: Vec<ChunkSpan> = raw_chunks
+                let mut chunks: Vec<ChunkSpan> = raw_chunks
                     .into_iter()
-                    .map(|(offset, chunk)| Self::to_chunk_span(content, offset, chunk))
+                    .map(|(offset, chunk)| {
+                        let mut span = Self::to_chunk_span(&remaining_content, offset, chunk);
+                        // Adjust line numbers to account for extracted import block
+                        span.start_line += line_offset;
+                        span.end_line += line_offset;
+                        span
+                    })
                     .collect();
+
+                // Prepend import chunk if present
+                if let Some(import) = import_chunk {
+                    chunks.insert(0, import);
+                }
 
                 // No overlap for code - AST boundaries provide natural semantic separation
                 return Ok(chunks);
@@ -164,12 +186,23 @@ impl CodeChunkerService {
         let tokenizer = cl100k_base().expect("tiktoken");
         let chunk_config = ChunkConfig::new(self.max_tokens).with_sizer(tokenizer.clone());
         let splitter = TextSplitter::new(chunk_config);
-        let raw_chunks: Vec<(usize, &str)> = splitter.chunk_indices(content).collect();
+        let raw_chunks: Vec<(usize, &str)> = splitter.chunk_indices(&remaining_content).collect();
 
         let mut chunks: Vec<ChunkSpan> = raw_chunks
             .into_iter()
-            .map(|(offset, chunk)| Self::to_chunk_span(content, offset, chunk))
+            .map(|(offset, chunk)| {
+                let mut span = Self::to_chunk_span(&remaining_content, offset, chunk);
+                // Adjust line numbers to account for extracted import block
+                span.start_line += line_offset;
+                span.end_line += line_offset;
+                span
+            })
             .collect();
+
+        // Prepend import chunk if present
+        if let Some(import) = import_chunk {
+            chunks.insert(0, import);
+        }
 
         // Apply overlap for text files
         if self.overlap_tokens > 0 && chunks.len() > 1 {
@@ -177,6 +210,57 @@ impl CodeChunkerService {
         }
 
         Ok(chunks)
+    }
+
+    /// Extract import block from the start of content.
+    ///
+    /// Returns (import_chunk, remaining_content, line_offset).
+    fn extract_import_block(
+        &self,
+        content: &str,
+        language: &str,
+    ) -> (Option<ChunkSpan>, String, i32) {
+        // Detect import block
+        let Some((end_line, import_content)) = detect_import_block(content, language) else {
+            return (None, content.to_string(), 0);
+        };
+
+        // Create import chunk
+        let import_chunk = ChunkSpan {
+            content: import_content,
+            start_line: 1,
+            end_line,
+            is_overview: false,
+        };
+
+        // Extract remaining content after imports
+        let lines: Vec<&str> = content.lines().collect();
+        let remaining_lines = if (end_line as usize) < lines.len() {
+            lines[end_line as usize..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        // Skip empty lines at the start of remaining content
+        let skip_empty = remaining_lines
+            .iter()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+
+        let actual_remaining: Vec<&str> = remaining_lines.into_iter().skip(skip_empty).collect();
+        let remaining_content = actual_remaining.join("\n");
+
+        // Calculate line offset (import_end_line + skipped empty lines)
+        let line_offset = end_line + skip_empty as i32;
+
+        tracing::trace!(
+            language = %language,
+            import_end_line = end_line,
+            line_offset = line_offset,
+            "Extracted import block"
+        );
+
+        (Some(import_chunk), remaining_content, line_offset)
     }
 
     /// Apply overlap using token-based measurement.
@@ -221,23 +305,196 @@ impl CodeChunkerService {
 /// Get tree-sitter Language for supported languages.
 ///
 /// Returns None for unsupported languages, triggering TextSplitter fallback.
-/// Currently supports: rust, go, python, java (matching tree-sitter-* dependencies).
+/// Currently supports: rust, go, python, java, typescript, javascript
+/// (matching tree-sitter-* dependencies).
 fn get_tree_sitter_language(lang: &str) -> Option<Language> {
     match lang {
         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
         "go" => Some(tree_sitter_go::LANGUAGE.into()),
         "python" => Some(tree_sitter_python::LANGUAGE.into()),
         "java" => Some(tree_sitter_java::LANGUAGE.into()),
+        // TypeScript/JavaScript support via tree-sitter-typescript
+        // LANGUAGE_TYPESCRIPT: TS/JS without JSX syntax
+        // LANGUAGE_TSX: TS/JS with JSX syntax support
+        "typescript" | "javascript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "tsx" | "jsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         _ => None,
     }
 }
 
 /// Languages with CodeSplitter (tree-sitter AST) support.
-pub const CODE_SPLITTER_LANGUAGES: &[&str] = &["rust", "go", "python", "java"];
+pub const CODE_SPLITTER_LANGUAGES: &[&str] = &[
+    "rust",
+    "go",
+    "python",
+    "java",
+    "typescript",
+    "javascript",
+    "tsx",
+    "jsx",
+];
 
 /// Check if a language is supported by CodeSplitter.
 pub fn is_code_splitter_supported(lang: &str) -> bool {
     get_tree_sitter_language(lang).is_some()
+}
+
+/// Precompiled regex patterns for import detection.
+/// Using `once_cell::sync::Lazy` to avoid recompiling on every call.
+
+/// Rust: use, mod, extern crate, #![...], #[...]
+static RUST_IMPORT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*(use\s|mod\s|pub\s+use\s|pub\s+mod\s|extern\s+crate\s|#\[|#!\[)")
+        .expect("invalid rust import regex")
+});
+
+/// Python: import, from ... import
+static PYTHON_IMPORT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*(import\s|from\s+\S+\s+import\s)").expect("invalid python import regex")
+});
+
+/// JS/TS: import, export, require (all forms), "use strict", "use client"
+static JS_IMPORT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"^\s*(import\s|export\s|(const|let|var)\s+[\w\{\s,\}]+\s*=\s*require\(|['"]use\s)"#,
+    )
+    .expect("invalid js import regex")
+});
+
+/// Go/Java: package, import
+static GO_JAVA_IMPORT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\s*(package\s|import\s)").expect("invalid go/java import regex"));
+
+/// Detect the import block at the start of a file.
+///
+/// Returns `Some((end_line, import_content))` if an import block is found,
+/// where `end_line` is the 1-indexed line number where imports end.
+///
+/// Import blocks are kept together as a single chunk to:
+/// - Provide context about dependencies when searching
+/// - Avoid fragmenting import statements across chunks
+/// - Enable queries like "what does this file import"
+pub fn detect_import_block(content: &str, language: &str) -> Option<(i32, String)> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Language-specific import patterns (precompiled, see static definitions above)
+    let pattern: &Regex = match language {
+        "rust" => &RUST_IMPORT_REGEX,
+        "python" => &PYTHON_IMPORT_REGEX,
+        "typescript" | "javascript" | "tsx" | "jsx" => &JS_IMPORT_REGEX,
+        "go" | "java" => &GO_JAVA_IMPORT_REGEX,
+        _ => return None,
+    };
+
+    // Find the end of the import block
+    let mut end_line = 0;
+    let mut in_multiline_import = false;
+    let mut brace_depth = 0; // Track brace depth for JS/TS multi-line imports
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        // Skip empty lines and comments at the start
+        if trimmed.is_empty() || is_comment_line(trimmed, language) {
+            // Only count if we've already started finding imports or in multi-line import
+            if end_line > 0 || in_multiline_import {
+                end_line = i as i32 + 1;
+            }
+            continue;
+        }
+
+        // Handle Go's multi-line import block: import ( ... )
+        if language == "go" {
+            if trimmed.starts_with("import (") || trimmed == "import(" {
+                in_multiline_import = true;
+                end_line = i as i32 + 1;
+                continue;
+            }
+            if in_multiline_import {
+                end_line = i as i32 + 1;
+                if trimmed.starts_with(')') {
+                    in_multiline_import = false;
+                }
+                continue;
+            }
+        }
+
+        // Handle JS/TS multi-line imports: import { ... } from '...';
+        if matches!(language, "typescript" | "javascript" | "tsx" | "jsx") {
+            if in_multiline_import {
+                end_line = i as i32 + 1;
+                // Count braces to track when import ends
+                for c in line.chars() {
+                    match c {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+                // Import ends when we see 'from' or ';' and braces are balanced
+                if brace_depth <= 0
+                    && (trimmed.contains("from ")
+                        || trimmed.contains("from'")
+                        || trimmed.ends_with(';'))
+                {
+                    in_multiline_import = false;
+                    brace_depth = 0;
+                }
+                continue;
+            }
+
+            // Detect start of multi-line import
+            if pattern.is_match(line) {
+                end_line = i as i32 + 1;
+
+                // Check if this import opens a brace that's not closed on same line
+                let open_braces = line.matches('{').count();
+                let close_braces = line.matches('}').count();
+                if open_braces > close_braces {
+                    in_multiline_import = true;
+                    brace_depth = (open_braces - close_braces) as i32;
+                }
+                continue;
+            }
+        }
+
+        // Check if line matches import pattern
+        if pattern.is_match(line) {
+            end_line = i as i32 + 1;
+        } else if end_line > 0 && !in_multiline_import {
+            // First non-import line after imports - stop here
+            break;
+        } else {
+            // No imports found yet and this isn't an import line
+            // Could be a shebang, pragma, etc. - keep looking for a few lines
+            if i > 5 {
+                break;
+            }
+        }
+    }
+
+    if end_line == 0 {
+        return None;
+    }
+
+    // Extract the import block content
+    let import_content: String = lines[..end_line as usize].join("\n");
+
+    Some((end_line, import_content))
+}
+
+/// Check if a line is a comment.
+fn is_comment_line(line: &str, language: &str) -> bool {
+    match language {
+        "rust" | "go" | "java" | "typescript" | "javascript" | "tsx" | "jsx" => {
+            line.starts_with("//") || line.starts_with("/*") || line.starts_with('*')
+        }
+        "python" => line.starts_with('#'),
+        _ => false,
+    }
 }
 
 /// Get formatted string of supported languages for logging.
@@ -296,15 +553,84 @@ fn add(a: i32, b: i32) -> i32 {
 
     #[test]
     fn test_code_splitter_supported_languages() {
+        // Supported languages
         assert!(is_code_splitter_supported("rust"));
         assert!(is_code_splitter_supported("go"));
         assert!(is_code_splitter_supported("python"));
         assert!(is_code_splitter_supported("java"));
+        assert!(is_code_splitter_supported("typescript"));
+        assert!(is_code_splitter_supported("javascript"));
+        assert!(is_code_splitter_supported("tsx"));
+        assert!(is_code_splitter_supported("jsx"));
         // Unsupported languages
-        assert!(!is_code_splitter_supported("javascript"));
-        assert!(!is_code_splitter_supported("typescript"));
         assert!(!is_code_splitter_supported("markdown"));
         assert!(!is_code_splitter_supported("unknown"));
+        assert!(!is_code_splitter_supported("c"));
+        assert!(!is_code_splitter_supported("cpp"));
+    }
+
+    #[test]
+    fn test_code_splitter_typescript() {
+        let code = r#"interface User {
+    id: number;
+    name: string;
+}
+
+function greet(user: User): string {
+    return `Hello, ${user.name}!`;
+}
+
+class UserService {
+    private users: User[] = [];
+
+    addUser(user: User): void {
+        this.users.push(user);
+    }
+
+    getUser(id: number): User | undefined {
+        return this.users.find(u => u.id === id);
+    }
+}
+"#;
+        let chunker = CodeChunkerService::new(100, 0);
+        let chunks = chunker.chunk(code, "typescript").expect("chunking failed");
+
+        assert!(!chunks.is_empty());
+        let total: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert!(total.contains("interface User"));
+        assert!(total.contains("function greet"));
+        assert!(total.contains("class UserService"));
+    }
+
+    #[test]
+    fn test_code_splitter_javascript() {
+        let code = r#"const express = require('express');
+const app = express();
+
+function handleRequest(req, res) {
+    res.json({ message: 'Hello, World!' });
+}
+
+app.get('/hello', handleRequest);
+
+class Router {
+    constructor() {
+        this.routes = [];
+    }
+
+    add(path, handler) {
+        this.routes.push({ path, handler });
+    }
+}
+"#;
+        let chunker = CodeChunkerService::new(100, 0);
+        let chunks = chunker.chunk(code, "javascript").expect("chunking failed");
+
+        assert!(!chunks.is_empty());
+        let total: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert!(total.contains("const express"));
+        assert!(total.contains("function handleRequest"));
+        assert!(total.contains("class Router"));
     }
 
     #[test]
@@ -608,5 +934,176 @@ fn another_function() {
                 &chunk.content[..chunk.content.len().min(100)]
             );
         }
+    }
+
+    #[test]
+    fn test_detect_import_block_rust() {
+        let code = r#"use std::io;
+use std::path::Path;
+use crate::error::Result;
+
+fn main() {
+    println!("Hello");
+}
+"#;
+        let result = detect_import_block(code, "rust");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        // Import block includes trailing empty line (line 4)
+        assert_eq!(end_line, 4);
+        assert!(content.contains("use std::io"));
+        assert!(content.contains("use crate::error::Result"));
+        assert!(!content.contains("fn main"));
+    }
+
+    #[test]
+    fn test_detect_import_block_python() {
+        let code = r#"import os
+import sys
+from typing import List, Optional
+from pathlib import Path
+
+def main():
+    print("Hello")
+"#;
+        let result = detect_import_block(code, "python");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        // Import block includes trailing empty line (line 5)
+        assert_eq!(end_line, 5);
+        assert!(content.contains("import os"));
+        assert!(content.contains("from pathlib import Path"));
+        assert!(!content.contains("def main"));
+    }
+
+    #[test]
+    fn test_detect_import_block_typescript() {
+        let code = r#"import React from 'react';
+import { useState, useEffect } from 'react';
+import type { User } from './types';
+
+export function App() {
+    return <div>Hello</div>;
+}
+"#;
+        let result = detect_import_block(code, "typescript");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        assert!(end_line >= 3);
+        assert!(content.contains("import React"));
+        assert!(content.contains("import type { User }"));
+    }
+
+    #[test]
+    fn test_detect_import_block_typescript_multiline() {
+        let code = r#"import {
+    useState,
+    useEffect,
+    useCallback,
+    useMemo
+} from 'react';
+import { Button } from './components';
+
+function App() {
+    return <div>Hello</div>;
+}
+"#;
+        let result = detect_import_block(code, "typescript");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        // Should include both multi-line import and single-line import (line 8 with trailing empty)
+        assert!(
+            end_line >= 7,
+            "end_line should be at least 7, got {end_line}"
+        );
+        assert!(content.contains("useState"));
+        assert!(content.contains("useMemo"));
+        assert!(content.contains("} from 'react'"));
+        assert!(content.contains("Button"));
+        assert!(!content.contains("function App"));
+    }
+
+    #[test]
+    fn test_detect_import_block_javascript_multiline() {
+        let code = r#"const {
+    readFile,
+    writeFile
+} = require('fs');
+const path = require('path');
+
+function main() {
+    console.log('Hello');
+}
+"#;
+        let result = detect_import_block(code, "javascript");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        assert!(
+            end_line >= 5,
+            "end_line should be at least 5, got {end_line}"
+        );
+        assert!(content.contains("readFile"));
+        assert!(content.contains("writeFile"));
+        assert!(content.contains("path"));
+        assert!(!content.contains("function main"));
+    }
+
+    #[test]
+    fn test_detect_import_block_javascript_require_variants() {
+        // Test all require() variants: const, let, var, destructured
+        let code = r#"const fs = require('fs');
+let path = require('path');
+var os = require('os');
+const { join, resolve } = require('path');
+
+function main() {}
+"#;
+        let result = detect_import_block(code, "javascript");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        assert!(
+            end_line >= 4,
+            "end_line should be at least 4, got {end_line}"
+        );
+        assert!(content.contains("const fs"));
+        assert!(content.contains("let path"));
+        assert!(content.contains("var os"));
+        assert!(content.contains("join, resolve"));
+        assert!(!content.contains("function main"));
+    }
+
+    #[test]
+    fn test_detect_import_block_go_multiline() {
+        let code = r#"package main
+
+import (
+    "fmt"
+    "os"
+    "path/filepath"
+)
+
+func main() {
+    fmt.Println("Hello")
+}
+"#;
+        let result = detect_import_block(code, "go");
+        assert!(result.is_some());
+        let (end_line, content) = result.unwrap();
+        // Import block includes trailing empty line (line 8)
+        assert_eq!(end_line, 8);
+        assert!(content.contains("package main"));
+        assert!(content.contains("\"fmt\""));
+        assert!(content.contains("\"path/filepath\""));
+        assert!(!content.contains("func main"));
+    }
+
+    #[test]
+    fn test_detect_import_block_no_imports() {
+        let code = r#"fn main() {
+    println!("Hello");
+}
+"#;
+        let result = detect_import_block(code, "rust");
+        assert!(result.is_none());
     }
 }

@@ -1,6 +1,9 @@
 //! Background task management for async subagent execution.
 
-use super::executor::SubagentResult;
+use super::result::SubagentResult;
+use crate::system_reminder::generator::BackgroundTaskInfo;
+use crate::system_reminder::generator::BackgroundTaskStatus as ReminderTaskStatus;
+use crate::system_reminder::generator::BackgroundTaskType;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +41,8 @@ pub struct BackgroundTask {
     pub handle: Option<JoinHandle<SubagentResult>>,
     /// When the task was created.
     pub created_at: Instant,
+    /// Whether completion has been notified via system reminder.
+    pub notified: bool,
 }
 
 /// Store for managing background tasks.
@@ -70,6 +75,7 @@ impl BackgroundTaskStore {
             result: None,
             handle: Some(handle),
             created_at: Instant::now(),
+            notified: false,
         };
         self.tasks.insert(agent_id, task);
     }
@@ -94,6 +100,7 @@ impl BackgroundTaskStore {
             result: None,
             handle: None,
             created_at: Instant::now(),
+            notified: false,
         };
         self.tasks.insert(agent_id, task);
     }
@@ -232,6 +239,60 @@ impl BackgroundTaskStore {
             }
         });
     }
+
+    /// List background agents that need notification.
+    ///
+    /// Returns agents that have finished (completed/failed) but not yet notified.
+    /// Used by system reminder injection.
+    pub fn list_for_reminder(&self) -> Vec<BackgroundTaskInfo> {
+        self.tasks
+            .iter()
+            .filter(|r| {
+                let task = r.value();
+                // Only finished tasks that haven't been notified
+                matches!(
+                    task.status,
+                    BackgroundTaskStatus::Completed | BackgroundTaskStatus::Failed
+                ) && !task.notified
+            })
+            .map(|r| {
+                let task = r.value();
+                BackgroundTaskInfo {
+                    task_id: r.key().clone(),
+                    task_type: BackgroundTaskType::AsyncAgent,
+                    command: None, // Agents don't have commands
+                    description: task.description.clone(),
+                    status: match task.status {
+                        BackgroundTaskStatus::Completed => ReminderTaskStatus::Completed,
+                        BackgroundTaskStatus::Failed => ReminderTaskStatus::Failed,
+                        _ => ReminderTaskStatus::Running,
+                    },
+                    exit_code: None,
+                    has_new_output: false, // Agents: no streaming output
+                    notified: task.notified,
+                }
+            })
+            .collect()
+    }
+
+    /// Mark an agent as notified (after reminder was injected).
+    pub fn mark_notified(&self, agent_id: &str) {
+        if let Some(mut task) = self.tasks.get_mut(agent_id) {
+            task.notified = true;
+        }
+    }
+
+    /// Batch mark multiple agents as notified.
+    ///
+    /// More efficient than calling mark_notified() in a loop when marking
+    /// multiple agents, as it reduces lock contention.
+    pub fn mark_all_notified(&self, agent_ids: &[String]) {
+        for id in agent_ids {
+            if let Some(mut task) = self.tasks.get_mut(id) {
+                task.notified = true;
+            }
+        }
+    }
 }
 
 // NOTE: BackgroundTaskStore intentionally does NOT implement Clone.
@@ -244,7 +305,7 @@ pub type SharedBackgroundTaskStore = Arc<BackgroundTaskStore>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subagent::executor::SubagentStatus;
+    use crate::subagent::result::SubagentStatus;
 
     #[tokio::test]
     async fn test_register_and_status() {

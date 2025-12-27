@@ -42,6 +42,12 @@ pub(crate) const EXT_FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::Lsp,
+        key: "lsp",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::McpResourceTools,
         key: "mcp_resource_tools",
         stage: Stage::Stable,
@@ -62,6 +68,12 @@ pub(crate) const EXT_FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MicroCompact,
         key: "micro_compact",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearch,
+        key: "web_search",
         stage: Stage::Experimental,
         default_enabled: false,
     },

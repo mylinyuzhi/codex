@@ -4,15 +4,29 @@
 //! keyed by conversation_id. This avoids modifying Session/codex.rs while
 //! ensuring stores persist across turns within a session.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::RwLock;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
+
+// Note: inject_call_count uses Ordering::Relaxed because:
+// 1. We only need monotonic increment, not synchronization
+// 2. Exact count doesn't need to be synchronized across threads
 
 use dashmap::DashMap;
 
 use super::AgentRegistry;
 use super::BackgroundTaskStore;
 use super::TranscriptStore;
+use crate::config::system_reminder::SystemReminderConfig;
+use crate::system_reminder::FileTracker;
+use crate::system_reminder::PlanState;
+use crate::system_reminder::PlanStep;
+use crate::system_reminder::SystemReminderOrchestrator;
 use codex_protocol::ConversationId;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 
 /// Session-scoped subagent stores.
 ///
@@ -20,20 +34,100 @@ use codex_protocol::ConversationId;
 /// - AgentRegistry: Caches loaded agent definitions
 /// - BackgroundTaskStore: Tracks background subagent tasks
 /// - TranscriptStore: Records agent transcripts for resume functionality
+/// - ReminderOrchestrator: Cached system reminder orchestrator (avoids per-turn allocation)
+/// - FileTracker: Tracks file reads for change detection
+/// - PlanState: Tracks plan state for reminder generation
+/// - inject_call_count: Tracks main agent reminder injection calls
 #[derive(Debug)]
 pub struct SubagentStores {
     pub registry: Arc<AgentRegistry>,
     pub background_store: Arc<BackgroundTaskStore>,
     pub transcript_store: Arc<TranscriptStore>,
+    pub reminder_orchestrator: Arc<SystemReminderOrchestrator>,
+    pub file_tracker: Arc<FileTracker>,
+    pub plan_state: Arc<RwLock<PlanState>>,
+    /// Counter for main agent reminder injection calls.
+    /// Used by PlanReminderGenerator to determine if reminder should fire.
+    inject_call_count: AtomicI32,
+}
+
+/// Build default search paths for custom agent discovery.
+///
+/// Search order:
+/// 1. `~/.config/codex/agents/` - User config directory
+/// 2. `~/.codex/agents/` - User home directory
+/// 3. `.codex/agents/` - Project local directory
+fn build_default_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. User config directory (~/.config/codex/agents/ on Linux/macOS)
+    if let Some(config_dir) = dirs::config_dir() {
+        paths.push(config_dir.join("codex").join("agents"));
+    }
+
+    // 2. User home directory (~/.codex/agents/)
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".codex").join("agents"));
+    }
+
+    // 3. Project local directory (.codex/agents/)
+    if let Ok(cwd) = std::env::current_dir() {
+        paths.push(cwd.join(".codex").join("agents"));
+    }
+
+    paths
 }
 
 impl SubagentStores {
     pub fn new() -> Self {
+        let search_paths = build_default_search_paths();
         Self {
-            registry: Arc::new(AgentRegistry::new()),
+            registry: Arc::new(AgentRegistry::with_search_paths(search_paths)),
             background_store: Arc::new(BackgroundTaskStore::new()),
             transcript_store: Arc::new(TranscriptStore::new()),
+            reminder_orchestrator: Arc::new(SystemReminderOrchestrator::new(
+                SystemReminderConfig::default(),
+            )),
+            file_tracker: Arc::new(FileTracker::new()),
+            plan_state: Arc::new(RwLock::new(PlanState::default())),
+            inject_call_count: AtomicI32::new(0),
         }
+    }
+
+    /// Increment and return the new inject call count.
+    /// Only call this for main agent turns.
+    pub fn increment_inject_count(&self) -> i32 {
+        self.inject_call_count.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Get the current inject call count.
+    pub fn get_inject_count(&self) -> i32 {
+        self.inject_call_count.load(Ordering::Relaxed)
+    }
+
+    /// Update plan state from UpdatePlanArgs.
+    ///
+    /// Called by the update_plan handler to track plan state for reminder generation.
+    pub fn update_plan_state(&self, args: &UpdatePlanArgs, current_count: i32) {
+        let mut state = self.plan_state.write().expect("plan_state lock poisoned");
+        state.steps = args
+            .plan
+            .iter()
+            .map(|item| PlanStep {
+                step: item.step.clone(),
+                status: format!("{:?}", item.status).to_lowercase(),
+            })
+            .collect();
+        state.is_empty = state.steps.is_empty();
+        state.last_update_count = current_count;
+    }
+
+    /// Get a snapshot of the current plan state.
+    pub fn get_plan_state(&self) -> PlanState {
+        self.plan_state
+            .read()
+            .expect("plan_state lock poisoned")
+            .clone()
     }
 }
 
@@ -87,6 +181,22 @@ pub fn get_stores(conversation_id: &ConversationId) -> Option<Arc<SubagentStores
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_default_search_paths() {
+        let paths = build_default_search_paths();
+
+        // Should have at least project local path
+        assert!(!paths.is_empty());
+
+        // All paths should end with "agents"
+        for path in &paths {
+            assert!(
+                path.ends_with("agents"),
+                "Path should end with 'agents': {path:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_get_or_create_stores() {

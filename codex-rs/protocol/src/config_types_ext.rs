@@ -41,6 +41,9 @@ pub struct WebSearchConfig {
     /// Maximum number of search results to return (1-20)
     #[serde(default = "default_max_results")]
     pub max_results: usize,
+    /// API key for Tavily provider (falls back to TAVILY_API_KEY env var)
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for WebSearchConfig {
@@ -48,6 +51,7 @@ impl Default for WebSearchConfig {
         Self {
             provider: WebSearchProvider::default(),
             max_results: default_max_results(),
+            api_key: None,
         }
     }
 }

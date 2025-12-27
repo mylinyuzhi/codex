@@ -108,6 +108,14 @@ impl FileTracker {
         }
     }
 
+    /// Remove a file from tracking (e.g., when deleted).
+    ///
+    /// This prevents repeated notifications for deleted files.
+    pub fn remove(&self, path: &PathBuf) {
+        let mut files = self.files.write().expect("file tracker lock poisoned");
+        files.remove(path);
+    }
+
     /// Check if a file has been modified since last read.
     pub fn has_file_changed(&self, path: &PathBuf) -> bool {
         let files = self.files.read().expect("file tracker lock poisoned");

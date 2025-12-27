@@ -40,6 +40,7 @@ use crate::search::RecentFilesCache;
 use crate::storage::lancedb::LanceDbStore;
 use crate::traits::EmbeddingProvider;
 use crate::types::CodeChunk;
+use crate::types::ScoreType;
 use crate::types::SearchResult;
 
 /// Maximum number of cached RetrievalService instances.
@@ -104,6 +105,8 @@ pub struct RetrievalService {
     rewriter: Arc<dyn QueryRewriter>,
     /// LRU cache for recently accessed files (temporal relevance signal).
     recent_files: RwLock<RecentFilesCache>,
+    /// Workspace root for hydrating content from files.
+    workspace_root: Option<PathBuf>,
 }
 
 impl RetrievalService {
@@ -141,7 +144,7 @@ impl RetrievalService {
             ..Default::default()
         };
 
-        let service = Arc::new(Self::new(config, features).await?);
+        let service = Arc::new(Self::with_workspace(config, features, canonical.clone()).await?);
 
         // Cache the instance (LRU eviction handles memory bounds)
         INSTANCES.insert(canonical, Arc::clone(&service));
@@ -163,11 +166,30 @@ impl RetrievalService {
 
     /// Create a new retrieval service with BM25-only search.
     pub async fn new(config: RetrievalConfig, features: RetrievalFeatures) -> Result<Self> {
+        Self::with_workspace(config, features, None).await
+    }
+
+    /// Create a new retrieval service with workspace root for content hydration.
+    ///
+    /// When workspace_root is set, search results return fresh file content
+    /// instead of stale indexed content.
+    pub async fn with_workspace(
+        config: RetrievalConfig,
+        features: RetrievalFeatures,
+        workspace_root: impl Into<Option<PathBuf>>,
+    ) -> Result<Self> {
+        let workspace_root = workspace_root.into();
         let store = Arc::new(LanceDbStore::open(&config.data_dir).await?);
         let max_chunks_per_file = config.search.max_chunks_per_file as usize;
-        let searcher = HybridSearcher::new(store)
+        let mut searcher = HybridSearcher::new(store)
             .with_max_chunks_per_file(max_chunks_per_file)
             .with_reranker_config(&config.reranker);
+
+        // Enable hydration if workspace_root is set
+        if let Some(ref root) = workspace_root {
+            searcher = searcher.with_workspace_root(root.clone());
+        }
+
         let rewriter: Arc<dyn QueryRewriter> = Arc::new(SimpleRewriter::new());
         let recent_files = RwLock::new(RecentFilesCache::new(DEFAULT_RECENT_FILES_CAPACITY));
 
@@ -177,6 +199,7 @@ impl RetrievalService {
             searcher,
             rewriter,
             recent_files,
+            workspace_root,
         })
     }
 
@@ -186,11 +209,28 @@ impl RetrievalService {
         features: RetrievalFeatures,
         provider: Arc<dyn EmbeddingProvider>,
     ) -> Result<Self> {
+        Self::with_embeddings_and_workspace(config, features, provider, None).await
+    }
+
+    /// Create with an embedding provider and workspace root.
+    pub async fn with_embeddings_and_workspace(
+        config: RetrievalConfig,
+        features: RetrievalFeatures,
+        provider: Arc<dyn EmbeddingProvider>,
+        workspace_root: impl Into<Option<PathBuf>>,
+    ) -> Result<Self> {
+        let workspace_root = workspace_root.into();
         let store = Arc::new(LanceDbStore::open(&config.data_dir).await?);
         let max_chunks_per_file = config.search.max_chunks_per_file as usize;
-        let searcher = HybridSearcher::with_embeddings(store, provider)
+        let mut searcher = HybridSearcher::with_embeddings(store, provider)
             .with_max_chunks_per_file(max_chunks_per_file)
             .with_reranker_config(&config.reranker);
+
+        // Enable hydration if workspace_root is set
+        if let Some(ref root) = workspace_root {
+            searcher = searcher.with_workspace_root(root.clone());
+        }
+
         let rewriter: Arc<dyn QueryRewriter> = Arc::new(SimpleRewriter::new().with_expansion(true));
         let recent_files = RwLock::new(RecentFilesCache::new(DEFAULT_RECENT_FILES_CAPACITY));
 
@@ -200,6 +240,7 @@ impl RetrievalService {
             searcher,
             rewriter,
             recent_files,
+            workspace_root,
         })
     }
 
@@ -244,9 +285,48 @@ impl RetrievalService {
             query.to_string()
         };
 
-        // Perform search
         let limit = limit.unwrap_or(self.config.search.n_final);
-        self.searcher.search(&effective_query, limit).await
+
+        // Get recently accessed files for temporal relevance boost
+        let recent_results = self.get_recent_search_results(limit as usize).await;
+
+        // Perform search with hydration and recent files boost
+        self.searcher
+            .search_hydrated_with_recent(&effective_query, limit, &recent_results)
+            .await
+    }
+
+    /// Get SearchResults from recently accessed files for RRF fusion.
+    ///
+    /// Reads and chunks files on demand to ensure fresh content.
+    async fn get_recent_search_results(&self, limit: usize) -> Vec<SearchResult> {
+        let paths = self.recent_files.read().await.get_recent_paths(limit);
+
+        if paths.is_empty() {
+            return Vec::new();
+        }
+
+        let mut results = Vec::new();
+        for (rank, path) in paths.iter().enumerate() {
+            match self.chunk_file(path).await {
+                Ok(chunks) => {
+                    for chunk in chunks {
+                        results.push(SearchResult {
+                            chunk,
+                            // Score based on recency rank (most recent = highest)
+                            score: 1.0 / (rank as f32 + 1.0),
+                            score_type: ScoreType::Recent,
+                            is_stale: None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(path = ?path, error = %e, "Failed to chunk recent file");
+                }
+            }
+        }
+
+        results
     }
 
     /// Search using BM25 full-text search only.
@@ -308,6 +388,11 @@ impl RetrievalService {
         &self.config
     }
 
+    /// Get workspace root (if set).
+    pub fn workspace_root(&self) -> Option<&Path> {
+        self.workspace_root.as_deref()
+    }
+
     /// Check if vector search is available.
     pub fn has_vector_search(&self) -> bool {
         self.features.vector_search && self.searcher.has_vector_search()
@@ -320,40 +405,44 @@ impl RetrievalService {
     /// This updates the LRU cache for temporal relevance in search results.
     /// Recently accessed files will be boosted in search ranking.
     ///
-    /// # Arguments
-    /// * `path` - File path (absolute or relative to workspace)
-    /// * `chunks` - Optional pre-computed chunks. If None, file will be
-    ///              read and chunked automatically.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // With auto-chunking (reads file content)
-    /// service.notify_file_accessed(Path::new("src/main.rs"), None).await?;
-    ///
-    /// // With pre-computed chunks
-    /// service.notify_file_accessed(path, Some(chunks)).await?;
-    /// ```
-    pub async fn notify_file_accessed(
-        &self,
-        path: &Path,
-        chunks: Option<Vec<CodeChunk>>,
-    ) -> Result<()> {
-        let chunks = match chunks {
-            Some(c) => c,
-            None => self.chunk_file(path).await?,
-        };
-        self.recent_files
-            .write()
-            .await
-            .notify_file_accessed(path, chunks);
-        Ok(())
+    /// Note: Only the path is stored. Content is read fresh on demand during
+    /// search to avoid consistency issues with stale cached content.
+    pub async fn notify_file_accessed(&self, path: impl AsRef<Path>) {
+        self.recent_files.write().await.notify_file_accessed(path);
     }
 
     /// Remove a file from the recent files cache.
     ///
     /// Call this when a file is closed or deleted.
-    pub async fn remove_recent_file(&self, path: &Path) {
+    pub async fn remove_recent_file(&self, path: impl AsRef<Path>) {
         self.recent_files.write().await.remove(path);
+    }
+
+    /// Get paths of recently accessed files.
+    ///
+    /// Returns up to `limit` file paths, ordered by most recently accessed first.
+    pub async fn get_recent_paths(&self, limit: usize) -> Vec<PathBuf> {
+        self.recent_files.read().await.get_recent_paths(limit)
+    }
+
+    /// Get chunks from recently accessed files.
+    ///
+    /// Reads files from disk and chunks them on demand to ensure fresh content.
+    /// Used internally for RRF fusion with temporal relevance signal.
+    pub async fn get_recent_chunks(&self, limit: usize) -> Vec<CodeChunk> {
+        let paths = self.recent_files.read().await.get_recent_paths(limit);
+        let mut all_chunks = Vec::new();
+
+        for path in paths {
+            match self.chunk_file(&path).await {
+                Ok(chunks) => all_chunks.extend(chunks),
+                Err(e) => {
+                    tracing::debug!(path = ?path, error = %e, "Failed to chunk recent file");
+                }
+            }
+        }
+
+        all_chunks
     }
 
     /// Clear all recent files from the cache.
@@ -362,7 +451,7 @@ impl RetrievalService {
     }
 
     /// Check if a file is in the recent files cache.
-    pub async fn is_recent_file(&self, path: &Path) -> bool {
+    pub async fn is_recent_file(&self, path: impl AsRef<Path>) -> bool {
         self.recent_files.read().await.contains(path)
     }
 
@@ -385,21 +474,36 @@ impl RetrievalService {
         };
 
         // Get file extension for language detection
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("txt");
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("txt")
+            .to_string();
 
         // Get filepath string
         let filepath_str = path.to_string_lossy().to_string();
 
-        // Create token-aware chunker
-        let chunker = CodeChunkerService::new(
-            self.config.chunking.max_tokens as usize,
-            self.config.chunking.overlap_tokens as usize,
-        );
+        // Chunking config
+        let max_tokens = self.config.chunking.max_tokens as usize;
+        let overlap_tokens = self.config.chunking.overlap_tokens as usize;
 
-        let spans = match chunker.chunk(&content, extension) {
-            Ok(s) => s,
-            Err(e) => {
+        // Clone extension for use in closure (original is used later for CodeChunk.language)
+        let ext_for_chunk = extension.clone();
+
+        // Run CPU-intensive chunking in a blocking thread pool
+        let spans = match tokio::task::spawn_blocking(move || {
+            let chunker = CodeChunkerService::new(max_tokens, overlap_tokens);
+            chunker.chunk(&content, &ext_for_chunk)
+        })
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 tracing::debug!(path = ?path, error = %e, "Failed to chunk file");
+                return Ok(Vec::new());
+            }
+            Err(e) => {
+                tracing::warn!(path = ?path, error = %e, "Chunking task panicked");
                 return Ok(Vec::new());
             }
         };
@@ -526,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_notify_file_accessed_with_chunks() {
+    async fn test_notify_file_accessed() {
         let dir = TempDir::new().unwrap();
         let mut config = RetrievalConfig::default();
         config.data_dir = dir.path().to_path_buf();
@@ -535,34 +639,35 @@ mod tests {
         let service = RetrievalService::new(config, features).await.unwrap();
 
         let path = Path::new("src/main.rs");
-        let chunks = vec![CodeChunk {
-            id: "test:main.rs:0".to_string(),
-            source_id: "test".to_string(),
-            filepath: "src/main.rs".to_string(),
-            language: "rust".to_string(),
-            content: "fn main() {}".to_string(),
-            start_line: 1,
-            end_line: 1,
-            embedding: None,
-            modified_time: None,
-            workspace: "test".to_string(),
-            content_hash: String::new(),
-            indexed_at: 0,
-            parent_symbol: None,
-            is_overview: false,
-        }];
-
-        service
-            .notify_file_accessed(path, Some(chunks))
-            .await
-            .unwrap();
+        service.notify_file_accessed(path).await;
 
         assert!(service.is_recent_file(path).await);
         assert_eq!(service.recent_files_count().await, 1);
     }
 
     #[tokio::test]
-    async fn test_notify_file_accessed_auto_chunk() {
+    async fn test_get_recent_paths() {
+        let dir = TempDir::new().unwrap();
+        let mut config = RetrievalConfig::default();
+        config.data_dir = dir.path().to_path_buf();
+
+        let features = RetrievalFeatures::with_code_search();
+        let service = RetrievalService::new(config, features).await.unwrap();
+
+        service.notify_file_accessed("a.rs").await;
+        service.notify_file_accessed("b.rs").await;
+        service.notify_file_accessed("c.rs").await;
+
+        let paths = service.get_recent_paths(10).await;
+        assert_eq!(paths.len(), 3);
+        // Most recent first
+        assert_eq!(paths[0], PathBuf::from("c.rs"));
+        assert_eq!(paths[1], PathBuf::from("b.rs"));
+        assert_eq!(paths[2], PathBuf::from("a.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_chunks() {
         let dir = TempDir::new().unwrap();
         let mut config = RetrievalConfig::default();
         config.data_dir = dir.path().to_path_buf();
@@ -574,14 +679,11 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {\n    println!(\"hello\");\n}").unwrap();
 
-        // Notify with None to trigger auto-chunking
-        service
-            .notify_file_accessed(&file_path, None)
-            .await
-            .unwrap();
+        service.notify_file_accessed(&file_path).await;
 
-        assert!(service.is_recent_file(&file_path).await);
-        assert_eq!(service.recent_files_count().await, 1);
+        let chunks = service.get_recent_chunks(100).await;
+        assert!(!chunks.is_empty());
+        assert!(chunks[0].content.contains("fn main()"));
     }
 
     #[tokio::test]
@@ -594,10 +696,7 @@ mod tests {
         let service = RetrievalService::new(config, features).await.unwrap();
 
         let path = Path::new("src/main.rs");
-        service
-            .notify_file_accessed(path, Some(vec![]))
-            .await
-            .unwrap();
+        service.notify_file_accessed(path).await;
         assert!(service.is_recent_file(path).await);
 
         service.remove_recent_file(path).await;
@@ -613,14 +712,8 @@ mod tests {
         let features = RetrievalFeatures::with_code_search();
         let service = RetrievalService::new(config, features).await.unwrap();
 
-        service
-            .notify_file_accessed(Path::new("a.rs"), Some(vec![]))
-            .await
-            .unwrap();
-        service
-            .notify_file_accessed(Path::new("b.rs"), Some(vec![]))
-            .await
-            .unwrap();
+        service.notify_file_accessed("a.rs").await;
+        service.notify_file_accessed("b.rs").await;
         assert_eq!(service.recent_files_count().await, 2);
 
         service.clear_recent_files().await;
@@ -628,7 +721,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_notify_nonexistent_file_returns_empty_chunks() {
+    async fn test_get_recent_chunks_nonexistent_file() {
         let dir = TempDir::new().unwrap();
         let mut config = RetrievalConfig::default();
         config.data_dir = dir.path().to_path_buf();
@@ -636,11 +729,15 @@ mod tests {
         let features = RetrievalFeatures::with_code_search();
         let service = RetrievalService::new(config, features).await.unwrap();
 
-        // Notify with non-existent file (auto-chunk should return empty)
+        // Notify with non-existent file
         let path = Path::new("/nonexistent/file.rs");
-        service.notify_file_accessed(path, None).await.unwrap();
+        service.notify_file_accessed(path).await;
 
-        // File should still be tracked, just with empty chunks
+        // File is tracked
         assert!(service.is_recent_file(path).await);
+
+        // But get_recent_chunks returns empty (file doesn't exist)
+        let chunks = service.get_recent_chunks(100).await;
+        assert!(chunks.is_empty());
     }
 }

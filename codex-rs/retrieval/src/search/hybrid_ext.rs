@@ -112,6 +112,7 @@ impl SnippetSearcher {
             // Rank-based score (1.0, 0.5, 0.33, ...)
             score: 1.0 / (rank as f32 + 1.0),
             score_type: ScoreType::Snippet,
+            is_stale: None, // Not hydrated yet
         }
     }
 

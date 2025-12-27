@@ -2,16 +2,19 @@
 //!
 //! Minimal integration hooks - bulk logic in system_reminder/ module.
 
+use crate::config::system_reminder::LspDiagnosticsMinSeverity;
 use crate::system_reminder::BackgroundTaskInfo;
 use crate::system_reminder::FileTracker;
 use crate::system_reminder::GeneratorContext;
+use crate::system_reminder::PlanState;
 use crate::system_reminder::SystemReminder;
 use crate::system_reminder::SystemReminderOrchestrator;
-use crate::system_reminder::TodoState;
 use crate::user_instructions::UserInstructions;
+use codex_lsp::DiagnosticsStore;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Inject system reminders into conversation history.
 ///
@@ -31,10 +34,10 @@ pub async fn inject_system_reminders(
     // Find insertion position (after environment_context and user_instructions)
     let insert_pos = find_insert_position(history);
 
-    tracing::debug!(
-        "Injecting {} system reminders at position {}",
-        reminders.len(),
-        insert_pos
+    tracing::info!(
+        count = reminders.len(),
+        position = insert_pos,
+        "Injecting system reminders into conversation"
     );
 
     // Insert reminders in reverse order to maintain order
@@ -84,9 +87,11 @@ pub fn build_generator_context<'a>(
     plan_file_path: Option<&'a str>,
     is_plan_reentry: bool,
     file_tracker: &'a FileTracker,
-    todo_state: &'a TodoState,
+    plan_state: &'a PlanState,
     background_tasks: &'a [BackgroundTaskInfo],
     critical_instruction: Option<&'a str>,
+    diagnostics_store: Option<Arc<DiagnosticsStore>>,
+    lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
 ) -> GeneratorContext<'a> {
     GeneratorContext {
         turn_number,
@@ -98,9 +103,11 @@ pub fn build_generator_context<'a>(
         plan_file_path,
         is_plan_reentry,
         file_tracker,
-        todo_state,
+        plan_state,
         background_tasks,
         critical_instruction,
+        diagnostics_store,
+        lsp_diagnostics_min_severity,
     }
 }
 
@@ -194,7 +201,7 @@ mod tests {
         ];
 
         let tracker = FileTracker::new();
-        let todo_state = TodoState::default();
+        let plan_state = PlanState::default();
         let bg_tasks = vec![];
 
         let ctx = build_generator_context(
@@ -207,9 +214,11 @@ mod tests {
             None,
             false,
             &tracker,
-            &todo_state,
+            &plan_state,
             &bg_tasks,
             Some("Critical: Always test"),
+            None,
+            LspDiagnosticsMinSeverity::default(),
         );
 
         inject_system_reminders(&mut history, &orchestrator, &ctx).await;

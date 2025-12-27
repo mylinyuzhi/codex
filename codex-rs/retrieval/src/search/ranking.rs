@@ -179,6 +179,7 @@ mod tests {
             },
             score,
             score_type: ScoreType::Bm25,
+            is_stale: None,
         }
     }
 

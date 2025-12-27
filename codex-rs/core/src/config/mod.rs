@@ -1455,6 +1455,8 @@ impl Config {
                 web_fetch_config: Default::default(),
                 logging: cfg.ext.logging.unwrap_or_default(),
                 compact: cfg.ext.compact.unwrap_or_default(),
+                tool_filter: None,
+                system_reminder: cfg.ext.system_reminder.unwrap_or_default(),
             },
         };
         Ok(config)
