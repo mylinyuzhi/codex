@@ -506,10 +506,15 @@ impl Session {
             session_configuration.session_source.clone(),
         );
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &per_turn_config.features,
         });
+
+        // Apply tool filter if configured (for subagent sessions)
+        if let Some(filter) = &per_turn_config.ext.tool_filter {
+            tools_config.tool_filter = Some(filter.clone());
+        }
 
         // Log loaded tools
         let (tools, _) = crate::tools::spec::build_specs(&tools_config, None).build();
@@ -2365,11 +2370,11 @@ pub(crate) async fn run_task(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
-    if sess.enabled(Feature::CompactV2) {
-        // Use V2 compact dispatch (two-tier: micro-compact → full compact)
-        crate::compact_v2::auto_compact_dispatch(sess.clone(), turn_context.clone()).await;
+    // Try V2 compact first (encapsulates Feature::CompactV2 check)
+    if crate::compact_v2::try_auto_compact(sess.clone(), turn_context.clone()).await {
         return;
     }
+    // Fall back to legacy compact
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {

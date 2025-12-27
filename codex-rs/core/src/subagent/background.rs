@@ -1,6 +1,6 @@
 //! Background task management for async subagent execution.
 
-use super::executor::SubagentResult;
+use super::result::SubagentResult;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -244,7 +244,7 @@ pub type SharedBackgroundTaskStore = Arc<BackgroundTaskStore>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subagent::executor::SubagentStatus;
+    use crate::subagent::result::SubagentStatus;
 
     #[tokio::test]
     async fn test_register_and_status() {

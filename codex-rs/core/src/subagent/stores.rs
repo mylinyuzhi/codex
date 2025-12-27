@@ -4,6 +4,7 @@
 //! keyed by conversation_id. This avoids modifying Session/codex.rs while
 //! ensuring stores persist across turns within a session.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -27,10 +28,38 @@ pub struct SubagentStores {
     pub transcript_store: Arc<TranscriptStore>,
 }
 
+/// Build default search paths for custom agent discovery.
+///
+/// Search order:
+/// 1. `~/.config/codex/agents/` - User config directory
+/// 2. `~/.codex/agents/` - User home directory
+/// 3. `.codex/agents/` - Project local directory
+fn build_default_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. User config directory (~/.config/codex/agents/ on Linux/macOS)
+    if let Some(config_dir) = dirs::config_dir() {
+        paths.push(config_dir.join("codex").join("agents"));
+    }
+
+    // 2. User home directory (~/.codex/agents/)
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".codex").join("agents"));
+    }
+
+    // 3. Project local directory (.codex/agents/)
+    if let Ok(cwd) = std::env::current_dir() {
+        paths.push(cwd.join(".codex").join("agents"));
+    }
+
+    paths
+}
+
 impl SubagentStores {
     pub fn new() -> Self {
+        let search_paths = build_default_search_paths();
         Self {
-            registry: Arc::new(AgentRegistry::new()),
+            registry: Arc::new(AgentRegistry::with_search_paths(search_paths)),
             background_store: Arc::new(BackgroundTaskStore::new()),
             transcript_store: Arc::new(TranscriptStore::new()),
         }
@@ -87,6 +116,22 @@ pub fn get_stores(conversation_id: &ConversationId) -> Option<Arc<SubagentStores
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_default_search_paths() {
+        let paths = build_default_search_paths();
+
+        // Should have at least project local path
+        assert!(!paths.is_empty());
+
+        // All paths should end with "agents"
+        for path in &paths {
+            assert!(
+                path.ends_with("agents"),
+                "Path should end with 'agents': {path:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_get_or_create_stores() {

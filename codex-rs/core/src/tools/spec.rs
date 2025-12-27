@@ -16,6 +16,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+// Re-export ToolFilter from spec_ext
+pub use crate::tools::spec_ext::ToolFilter;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
@@ -30,6 +33,9 @@ pub(crate) struct ToolsConfig {
     pub include_mcp_resource_tools: bool,
     pub include_subagent: bool,
     pub experimental_supported_tools: Vec<String>,
+    /// Optional tool filter. When set, tools will be filtered accordingly.
+    /// Main session: None (no filtering). Subagent: from_agent_definition().
+    pub tool_filter: Option<ToolFilter>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -93,6 +99,7 @@ impl ToolsConfig {
             include_mcp_resource_tools,
             include_subagent,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            tool_filter: None,
         }
     }
 }
@@ -1150,6 +1157,11 @@ pub(crate) fn build_specs(
                 }
             }
         }
+    }
+
+    // Apply tool filtering if configured.
+    if let Some(filter) = &config.tool_filter {
+        builder = builder.filter_with(filter);
     }
 
     builder

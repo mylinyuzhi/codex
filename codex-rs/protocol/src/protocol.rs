@@ -43,6 +43,15 @@ pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 
+// Re-export extension types for backwards compatibility
+pub use crate::protocol_ext::CompactCompletedEvent;
+pub use crate::protocol_ext::CompactFailedEvent;
+pub use crate::protocol_ext::CompactThresholdExceededEvent;
+pub use crate::protocol_ext::ExtEventMsg;
+pub use crate::protocol_ext::MicroCompactCompletedEvent;
+pub use crate::protocol_ext::SubagentActivityEvent;
+pub use crate::protocol_ext::SubagentEventType;
+
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
@@ -668,20 +677,9 @@ pub enum EventMsg {
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 
-    /// Activity event from a subagent (Task tool execution).
-    SubagentActivity(SubagentActivityEvent),
-
-    /// Full compact completed successfully.
-    CompactCompleted(CompactCompletedEvent),
-
-    /// Micro-compact completed successfully.
-    MicroCompactCompleted(MicroCompactCompletedEvent),
-
-    /// Compact operation failed.
-    CompactFailed(CompactFailedEvent),
-
-    /// Context usage exceeded auto-compact threshold.
-    CompactThresholdExceeded(CompactThresholdExceededEvent),
+    /// Extension events (subagent, compact v2, etc.)
+    /// All custom events are wrapped here to minimize upstream conflicts.
+    Ext(ExtEventMsg),
 }
 
 /// Codex errors that we expose to clients.
@@ -849,64 +847,8 @@ pub struct WarningEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
 
-/// Event emitted when full compact completes successfully.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct CompactCompletedEvent {
-    /// Tokens before compaction.
-    #[ts(type = "number")]
-    pub pre_compact_tokens: i64,
-    /// Tokens after compaction.
-    #[ts(type = "number")]
-    pub post_compact_tokens: i64,
-    /// Tokens used for summarization input.
-    #[ts(type = "number")]
-    #[serde(default)]
-    pub compaction_input_tokens: i64,
-    /// Tokens generated in summary output.
-    #[ts(type = "number")]
-    #[serde(default)]
-    pub compaction_output_tokens: i64,
-    /// Number of files restored after compaction.
-    pub files_restored: i32,
-    /// Duration of compact operation in milliseconds.
-    #[ts(type = "number")]
-    #[serde(default)]
-    pub duration_ms: i64,
-    /// Whether this was an auto-compact or manual.
-    pub is_auto: bool,
-}
-
-/// Event emitted when micro-compact completes successfully.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct MicroCompactCompletedEvent {
-    /// Number of tool results that were compacted.
-    pub tools_compacted: i32,
-    /// Estimated tokens saved by compaction.
-    #[ts(type = "number")]
-    pub tokens_saved: i64,
-}
-
-/// Event emitted when compact operation fails.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct CompactFailedEvent {
-    /// Error message describing the failure.
-    pub message: String,
-    /// Whether this was an auto-compact or manual.
-    pub is_auto: bool,
-}
-
-/// Event emitted when context usage exceeds auto-compact threshold.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct CompactThresholdExceededEvent {
-    /// Current token usage.
-    #[ts(type = "number")]
-    pub current_tokens: i64,
-    /// Auto-compact threshold that was exceeded.
-    #[ts(type = "number")]
-    pub threshold_tokens: i64,
-    /// Percentage of context window used.
-    pub usage_percent: f64,
-}
+// CompactCompletedEvent, MicroCompactCompletedEvent, CompactFailedEvent,
+// CompactThresholdExceededEvent moved to protocol_ext.rs
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
@@ -1681,44 +1623,7 @@ pub struct StreamErrorEvent {
     pub additional_details: Option<String>,
 }
 
-/// Event type for subagent activity.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentEventType {
-    /// Subagent execution started.
-    Started,
-    /// Subagent execution completed successfully.
-    Completed,
-    /// Subagent execution encountered an error.
-    Error,
-    /// Subagent turn started.
-    TurnStart,
-    /// Subagent turn completed.
-    TurnComplete,
-    /// Tool call started within subagent.
-    ToolCallStart,
-    /// Tool call ended within subagent.
-    ToolCallEnd,
-    /// Grace period started (timeout/max_turns recovery).
-    GracePeriodStart,
-    /// Grace period ended.
-    GracePeriodEnd,
-}
-
-/// Activity event from a subagent execution.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SubagentActivityEvent {
-    /// Unique identifier for this agent instance.
-    pub agent_id: String,
-    /// Type of agent (e.g., "Explore", "Plan").
-    pub agent_type: String,
-    /// Type of activity event.
-    pub event_type: SubagentEventType,
-    /// Optional additional data (turn number, duration, etc.).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub data: Option<serde_json::Value>,
-}
+// SubagentEventType, SubagentActivityEvent moved to protocol_ext.rs
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamInfoEvent {

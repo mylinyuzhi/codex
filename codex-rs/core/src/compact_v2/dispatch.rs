@@ -9,6 +9,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::features::Feature;
 use crate::protocol::EventMsg;
+use crate::protocol::ExtEventMsg;
 use crate::protocol::MicroCompactCompletedEvent;
 use codex_protocol::user_input::UserInput;
 use tracing::debug;
@@ -76,10 +77,12 @@ pub(crate) async fn auto_compact_dispatch(
                 sess.recompute_token_usage(&turn_context).await;
 
                 // Emit MicroCompactCompleted event
-                let event = EventMsg::MicroCompactCompleted(MicroCompactCompletedEvent {
-                    tools_compacted: result.tools_compacted,
-                    tokens_saved: result.tokens_saved,
-                });
+                let event = EventMsg::Ext(ExtEventMsg::MicroCompactCompleted(
+                    MicroCompactCompletedEvent {
+                        tools_compacted: result.tools_compacted,
+                        tokens_saved: result.tokens_saved,
+                    },
+                ));
                 sess.send_event(&turn_context, event).await;
 
                 info!(

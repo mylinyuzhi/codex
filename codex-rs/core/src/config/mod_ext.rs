@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::tools::spec_ext::ToolFilter;
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigExt {
@@ -21,6 +23,9 @@ pub struct ConfigExt {
 
     /// Compact V2 configuration (thresholds, micro-compact, context restoration).
     pub compact: crate::compact_v2::CompactConfig,
+
+    /// Tool filter. Main session: None. Subagent: from_agent_definition().
+    pub tool_filter: Option<ToolFilter>,
 }
 
 impl Default for ConfigExt {
@@ -32,6 +37,7 @@ impl Default for ConfigExt {
             web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig::default(),
             logging: crate::config::types_ext::LoggingConfig::default(),
             compact: crate::compact_v2::CompactConfig::default(),
+            tool_filter: None,
         }
     }
 }

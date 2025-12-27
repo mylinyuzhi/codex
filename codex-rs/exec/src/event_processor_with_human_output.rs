@@ -596,11 +596,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_)
-            | EventMsg::SubagentActivity(_)
-            | EventMsg::CompactCompleted(_)
-            | EventMsg::MicroCompactCompleted(_)
-            | EventMsg::CompactFailed(_)
-            | EventMsg::CompactThresholdExceeded(_) => {}
+            | EventMsg::Ext(_) => {}
         }
         CodexStatus::Running
     }

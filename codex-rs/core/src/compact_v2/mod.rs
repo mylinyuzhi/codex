@@ -134,6 +134,24 @@ pub struct CompactMetrics {
     pub duration_ms: i64,
 }
 
+/// Try to run auto-compact using the V2 system.
+///
+/// Returns `true` if CompactV2 is enabled and handled the auto-compact request.
+/// Returns `false` if CompactV2 is not enabled (caller should use legacy compact).
+///
+/// This function encapsulates the Feature::CompactV2 check to minimize changes
+/// in codex.rs during upstream syncs.
+pub async fn try_auto_compact(
+    sess: std::sync::Arc<crate::codex::Session>,
+    turn_context: std::sync::Arc<crate::codex::TurnContext>,
+) -> bool {
+    if !sess.enabled(crate::features::Feature::CompactV2) {
+        return false;
+    }
+    auto_compact_dispatch(sess, turn_context).await;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
