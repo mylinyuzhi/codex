@@ -30,11 +30,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
-    /// Build a non-streaming request with incremental input filtering.
+    /// Build a non-streaming request with tweakcc input filtering.
     ///
     /// This method:
     /// 1. Sets `stream: false`
-    /// 2. Applies incremental input filtering if `previous_response_id` is set
+    /// 2. Applies tweakcc input filtering if `previous_response_id` is set
     /// 3. Builds the request
     ///
     /// # Incremental Filtering Logic
@@ -49,7 +49,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
     pub fn build_nonstream(mut self, provider: &Provider) -> Result<ResponsesRequest, ApiError> {
         self.stream = false;
 
-        // Apply incremental filtering if previous_response_id is set
+        // Apply tweakcc filtering if previous_response_id is set
         if self.previous_response_id.is_some() {
             if let Some(input) = self.input {
                 match filter_incremental_input(input) {
@@ -67,11 +67,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
                         ));
                     }
                     Some(slice) => {
-                        // Normal incremental mode - use filtered slice
+                        // Normal tweakcc mode - use filtered slice
                         tracing::debug!(
                             original_len = input.len(),
                             filtered_len = slice.len(),
-                            "Using incremental input mode"
+                            "Using tweakcc input mode"
                         );
                         self.input = Some(slice);
                     }

@@ -126,6 +126,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "glob_files",
         "think",
         "write_file",
+        "BashOutput",
+        "KillShell",
     ];
     let body0 = req1.single_request().body_json();
 

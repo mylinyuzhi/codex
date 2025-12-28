@@ -3,8 +3,6 @@
 mod builtin;
 mod parser;
 
-pub use builtin::EXPLORE_AGENT;
-pub use builtin::PLAN_AGENT;
 pub use builtin::get_builtin_agents;
 pub use parser::parse_agent_definition;
 

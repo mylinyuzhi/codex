@@ -37,6 +37,7 @@ pub mod embeddings;
 pub mod health;
 pub mod indexing;
 pub mod query;
+pub mod repomap;
 pub mod reranker;
 pub mod search;
 pub mod storage;
@@ -75,3 +76,10 @@ pub use indexing::IndexStats;
 pub use indexing::RebuildMode;
 pub use indexing::WatchEvent;
 pub use indexing::WatchEventKind;
+
+// Repo map exports
+pub use repomap::RankedFile;
+pub use repomap::RankedSymbol;
+pub use repomap::RepoMapRequest;
+pub use repomap::RepoMapResult;
+pub use repomap::RepoMapService;

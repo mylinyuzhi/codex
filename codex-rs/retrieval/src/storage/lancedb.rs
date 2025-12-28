@@ -1,7 +1,7 @@
 //! LanceDB storage layer.
 //!
 //! Provides vector storage and full-text search using LanceDB.
-//! Extended schema includes file metadata for incremental indexing.
+//! Extended schema includes file metadata for tweakcc indexing.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -37,6 +37,16 @@ pub struct LanceDbStore {
 }
 
 impl LanceDbStore {
+    /// Get reference to the database connection.
+    pub fn db(&self) -> &Connection {
+        &self.db
+    }
+
+    /// Get the table name.
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+
     /// Open or create a LanceDB database.
     pub async fn open(path: &Path) -> Result<Self> {
         Self::open_with_dimension(path, default_embedding_dimension()).await
@@ -61,7 +71,7 @@ impl LanceDbStore {
 
     /// Get the Arrow schema for the chunks table.
     ///
-    /// Extended schema includes metadata for incremental indexing:
+    /// Extended schema includes metadata for tweakcc indexing:
     /// - workspace: workspace identifier
     /// - content_hash: SHA256 hash of file content
     /// - mtime: file modification timestamp
@@ -85,7 +95,7 @@ impl LanceDbStore {
                 ),
                 true, // nullable for chunks without embeddings
             ),
-            // Extended metadata fields for incremental indexing
+            // Extended metadata fields for tweakcc indexing
             Field::new("workspace", DataType::Utf8, false),
             Field::new("content_hash", DataType::Utf8, false),
             Field::new("mtime", DataType::Int64, false),
@@ -94,6 +104,8 @@ impl LanceDbStore {
             Field::new("parent_symbol", DataType::Utf8, true),
             // Is overview chunk (nullable, defaults to false for backward compatibility)
             Field::new("is_overview", DataType::Boolean, true),
+            // BM25 sparse embedding (JSON string, nullable)
+            Field::new("bm25_embedding", DataType::Utf8, true),
         ])
     }
 
@@ -170,7 +182,13 @@ impl LanceDbStore {
     }
 
     /// Convert chunks to Arrow RecordBatch.
-    fn chunks_to_batch(&self, chunks: &[CodeChunk]) -> Result<RecordBatch> {
+    ///
+    /// Optionally includes BM25 sparse embeddings as JSON strings.
+    fn chunks_to_batch(
+        &self,
+        chunks: &[CodeChunk],
+        bm25_embeddings: Option<&[String]>,
+    ) -> Result<RecordBatch> {
         // Core chunk fields
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
         let source_ids: Vec<&str> = chunks.iter().map(|c| c.source_id.as_str()).collect();
@@ -229,6 +247,16 @@ impl LanceDbStore {
         // Is overview chunk (nullable)
         let is_overviews: Vec<Option<bool>> = chunks.iter().map(|c| Some(c.is_overview)).collect();
 
+        // BM25 sparse embeddings (nullable JSON strings)
+        let bm25_emb_values: Vec<Option<&str>> = if let Some(embeddings) = bm25_embeddings {
+            embeddings
+                .iter()
+                .map(|e| if e.is_empty() { None } else { Some(e.as_str()) })
+                .collect()
+        } else {
+            vec![None; chunks.len()]
+        };
+
         let schema = Arc::new(self.get_schema());
         RecordBatch::try_new(
             schema,
@@ -247,6 +275,7 @@ impl LanceDbStore {
                 Arc::new(Int64Array::from(indexed_ats)),
                 Arc::new(StringArray::from(parent_symbols)),
                 Arc::new(BooleanArray::from(is_overviews)),
+                Arc::new(StringArray::from(bm25_emb_values)),
             ],
         )
         .map_err(|e| RetrievalErr::LanceDbQueryFailed {
@@ -293,14 +322,26 @@ impl LanceDbStore {
         })
     }
 
-    /// Store a batch of code chunks.
+    /// Store a batch of code chunks (without BM25 embeddings).
     pub async fn store_chunks(&self, chunks: &[CodeChunk]) -> Result<()> {
+        self.store_chunks_with_bm25(chunks, None).await
+    }
+
+    /// Store a batch of code chunks with optional BM25 embeddings.
+    ///
+    /// If `bm25_embeddings` is provided, it must have the same length as `chunks`.
+    /// Each string should be a JSON-serialized SparseEmbedding.
+    pub async fn store_chunks_with_bm25(
+        &self,
+        chunks: &[CodeChunk],
+        bm25_embeddings: Option<&[String]>,
+    ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
 
         let table = self.get_or_create_table().await?;
-        let batch = self.chunks_to_batch(chunks)?;
+        let batch = self.chunks_to_batch(chunks, bm25_embeddings)?;
 
         // Create a RecordBatchIterator for LanceDB
         let schema = batch.schema();
@@ -1012,7 +1053,7 @@ impl LanceDbStore {
         Ok(())
     }
 
-    // ========== Catalog-like operations for incremental indexing ==========
+    // ========== Catalog-like operations for tweakcc indexing ==========
 
     /// Get file metadata for a specific file in a workspace.
     ///
@@ -1206,7 +1247,7 @@ impl LanceDbStore {
     }
 }
 
-/// File metadata for incremental indexing.
+/// File metadata for tweakcc indexing.
 ///
 /// Contains the metadata needed for change detection without
 /// loading the full chunk content.

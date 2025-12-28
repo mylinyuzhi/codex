@@ -113,7 +113,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             extra_headers,
         } = options;
 
-        // Apply incremental filtering when previous_response_id exists
+        // Apply tweakcc filtering when previous_response_id exists
         let input = if prompt.previous_response_id.is_some() {
             match filter_incremental_input(&prompt.input) {
                 None => {
@@ -127,7 +127,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                     ));
                 }
                 Some(slice) => {
-                    // Normal incremental mode - use filtered slice
+                    // Normal tweakcc mode - use filtered slice
                     slice
                 }
             }

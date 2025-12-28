@@ -21,7 +21,9 @@ pub static EXPLORE_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefi
             .to_string(),
     ),
     tools: ToolAccess::List(vec![
+        names::THINK.to_string(),
         names::READ_FILE.to_string(),
+        names::LIST_DIR.to_string(),
         names::GLOB_FILES.to_string(),
         names::GREP_FILES.to_string(),
         names::WEB_FETCH.to_string(),
@@ -29,6 +31,7 @@ pub static EXPLORE_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefi
     ]),
     disallowed_tools: vec![
         names::SMART_EDIT.to_string(),
+        names::APPLY_PATCH.to_string(),
         names::WRITE_FILE.to_string(),
         names::SHELL_COMMAND.to_string(),
         names::TASK.to_string(),
@@ -42,7 +45,7 @@ pub static EXPLORE_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefi
     },
     run_config: AgentRunConfig {
         max_time_seconds: 120,
-        max_turns: 30,
+        max_turns: 100,
         grace_period_seconds: 30,
     },
     input_config: None,
@@ -66,7 +69,9 @@ pub static PLAN_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefinit
             .to_string(),
     ),
     tools: ToolAccess::List(vec![
+        names::THINK.to_string(),
         names::READ_FILE.to_string(),
+        names::LIST_DIR.to_string(),
         names::GLOB_FILES.to_string(),
         names::GREP_FILES.to_string(),
         names::WEB_FETCH.to_string(),
@@ -74,6 +79,7 @@ pub static PLAN_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefinit
     ]),
     disallowed_tools: vec![
         names::SMART_EDIT.to_string(),
+        names::APPLY_PATCH.to_string(),
         names::WRITE_FILE.to_string(),
         names::SHELL_COMMAND.to_string(),
         names::TASK.to_string(),
@@ -87,7 +93,7 @@ pub static PLAN_AGENT: LazyLock<AgentDefinition> = LazyLock::new(|| AgentDefinit
     },
     run_config: AgentRunConfig {
         max_time_seconds: 300,
-        max_turns: 50,
+        max_turns: 100,
         grace_period_seconds: 60,
     },
     input_config: None,

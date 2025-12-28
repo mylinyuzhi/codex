@@ -36,6 +36,10 @@ fn default_health_check_interval_ms() -> i64 {
     30_000
 }
 
+fn default_notification_buffer_size() -> i32 {
+    100
+}
+
 // ============================================================================
 // Built-in server definitions
 // ============================================================================
@@ -142,6 +146,10 @@ pub struct LspServerConfig {
     /// Health check interval in milliseconds (default: 30_000)
     #[serde(default = "default_health_check_interval_ms")]
     pub health_check_interval_ms: i64,
+
+    /// Notification channel buffer size (default: 100)
+    #[serde(default = "default_notification_buffer_size")]
+    pub notification_buffer_size: i32,
 }
 
 impl Default for LspServerConfig {
@@ -162,6 +170,7 @@ impl Default for LspServerConfig {
             shutdown_timeout_ms: default_shutdown_timeout_ms(),
             request_timeout_ms: default_request_timeout_ms(),
             health_check_interval_ms: default_health_check_interval_ms(),
+            notification_buffer_size: default_notification_buffer_size(),
         }
     }
 }
@@ -268,6 +277,7 @@ pub struct LifecycleConfig {
     pub startup_timeout_ms: i64,
     pub shutdown_timeout_ms: i64,
     pub request_timeout_ms: i64,
+    pub notification_buffer_size: i32,
 }
 
 impl From<&LspServerConfig> for LifecycleConfig {
@@ -279,6 +289,7 @@ impl From<&LspServerConfig> for LifecycleConfig {
             startup_timeout_ms: config.startup_timeout_ms,
             shutdown_timeout_ms: config.shutdown_timeout_ms,
             request_timeout_ms: config.request_timeout_ms,
+            notification_buffer_size: config.notification_buffer_size,
         }
     }
 }
@@ -292,6 +303,7 @@ impl Default for LifecycleConfig {
             startup_timeout_ms: default_startup_timeout_ms(),
             shutdown_timeout_ms: default_shutdown_timeout_ms(),
             request_timeout_ms: default_request_timeout_ms(),
+            notification_buffer_size: default_notification_buffer_size(),
         }
     }
 }

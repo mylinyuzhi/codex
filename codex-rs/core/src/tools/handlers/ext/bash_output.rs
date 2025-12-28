@@ -1,10 +1,10 @@
 //! BashOutput tool handler.
 //!
-//! Retrieves output from background shell commands with incremental read support.
+//! Retrieves output from background shell commands with tweakcc read support.
 //!
 //! ## Incremental Output
 //!
-//! By default, each call returns new output since the last read (incremental mode).
+//! By default, each call returns new output since the last read (tweakcc mode).
 //! Use `offset=0` to read from the beginning, or specify a byte offset to read from.
 //!
 //! ## Environment Variables

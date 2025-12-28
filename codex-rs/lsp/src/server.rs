@@ -102,7 +102,7 @@ impl LspServerManager {
             ext
         );
 
-        let server_info = self.find_server_for_extension(&ext)?;
+        let server_info = self.find_server_for_extension(&ext).await?;
         info!(
             "Selected LSP server '{}' for extension '{}'",
             server_info.id, ext
@@ -114,61 +114,83 @@ impl LspServerManager {
         let key = (server_info.id.clone(), root_path.clone());
 
         // Check if existing client is healthy (with rate-limited health checks)
-        {
+        // Lock ordering: We acquire locks sequentially and release each before acquiring the next
+        // to avoid potential deadlocks. The pattern is:
+        // 1. Check clients -> get cloned client ref (release lock)
+        // 2. Check last_health_checks -> determine if check needed (release lock)
+        // 3. Check lifecycles -> get health status (release lock)
+        // 4. Update last_health_checks if needed (release lock)
+
+        // Step 1: Get cached client (if any)
+        let cached_client = {
             let clients = self.clients.lock().await;
-            if let Some(client) = clients.get(&key) {
-                // Rate-limit health checks to avoid excessive overhead
-                let should_check = {
-                    let last_checks = self.last_health_checks.lock().await;
-                    match last_checks.get(&key) {
-                        Some(last) => {
-                            last.elapsed() >= Duration::from_secs(HEALTH_CHECK_MIN_INTERVAL_SECS)
-                        }
-                        None => true, // Never checked, should check
+            clients.get(&key).cloned()
+        };
+
+        if let Some(client) = cached_client {
+            // Step 2: Check if we should perform health check (rate limiting)
+            let should_check = {
+                let last_checks = self.last_health_checks.lock().await;
+                match last_checks.get(&key) {
+                    Some(last) => {
+                        last.elapsed() >= Duration::from_secs(HEALTH_CHECK_MIN_INTERVAL_SECS)
                     }
-                };
-
-                if !should_check {
-                    // Skip health check, assume healthy (checked recently)
-                    info!(
-                        "Using cached LSP client for {} ({})",
-                        server_info.id,
-                        root_path.display()
-                    );
-                    return Ok(Arc::clone(client));
+                    None => true, // Never checked, should check
                 }
+            };
 
-                // Check health via lifecycle manager
+            if !should_check {
+                // Skip health check, assume healthy (checked recently)
+                info!(
+                    "Using cached LSP client for {} ({})",
+                    server_info.id,
+                    root_path.display()
+                );
+                return Ok(client);
+            }
+
+            // Step 3: Get lifecycle and check health
+            let (health, restart_count, is_restarting, has_lifecycle) = {
                 let lifecycles = self.lifecycles.lock().await;
                 if let Some(lifecycle) = lifecycles.get(&key) {
                     let health = lifecycle.health().await;
-
-                    // Update last health check time
-                    {
-                        let mut last_checks = self.last_health_checks.lock().await;
-                        last_checks.insert(key.clone(), Instant::now());
-                    }
-
-                    if health == ServerHealth::Healthy {
-                        return Ok(Arc::clone(client));
-                    }
-
-                    // Check if we should restart
-                    if health == ServerHealth::Failed {
-                        return Err(LspErr::ServerFailed {
-                            server: key.0.clone(),
-                            restarts: lifecycle.get_restart_count(),
-                        });
-                    }
-
-                    if lifecycle.is_restarting() {
-                        return Err(LspErr::ServerRestarting {
-                            server: key.0.clone(),
-                        });
-                    }
+                    let restart_count = lifecycle.get_restart_count();
+                    let is_restarting = lifecycle.is_restarting();
+                    (Some(health), restart_count, is_restarting, true)
                 } else {
-                    // No lifecycle manager, assume healthy
-                    return Ok(Arc::clone(client));
+                    (None, 0, false, false)
+                }
+            };
+
+            // Step 4: Update last health check time
+            {
+                let mut last_checks = self.last_health_checks.lock().await;
+                last_checks.insert(key.clone(), Instant::now());
+            }
+
+            // Process health check result
+            if !has_lifecycle {
+                // No lifecycle manager, assume healthy
+                return Ok(client);
+            }
+
+            match health {
+                Some(ServerHealth::Healthy) => {
+                    return Ok(client);
+                }
+                Some(ServerHealth::Failed) => {
+                    return Err(LspErr::ServerFailed {
+                        server: key.0.clone(),
+                        restarts: restart_count,
+                    });
+                }
+                _ if is_restarting => {
+                    return Err(LspErr::ServerRestarting {
+                        server: key.0.clone(),
+                    });
+                }
+                _ => {
+                    // Server needs restart, fall through to spawn_server_with_lifecycle
                 }
             }
         }
@@ -225,6 +247,15 @@ impl LspServerManager {
             );
         }
 
+        // Clear symbol cache from old client before spawning new one
+        // This ensures stale symbol information is not returned after restart
+        {
+            let clients = self.clients.lock().await;
+            if let Some(old_client) = clients.get(key) {
+                old_client.clear_symbol_cache().await;
+            }
+        }
+
         // Attempt to spawn server
         match self.spawn_server(server_info, root_path).await {
             Ok(client) => {
@@ -262,7 +293,7 @@ impl LspServerManager {
     }
 
     /// Find server configuration for file extension
-    fn find_server_for_extension(&self, ext: &str) -> Result<ServerInfo> {
+    async fn find_server_for_extension(&self, ext: &str) -> Result<ServerInfo> {
         // First, check custom servers (those with command defined)
         for (id, config) in &self.config.servers {
             if config.disabled {
@@ -290,7 +321,7 @@ impl LspServerManager {
             });
         }
 
-        self.build_server_info_from_builtin(builtin)
+        self.build_server_info_from_builtin(builtin).await
     }
 
     /// Build ServerInfo from a unified server config (custom server)
@@ -316,9 +347,9 @@ impl LspServerManager {
 
     /// Build ServerInfo from a builtin server
     ///
-    /// Note: This method uses the first command from the builtin server as a fallback.
-    /// Actual command resolution (binary existence check) happens during spawning.
-    fn build_server_info_from_builtin(
+    /// Note: This method resolves the command asynchronously to avoid blocking
+    /// when checking for binary availability with `which::which()`.
+    async fn build_server_info_from_builtin(
         &self,
         builtin: &'static BuiltinServer,
     ) -> Result<ServerInfo> {
@@ -330,10 +361,10 @@ impl LspServerManager {
                 // Custom command specified - use it with args from config
                 (custom_cmd.clone(), config.args.clone())
             } else {
-                self.get_builtin_command_fallback(builtin)
+                Self::get_builtin_command_fallback(builtin).await
             }
         } else {
-            self.get_builtin_command_fallback(builtin)
+            Self::get_builtin_command_fallback(builtin).await
         };
 
         let lifecycle_config = server_config.map(LifecycleConfig::from).unwrap_or_default();
@@ -368,34 +399,53 @@ impl LspServerManager {
     }
 
     /// Get command from builtin server (uses first command as fallback)
-    fn get_builtin_command_fallback(
-        &self,
+    ///
+    /// This method uses `spawn_blocking` to avoid blocking the async runtime
+    /// when calling `which::which()` to check for binary availability.
+    async fn get_builtin_command_fallback(
         builtin: &'static BuiltinServer,
     ) -> (String, Vec<String>) {
-        // Try to find an available binary
-        for cmd in builtin.commands {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
+        // Move blocking which::which() calls to the blocking thread pool
+        tokio::task::spawn_blocking(move || {
+            // Try to find an available binary
+            for cmd in builtin.commands {
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let program = parts[0];
+                if which::which(program).is_ok() {
+                    let args = parts[1..].iter().map(|s| s.to_string()).collect();
+                    return (program.to_string(), args);
+                }
+            }
+
+            // Fallback to first command (will fail at spawn time if not found)
+            let first_cmd = builtin.commands.first().unwrap_or(&"");
+            let parts: Vec<&str> = first_cmd.split_whitespace().collect();
             if parts.is_empty() {
-                continue;
-            }
-
-            let program = parts[0];
-            if which::which(program).is_ok() {
+                (String::new(), Vec::new())
+            } else {
+                let program = parts[0].to_string();
                 let args = parts[1..].iter().map(|s| s.to_string()).collect();
-                return (program.to_string(), args);
+                (program, args)
             }
-        }
-
-        // Fallback to first command (will fail at spawn time if not found)
-        let first_cmd = builtin.commands.first().unwrap_or(&"");
-        let parts: Vec<&str> = first_cmd.split_whitespace().collect();
-        if parts.is_empty() {
-            (String::new(), Vec::new())
-        } else {
-            let program = parts[0].to_string();
-            let args = parts[1..].iter().map(|s| s.to_string()).collect();
-            (program, args)
-        }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            // JoinError fallback - use first command
+            let first_cmd = builtin.commands.first().unwrap_or(&"");
+            let parts: Vec<&str> = first_cmd.split_whitespace().collect();
+            if parts.is_empty() {
+                (String::new(), Vec::new())
+            } else {
+                (
+                    parts[0].to_string(),
+                    parts[1..].iter().map(|s| s.to_string()).collect(),
+                )
+            }
+        })
     }
 
     /// Find project root from file path
@@ -511,14 +561,14 @@ impl LspServerManager {
     }
 
     /// Check if LSP is available for a file extension
-    pub fn is_available(&self, file_path: &Path) -> bool {
+    pub async fn is_available(&self, file_path: &Path) -> bool {
         let ext = file_path
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| format!(".{s}"))
             .unwrap_or_default();
 
-        self.find_server_for_extension(&ext).is_ok()
+        self.find_server_for_extension(&ext).await.is_ok()
     }
 
     /// Get diagnostics store
@@ -599,6 +649,84 @@ impl LspServerManager {
         let lifecycles = self.lifecycles.lock().await;
         lifecycles.get(&key).cloned()
     }
+
+    /// Pre-warm language servers for given file extensions
+    ///
+    /// This spawns servers in the background for the specified extensions,
+    /// reducing latency for the first LSP operation. Useful during startup
+    /// when you know which languages will be used.
+    ///
+    /// # Arguments
+    /// * `extensions` - File extensions to pre-warm (e.g., ".rs", ".go", ".py")
+    /// * `project_root` - Project root directory for server initialization
+    ///
+    /// # Returns
+    /// List of server IDs that were successfully warmed up
+    ///
+    /// # Example
+    /// ```ignore
+    /// let manager = LspServerManager::new(config, diagnostics);
+    /// let warmed = manager.prewarm(&[".rs", ".go"], project_root).await;
+    /// ```
+    pub async fn prewarm(&self, extensions: &[&str], project_root: &Path) -> Vec<String> {
+        let mut warmed = Vec::new();
+
+        for ext in extensions {
+            // Check if we have a server for this extension
+            match self.find_server_for_extension(ext).await {
+                Ok(server_info) => {
+                    let key = (server_info.id.clone(), project_root.to_path_buf());
+
+                    // Check if already cached
+                    {
+                        let clients = self.clients.lock().await;
+                        if clients.contains_key(&key) {
+                            debug!(
+                                "Server {} already running for extension {}",
+                                server_info.id, ext
+                            );
+                            warmed.push(server_info.id);
+                            continue;
+                        }
+                    }
+
+                    // Try to spawn the server
+                    info!(
+                        "Pre-warming LSP server {} for extension {}",
+                        server_info.id, ext
+                    );
+
+                    match self
+                        .spawn_server_with_lifecycle(&key, &server_info, project_root)
+                        .await
+                    {
+                        Ok(_client) => {
+                            info!(
+                                "Successfully pre-warmed LSP server {} for extension {}",
+                                server_info.id, ext
+                            );
+                            warmed.push(server_info.id);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to pre-warm LSP server {} for extension {}: {}",
+                                server_info.id, ext, e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("No server available for extension {}: {}", ext, e);
+                }
+            }
+        }
+
+        if !warmed.is_empty() {
+            info!("Pre-warmed {} LSP server(s): {:?}", warmed.len(), warmed);
+        }
+
+        warmed
+    }
 }
 
 impl std::fmt::Debug for LspServerManager {
@@ -621,20 +749,20 @@ mod tests {
         assert!(exts.contains(&".py"));
     }
 
-    #[test]
-    fn test_find_server_for_extension() {
+    #[tokio::test]
+    async fn test_find_server_for_extension() {
         let config = LspServersConfig::default();
         let diagnostics = Arc::new(DiagnosticsStore::new());
         let manager = LspServerManager::new(config, diagnostics);
 
-        assert!(manager.find_server_for_extension(".rs").is_ok());
-        assert!(manager.find_server_for_extension(".go").is_ok());
-        assert!(manager.find_server_for_extension(".py").is_ok());
-        assert!(manager.find_server_for_extension(".txt").is_err());
+        assert!(manager.find_server_for_extension(".rs").await.is_ok());
+        assert!(manager.find_server_for_extension(".go").await.is_ok());
+        assert!(manager.find_server_for_extension(".py").await.is_ok());
+        assert!(manager.find_server_for_extension(".txt").await.is_err());
     }
 
-    #[test]
-    fn test_find_server_disabled() {
+    #[tokio::test]
+    async fn test_find_server_disabled() {
         let mut config = LspServersConfig::default();
         config.servers.insert(
             "rust-analyzer".to_string(),
@@ -647,8 +775,8 @@ mod tests {
         let diagnostics = Arc::new(DiagnosticsStore::new());
         let manager = LspServerManager::new(config, diagnostics);
 
-        assert!(manager.find_server_for_extension(".rs").is_err());
-        assert!(manager.find_server_for_extension(".go").is_ok());
+        assert!(manager.find_server_for_extension(".rs").await.is_err());
+        assert!(manager.find_server_for_extension(".go").await.is_ok());
     }
 
     #[test]
@@ -662,8 +790,8 @@ mod tests {
         assert_eq!(root, Path::new("/some/path"));
     }
 
-    #[test]
-    fn test_custom_server_priority() {
+    #[tokio::test]
+    async fn test_custom_server_priority() {
         let mut config = LspServersConfig::default();
 
         // Add custom server for .rs extension (should override builtin)
@@ -682,13 +810,13 @@ mod tests {
         let manager = LspServerManager::new(config, diagnostics);
 
         // Custom server should be found first
-        let server_info = manager.find_server_for_extension(".rs").unwrap();
+        let server_info = manager.find_server_for_extension(".rs").await.unwrap();
         assert_eq!(server_info.id, "my-rust-lsp");
         assert_eq!(server_info.command, "my-rust-lsp");
     }
 
-    #[test]
-    fn test_custom_server_new_extension() {
+    #[tokio::test]
+    async fn test_custom_server_new_extension() {
         let mut config = LspServersConfig::default();
 
         // Add custom server for a new extension
@@ -707,10 +835,10 @@ mod tests {
         let manager = LspServerManager::new(config, diagnostics);
 
         // Custom extension should be found
-        let server_info = manager.find_server_for_extension(".ts").unwrap();
+        let server_info = manager.find_server_for_extension(".ts").await.unwrap();
         assert_eq!(server_info.id, "typescript-lsp");
 
-        let server_info = manager.find_server_for_extension(".tsx").unwrap();
+        let server_info = manager.find_server_for_extension(".tsx").await.unwrap();
         assert_eq!(server_info.id, "typescript-lsp");
     }
 
@@ -739,8 +867,8 @@ mod tests {
         assert!(exts.contains(&".ts".to_string()));
     }
 
-    #[test]
-    fn test_server_info_lifecycle_config() {
+    #[tokio::test]
+    async fn test_server_info_lifecycle_config() {
         let mut config = LspServersConfig::default();
 
         config.servers.insert(
@@ -756,7 +884,7 @@ mod tests {
         let diagnostics = Arc::new(DiagnosticsStore::new());
         let manager = LspServerManager::new(config, diagnostics);
 
-        let server_info = manager.find_server_for_extension(".rs").unwrap();
+        let server_info = manager.find_server_for_extension(".rs").await.unwrap();
         assert_eq!(server_info.lifecycle_config.max_restarts, 5);
         assert!(!server_info.lifecycle_config.restart_on_crash);
         assert_eq!(server_info.lifecycle_config.startup_timeout_ms, 20_000);

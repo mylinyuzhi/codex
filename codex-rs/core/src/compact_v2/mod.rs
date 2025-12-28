@@ -141,7 +141,7 @@ pub struct CompactMetrics {
 ///
 /// This function encapsulates the Feature::CompactV2 check to minimize changes
 /// in codex.rs during upstream syncs.
-pub async fn try_auto_compact(
+pub(crate) async fn try_auto_compact(
     sess: std::sync::Arc<crate::codex::Session>,
     turn_context: std::sync::Arc<crate::codex::TurnContext>,
 ) -> bool {

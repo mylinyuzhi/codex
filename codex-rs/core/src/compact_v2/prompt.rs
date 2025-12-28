@@ -83,6 +83,7 @@ pub fn generate_summarization_prompt(custom_instructions: Option<&str>) -> Strin
 /// Generate a shorter summarization prompt for micro-compaction.
 ///
 /// Used when only a brief summary is needed (e.g., for progress tracking).
+#[allow(dead_code)] // Reserved for micro-compact brief summaries
 pub fn generate_brief_prompt() -> &'static str {
     r#"Provide a brief 2-3 sentence summary of the key points from this conversation.
 Focus on: current task, key decisions made, and any pending items."#
@@ -91,7 +92,6 @@ Focus on: current task, key decisions made, and any pending items."#
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn system_prompt_is_defined() {

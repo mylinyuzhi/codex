@@ -1,4 +1,4 @@
-//! Change detection for incremental indexing.
+//! Change detection for tweakcc indexing.
 //!
 //! Uses content hash (SHA256) to detect file modifications.
 
@@ -56,7 +56,7 @@ pub struct CatalogEntry {
     pub chunks_failed: i32,
 }
 
-/// Change detector for incremental indexing.
+/// Change detector for tweakcc indexing.
 pub struct ChangeDetector {
     db: Arc<SqliteStore>,
 }

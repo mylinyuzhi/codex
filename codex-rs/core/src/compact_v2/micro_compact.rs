@@ -76,6 +76,7 @@ pub struct MicroCompactResult {
 const CLEARED_PLACEHOLDER: &str = "[Old tool result content cleared]";
 
 /// Scanned tool information.
+#[allow(dead_code)] // Tool tracking for micro-compaction
 #[derive(Debug, Clone)]
 struct ToolInfo {
     /// Index of the message containing the tool_use
@@ -247,6 +248,7 @@ pub fn try_micro_compact(
 }
 
 /// Check if a tool name is eligible for micro-compact.
+#[allow(dead_code)]
 pub fn is_eligible_tool(name: &str) -> bool {
     ELIGIBLE_TOOLS.contains(name)
 }

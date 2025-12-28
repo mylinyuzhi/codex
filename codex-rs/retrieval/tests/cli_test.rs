@@ -222,7 +222,7 @@ async fn test_clean_rebuild_mode() {
     let store = Arc::new(SqliteStore::open(&db_path).unwrap());
     let mut manager = IndexManager::new(config, store);
 
-    // First build (incremental)
+    // First build (tweakcc)
     let mut rx = manager
         .rebuild("test", workdir.path(), RebuildMode::Incremental)
         .await

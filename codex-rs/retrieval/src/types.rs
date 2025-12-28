@@ -68,7 +68,7 @@ pub fn detect_language(path: &Path) -> Option<String> {
 
 /// Code chunk - a segment of source code.
 ///
-/// Extended with metadata fields for incremental indexing support.
+/// Extended with metadata fields for tweakcc indexing support.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
     /// Unique ID: "{workspace}:{filepath}:{chunk_idx}"
@@ -92,7 +92,7 @@ pub struct CodeChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub modified_time: Option<i64>,
-    // Extended metadata fields for incremental indexing
+    // Extended metadata fields for tweakcc indexing
     /// Workspace identifier (same as source_id for backward compatibility)
     #[serde(default)]
     pub workspace: String,

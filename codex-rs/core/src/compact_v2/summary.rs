@@ -101,6 +101,7 @@ pub fn create_summary_message(summary_text: &str, continue_without_asking: bool)
 /// Extract summary text from LLM response.
 ///
 /// Looks for content in `<summary>` tags or returns the full text if no tags.
+#[allow(dead_code)] // Summary extraction utility
 pub fn extract_summary_text(response: &str) -> String {
     if let Some(caps) = SUMMARY_RE.captures(response) {
         if let Some(content) = caps.get(1) {

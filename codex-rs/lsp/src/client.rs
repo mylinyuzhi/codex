@@ -1,5 +1,8 @@
 //! LSP client for communicating with a single language server
 
+use crate::client_ext::DocumentContent;
+use crate::client_ext::MAX_INCREMENTAL_CONTENT_SIZE;
+use crate::client_ext::compute_incremental_changes;
 use crate::diagnostics::DiagnosticsStore;
 use crate::error::LspErr;
 use crate::error::Result;
@@ -49,6 +52,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -59,8 +63,38 @@ use tracing::warn;
 /// Maximum number of files to track as opened (prevents unbounded memory growth)
 const MAX_OPENED_FILES: usize = 500;
 
+/// Maximum number of symbol cache entries (prevents unbounded memory growth)
+const MAX_SYMBOL_CACHE_SIZE: usize = 100;
+
 /// Health check timeout in seconds
 const HEALTH_CHECK_TIMEOUT_SECS: i32 = 5;
+
+/// Cached document symbols with version tracking and LRU support
+#[derive(Debug, Clone)]
+struct CachedSymbols {
+    /// The cached symbols (Arc for cheap cloning)
+    symbols: Arc<Vec<ResolvedSymbol>>,
+    /// File version when cache was created
+    version: i32,
+    /// Last access time for LRU eviction
+    last_access: Instant,
+}
+
+/// Consolidated file tracking state to minimize lock contention
+///
+/// Instead of multiple separate locks for opened_files, file_versions, and file_access,
+/// we consolidate them into a single struct with one lock.
+#[derive(Debug, Default)]
+struct FileTracker {
+    /// Files that have been opened with textDocument/didOpen
+    opened: HashSet<PathBuf>,
+    /// File versions for textDocument/didChange
+    versions: HashMap<PathBuf, i32>,
+    /// Last access time for LRU eviction
+    access: HashMap<PathBuf, Instant>,
+    /// Document contents for incremental sync (only stored if server supports it)
+    contents: HashMap<PathBuf, DocumentContent>,
+}
 
 /// Cached server capabilities from initialize response
 #[derive(Debug, Default, Clone)]
@@ -75,6 +109,8 @@ pub struct CachedCapabilities {
     pub supports_call_hierarchy: bool,
     /// Server supports workspace/symbol
     pub supports_workspace_symbol: bool,
+    /// Server supports incremental document sync (TextDocumentSyncKind::Incremental)
+    pub supports_incremental_sync: bool,
 }
 
 /// Percentage of files to evict when cache is full (25%)
@@ -87,18 +123,19 @@ pub struct LspClient {
     diagnostics: Arc<DiagnosticsStore>,
     server_id: String,
     root_uri: Url,
-    /// Tracks files that have been opened with textDocument/didOpen
-    opened_files: Arc<Mutex<HashSet<PathBuf>>>,
-    /// Tracks file versions for textDocument/didChange
-    file_versions: Arc<Mutex<HashMap<PathBuf, i32>>>,
-    /// Tracks last access time for LRU eviction
-    file_access: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+    /// Consolidated file tracking (opened files, versions, access times)
+    /// RwLock allows concurrent reads (sync_file checks, version lookups)
+    /// while ensuring exclusive access for writes (file open/close/update)
+    file_tracker: Arc<RwLock<FileTracker>>,
     /// Handle to notification handler task for cleanup
     notification_handle: Mutex<Option<JoinHandle<()>>>,
     /// Timeout configuration
     timeout_config: TimeoutConfig,
     /// Server capabilities cached from initialize response
-    capabilities: Mutex<CachedCapabilities>,
+    /// RwLock for read-heavy access (capability checks are frequent, writes only at init)
+    capabilities: RwLock<CachedCapabilities>,
+    /// Cached document symbols (invalidated on file change)
+    symbol_cache: Arc<Mutex<HashMap<PathBuf, CachedSymbols>>>,
 }
 
 impl LspClient {
@@ -113,13 +150,15 @@ impl LspClient {
         settings: Option<serde_json::Value>,
         timeout_config: TimeoutConfig,
     ) -> Result<Self> {
-        info!(
+        debug!(
             "Creating LSP client for {} at {}",
             server_id,
             root_path.display()
         );
 
-        let (notification_tx, notification_rx) = mpsc::channel(100);
+        // Use configurable buffer size for notification channel
+        let buffer_size = timeout_config.notification_buffer_size.max(10) as usize;
+        let (notification_tx, notification_rx) = mpsc::channel(buffer_size);
 
         let connection = Arc::new(JsonRpcConnection::new(
             stdin,
@@ -143,12 +182,11 @@ impl LspClient {
             diagnostics: Arc::clone(&diagnostics),
             server_id,
             root_uri: root_uri.clone(),
-            opened_files: Arc::new(Mutex::new(HashSet::new())),
-            file_versions: Arc::new(Mutex::new(HashMap::new())),
-            file_access: Arc::new(Mutex::new(HashMap::new())),
+            file_tracker: Arc::new(RwLock::new(FileTracker::default())),
             notification_handle: Mutex::new(Some(notification_handle)),
             timeout_config,
-            capabilities: Mutex::new(CachedCapabilities::default()),
+            capabilities: RwLock::new(CachedCapabilities::default()),
+            symbol_cache: Arc::new(Mutex::new(HashMap::new())),
         };
 
         // Initialize the server with configurable timeout
@@ -283,8 +321,8 @@ impl LspClient {
 
     /// Get any opened file for fallback health check
     async fn get_any_opened_file(&self) -> Option<PathBuf> {
-        let opened = self.opened_files.lock().await;
-        opened.iter().next().cloned()
+        let tracker = self.file_tracker.read().await;
+        tracker.opened.iter().next().cloned()
     }
 
     /// Get the timeout configuration
@@ -292,15 +330,39 @@ impl LspClient {
         &self.timeout_config
     }
 
+    /// Clear the symbol cache
+    ///
+    /// This should be called when the server restarts to ensure stale
+    /// symbol information is not returned.
+    pub async fn clear_symbol_cache(&self) {
+        let mut cache = self.symbol_cache.lock().await;
+        cache.clear();
+        debug!("Cleared symbol cache for server {}", self.server_id);
+    }
+
     /// Initialize the language server
+    ///
+    /// Uses both `workspace_folders` (LSP 3.16+) and deprecated `root_uri` for
+    /// backward compatibility with older language servers.
     #[allow(deprecated)] // root_uri is deprecated but still widely supported
     async fn initialize(
         &self,
         root_uri: Url,
         initialization_options: Option<serde_json::Value>,
     ) -> Result<()> {
+        // Extract workspace name from URI path
+        let workspace_name = root_uri
+            .path_segments()
+            .and_then(|segs| segs.last())
+            .unwrap_or("workspace")
+            .to_string();
+
         let params = InitializeParams {
-            root_uri: Some(root_uri),
+            root_uri: Some(root_uri.clone()), // Keep for backward compatibility
+            workspace_folders: Some(vec![lsp_types::WorkspaceFolder {
+                uri: root_uri,
+                name: workspace_name,
+            }]),
             initialization_options,
             capabilities: lsp_types::ClientCapabilities {
                 text_document: Some(lsp_types::TextDocumentClientCapabilities {
@@ -359,27 +421,40 @@ impl LspClient {
             .await
             .and_then(|v| serde_json::from_value(v).map_err(Into::into))?;
 
-        // Cache server capabilities
+        // Cache server capabilities (write lock - only happens at init)
         let caps = {
-            let mut caps = self.capabilities.lock().await;
+            let mut caps = self.capabilities.write().await;
             let server_caps = &result.capabilities;
             caps.supports_implementation = server_caps.implementation_provider.is_some();
             caps.supports_type_definition = server_caps.type_definition_provider.is_some();
             caps.supports_declaration = server_caps.declaration_provider.is_some();
             caps.supports_call_hierarchy = server_caps.call_hierarchy_provider.is_some();
             caps.supports_workspace_symbol = server_caps.workspace_symbol_provider.is_some();
+
+            // Check for incremental document sync support
+            caps.supports_incremental_sync = match &server_caps.text_document_sync {
+                Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => {
+                    *kind == lsp_types::TextDocumentSyncKind::INCREMENTAL
+                }
+                Some(lsp_types::TextDocumentSyncCapability::Options(opts)) => {
+                    opts.change == Some(lsp_types::TextDocumentSyncKind::INCREMENTAL)
+                }
+                None => false,
+            };
+
             caps.clone()
         };
 
         info!(
-            "LSP {} initialized: server={:?}, capabilities=[implementation={}, type_definition={}, declaration={}, call_hierarchy={}, workspace_symbol={}]",
+            "LSP {} initialized: server={:?}, capabilities=[implementation={}, type_definition={}, declaration={}, call_hierarchy={}, workspace_symbol={}, incremental_sync={}]",
             self.server_id,
             result.server_info.as_ref().map(|s| &s.name),
             caps.supports_implementation,
             caps.supports_type_definition,
             caps.supports_declaration,
             caps.supports_call_hierarchy,
-            caps.supports_workspace_symbol
+            caps.supports_workspace_symbol,
+            caps.supports_incremental_sync
         );
 
         // Send initialized notification
@@ -435,7 +510,7 @@ impl LspClient {
                     trace!("LSP progress notification received");
                 }
                 _ => {
-                    trace!("Unhandled notification: {}", method);
+                    debug!("Unhandled LSP notification: {}", method);
                 }
             }
         }
@@ -455,20 +530,23 @@ impl LspClient {
             }
         };
 
-        // Check if already opened - if so, just update access time
+        // Check if already opened and update access time
         {
-            let opened = self.opened_files.lock().await;
-            if opened.contains(&path) {
-                // Update access time for LRU tracking
-                let mut access = self.file_access.lock().await;
-                access.insert(path, Instant::now());
+            let tracker = self.file_tracker.read().await;
+            if tracker.opened.contains(&path) {
+                // Already opened - need write lock to update access time
+                drop(tracker);
+                let mut tracker = self.file_tracker.write().await;
+                tracker.access.insert(path, Instant::now());
                 return Ok(());
             }
-        }
 
-        // Check if we need to evict files before opening a new one
-        if self.opened_files.lock().await.len() >= MAX_OPENED_FILES {
-            self.evict_lru_files().await;
+            // Check if we need to evict files before opening a new one
+            if tracker.opened.len() >= MAX_OPENED_FILES {
+                // Release lock for eviction (which sends notifications)
+                drop(tracker);
+                self.evict_lru_files().await;
+            }
         }
 
         // Read file content
@@ -481,8 +559,8 @@ impl LspClient {
         let uri = Url::from_file_path(&path)
             .map_err(|_| LspErr::Internal(format!("invalid file path: {}", path.display())))?;
 
-        // Detect language ID from extension
-        let language_id = path
+        // Detect language ID from extension (use &'static str to avoid allocation)
+        let language_id: &'static str = path
             .extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| match ext {
@@ -491,16 +569,14 @@ impl LspClient {
                 "py" | "pyi" => "python",
                 _ => "plaintext",
             })
-            .unwrap_or("plaintext")
-            .to_string();
+            .unwrap_or("plaintext");
 
-        let language_id_for_log = language_id.clone();
         let params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri,
-                language_id,
+                language_id: language_id.to_string(),
                 version: 1,
-                text: content,
+                text: content.clone(),
             },
         };
 
@@ -508,27 +584,28 @@ impl LspClient {
             .notify("textDocument/didOpen", params)
             .await?;
 
-        info!(
+        debug!(
             "Opened file in LSP {}: {} (language: {})",
             self.server_id,
             path.display(),
-            language_id_for_log
+            language_id
         );
 
-        // Mark as opened and track access time
-        let now = Instant::now();
+        // Check if server supports incremental sync
+        let supports_incremental = self.capabilities.read().await.supports_incremental_sync;
+
+        // Single lock acquisition for all tracking updates (write lock needed)
         {
-            let mut opened = self.opened_files.lock().await;
-            opened.insert(path.clone());
-        }
-        {
-            let mut access = self.file_access.lock().await;
-            access.insert(path.clone(), now);
-        }
-        {
-            // Initialize version tracking
-            let mut versions = self.file_versions.lock().await;
-            versions.insert(path, 1);
+            let mut tracker = self.file_tracker.write().await;
+            let now = Instant::now();
+            tracker.opened.insert(path.clone());
+            tracker.access.insert(path.clone(), now);
+            tracker.versions.insert(path.clone(), 1);
+
+            // Store content for incremental sync if supported and file is small enough
+            if supports_incremental && content.len() <= MAX_INCREMENTAL_CONTENT_SIZE {
+                tracker.contents.insert(path, DocumentContent::new(content));
+            }
         }
 
         Ok(())
@@ -556,8 +633,8 @@ impl LspClient {
     /// Close all opened files and clear tracking
     async fn close_all_files(&self) {
         let paths: Vec<PathBuf> = {
-            let opened = self.opened_files.lock().await;
-            opened.iter().cloned().collect()
+            let tracker = self.file_tracker.read().await;
+            tracker.opened.iter().cloned().collect()
         };
 
         for path in &paths {
@@ -566,48 +643,63 @@ impl LspClient {
             }
         }
 
-        // Clear all tracking
-        self.opened_files.lock().await.clear();
-        self.file_versions.lock().await.clear();
-        self.file_access.lock().await.clear();
+        // Clear all tracking (write lock needed)
+        let mut tracker = self.file_tracker.write().await;
+        tracker.opened.clear();
+        tracker.versions.clear();
+        tracker.access.clear();
     }
 
     /// Evict LRU_EVICTION_PERCENT of oldest files to make room for new ones
+    ///
+    /// Uses batch operations to minimize lock contention.
     async fn evict_lru_files(&self) {
-        let access = self.file_access.lock().await;
-        let mut files_by_access: Vec<_> = access.iter().collect();
+        // Phase 1: Identify files to evict (read lock - just collecting info)
+        let to_evict: Vec<PathBuf> = {
+            let tracker = self.file_tracker.read().await;
+            let mut files_by_access: Vec<_> = tracker.access.iter().collect();
 
-        // Sort by access time (oldest first)
-        files_by_access.sort_by(|a, b| a.1.cmp(b.1));
+            // Sort by access time (oldest first)
+            files_by_access.sort_by(|a, b| a.1.cmp(b.1));
 
-        // Calculate number of files to evict (25% of max)
-        let evict_count = (MAX_OPENED_FILES * LRU_EVICTION_PERCENT) / 100;
-        let evict_count = evict_count.max(1); // Evict at least 1
+            // Calculate number of files to evict (25% of max)
+            let evict_count = (MAX_OPENED_FILES * LRU_EVICTION_PERCENT) / 100;
+            let evict_count = evict_count.max(1); // Evict at least 1
 
-        let to_evict: Vec<PathBuf> = files_by_access
-            .iter()
-            .take(evict_count)
-            .map(|(path, _)| (*path).clone())
-            .collect();
+            files_by_access
+                .iter()
+                .take(evict_count)
+                .map(|(path, _)| (*path).clone())
+                .collect()
+        };
 
-        drop(access); // Release lock before closing files
+        if to_evict.is_empty() {
+            return;
+        }
 
-        info!(
+        debug!(
             "Evicting {} oldest files from {} cache (max: {})",
             to_evict.len(),
             self.server_id,
             MAX_OPENED_FILES
         );
 
+        // Phase 2: Close files (this sends didClose notifications)
         for path in &to_evict {
             if let Err(e) = self.close_file(path).await {
                 debug!("Failed to close evicted file {}: {}", path.display(), e);
             }
+        }
 
-            // Remove from tracking
-            self.opened_files.lock().await.remove(path);
-            self.file_versions.lock().await.remove(path);
-            self.file_access.lock().await.remove(path);
+        // Phase 3: Batch remove from all tracking (write lock needed)
+        {
+            let mut tracker = self.file_tracker.write().await;
+            for path in &to_evict {
+                tracker.opened.remove(path);
+                tracker.versions.remove(path);
+                tracker.access.remove(path);
+                tracker.contents.remove(path);
+            }
         }
     }
 
@@ -621,39 +713,100 @@ impl LspClient {
             Err(_) => path.to_path_buf(),
         };
 
-        // Ensure file is opened first
-        if !self.opened_files.lock().await.contains(&path) {
-            self.sync_file(&path).await?;
+        // Ensure file is opened first (read lock for check)
+        {
+            let tracker = self.file_tracker.read().await;
+            if !tracker.opened.contains(&path) {
+                drop(tracker); // Release lock before sync_file
+                self.sync_file(&path).await?;
+            }
         }
 
         let uri = Url::from_file_path(&path)
             .map_err(|_| LspErr::Internal(format!("invalid file path: {}", path.display())))?;
 
-        // Get and increment version
-        let version = {
-            let mut versions = self.file_versions.lock().await;
-            let v = versions.entry(path).or_insert(1);
+        // Check if server supports incremental sync
+        let supports_incremental = self.capabilities.read().await.supports_incremental_sync;
+
+        // Compute content changes and update version (write lock needed)
+        let (version, content_changes, should_store_content) = {
+            let mut tracker = self.file_tracker.write().await;
+            let v = tracker.versions.entry(path.clone()).or_insert(1);
             *v += 1;
-            *v
+            let version = *v;
+
+            // Try incremental sync if supported and we have stored content
+            let (changes, store) =
+                if supports_incremental && content.len() <= MAX_INCREMENTAL_CONTENT_SIZE {
+                    if let Some(old_content) = tracker.contents.get(&path) {
+                        let incremental = compute_incremental_changes(old_content, content);
+                        if incremental.is_empty() {
+                            // No changes detected - skip update
+                            debug!(
+                                "No changes detected for {} in LSP {}",
+                                path.display(),
+                                self.server_id
+                            );
+                            return Ok(());
+                        }
+                        (incremental, true)
+                    } else {
+                        // No stored content, fallback to full sync
+                        (
+                            vec![TextDocumentContentChangeEvent {
+                                range: None,
+                                range_length: None,
+                                text: content.to_string(),
+                            }],
+                            true,
+                        )
+                    }
+                } else {
+                    // Full sync
+                    (
+                        vec![TextDocumentContentChangeEvent {
+                            range: None,
+                            range_length: None,
+                            text: content.to_string(),
+                        }],
+                        supports_incremental && content.len() <= MAX_INCREMENTAL_CONTENT_SIZE,
+                    )
+                };
+
+            (version, changes, store)
         };
 
-        let uri_path_for_log = uri.path().to_string();
+        let is_incremental = content_changes
+            .first()
+            .map(|c| c.range.is_some())
+            .unwrap_or(false);
+
         let params = DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier { uri, version },
-            content_changes: vec![TextDocumentContentChangeEvent {
-                range: None, // Full document sync
-                range_length: None,
-                text: content.to_string(),
-            }],
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version,
+            },
+            content_changes,
         };
 
         self.connection
             .notify("textDocument/didChange", params)
             .await?;
 
-        info!(
-            "Updated file in LSP {}: {} (version {})",
-            self.server_id, uri_path_for_log, version
+        // Update stored content for next incremental sync
+        if should_store_content {
+            let mut tracker = self.file_tracker.write().await;
+            tracker
+                .contents
+                .insert(path.clone(), DocumentContent::new(content.to_string()));
+        }
+
+        debug!(
+            "Updated file in LSP {}: {} (version {}, incremental={})",
+            self.server_id,
+            uri.path(),
+            version,
+            is_incremental
         );
 
         Ok(())
@@ -668,34 +821,67 @@ impl LspClient {
             Err(_) => path.to_path_buf(),
         };
 
-        // Close the file first if it was opened
-        if self.opened_files.lock().await.contains(&path) {
+        // Check if file was opened and close it (read lock for check)
+        let was_opened = {
+            let tracker = self.file_tracker.read().await;
+            tracker.opened.contains(&path)
+        };
+
+        if was_opened {
             let _ = self.close_file(&path).await;
         }
 
-        // Remove from all tracking
+        // Remove from all tracking (write lock needed)
         {
-            let mut opened = self.opened_files.lock().await;
-            opened.remove(&path);
-        }
-        {
-            let mut versions = self.file_versions.lock().await;
-            versions.remove(&path);
-        }
-        {
-            let mut access = self.file_access.lock().await;
-            access.remove(&path);
+            let mut tracker = self.file_tracker.write().await;
+            tracker.opened.remove(&path);
+            tracker.versions.remove(&path);
+            tracker.access.remove(&path);
+            tracker.contents.remove(&path);
         }
 
         // Re-sync
         self.sync_file(&path).await
     }
 
-    /// Get document symbols
-    pub async fn document_symbols(&self, path: &Path) -> Result<Vec<ResolvedSymbol>> {
+    /// Get document symbols (with caching)
+    ///
+    /// Returns cached symbols if the file version hasn't changed since last fetch.
+    /// This significantly reduces LSP round-trips for repeated symbol queries.
+    /// Cache is bounded to MAX_SYMBOL_CACHE_SIZE entries with LRU eviction.
+    /// Returns Arc<Vec> for zero-copy sharing across callers.
+    pub async fn document_symbols(&self, path: &Path) -> Result<Arc<Vec<ResolvedSymbol>>> {
         self.sync_file(path).await?;
 
-        let uri = Url::from_file_path(path)
+        let path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+
+        // Atomic check: get version and check cache in single lock scope to avoid race condition
+        // where file could be modified between version check and cache lookup
+        {
+            let tracker = self.file_tracker.read().await;
+            let current_version = tracker.versions.get(&path).copied().unwrap_or(0);
+
+            let mut cache = self.symbol_cache.lock().await;
+            if let Some(cached) = cache.get_mut(&path) {
+                if cached.version == current_version {
+                    // Update last_access for LRU tracking
+                    cached.last_access = Instant::now();
+                    trace!(
+                        "Symbol cache hit for {} (version {})",
+                        path.display(),
+                        current_version
+                    );
+                    // Arc clone is cheap - just increments reference count
+                    return Ok(Arc::clone(&cached.symbols));
+                }
+            }
+        }
+
+        // Cache miss - fetch from server
+        let uri = Url::from_file_path(&path)
             .map_err(|_| LspErr::Internal(format!("invalid file path: {}", path.display())))?;
 
         let params = DocumentSymbolParams {
@@ -721,15 +907,55 @@ impl LspClient {
             None => Vec::new(),
         };
 
-        info!(
-            "Retrieved {} symbols from {} via {}: {:?}",
-            symbols.len(),
+        // Get current version again and update cache atomically
+        let current_version = {
+            let tracker = self.file_tracker.read().await;
+            tracker.versions.get(&path).copied().unwrap_or(0)
+        };
+
+        // Wrap in Arc for cheap cloning on cache hits
+        let symbols_arc = Arc::new(symbols);
+
+        {
+            let mut cache = self.symbol_cache.lock().await;
+
+            // Evict LRU entries if cache is at capacity
+            if cache.len() >= MAX_SYMBOL_CACHE_SIZE {
+                let evict_count = MAX_SYMBOL_CACHE_SIZE / 4; // Evict 25%
+                let mut entries: Vec<_> = cache
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.last_access))
+                    .collect();
+                entries.sort_by(|a, b| a.1.cmp(&b.1)); // Sort by access time (oldest first)
+
+                for (key, _) in entries.into_iter().take(evict_count) {
+                    cache.remove(&key);
+                }
+                debug!(
+                    "Symbol cache evicted {} entries (capacity: {})",
+                    evict_count, MAX_SYMBOL_CACHE_SIZE
+                );
+            }
+
+            cache.insert(
+                path.clone(),
+                CachedSymbols {
+                    symbols: Arc::clone(&symbols_arc),
+                    version: current_version,
+                    last_access: Instant::now(),
+                },
+            );
+        }
+
+        debug!(
+            "Retrieved {} symbols from {} via {} (cached at version {})",
+            symbols_arc.len(),
             path.display(),
             self.server_id,
-            symbols.iter().take(5).map(|s| &s.name).collect::<Vec<_>>()
+            current_version
         );
 
-        Ok(symbols)
+        Ok(symbols_arc)
     }
 
     /// Go to definition by symbol name
@@ -739,7 +965,7 @@ impl LspClient {
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Vec<Location>> {
-        info!(
+        debug!(
             "Finding definition for '{}' (kind={:?}) in {} via {}",
             symbol_name,
             symbol_kind,
@@ -761,11 +987,10 @@ impl LspClient {
         let symbol = &matches[0].symbol;
         let locations = self.definition_at_position(path, symbol.position).await?;
 
-        info!(
-            "Definition result for '{}': {} locations {:?}",
+        debug!(
+            "Definition result for '{}': {} locations",
             symbol_name,
-            locations.len(),
-            locations.iter().map(|l| l.uri.path()).collect::<Vec<_>>()
+            locations.len()
         );
 
         Ok(locations)
@@ -784,12 +1009,19 @@ impl LspClient {
     /// Go to implementation by symbol name
     ///
     /// Finds implementations of traits/interfaces for the given symbol.
+    /// Returns error if server does not support textDocument/implementation.
     pub async fn implementation(
         &self,
         path: &Path,
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Vec<Location>> {
+        if !self.supports_implementation().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/implementation".to_string(),
+            });
+        }
+
         let symbols = self.document_symbols(path).await?;
         let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
 
@@ -806,11 +1038,18 @@ impl LspClient {
     }
 
     /// Go to implementation at exact position
+    ///
+    /// Returns error if server does not support textDocument/implementation.
     pub async fn implementation_at_position(
         &self,
         path: &Path,
         position: Position,
     ) -> Result<Vec<Location>> {
+        if !self.supports_implementation().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/implementation".to_string(),
+            });
+        }
         self.goto_at_position("textDocument/implementation", path, position)
             .await
     }
@@ -818,12 +1057,19 @@ impl LspClient {
     /// Go to type definition by symbol name
     ///
     /// Finds the type definition for a symbol (e.g., the struct definition for a variable).
+    /// Returns error if server does not support textDocument/typeDefinition.
     pub async fn type_definition(
         &self,
         path: &Path,
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Vec<Location>> {
+        if !self.supports_type_definition().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/typeDefinition".to_string(),
+            });
+        }
+
         let symbols = self.document_symbols(path).await?;
         let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
 
@@ -840,11 +1086,18 @@ impl LspClient {
     }
 
     /// Go to type definition at exact position
+    ///
+    /// Returns error if server does not support textDocument/typeDefinition.
     pub async fn type_definition_at_position(
         &self,
         path: &Path,
         position: Position,
     ) -> Result<Vec<Location>> {
+        if !self.supports_type_definition().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/typeDefinition".to_string(),
+            });
+        }
         self.goto_at_position("textDocument/typeDefinition", path, position)
             .await
     }
@@ -852,12 +1105,19 @@ impl LspClient {
     /// Go to declaration by symbol name
     ///
     /// Finds the declaration of a symbol (useful in languages with separate declaration/definition).
+    /// Returns error if server does not support textDocument/declaration.
     pub async fn declaration(
         &self,
         path: &Path,
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Vec<Location>> {
+        if !self.supports_declaration().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/declaration".to_string(),
+            });
+        }
+
         let symbols = self.document_symbols(path).await?;
         let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
 
@@ -873,11 +1133,18 @@ impl LspClient {
     }
 
     /// Go to declaration at exact position
+    ///
+    /// Returns error if server does not support textDocument/declaration.
     pub async fn declaration_at_position(
         &self,
         path: &Path,
         position: Position,
     ) -> Result<Vec<Location>> {
+        if !self.supports_declaration().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "textDocument/declaration".to_string(),
+            });
+        }
         self.goto_at_position("textDocument/declaration", path, position)
             .await
     }
@@ -940,7 +1207,7 @@ impl LspClient {
         symbol_kind: Option<SymbolKind>,
         include_declaration: bool,
     ) -> Result<Vec<Location>> {
-        info!(
+        debug!(
             "Finding references for '{}' (kind={:?}, include_declaration={}) in {} via {}",
             symbol_name,
             symbol_kind,
@@ -964,7 +1231,7 @@ impl LspClient {
             .references_at_position(path, symbol.position, include_declaration)
             .await?;
 
-        info!(
+        debug!(
             "References result for '{}': {} locations",
             symbol_name,
             locations.len()
@@ -1019,7 +1286,7 @@ impl LspClient {
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Option<String>> {
-        info!(
+        debug!(
             "Hover for '{}' (kind={:?}) in {} via {}",
             symbol_name,
             symbol_kind,
@@ -1040,7 +1307,7 @@ impl LspClient {
         let symbol = &matches[0].symbol;
         let result = self.hover_at_position(path, symbol.position).await?;
 
-        info!(
+        debug!(
             "Hover result for '{}': {} chars",
             symbol_name,
             result.as_ref().map(|s| s.len()).unwrap_or(0)
@@ -1104,8 +1371,15 @@ impl LspClient {
     ///
     /// This searches all files in the workspace for symbols matching the query.
     /// Useful for finding where a symbol is defined without knowing the file path.
+    /// Returns error if server does not support workspace/symbol.
     pub async fn workspace_symbol(&self, query: &str) -> Result<Vec<SymbolInformation>> {
-        info!(
+        if !self.supports_workspace_symbol().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "workspace/symbol".to_string(),
+            });
+        }
+
+        debug!(
             "Workspace symbol search query='{}' via {}",
             query, self.server_id
         );
@@ -1160,11 +1434,7 @@ impl LspClient {
             None => Vec::new(),
         };
 
-        info!(
-            "Workspace symbol result: {} symbols {:?}",
-            symbols.len(),
-            symbols.iter().take(5).map(|s| &s.name).collect::<Vec<_>>()
-        );
+        debug!("Workspace symbol result: {} symbols", symbols.len());
 
         Ok(symbols)
     }
@@ -1173,13 +1443,20 @@ impl LspClient {
     ///
     /// This is the first step of the call hierarchy protocol.
     /// Returns CallHierarchyItem(s) that can be used with incoming_calls/outgoing_calls.
+    /// Returns error if server does not support call hierarchy.
     pub async fn prepare_call_hierarchy(
         &self,
         path: &Path,
         symbol_name: &str,
         symbol_kind: Option<SymbolKind>,
     ) -> Result<Vec<CallHierarchyItem>> {
-        info!(
+        if !self.supports_call_hierarchy().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "callHierarchy".to_string(),
+            });
+        }
+
+        debug!(
             "Prepare call hierarchy for '{}' (kind={:?}) in {}",
             symbol_name,
             symbol_kind,
@@ -1201,21 +1478,25 @@ impl LspClient {
             .prepare_call_hierarchy_at_position(path, symbol.position)
             .await?;
 
-        info!(
-            "Call hierarchy prepared: {} items {:?}",
-            items.len(),
-            items.iter().map(|i| &i.name).collect::<Vec<_>>()
-        );
+        debug!("Call hierarchy prepared: {} items", items.len());
 
         Ok(items)
     }
 
     /// Prepare call hierarchy at exact position
+    ///
+    /// Returns error if server does not support call hierarchy.
     pub async fn prepare_call_hierarchy_at_position(
         &self,
         path: &Path,
         position: Position,
     ) -> Result<Vec<CallHierarchyItem>> {
+        if !self.supports_call_hierarchy().await {
+            return Err(LspErr::OperationNotSupported {
+                operation: "callHierarchy".to_string(),
+            });
+        }
+
         self.sync_file(path).await?;
 
         let uri = Url::from_file_path(path)
@@ -1251,7 +1532,7 @@ impl LspClient {
         &self,
         item: CallHierarchyItem,
     ) -> Result<Vec<CallHierarchyIncomingCall>> {
-        info!("Finding incoming calls for '{}'", item.name);
+        debug!("Finding incoming calls for '{}'", item.name);
 
         let params = CallHierarchyIncomingCallsParams {
             item,
@@ -1273,11 +1554,7 @@ impl LspClient {
 
         let calls = result.unwrap_or_default();
 
-        info!(
-            "Incoming calls result: {} callers {:?}",
-            calls.len(),
-            calls.iter().map(|c| &c.from.name).collect::<Vec<_>>()
-        );
+        debug!("Incoming calls result: {} callers", calls.len());
 
         Ok(calls)
     }
@@ -1289,7 +1566,7 @@ impl LspClient {
         &self,
         item: CallHierarchyItem,
     ) -> Result<Vec<CallHierarchyOutgoingCall>> {
-        info!("Finding outgoing calls from '{}'", item.name);
+        debug!("Finding outgoing calls from '{}'", item.name);
 
         let params = CallHierarchyOutgoingCallsParams {
             item,
@@ -1311,11 +1588,7 @@ impl LspClient {
 
         let calls = result.unwrap_or_default();
 
-        info!(
-            "Outgoing calls result: {} callees {:?}",
-            calls.len(),
-            calls.iter().map(|c| &c.to.name).collect::<Vec<_>>()
-        );
+        debug!("Outgoing calls result: {} callees", calls.len());
 
         Ok(calls)
     }
@@ -1328,7 +1601,7 @@ impl LspClient {
     /// 3. Send exit notification
     /// 4. Clean up notification handler task
     pub async fn shutdown(&self) -> Result<()> {
-        let opened_files_count = self.opened_files.lock().await.len();
+        let opened_files_count = self.file_tracker.read().await.opened.len();
         info!(
             "Shutting down LSP server: {} (files: {})",
             self.server_id, opened_files_count
@@ -1342,7 +1615,7 @@ impl LspClient {
         // Send shutdown request with timeout
         match tokio::time::timeout(
             shutdown_timeout,
-            self.connection.request("shutdown", serde_json::Value::Null),
+            self.connection.request("shutdown", serde_json::json!({})),
         )
         .await
         {
@@ -1361,10 +1634,7 @@ impl LspClient {
         }
 
         // Send exit notification (best effort)
-        let _ = self
-            .connection
-            .notify("exit", serde_json::Value::Null)
-            .await;
+        let _ = self.connection.notify("exit", serde_json::json!({})).await;
 
         // Abort notification handler task to prevent resource leak
         if let Some(handle) = self.notification_handle.lock().await.take() {
@@ -1393,32 +1663,32 @@ impl LspClient {
 
     /// Check if server supports textDocument/implementation
     pub async fn supports_implementation(&self) -> bool {
-        self.capabilities.lock().await.supports_implementation
+        self.capabilities.read().await.supports_implementation
     }
 
     /// Check if server supports textDocument/typeDefinition
     pub async fn supports_type_definition(&self) -> bool {
-        self.capabilities.lock().await.supports_type_definition
+        self.capabilities.read().await.supports_type_definition
     }
 
     /// Check if server supports textDocument/declaration
     pub async fn supports_declaration(&self) -> bool {
-        self.capabilities.lock().await.supports_declaration
+        self.capabilities.read().await.supports_declaration
     }
 
     /// Check if server supports call hierarchy operations
     pub async fn supports_call_hierarchy(&self) -> bool {
-        self.capabilities.lock().await.supports_call_hierarchy
+        self.capabilities.read().await.supports_call_hierarchy
     }
 
     /// Check if server supports workspace/symbol
     pub async fn supports_workspace_symbol(&self) -> bool {
-        self.capabilities.lock().await.supports_workspace_symbol
+        self.capabilities.read().await.supports_workspace_symbol
     }
 
     /// Get all cached capabilities
     pub async fn capabilities(&self) -> CachedCapabilities {
-        self.capabilities.lock().await.clone()
+        self.capabilities.read().await.clone()
     }
 }
 
@@ -1428,6 +1698,19 @@ impl std::fmt::Debug for LspClient {
             .field("server_id", &self.server_id)
             .field("root_uri", &self.root_uri)
             .finish()
+    }
+}
+
+impl Drop for LspClient {
+    fn drop(&mut self) {
+        // Abort notification handler task to prevent resource leak
+        if let Some(handle) = self.notification_handle.get_mut().take() {
+            handle.abort();
+            debug!(
+                "LspClient {} dropped - notification handler aborted",
+                self.server_id
+            );
+        }
     }
 }
 

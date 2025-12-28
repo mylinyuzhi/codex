@@ -16,7 +16,6 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Arguments for Task tool invocation
@@ -28,9 +27,11 @@ pub struct TaskArgs {
     /// Provider name override - references config.model_providers HashMap key.
     /// Takes highest priority for provider selection.
     #[serde(default)]
+    #[allow(dead_code)] // Reserved for model selection
     pub model_provider: Option<String>,
     /// Model name override.
     #[serde(default)]
+    #[allow(dead_code)]
     pub model: Option<String>,
     #[serde(default)]
     pub run_in_background: bool,

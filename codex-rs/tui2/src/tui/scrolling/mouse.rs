@@ -583,7 +583,7 @@ impl Default for MouseScrollState {
 /// direction changes. The stream accumulates raw event counts and converts them into a desired
 /// total line position via [`ScrollConfig`]. The outer [`MouseScrollState`] then applies only the
 /// delta between `desired_total` and `applied_lines` so callers can treat scroll updates as
-/// incremental line deltas.
+/// tweakcc line deltas.
 ///
 /// This type is intentionally not exposed outside this module. The public API is the pair of
 /// entrypoints:

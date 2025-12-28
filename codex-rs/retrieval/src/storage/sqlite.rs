@@ -163,7 +163,7 @@ impl SqliteStore {
 
 /// SQLite schema for retrieval metadata.
 ///
-/// Simplified schema without branch tracking - incremental updates based on
+/// Simplified schema without branch tracking - tweakcc updates based on
 /// file content changes only.
 const SCHEMA: &str = r#"
 -- Schema version tracking
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (2, strftime('%s', 'now'));
 
--- Index catalog (incremental update tracking)
+-- Index catalog (tweakcc update tracking)
 -- Simplified: no branch column, unique by (workspace, filepath)
 CREATE TABLE IF NOT EXISTS catalog (
     id INTEGER PRIMARY KEY,
@@ -257,6 +257,22 @@ CREATE TRIGGER IF NOT EXISTS snippets_au AFTER UPDATE ON snippets BEGIN
     INSERT INTO snippets_fts(rowid, name, signature, docs)
     VALUES (new.id, new.name, new.signature, new.docs);
 END;
+
+-- Repo map tag cache (definitions and references for PageRank graph)
+CREATE TABLE IF NOT EXISTS repomap_tags (
+    id INTEGER PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    mtime INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,  -- 'def' or 'ref'
+    line INTEGER NOT NULL,
+    UNIQUE(workspace, filepath, name, kind, line)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_file ON repomap_tags(workspace, filepath);
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_name ON repomap_tags(name);
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_kind ON repomap_tags(kind);
 "#;
 
 /// Extension trait for optional query results.

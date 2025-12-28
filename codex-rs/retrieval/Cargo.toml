@@ -50,6 +50,12 @@ tree-sitter-typescript = "0.23"
 # Query preprocessing
 rust-stemmers = "1.2"
 
+# BM25 full-text search (custom implementation with tunable k1/b parameters)
+bm25 = { version = "2.3", features = ["parallelism"] }
+
+# Graph algorithms for PageRank (repo map)
+petgraph = "0.6"
+
 # Async
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }

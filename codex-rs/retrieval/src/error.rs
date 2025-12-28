@@ -110,8 +110,8 @@ pub enum RetrievalErr {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Parse error: {0}")]
-    Parse(String),
+    #[error("JSON parse error: context={context}, cause={cause}")]
+    JsonParse { context: String, cause: String },
 
     #[error("Tokio join error: {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
@@ -136,6 +136,14 @@ impl RetrievalErr {
     pub fn sqlite_error(path: &std::path::Path, e: rusqlite::Error) -> Self {
         Self::SqliteError {
             path: path.to_path_buf(),
+            cause: e.to_string(),
+        }
+    }
+
+    /// Create a JSON parse error with context.
+    pub fn json_parse(context: &str, e: impl std::fmt::Display) -> Self {
+        Self::JsonParse {
+            context: context.to_string(),
             cause: e.to_string(),
         }
     }

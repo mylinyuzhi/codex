@@ -859,7 +859,7 @@ impl PlanModeGenerator {
             if plan_exists {
                 format!(
                     "## Plan File Info:\n\
-                     A plan file already exists at {path}. You can read it and make incremental \
+                     A plan file already exists at {path}. You can read it and make tweakcc \
                      edits using the Edit tool."
                 )
             } else {

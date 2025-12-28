@@ -165,9 +165,10 @@ impl LlmProvider for OpenAiProvider {
 
             match response {
                 Ok(resp) if resp.status().is_success() => {
-                    let json: OpenAiResponse = resp.json().await.map_err(|e| {
-                        RetrievalErr::Parse(format!("Failed to parse OpenAI response: {e}"))
-                    })?;
+                    let json: OpenAiResponse = resp
+                        .json()
+                        .await
+                        .map_err(|e| RetrievalErr::json_parse("OpenAI response", e))?;
 
                     let content = json
                         .choices
@@ -304,11 +305,7 @@ impl LlmRewriteResponse {
         // Try to extract JSON from the response (in case there's surrounding text)
         let json_str = extract_json(content);
 
-        serde_json::from_str(json_str).map_err(|e| {
-            RetrievalErr::Parse(format!(
-                "Failed to parse LLM response: {e}\nContent: {content}"
-            ))
-        })
+        serde_json::from_str(json_str).map_err(|e| RetrievalErr::json_parse("LLM response", e))
     }
 
     /// Convert to RewrittenQuery.

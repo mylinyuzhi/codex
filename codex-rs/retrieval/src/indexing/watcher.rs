@@ -1,7 +1,7 @@
 //! File watcher for automatic index updates.
 //!
 //! Uses the `notify` crate to detect file changes and trigger
-//! incremental re-indexing. Uses codex-file-ignore for consistent
+//! tweakcc re-indexing. Uses codex-file-ignore for consistent
 //! ignore patterns with the file walker.
 
 use std::path::Path;
@@ -43,7 +43,7 @@ pub struct WatchEvent {
 /// File watcher service.
 ///
 /// Monitors a directory for file changes and emits events
-/// that can be used to trigger incremental re-indexing.
+/// that can be used to trigger tweakcc re-indexing.
 /// Uses codex-file-ignore for consistent ignore patterns.
 pub struct FileWatcher {
     /// The debouncer wraps the underlying watcher

@@ -250,10 +250,24 @@ impl EmbeddingCache {
     pub fn artifact_id(&self) -> &str {
         &self.artifact_id
     }
+
+    /// Execute a function with the connection.
+    ///
+    /// Internal API for cache_ext bulk operations.
+    pub(crate) fn with_conn<F, T>(&self, f: F) -> crate::error::Result<T>
+    where
+        F: FnOnce(&rusqlite::Connection, &str) -> crate::error::Result<T>,
+    {
+        let conn = self.conn.lock().map_err(|_| RetrievalErr::SqliteFailed {
+            operation: "lock embedding cache".to_string(),
+            cause: "mutex poisoned".to_string(),
+        })?;
+        f(&conn, &self.artifact_id)
+    }
 }
 
 /// Convert a byte slice to a Vec<f32>.
-fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
+pub(crate) fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))

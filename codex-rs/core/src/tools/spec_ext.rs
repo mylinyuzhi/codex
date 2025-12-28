@@ -23,7 +23,7 @@ use tracing::info;
 pub const ALWAYS_BLOCKED_TOOLS: &[&str] = &[
     names::TASK,        // Prevent recursive subagent spawning
     names::TASK_OUTPUT, // Associated with Task
-    names::TODO_WRITE,  // Main agent responsibility only
+    names::UPDATE_PLAN, // Main agent responsibility only
     names::BASH_OUTPUT, // Background shell is main agent only
     names::KILL_SHELL,  // Background shell is main agent only
 ];
@@ -78,6 +78,7 @@ impl ToolFilter {
 }
 
 /// Extension trait for ToolsConfig to support tool filtering.
+#[allow(dead_code)] // Extension point for tool filtering
 pub trait ToolsConfigExt {
     /// Set a tool filter.
     fn with_tool_filter(self, filter: ToolFilter) -> Self;
@@ -282,13 +283,20 @@ pub fn register_lsp(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
 /// This avoids per-turn recreation and ensures background tasks persist across turns.
 pub fn register_subagent_tools(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
     if config.include_subagent {
+        use crate::subagent::get_builtin_agents;
         use crate::tools::ext::subagent::create_task_output_tool;
-        use crate::tools::ext::subagent::create_task_tool;
+        use crate::tools::ext::subagent::create_task_tool_with_description;
+        use crate::tools::ext::subagent::generate_task_description;
         use crate::tools::handlers::ext::subagent::TaskHandler;
         use crate::tools::handlers::ext::subagent::TaskOutputHandler;
 
+        // Generate dynamic description from built-in agents
+        let builtin_agents = get_builtin_agents();
+        let description = generate_task_description(&builtin_agents);
+
         // Task tool - spawns subagents (supports parallel execution)
-        builder.push_spec_with_parallel_support(create_task_tool(), true);
+        builder
+            .push_spec_with_parallel_support(create_task_tool_with_description(description), true);
         builder.register_handler("Task", Arc::new(TaskHandler::new()));
 
         // TaskOutput tool - retrieves background task results (supports parallel execution)

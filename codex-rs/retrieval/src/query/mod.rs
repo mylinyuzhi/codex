@@ -6,6 +6,7 @@ pub mod cache;
 pub mod llm_provider;
 pub mod preprocessor;
 pub mod rewriter;
+pub mod semantic_cache;
 pub mod service;
 
 pub use cache::CacheStats;
@@ -30,4 +31,7 @@ pub use rewriter::RewriteSource;
 pub use rewriter::RewrittenQuery;
 pub use rewriter::SimpleRewriter;
 pub use rewriter::Translator;
+pub use semantic_cache::CacheStats as SemanticCacheStats;
+pub use semantic_cache::SemanticCacheConfig;
+pub use semantic_cache::SemanticQueryCache;
 pub use service::QueryRewriteService;

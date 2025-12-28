@@ -18,6 +18,8 @@ use tokio::process::ChildStdout;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tracing::debug;
@@ -31,6 +33,10 @@ pub const REQUEST_TIMEOUT_SECS: i32 = 30;
 /// Initialization timeout in seconds (legacy, use TimeoutConfig instead)
 pub const INIT_TIMEOUT_SECS: i32 = 45;
 
+/// Maximum allowed Content-Length for LSP messages (10 MB)
+/// Prevents memory exhaustion from malformed or malicious servers
+const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024;
+
 /// Configurable timeout settings for LSP operations
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
@@ -40,6 +46,8 @@ pub struct TimeoutConfig {
     pub request_timeout_ms: i64,
     /// Shutdown timeout in milliseconds
     pub shutdown_timeout_ms: i64,
+    /// Notification channel buffer size
+    pub notification_buffer_size: i32,
 }
 
 impl Default for TimeoutConfig {
@@ -48,6 +56,7 @@ impl Default for TimeoutConfig {
             init_timeout_ms: 10_000,
             request_timeout_ms: 30_000,
             shutdown_timeout_ms: 5_000,
+            notification_buffer_size: 100,
         }
     }
 }
@@ -58,6 +67,7 @@ impl From<&LifecycleConfig> for TimeoutConfig {
             init_timeout_ms: config.startup_timeout_ms,
             request_timeout_ms: config.request_timeout_ms,
             shutdown_timeout_ms: config.shutdown_timeout_ms,
+            notification_buffer_size: config.notification_buffer_size,
         }
     }
 }
@@ -112,6 +122,9 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i32,
     message: String,
+    /// Optional additional data per JSON-RPC 2.0 spec
+    #[allow(dead_code)]
+    data: Option<serde_json::Value>,
 }
 
 /// Pending request handle
@@ -125,6 +138,10 @@ pub struct JsonRpcConnection {
     next_id: AtomicI64,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    /// Shutdown signal sender
+    shutdown_tx: watch::Sender<bool>,
+    /// Reader task handle for cleanup
+    reader_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl JsonRpcConnection {
@@ -137,9 +154,15 @@ impl JsonRpcConnection {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = Arc::clone(&pending);
 
-        // Spawn reader task
-        tokio::spawn(async move {
-            if let Err(e) = Self::read_loop(stdout, pending_clone, notification_tx).await {
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Spawn reader task with shutdown support
+        let reader_handle = tokio::spawn(async move {
+            if let Err(e) =
+                Self::read_loop_with_shutdown(stdout, pending_clone, notification_tx, shutdown_rx)
+                    .await
+            {
                 warn!("LSP read loop ended with error: {}", e);
             }
         });
@@ -150,6 +173,8 @@ impl JsonRpcConnection {
             next_id: AtomicI64::new(1),
             stdin: Arc::new(Mutex::new(stdin)),
             pending,
+            shutdown_tx,
+            reader_handle: Mutex::new(Some(reader_handle)),
         }
     }
 
@@ -196,7 +221,7 @@ impl JsonRpcConnection {
         let body = serde_json::to_string(&request)?;
         let message = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
 
-        info!("LSP request [{}]: {}", id, method);
+        debug!("LSP request [{}]: {}", id, method);
         trace!("LSP request [{}]: {} {}", id, method, body);
 
         {
@@ -260,7 +285,7 @@ impl JsonRpcConnection {
         let body = serde_json::to_string(&notification)?;
         let message = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
 
-        info!("LSP notify: {}", method);
+        debug!("LSP notify: {}", method);
         trace!("LSP notify: {} {}", method, body);
 
         let mut stdin = self.stdin.lock().await;
@@ -269,21 +294,57 @@ impl JsonRpcConnection {
         Ok(())
     }
 
-    /// Read loop for incoming messages
+    /// Read loop for incoming messages (legacy - without shutdown support)
+    #[allow(dead_code)]
     async fn read_loop(
         stdout: ChildStdout,
         pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,
     ) -> Result<()> {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        Self::read_loop_with_shutdown(stdout, pending, notification_tx, shutdown_rx).await
+    }
+
+    /// Read loop for incoming messages with shutdown support
+    async fn read_loop_with_shutdown(
+        stdout: ChildStdout,
+        pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+        notification_tx: mpsc::Sender<(String, serde_json::Value)>,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) -> Result<()> {
         let mut reader = BufReader::new(stdout);
 
         loop {
+            // Check shutdown signal
+            if *shutdown_rx.borrow() {
+                debug!("LSP read loop received shutdown signal");
+                // Fail all pending requests
+                let mut pending_guard = pending.lock().await;
+                for (_id, req) in pending_guard.drain() {
+                    let _ = req.tx.send(Err(LspErr::ConnectionClosed));
+                }
+                return Ok(());
+            }
+
             // Read headers until empty line
             let mut content_length: Option<usize> = None;
 
             loop {
                 let mut header = String::new();
-                let bytes_read = reader.read_line(&mut header).await?;
+
+                // Use select to check for shutdown while reading
+                let bytes_read = tokio::select! {
+                    result = reader.read_line(&mut header) => result?,
+                    _ = shutdown_rx.changed() => {
+                        debug!("LSP read loop shutdown during header read");
+                        let mut pending_guard = pending.lock().await;
+                        for (_id, req) in pending_guard.drain() {
+                            let _ = req.tx.send(Err(LspErr::ConnectionClosed));
+                        }
+                        return Ok(());
+                    }
+                };
+
                 if bytes_read == 0 {
                     let pending_guard = pending.lock().await;
                     let pending_count = pending_guard.len();
@@ -321,6 +382,15 @@ impl JsonRpcConnection {
                     continue;
                 }
             };
+
+            // Validate Content-Length to prevent memory exhaustion
+            if content_length > MAX_CONTENT_LENGTH {
+                warn!(
+                    "Content-Length {} exceeds maximum allowed {} bytes, skipping message",
+                    content_length, MAX_CONTENT_LENGTH
+                );
+                continue;
+            }
 
             // Read body
             let mut buffer = vec![0u8; content_length];
@@ -365,13 +435,45 @@ impl JsonRpcConnection {
                     }
                 }
             } else if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
-                // Notification
+                // Notification - check for backpressure
                 let params = value
                     .get("params")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                let _ = notification_tx.send((method.to_string(), params)).await;
+                let notification = (method.to_string(), params);
+
+                // Try non-blocking send first to detect backpressure
+                match notification_tx.try_send(notification) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(notification)) => {
+                        // Channel is full - log warning and block
+                        warn!(
+                            "LSP notification channel full, backpressure detected (method: {})",
+                            notification.0
+                        );
+                        // Fall back to blocking send
+                        let _ = notification_tx.send(notification).await;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        // Channel closed, reader is shutting down
+                        debug!("Notification channel closed");
+                        return Ok(());
+                    }
+                }
             }
+        }
+    }
+}
+
+impl Drop for JsonRpcConnection {
+    fn drop(&mut self) {
+        // Signal shutdown to reader task
+        let _ = self.shutdown_tx.send(true);
+
+        // Abort reader task if still running
+        if let Some(handle) = self.reader_handle.get_mut().take() {
+            handle.abort();
+            debug!("JsonRpcConnection dropped - reader task aborted");
         }
     }
 }

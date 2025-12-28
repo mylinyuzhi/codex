@@ -9,15 +9,13 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use super::constants::DEFAULT_RECENCY_HALF_LIFE_DAYS;
+use super::constants::DEFAULT_RRF_K;
+use super::constants::LN_2;
+use super::constants::SECONDS_PER_DAY;
 use crate::types::CodeChunk;
 use crate::types::ScoreType;
 use crate::types::SearchResult;
-
-/// Default RRF constant (k parameter).
-const DEFAULT_K: f32 = 60.0;
-
-/// Default recency decay half-life in days.
-const DEFAULT_RECENCY_HALF_LIFE_DAYS: f32 = 7.0;
 
 /// RRF fusion configuration.
 #[derive(Debug, Clone)]
@@ -42,7 +40,7 @@ pub struct RrfConfig {
 impl Default for RrfConfig {
     fn default() -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight: 0.5,
             vector_weight: 0.3,
             snippet_weight: 0.0,
@@ -57,7 +55,7 @@ impl RrfConfig {
     /// Create a new RRF config with custom weights.
     pub fn new(bm25_weight: f32, vector_weight: f32, snippet_weight: f32) -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight,
             vector_weight,
             snippet_weight,
@@ -75,7 +73,7 @@ impl RrfConfig {
         recent_weight: f32,
     ) -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight,
             vector_weight,
             snippet_weight,
@@ -163,10 +161,10 @@ pub fn recency_score(modified_time: Option<i64>, half_life_days: f32) -> f32 {
     }
 
     let age_seconds = (now - mtime) as f32;
-    let age_days = age_seconds / 86400.0;
+    let age_days = age_seconds / SECONDS_PER_DAY;
 
     // Exponential decay: score = exp(-ln(2) * age / half_life)
-    let decay_rate = 0.693 / half_life_days; // ln(2) ≈ 0.693
+    let decay_rate = LN_2 / half_life_days;
     (-decay_rate * age_days).exp()
 }
 

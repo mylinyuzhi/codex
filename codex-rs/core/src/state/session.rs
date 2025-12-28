@@ -15,7 +15,7 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     /// Last response ID for adapter conversation continuity.
-    /// Stored after each successful response, used to enable incremental message sending.
+    /// Stored after each successful response, used to enable tweakcc message sending.
     pub(crate) last_response_id: Option<String>,
 }
 

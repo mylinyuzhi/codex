@@ -1,6 +1,6 @@
 //! Index manager for batch indexing operations.
 //!
-//! Coordinates file walking, change detection, and incremental updates.
+//! Coordinates file walking, change detection, and tweakcc updates.
 //! Supports optional embedding generation with caching.
 
 use std::collections::HashMap;
@@ -35,6 +35,7 @@ use crate::indexing::change_detector::get_mtime;
 use crate::indexing::change_detector::hash_file;
 use crate::indexing::progress::IndexProgress;
 use crate::indexing::walker::FileWalker;
+use crate::search::Bm25Searcher;
 use crate::storage::SnippetStorage;
 use crate::storage::SqliteStore;
 use crate::storage::lancedb::LanceDbStore;
@@ -62,6 +63,9 @@ pub struct IndexManager {
     lancedb: Option<Arc<LanceDbStore>>,
     cache: Option<EmbeddingCache>,
     provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// Custom BM25 searcher with tunable k1/b parameters.
+    /// When set, chunks are indexed for BM25 search during indexing.
+    bm25_searcher: Option<Arc<Bm25Searcher>>,
 }
 
 impl IndexManager {
@@ -80,6 +84,7 @@ impl IndexManager {
             lancedb: None,
             cache: None,
             provider: None,
+            bm25_searcher: None,
         }
     }
 
@@ -89,6 +94,7 @@ impl IndexManager {
     /// - Compute embeddings for code chunks using the provider
     /// - Cache embeddings to avoid recomputing unchanged chunks
     /// - Store chunks with embeddings to LanceDB for vector search
+    /// - Index chunks for BM25 search with tunable k1/b parameters
     ///
     /// # Arguments
     /// * `config` - Retrieval configuration
@@ -109,6 +115,8 @@ impl IndexManager {
         let change_detector = ChangeDetector::new(db.clone());
         let snippet_storage = SnippetStorage::new(db.clone());
         let chunker = Self::create_chunker(&config);
+        // Create BM25 searcher with config-tuned k1/b parameters
+        let bm25_searcher = Arc::new(Bm25Searcher::with_config(lancedb.clone(), &config.search));
 
         Ok(Self {
             config,
@@ -119,12 +127,20 @@ impl IndexManager {
             lancedb: Some(lancedb),
             cache: Some(cache),
             provider: Some(provider),
+            bm25_searcher: Some(bm25_searcher),
         })
     }
 
     /// Check if embedding mode is enabled.
     pub fn has_embeddings(&self) -> bool {
         self.lancedb.is_some() && self.cache.is_some() && self.provider.is_some()
+    }
+
+    /// Get the BM25 searcher if available.
+    ///
+    /// Returns the BM25 searcher that can be used with HybridSearcher.
+    pub fn bm25_searcher(&self) -> Option<Arc<Bm25Searcher>> {
+        self.bm25_searcher.clone()
     }
 
     /// Create chunker based on config.
@@ -164,6 +180,7 @@ impl IndexManager {
         // Clone optional embedding components
         let lancedb = self.lancedb.clone();
         let provider = self.provider.clone();
+        let bm25_searcher = self.bm25_searcher.clone();
         // Note: cache is behind Mutex, need to clone the path and artifact_id for re-creation
         let cache_path = config.data_dir.join("embeddings.db");
         let artifact_id = config
@@ -190,6 +207,7 @@ impl IndexManager {
                 } else {
                     None
                 },
+                bm25_searcher.as_ref(),
             )
             .await;
 
@@ -218,6 +236,8 @@ impl IndexManager {
         lancedb: Option<&Arc<LanceDbStore>>,
         provider: Option<&Arc<dyn EmbeddingProvider>>,
         cache_info: Option<(&Path, &str)>, // (cache_path, artifact_id)
+        // Optional BM25 searcher for custom BM25 indexing
+        bm25_searcher: Option<&Arc<Bm25Searcher>>,
     ) -> Result<()> {
         // Create cache if embedding mode is enabled
         let cache = if let Some((cache_path, artifact_id)) = cache_info {
@@ -482,6 +502,12 @@ impl IndexManager {
                                 "Failed to store chunks to LanceDB"
                             );
                         }
+
+                        // 5. Index chunks with custom BM25 (if enabled)
+                        if let Some(bm25) = bm25_searcher {
+                            // Index all chunks for this file
+                            bm25.index_chunks(&chunks_with_emb).await;
+                        }
                     }
                 }
 
@@ -533,6 +559,11 @@ impl IndexManager {
                 }
             }
 
+            // Delete from BM25 index (if enabled)
+            if let Some(bm25) = bm25_searcher {
+                bm25.remove_chunks_by_filepath(&change.filepath).await;
+            }
+
             // Delete from catalog and snippets
             change_detector
                 .remove_from_catalog(workspace, &change.filepath)
@@ -548,6 +579,13 @@ impl IndexManager {
                 count = failed_files.len(),
                 "Some files could not be indexed due to read errors"
             );
+        }
+
+        // Save BM25 metadata (if enabled)
+        if let Some(bm25) = bm25_searcher {
+            if let Err(e) = bm25.save_to_storage().await {
+                tracing::warn!(error = %e, "Failed to save BM25 metadata");
+            }
         }
 
         let status_msg = if failed_files.is_empty() {

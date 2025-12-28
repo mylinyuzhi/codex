@@ -9,10 +9,12 @@ use std::sync::Arc;
 use crate::traits::EmbeddingProvider;
 
 pub mod cache;
+pub mod cache_ext;
 pub mod openai;
 pub mod queue;
 
 pub use cache::EmbeddingCache;
+pub use cache_ext::CacheLookupResult;
 pub use openai::OpenAIEmbeddings;
 pub use queue::EmbeddingQueue;
 

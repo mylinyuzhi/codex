@@ -69,7 +69,7 @@ impl RewriteCache {
                 // Parse the cached result
                 serde_json::from_str(&json)
                     .map(Some)
-                    .map_err(|e| RetrievalErr::Parse(e.to_string()))
+                    .map_err(|e| RetrievalErr::json_parse("rewrite cache result", e))
             } else {
                 Ok(None)
             }
@@ -88,8 +88,8 @@ impl RewriteCache {
         let expires_at = now + self.config.ttl_secs;
         let original = query.to_string();
 
-        let result_json =
-            serde_json::to_string(result).map_err(|e| RetrievalErr::Parse(e.to_string()))?;
+        let result_json = serde_json::to_string(result)
+            .map_err(|e| RetrievalErr::json_parse("rewrite result serialization", e))?;
 
         let db = self.db.clone();
         let max_entries = self.config.max_entries;

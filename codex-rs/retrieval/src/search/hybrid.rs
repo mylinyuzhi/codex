@@ -4,6 +4,10 @@
 //! multiple search methods.
 //!
 //! Optionally applies rule-based reranking for improved relevance.
+//!
+//! BM25 search can use either:
+//! - Custom BM25 index with tunable k1/b parameters (recommended for code)
+//! - LanceDB built-in FTS (fallback)
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,6 +20,7 @@ use crate::reranker::Reranker;
 use crate::reranker::RuleBasedReranker;
 use crate::reranker::RuleBasedRerankerConfig;
 use crate::reranker::create_reranker;
+use crate::search::Bm25Searcher;
 use crate::search::dedup::deduplicate_results;
 use crate::search::dedup::limit_chunks_per_file;
 use crate::search::fusion::RrfConfig;
@@ -29,6 +34,7 @@ use crate::traits::EmbeddingProvider;
 use crate::types::ChunkRef;
 use crate::types::CodeChunk;
 use crate::types::ScoreType;
+use crate::types::SearchQuery;
 use crate::types::SearchResult;
 
 /// Hybrid searcher combining BM25 and vector search.
@@ -44,6 +50,9 @@ pub struct HybridSearcher {
     snippet_searcher: Option<SnippetSearcher>,
     /// Workspace root for hydrating content from files
     workspace_root: Option<PathBuf>,
+    /// Custom BM25 searcher with tunable k1/b parameters.
+    /// If set, uses this instead of LanceDB FTS for better code search.
+    bm25_searcher: Option<Arc<Bm25Searcher>>,
 }
 
 impl HybridSearcher {
@@ -57,6 +66,7 @@ impl HybridSearcher {
             reranker: None,
             snippet_searcher: None,
             workspace_root: None,
+            bm25_searcher: None,
         }
     }
 
@@ -70,7 +80,24 @@ impl HybridSearcher {
             reranker: None,
             snippet_searcher: None,
             workspace_root: None,
+            bm25_searcher: None,
         }
+    }
+
+    /// Set custom BM25 searcher with tunable k1/b parameters.
+    ///
+    /// When set, uses the custom BM25 index instead of LanceDB FTS.
+    /// This provides better code search quality with optimized parameters:
+    /// - k1 = 0.8 (reduced keyword repetition weight)
+    /// - b = 0.5 (reduced length normalization)
+    pub fn with_bm25_searcher(mut self, searcher: Arc<Bm25Searcher>) -> Self {
+        self.bm25_searcher = Some(searcher);
+        self
+    }
+
+    /// Check if custom BM25 search is enabled.
+    pub fn has_custom_bm25(&self) -> bool {
+        self.bm25_searcher.is_some()
     }
 
     /// Set workspace root for hydrating content from files.
@@ -401,7 +428,21 @@ impl HybridSearcher {
     }
 
     /// Search using BM25 full-text search only.
+    ///
+    /// Uses custom BM25 searcher if available (with tunable k1/b parameters),
+    /// otherwise falls back to LanceDB FTS.
     pub async fn search_bm25(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
+        // Use custom BM25 searcher if available
+        if let Some(ref bm25) = self.bm25_searcher {
+            let search_query = SearchQuery {
+                text: query.to_string(),
+                limit,
+                ..Default::default()
+            };
+            return bm25.search(&search_query).await;
+        }
+
+        // Fall back to LanceDB FTS
         let chunks = self.store.search_fts(query, limit).await?;
 
         // Convert to SearchResult with rank-based scores

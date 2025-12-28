@@ -61,7 +61,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "codex-mini-latest should expose the local shell tool",
     );
@@ -79,7 +81,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "gpt-5-codex should expose the apply_patch tool",
     );
@@ -97,7 +101,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "gpt-5.1-codex should expose the apply_patch tool",
     );
@@ -114,7 +120,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "gpt-5 should expose the shell tool",
     );
@@ -132,7 +140,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "gpt-5.1 should expose the apply_patch tool",
     );
@@ -150,7 +160,9 @@ async fn model_selects_expected_tools() {
             "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
-            "write_file".to_string()
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
         ],
         "exp-5.1 should expose the apply_patch tool",
     );

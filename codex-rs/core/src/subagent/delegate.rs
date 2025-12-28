@@ -35,7 +35,7 @@ use crate::subagent::TranscriptStore;
 /// This function spawns a full Codex session with filtered tools based on
 /// the SubagentConfig, executes the prompt, and returns the result.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_subagent_delegate(
+pub(crate) async fn run_subagent_delegate(
     config: SubagentConfig,
     prompt: String,
     auth_manager: Arc<AuthManager>,
@@ -45,7 +45,7 @@ pub async fn run_subagent_delegate(
     cancel_token: CancellationToken,
     event_sender: Option<Sender<SubagentActivityEvent>>,
     transcript_store: Option<&TranscriptStore>,
-    resume_agent_id: Option<&str>,
+    _resume_agent_id: Option<&str>,
 ) -> Result<SubagentResult, CodexErr> {
     let start_time = Instant::now();
     let agent_id = generate_agent_id(&config.definition.agent_type);
