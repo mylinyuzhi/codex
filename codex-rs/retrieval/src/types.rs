@@ -68,7 +68,7 @@ pub fn detect_language(path: &Path) -> Option<String> {
 
 /// Code chunk - a segment of source code.
 ///
-/// Extended with metadata fields for incremental indexing support.
+/// Extended with metadata fields for tweakcc indexing support.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
     /// Unique ID: "{workspace}:{filepath}:{chunk_idx}"
@@ -92,7 +92,7 @@ pub struct CodeChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub modified_time: Option<i64>,
-    // Extended metadata fields for incremental indexing
+    // Extended metadata fields for tweakcc indexing
     /// Workspace identifier (same as source_id for backward compatibility)
     #[serde(default)]
     pub workspace: String,
@@ -389,7 +389,8 @@ pub struct SearchResult {
 }
 
 /// Type of score for search results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScoreType {
     /// BM25 full-text search score
     Bm25,
@@ -401,6 +402,18 @@ pub enum ScoreType {
     Snippet,
     /// Recently accessed file score
     Recent,
+}
+
+impl std::fmt::Display for ScoreType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScoreType::Bm25 => write!(f, "BM25"),
+            ScoreType::Vector => write!(f, "Vector"),
+            ScoreType::Hybrid => write!(f, "Hybrid"),
+            ScoreType::Snippet => write!(f, "Snippet"),
+            ScoreType::Recent => write!(f, "Recent"),
+        }
+    }
 }
 
 /// Index tag for workspace tracking.

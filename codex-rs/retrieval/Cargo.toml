@@ -9,8 +9,8 @@ name = "codex_retrieval"
 path = "src/lib.rs"
 
 [[bin]]
-name = "retrieval-cli"
-path = "src/bin/retrieval-cli.rs"
+name = "retrieval"
+path = "src/bin/retrieval_cli.rs"
 
 [dependencies]
 # CLI
@@ -50,8 +50,15 @@ tree-sitter-typescript = "0.23"
 # Query preprocessing
 rust-stemmers = "1.2"
 
+# BM25 full-text search (custom implementation with tunable k1/b parameters)
+bm25 = { version = "2.3", features = ["parallelism"] }
+
+# Graph algorithms for PageRank (repo map)
+petgraph = "0.8"
+
 # Async
 tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7"
 async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures = { workspace = true }
@@ -82,12 +89,35 @@ codex-file-ignore = { workspace = true }
 codex-utils-cache = { path = "../utils/cache" }
 dirs = { workspace = true }
 
+# TUI (same tech stack as codex-tui2)
+ratatui = { workspace = true, features = [
+    "scrolling-regions",
+    "unstable-backend-writer",
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
+ratatui-macros = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+tree-sitter-highlight = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+textwrap = { workspace = true }
+tokio-stream = { workspace = true }
+itertools = { workspace = true }
+derive_more = { workspace = true, features = ["is_variant"] }
+
 [features]
 default = []
 # Enable local neural reranking with fastembed (ONNX Runtime)
 neural-reranker = ["fastembed"]
+# Enable local embeddings with fastembed (ONNX Runtime)
+local-embeddings = ["fastembed"]
+# Enable all local features (embeddings + reranking)
+local = ["local-embeddings", "neural-reranker"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }
+insta = { workspace = true }
+vt100 = { workspace = true }

@@ -116,7 +116,7 @@ impl ToolHandler for LspHandler {
         let manager = get_lsp_manager().await;
 
         // Check if LSP is available for this file type
-        if !manager.is_available(&file_path) {
+        if !manager.is_available(&file_path).await {
             let ext = file_path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -202,7 +202,7 @@ impl ToolHandler for LspHandler {
                         symbols.len(),
                         file_path.display()
                     );
-                    for sym in &symbols {
+                    for sym in symbols.iter() {
                         output.push_str(&format!(
                             "  {} {} (line {})\n",
                             sym.kind.display_name(),

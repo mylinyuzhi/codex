@@ -1,4 +1,4 @@
-//! Non-streaming response handling and incremental input filtering utilities.
+//! Non-streaming response handling and tweakcc input filtering utilities.
 //!
 //! This module provides:
 //! - `NonStreamingResponse` type for complete API responses
@@ -85,7 +85,7 @@ pub fn is_llm_generated(item: &ResponseItem) -> bool {
 
 /// Filter input to get items after last LLM-generated item (zero-copy).
 ///
-/// Used for incremental mode when `previous_response_id` is present.
+/// Used for tweakcc mode when `previous_response_id` is present.
 /// The server already has history up to the last LLM response, so we only
 /// need to send user inputs that occurred after that point.
 ///

@@ -95,6 +95,7 @@ pub fn get_auto_compact_threshold(context_limit: i64, config: &CompactConfig) ->
 }
 
 /// Calculate tokens remaining until auto-compact triggers.
+#[allow(dead_code)] // Used in threshold calculations
 pub fn tokens_until_compact(used_tokens: i64, context_limit: i64, config: &CompactConfig) -> i64 {
     let threshold = get_auto_compact_threshold(context_limit, config);
     (threshold - used_tokens).max(0)

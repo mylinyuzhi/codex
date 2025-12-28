@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::storage::SnippetStorageExt;
+use crate::storage::SnippetStorage;
 use crate::storage::SqliteStore;
 use crate::storage::StoredSnippet;
 use crate::storage::SymbolQuery;
@@ -16,10 +16,10 @@ use crate::types::SearchResult;
 
 /// Snippet searcher for symbol-based code search.
 ///
-/// Wraps `SnippetStorageExt` and converts results to `SearchResult`
+/// Wraps `SnippetStorage` and converts results to `SearchResult`
 /// for integration with `HybridSearcher`.
 pub struct SnippetSearcher {
-    storage: SnippetStorageExt,
+    storage: SnippetStorage,
     workspace: String,
 }
 
@@ -27,7 +27,7 @@ impl SnippetSearcher {
     /// Create a new snippet searcher.
     pub fn new(db: Arc<SqliteStore>, workspace: &str) -> Self {
         Self {
-            storage: SnippetStorageExt::new(db),
+            storage: SnippetStorage::new(db),
             workspace: workspace.to_string(),
         }
     }

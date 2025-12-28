@@ -58,13 +58,63 @@ impl OpenAIEmbeddings {
         self
     }
 
-    /// Make an embedding request to the API.
+    /// Make an embedding request to the API with retry logic.
+    ///
+    /// Retries up to 3 times with exponential backoff for transient errors:
+    /// - 429 (rate limit)
+    /// - 503 (service unavailable)
+    /// - Network timeouts
     async fn request_embeddings(&self, input: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 100;
+
+        let mut last_error = None;
+        for attempt in 0..MAX_RETRIES {
+            match self.request_embeddings_once(&input).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    if !Self::is_retryable(&e) || attempt == MAX_RETRIES - 1 {
+                        return Err(e);
+                    }
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max_retries = MAX_RETRIES,
+                        "OpenAI embedding request failed, retrying: {e}"
+                    );
+                    last_error = Some(e);
+                    let delay = BASE_DELAY_MS * 2u64.pow(attempt);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| RetrievalErr::EmbeddingFailed {
+            cause: "Unknown error after retries".to_string(),
+        }))
+    }
+
+    /// Check if an error is retryable (transient).
+    fn is_retryable(err: &RetrievalErr) -> bool {
+        match err {
+            RetrievalErr::EmbeddingFailed { cause } => {
+                // Rate limit, service unavailable, or network errors
+                cause.contains("429")
+                    || cause.contains("503")
+                    || cause.contains("502")
+                    || cause.contains("timeout")
+                    || cause.contains("connection")
+                    || cause.contains("reset")
+            }
+            _ => false,
+        }
+    }
+
+    /// Single attempt at making an embedding request.
+    async fn request_embeddings_once(&self, input: &[String]) -> Result<Vec<Vec<f32>>> {
         let url = format!("{}/embeddings", self.base_url);
 
         let request = EmbeddingRequest {
             model: self.model.clone(),
-            input,
+            input: input.to_vec(),
             dimensions: Some(self.dimension),
             encoding_format: Some("float".to_string()),
         };

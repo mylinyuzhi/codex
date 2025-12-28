@@ -12,15 +12,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 // ============================================================================
-// OutputBuffer - Thread-safe incremental output buffer
+// OutputBuffer - Thread-safe tweakcc output buffer
 // ============================================================================
 
-/// Default max size per buffer (100KB for incremental data between reads).
+/// Default max size per buffer (100KB for tweakcc data between reads).
 const DEFAULT_MAX_BUFFER_SIZE: usize = 100_000;
 
-/// Thread-safe output buffer for incremental output.
+/// Thread-safe output buffer for tweakcc output.
 ///
-/// This is an **incremental-only** buffer:
+/// This is an **tweakcc-only** buffer:
 /// - `append()` adds data, truncating old data if exceeds max_size
 /// - `take_all()` returns all data and clears the buffer
 /// - Memory is released after each read
@@ -28,7 +28,7 @@ const DEFAULT_MAX_BUFFER_SIZE: usize = 100_000;
 /// Allows concurrent appending (during execution) and reading (via BashOutput).
 #[derive(Debug)]
 pub struct OutputBuffer {
-    /// Buffer for incremental output (cleared on each take_all).
+    /// Buffer for tweakcc output (cleared on each take_all).
     buffer: RwLock<String>,
     /// Maximum buffer size. If exceeded, old data is truncated.
     max_size: usize,
@@ -203,9 +203,9 @@ pub struct BackgroundShell {
     pub cancellation_token: CancellationToken,
     /// Cached result when completed.
     pub result: Option<ShellResult>,
-    /// Streaming stdout buffer (incremental, cleared on each read).
+    /// Streaming stdout buffer (tweakcc, cleared on each read).
     pub stdout_buffer: SharedOutputBuffer,
-    /// Streaming stderr buffer (incremental, cleared on each read).
+    /// Streaming stderr buffer (tweakcc, cleared on each read).
     pub stderr_buffer: SharedOutputBuffer,
 }
 
@@ -286,9 +286,9 @@ pub struct ShellOutput {
     pub status: String,
     /// Exit code if completed.
     pub exit_code: Option<i32>,
-    /// Stdout output (may be partial for incremental reads).
+    /// Stdout output (may be partial for tweakcc reads).
     pub stdout: String,
-    /// Stderr output (may be partial for incremental reads).
+    /// Stderr output (may be partial for tweakcc reads).
     pub stderr: String,
     /// Number of lines in stdout.
     pub stdout_lines: i32,

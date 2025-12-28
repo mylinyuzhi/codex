@@ -182,7 +182,7 @@ async fn test_explore_agent_configuration() {
     assert!(explore.run_config.max_turns > 0);
 
     // Explore should be read-only (no write tools)
-    let disallowed = &explore.disallowed_tools;
+    let _disallowed = &explore.disallowed_tools;
     // Verify it doesn't explicitly allow dangerous tools
     // (Tool filtering is handled by ToolFilter, not disallowed_tools for builtins)
 }

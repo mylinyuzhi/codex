@@ -26,17 +26,33 @@ use std::sync::Arc;
 use codex_utils_cache::BlockingLruCache;
 use once_cell::sync::Lazy;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::chunking::CodeChunkerService;
 use crate::chunking::supported_languages_info;
 use crate::config::RetrievalConfig;
 use crate::error::Result;
 use crate::error::RetrievalErr;
+use crate::event_emitter;
+use crate::events::RetrievalEvent;
+use crate::events::SearchMode;
+use crate::events::SearchResultSummary;
+use crate::indexing::FileWatcher;
+use crate::indexing::IndexManager;
+use crate::indexing::IndexProgress;
+use crate::indexing::IndexStats;
+use crate::indexing::RebuildMode;
+use crate::indexing::WatchEvent;
 use crate::query::rewriter::QueryRewriter;
 use crate::query::rewriter::RewrittenQuery;
 use crate::query::rewriter::SimpleRewriter;
+use crate::repomap::RepoMapRequest;
+use crate::repomap::RepoMapResult;
+use crate::repomap::RepoMapService;
 use crate::search::HybridSearcher;
 use crate::search::RecentFilesCache;
+use crate::storage::SqliteStore;
 use crate::storage::lancedb::LanceDbStore;
 use crate::traits::EmbeddingProvider;
 use crate::types::CodeChunk;
@@ -46,6 +62,19 @@ use crate::types::SearchResult;
 /// Maximum number of cached RetrievalService instances.
 /// Prevents unbounded memory growth in long-running processes.
 const MAX_CACHED_SERVICES: usize = 16;
+
+/// Generate a unique query ID using timestamp and counter.
+fn generate_query_id() -> String {
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() % 1_000_000)
+        .unwrap_or(0);
+    format!("q-{ts:06}-{count}")
+}
 
 /// Global service instance cache by workdir with LRU eviction.
 static INSTANCES: Lazy<BlockingLruCache<PathBuf, Arc<RetrievalService>>> = Lazy::new(|| {
@@ -267,11 +296,24 @@ impl RetrievalService {
         query: &str,
         limit: Option<i32>,
     ) -> Result<Vec<SearchResult>> {
+        let start_time = std::time::Instant::now();
+        let query_id = generate_query_id();
+        let limit = limit.unwrap_or(self.config.search.n_final);
+
         if !self.features.has_search() {
             return Ok(Vec::new());
         }
 
+        // Emit search started event
+        event_emitter::emit(RetrievalEvent::SearchStarted {
+            query_id: query_id.clone(),
+            query: query.to_string(),
+            mode: SearchMode::Hybrid,
+            limit,
+        });
+
         // Apply query rewriting if enabled
+        let rewrite_start = std::time::Instant::now();
         let effective_query = if self.features.query_rewrite {
             let rewritten = self.rewriter.rewrite(query).await?;
             tracing::debug!(
@@ -280,20 +322,58 @@ impl RetrievalService {
                 translated = rewritten.was_translated,
                 "Query rewritten"
             );
+
+            // Emit query rewritten event
+            event_emitter::emit(RetrievalEvent::QueryRewritten {
+                query_id: query_id.clone(),
+                original: query.to_string(),
+                rewritten: rewritten.rewritten.clone(),
+                expansions: rewritten
+                    .expansions
+                    .iter()
+                    .map(|x| x.text.clone())
+                    .collect(),
+                translated: rewritten.was_translated,
+                duration_ms: rewrite_start.elapsed().as_millis() as i64,
+            });
+
             rewritten.effective_query()
         } else {
             query.to_string()
         };
 
-        let limit = limit.unwrap_or(self.config.search.n_final);
-
         // Get recently accessed files for temporal relevance boost
         let recent_results = self.get_recent_search_results(limit as usize).await;
 
         // Perform search with hydration and recent files boost
-        self.searcher
+        let results = self
+            .searcher
             .search_hydrated_with_recent(&effective_query, limit, &recent_results)
-            .await
+            .await;
+
+        // Emit search completed or error event
+        let duration_ms = start_time.elapsed().as_millis() as i64;
+        match &results {
+            Ok(results) => {
+                event_emitter::emit(RetrievalEvent::SearchCompleted {
+                    query_id,
+                    results: results
+                        .iter()
+                        .map(|r| SearchResultSummary::from(r.clone()))
+                        .collect(),
+                    total_duration_ms: duration_ms,
+                });
+            }
+            Err(e) => {
+                event_emitter::emit(RetrievalEvent::SearchError {
+                    query_id,
+                    error: e.to_string(),
+                    retryable: e.is_retryable(),
+                });
+            }
+        }
+
+        results
     }
 
     /// Get SearchResults from recently accessed files for RRF fusion.
@@ -333,9 +413,20 @@ impl RetrievalService {
     ///
     /// Unlike `search()`, this bypasses vector search and RRF fusion.
     pub async fn search_bm25(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
+        let start_time = std::time::Instant::now();
+        let query_id = generate_query_id();
+
         if !self.features.code_search {
             return Ok(Vec::new());
         }
+
+        // Emit search started event
+        event_emitter::emit(RetrievalEvent::SearchStarted {
+            query_id: query_id.clone(),
+            query: query.to_string(),
+            mode: SearchMode::Bm25,
+            limit,
+        });
 
         // Apply query rewriting if enabled
         let effective_query = if self.features.query_rewrite {
@@ -344,16 +435,51 @@ impl RetrievalService {
             query.to_string()
         };
 
-        self.searcher.search_bm25(&effective_query, limit).await
+        let results = self.searcher.search_bm25(&effective_query, limit).await;
+
+        // Emit completion event
+        let duration_ms = start_time.elapsed().as_millis() as i64;
+        match &results {
+            Ok(results) => {
+                event_emitter::emit(RetrievalEvent::SearchCompleted {
+                    query_id,
+                    results: results
+                        .iter()
+                        .map(|r| SearchResultSummary::from(r.clone()))
+                        .collect(),
+                    total_duration_ms: duration_ms,
+                });
+            }
+            Err(e) => {
+                event_emitter::emit(RetrievalEvent::SearchError {
+                    query_id,
+                    error: e.to_string(),
+                    retryable: e.is_retryable(),
+                });
+            }
+        }
+
+        results
     }
 
     /// Search using vector similarity only.
     ///
     /// Returns empty results if embeddings are not configured.
     pub async fn search_vector(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
+        let start_time = std::time::Instant::now();
+        let query_id = generate_query_id();
+
         if !self.has_vector_search() {
             return Ok(Vec::new());
         }
+
+        // Emit search started event
+        event_emitter::emit(RetrievalEvent::SearchStarted {
+            query_id: query_id.clone(),
+            query: query.to_string(),
+            mode: SearchMode::Vector,
+            limit,
+        });
 
         // Apply query rewriting if enabled
         let effective_query = if self.features.query_rewrite {
@@ -362,9 +488,34 @@ impl RetrievalService {
             query.to_string()
         };
 
-        self.searcher
+        let results = self
+            .searcher
             .search_vector_only(&effective_query, limit)
-            .await
+            .await;
+
+        // Emit completion event
+        let duration_ms = start_time.elapsed().as_millis() as i64;
+        match &results {
+            Ok(results) => {
+                event_emitter::emit(RetrievalEvent::SearchCompleted {
+                    query_id,
+                    results: results
+                        .iter()
+                        .map(|r| SearchResultSummary::from(r.clone()))
+                        .collect(),
+                    total_duration_ms: duration_ms,
+                });
+            }
+            Err(e) => {
+                event_emitter::emit(RetrievalEvent::SearchError {
+                    query_id,
+                    error: e.to_string(),
+                    retryable: e.is_retryable(),
+                });
+            }
+        }
+
+        results
     }
 
     /// Rewrite a query without searching.
@@ -458,6 +609,226 @@ impl RetrievalService {
     /// Get the number of files in the recent files cache.
     pub async fn recent_files_count(&self) -> usize {
         self.recent_files.read().await.len()
+    }
+
+    // ========== Operations API ==========
+    // These methods provide a unified interface for indexing, watching, and repomap
+    // operations. They are used by both CLI and TUI to avoid code duplication.
+
+    /// Build or rebuild the index for the workspace.
+    ///
+    /// # Arguments
+    /// * `mode` - `RebuildMode::Incremental` (default) or `RebuildMode::Clean`
+    /// * `cancel` - Cancellation token to abort the operation
+    ///
+    /// # Returns
+    /// A channel receiver that yields `IndexProgress` updates.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let cancel = CancellationToken::new();
+    /// let mut rx = service.build_index(RebuildMode::Incremental, cancel).await?;
+    /// while let Some(progress) = rx.recv().await {
+    ///     println!("{}: {}", progress.status, progress.description);
+    /// }
+    /// ```
+    pub async fn build_index(
+        &self,
+        mode: RebuildMode,
+        cancel: CancellationToken,
+    ) -> Result<mpsc::Receiver<IndexProgress>> {
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let workspace = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .to_string();
+
+        // Ensure data directory exists
+        std::fs::create_dir_all(&self.config.data_dir)?;
+
+        let db_path = self.config.data_dir.join("retrieval.db");
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+
+        let mut manager = IndexManager::new(self.config.clone(), store);
+        let workdir = workdir.clone();
+
+        let (tx, rx) = mpsc::channel(100);
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    tracing::info!("Index build cancelled by user");
+                    let _ = tx.send(IndexProgress::failed("Cancelled by user")).await;
+                }
+                result = manager.rebuild(&workspace, &workdir, mode) => {
+                    match result {
+                        Ok(mut progress_rx) => {
+                            while let Some(progress) = progress_rx.recv().await {
+                                if tx.send(progress).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Index rebuild failed: {}", e);
+                            let _ = tx.send(IndexProgress::failed(e.to_string())).await;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    /// Get index status and statistics.
+    ///
+    /// Returns information about the index including file count, chunk count,
+    /// and last indexing time.
+    pub async fn get_index_status(&self) -> Result<IndexStats> {
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let workspace = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .to_string();
+
+        let db_path = self.config.data_dir.join("retrieval.db");
+        if !db_path.exists() {
+            return Ok(IndexStats::default());
+        }
+
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+        let manager = IndexManager::new(self.config.clone(), store);
+        manager.get_stats(&workspace).await
+    }
+
+    /// Start file watcher for incremental index updates.
+    ///
+    /// # Arguments
+    /// * `cancel` - Cancellation token to stop watching
+    ///
+    /// # Returns
+    /// A channel receiver that yields `WatchEvent` updates.
+    pub async fn start_watch(
+        &self,
+        cancel: CancellationToken,
+    ) -> Result<mpsc::Receiver<WatchEvent>> {
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let workspace = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .to_string();
+
+        let debounce_ms = self.config.indexing.watch_debounce_ms.max(0) as u64;
+        let watcher = FileWatcher::new(workdir, debounce_ms)?;
+
+        // Emit watch started event
+        event_emitter::emit(RetrievalEvent::WatchStarted {
+            workspace: workspace.clone(),
+            paths: vec![workdir.display().to_string()],
+        });
+
+        let (tx, rx) = mpsc::channel(100);
+        let config = self.config.clone();
+        let workdir = workdir.clone();
+
+        tokio::spawn(async move {
+            let db_path = config.data_dir.join("retrieval.db");
+            let store = match SqliteStore::open(&db_path) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    tracing::error!("Failed to open database for watcher: {}", e);
+                    event_emitter::emit(RetrievalEvent::WatchStopped {
+                        workspace: workspace.clone(),
+                    });
+                    return;
+                }
+            };
+
+            let mut manager = IndexManager::new(config.clone(), store);
+
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        tracing::info!("File watcher cancelled");
+                        break;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        if let Some(events) = watcher.recv_timeout(std::time::Duration::from_millis(100)) {
+                            for event in &events {
+                                let watch_event = WatchEvent {
+                                    path: event.path.clone(),
+                                    kind: event.kind.clone(),
+                                };
+                                let _ = tx.send(watch_event).await;
+                            }
+
+                            if !events.is_empty() {
+                                // Trigger incremental rebuild
+                                if let Err(e) = manager
+                                    .rebuild(&workspace, &workdir, RebuildMode::Incremental)
+                                    .await
+                                {
+                                    tracing::error!("Incremental rebuild failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            event_emitter::emit(RetrievalEvent::WatchStopped { workspace });
+        });
+
+        Ok(rx)
+    }
+
+    /// Generate a repository map.
+    ///
+    /// Creates a condensed representation of the codebase structure
+    /// using PageRank to prioritize important files and symbols.
+    ///
+    /// # Arguments
+    /// * `request` - Request parameters including max_tokens and chat_files
+    pub async fn generate_repomap(&self, request: RepoMapRequest) -> Result<RepoMapResult> {
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let workdir_name = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let db_path = self.config.data_dir.join("retrieval.db");
+        if !db_path.exists() {
+            return Err(RetrievalErr::NotReady {
+                workspace: workdir_name.to_string(),
+                reason: "Index not found - please build the index first".to_string(),
+            });
+        }
+
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+        let repo_map_config = self.config.repo_map.clone().unwrap_or_default();
+        let mut repomap_service = RepoMapService::new(repo_map_config, store, workdir.clone())?;
+
+        repomap_service.generate(&request, false).await
     }
 
     /// Internal: read and chunk a file.

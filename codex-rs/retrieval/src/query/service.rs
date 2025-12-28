@@ -17,6 +17,7 @@ use crate::query::llm_provider::LlmRewriteResponse;
 use crate::query::llm_provider::NoopProvider;
 use crate::query::llm_provider::OpenAiProvider;
 use crate::query::llm_provider::QUERY_REWRITE_SYSTEM_PROMPT;
+use crate::query::ollama_provider::OllamaLlmProvider;
 use crate::query::rewriter::SimpleRewriter;
 use crate::storage::SqliteStore;
 
@@ -45,11 +46,19 @@ impl QueryRewriteService {
             None
         };
 
-        // Initialize LLM provider
+        // Initialize LLM provider based on config
         let llm_provider: Arc<dyn LlmProvider> = if config.enabled {
             match config.llm.provider.as_str() {
                 "openai" => Arc::new(OpenAiProvider::new(config.llm.clone())),
-                _ => Arc::new(NoopProvider::new()),
+                "ollama" => Arc::new(OllamaLlmProvider::new(config.llm.clone())),
+                "noop" | "none" | "disabled" => Arc::new(NoopProvider::new()),
+                other => {
+                    tracing::warn!(
+                        provider = %other,
+                        "Unknown LLM provider, falling back to noop"
+                    );
+                    Arc::new(NoopProvider::new())
+                }
             }
         } else {
             Arc::new(NoopProvider::new())

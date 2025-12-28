@@ -1,6 +1,6 @@
 //! Index manager for batch indexing operations.
 //!
-//! Coordinates file walking, change detection, and incremental updates.
+//! Coordinates file walking, change detection, and tweakcc updates.
 //! Supports optional embedding generation with caching.
 
 use std::collections::HashMap;
@@ -28,6 +28,12 @@ use crate::config::RetrievalConfig;
 use crate::embeddings::EmbeddingCache;
 use crate::error::Result;
 use crate::error::RetrievalErr;
+use crate::event_emitter;
+use crate::events::FileProcessStatus;
+use crate::events::IndexPhaseInfo;
+use crate::events::IndexStatsSummary;
+use crate::events::RebuildModeInfo;
+use crate::events::RetrievalEvent;
 use crate::indexing::IndexLockGuard;
 use crate::indexing::change_detector::ChangeDetector;
 use crate::indexing::change_detector::ChangeStatus;
@@ -35,6 +41,7 @@ use crate::indexing::change_detector::get_mtime;
 use crate::indexing::change_detector::hash_file;
 use crate::indexing::progress::IndexProgress;
 use crate::indexing::walker::FileWalker;
+use crate::search::Bm25Searcher;
 use crate::storage::SnippetStorage;
 use crate::storage::SqliteStore;
 use crate::storage::lancedb::LanceDbStore;
@@ -62,6 +69,9 @@ pub struct IndexManager {
     lancedb: Option<Arc<LanceDbStore>>,
     cache: Option<EmbeddingCache>,
     provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// Custom BM25 searcher with tunable k1/b parameters.
+    /// When set, chunks are indexed for BM25 search during indexing.
+    bm25_searcher: Option<Arc<Bm25Searcher>>,
 }
 
 impl IndexManager {
@@ -80,6 +90,7 @@ impl IndexManager {
             lancedb: None,
             cache: None,
             provider: None,
+            bm25_searcher: None,
         }
     }
 
@@ -89,6 +100,7 @@ impl IndexManager {
     /// - Compute embeddings for code chunks using the provider
     /// - Cache embeddings to avoid recomputing unchanged chunks
     /// - Store chunks with embeddings to LanceDB for vector search
+    /// - Index chunks for BM25 search with tunable k1/b parameters
     ///
     /// # Arguments
     /// * `config` - Retrieval configuration
@@ -109,6 +121,8 @@ impl IndexManager {
         let change_detector = ChangeDetector::new(db.clone());
         let snippet_storage = SnippetStorage::new(db.clone());
         let chunker = Self::create_chunker(&config);
+        // Create BM25 searcher with config-tuned k1/b parameters
+        let bm25_searcher = Arc::new(Bm25Searcher::with_config(lancedb.clone(), &config.search));
 
         Ok(Self {
             config,
@@ -119,12 +133,20 @@ impl IndexManager {
             lancedb: Some(lancedb),
             cache: Some(cache),
             provider: Some(provider),
+            bm25_searcher: Some(bm25_searcher),
         })
     }
 
     /// Check if embedding mode is enabled.
     pub fn has_embeddings(&self) -> bool {
         self.lancedb.is_some() && self.cache.is_some() && self.provider.is_some()
+    }
+
+    /// Get the BM25 searcher if available.
+    ///
+    /// Returns the BM25 searcher that can be used with HybridSearcher.
+    pub fn bm25_searcher(&self) -> Option<Arc<Bm25Searcher>> {
+        self.bm25_searcher.clone()
     }
 
     /// Create chunker based on config.
@@ -164,6 +186,7 @@ impl IndexManager {
         // Clone optional embedding components
         let lancedb = self.lancedb.clone();
         let provider = self.provider.clone();
+        let bm25_searcher = self.bm25_searcher.clone();
         // Note: cache is behind Mutex, need to clone the path and artifact_id for re-creation
         let cache_path = config.data_dir.join("embeddings.db");
         let artifact_id = config
@@ -190,10 +213,17 @@ impl IndexManager {
                 } else {
                     None
                 },
+                bm25_searcher.as_ref(),
             )
             .await;
 
             if let Err(e) = result {
+                // Emit failure event
+                event_emitter::emit(RetrievalEvent::IndexBuildFailed {
+                    workspace: workspace.clone(),
+                    error: e.to_string(),
+                });
+
                 let _ = tx
                     .send(IndexProgress::failed(format!("Indexing failed: {e}")))
                     .await;
@@ -218,6 +248,8 @@ impl IndexManager {
         lancedb: Option<&Arc<LanceDbStore>>,
         provider: Option<&Arc<dyn EmbeddingProvider>>,
         cache_info: Option<(&Path, &str)>, // (cache_path, artifact_id)
+        // Optional BM25 searcher for custom BM25 indexing
+        bm25_searcher: Option<&Arc<Bm25Searcher>>,
     ) -> Result<()> {
         // Create cache if embedding mode is enabled
         let cache = if let Some((cache_path, artifact_id)) = cache_info {
@@ -225,8 +257,25 @@ impl IndexManager {
         } else {
             None
         };
+
+        let index_start = Instant::now();
+
+        // Emit index build started event
+        event_emitter::emit(RetrievalEvent::IndexBuildStarted {
+            workspace: workspace.to_string(),
+            mode: RebuildModeInfo::Incremental, // TODO: pass mode through
+            estimated_files: 0,                 // Will update after scan
+        });
+
         // Phase 1: Walk files
         let _ = tx.send(IndexProgress::loading("Scanning files...")).await;
+
+        event_emitter::emit(RetrievalEvent::IndexPhaseChanged {
+            workspace: workspace.to_string(),
+            phase: IndexPhaseInfo::Scanning,
+            progress: 0.0,
+            description: "Scanning files...".to_string(),
+        });
 
         let walker = FileWalker::new(config.indexing.max_file_size_mb);
         let files = walker.walk(root)?;
@@ -244,6 +293,13 @@ impl IndexManager {
             .send(IndexProgress::indexing(0.05, "Computing file hashes..."))
             .await;
 
+        event_emitter::emit(RetrievalEvent::IndexPhaseChanged {
+            workspace: workspace.to_string(),
+            phase: IndexPhaseInfo::Hashing,
+            progress: 0.05,
+            description: format!("Computing hashes for {} files...", files.len()),
+        });
+
         let mut current_files = HashMap::new();
         for file in &files {
             if let Ok(hash) = hash_file(file) {
@@ -260,6 +316,13 @@ impl IndexManager {
         let _ = tx
             .send(IndexProgress::indexing(0.1, "Detecting changes..."))
             .await;
+
+        event_emitter::emit(RetrievalEvent::IndexPhaseChanged {
+            workspace: workspace.to_string(),
+            phase: IndexPhaseInfo::Detecting,
+            progress: 0.1,
+            description: "Detecting changes...".to_string(),
+        });
 
         let changes = change_detector
             .detect_changes(workspace, &current_files)
@@ -308,6 +371,13 @@ impl IndexManager {
             .filter(|c| c.status != ChangeStatus::Deleted)
             .collect();
         let total_to_process = files_to_process.len();
+
+        event_emitter::emit(RetrievalEvent::IndexPhaseChanged {
+            workspace: workspace.to_string(),
+            phase: IndexPhaseInfo::Chunking,
+            progress: 0.15,
+            description: format!("Processing {} files...", total_to_process),
+        });
 
         let mut tag_extractor = TagExtractor::new();
         let mut processed = 0;
@@ -482,6 +552,12 @@ impl IndexManager {
                                 "Failed to store chunks to LanceDB"
                             );
                         }
+
+                        // 5. Index chunks with custom BM25 (if enabled)
+                        if let Some(bm25) = bm25_searcher {
+                            // Index all chunks for this file
+                            bm25.index_chunks(&chunks_with_emb).await;
+                        }
                     }
                 }
 
@@ -495,6 +571,14 @@ impl IndexManager {
                         0,
                     )
                     .await?;
+
+                // Emit file processed event
+                event_emitter::emit(RetrievalEvent::IndexFileProcessed {
+                    workspace: workspace.to_string(),
+                    path: change.filepath.clone(),
+                    chunks: chunk_spans.len() as i32,
+                    status: FileProcessStatus::Success,
+                });
 
                 processed += 1;
             }
@@ -533,6 +617,11 @@ impl IndexManager {
                 }
             }
 
+            // Delete from BM25 index (if enabled)
+            if let Some(bm25) = bm25_searcher {
+                bm25.remove_chunks_by_filepath(&change.filepath).await;
+            }
+
             // Delete from catalog and snippets
             change_detector
                 .remove_from_catalog(workspace, &change.filepath)
@@ -550,6 +639,21 @@ impl IndexManager {
             );
         }
 
+        // Emit finalizing phase
+        event_emitter::emit(RetrievalEvent::IndexPhaseChanged {
+            workspace: workspace.to_string(),
+            phase: IndexPhaseInfo::Finalizing,
+            progress: 0.95,
+            description: "Finalizing index...".to_string(),
+        });
+
+        // Save BM25 metadata (if enabled)
+        if let Some(bm25) = bm25_searcher {
+            if let Err(e) = bm25.save_to_storage().await {
+                tracing::warn!(error = %e, "Failed to save BM25 metadata");
+            }
+        }
+
         let status_msg = if failed_files.is_empty() {
             format!(
                 "Indexed {processed} files ({added} added, {modified} modified, {deleted} deleted)"
@@ -561,7 +665,21 @@ impl IndexManager {
             )
         };
 
-        let _ = tx.send(IndexProgress::done(status_msg)).await;
+        let _ = tx.send(IndexProgress::done(status_msg.clone())).await;
+
+        // Emit index build completed event
+        let duration_ms = index_start.elapsed().as_millis() as i64;
+        event_emitter::emit(RetrievalEvent::IndexBuildCompleted {
+            workspace: workspace.to_string(),
+            stats: IndexStatsSummary {
+                file_count: processed as i32,
+                chunk_count: 0, // TODO: track total chunks
+                symbol_count: 0,
+                index_size_bytes: 0,
+                languages: Vec::new(),
+            },
+            duration_ms,
+        });
 
         Ok(())
     }

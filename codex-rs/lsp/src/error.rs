@@ -42,6 +42,10 @@ pub enum LspErr {
     #[error("no LSP server available for file extension: {ext}")]
     NoServerForExtension { ext: String },
 
+    /// Server does not support the requested operation
+    #[error("LSP server does not support {operation}")]
+    OperationNotSupported { operation: String },
+
     /// Symbol not found in document
     #[error("symbol '{name}' not found in {file}")]
     SymbolNotFound { name: String, file: String },

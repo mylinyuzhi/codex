@@ -1,6 +1,6 @@
 //! BashOutput Tool Specification
 //!
-//! Retrieves output from background shell commands with automatic incremental read support.
+//! Retrieves output from background shell commands with automatic tweakcc read support.
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 /// BashOutput retrieves stdout/stderr from background shell commands
 /// started with `run_in_background: true`.
 ///
-/// Automatically returns incremental output - each call returns new output
+/// Automatically returns tweakcc output - each call returns new output
 /// since the last read, so the agent doesn't need to manage offsets.
 pub fn create_bash_output_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
@@ -59,7 +59,7 @@ Usage:
 - Use block=true (default) to wait for shell completion
 - Use block=false for non-blocking check of current status
 - Use filter to filter output lines by regex pattern
-- Each call returns new output since last call (incremental)
+- Each call returns new output since last call (tweakcc)
 
 Response includes:
 - shellId, command, status ("running"|"completed"|"failed"|"killed")
@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(tool.name, "BashOutput");
         assert!(!tool.strict);
         assert!(tool.description.contains("background shell"));
-        assert!(tool.description.contains("incremental"));
+        assert!(tool.description.contains("tweakcc"));
 
         let JsonSchema::Object {
             properties,

@@ -1,8 +1,10 @@
 //! LanceDB storage layer.
 //!
 //! Provides vector storage and full-text search using LanceDB.
-//! Extended schema includes file metadata for incremental indexing.
+//! Extended schema includes file metadata for tweakcc indexing.
+//! Also provides index policy management and BM25 metadata storage.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,6 +28,11 @@ use lancedb::query::QueryBase;
 use crate::config::default_embedding_dimension;
 use crate::error::Result;
 use crate::error::RetrievalErr;
+use crate::search::Bm25Metadata;
+use crate::search::SparseEmbedding;
+use crate::storage::lancedb_types::FileMetadata;
+use crate::storage::lancedb_types::IndexPolicy;
+use crate::storage::lancedb_types::IndexStatus;
 use crate::types::ChunkRef;
 use crate::types::CodeChunk;
 
@@ -37,6 +44,16 @@ pub struct LanceDbStore {
 }
 
 impl LanceDbStore {
+    /// Get reference to the database connection.
+    pub fn db(&self) -> &Connection {
+        &self.db
+    }
+
+    /// Get the table name.
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+
     /// Open or create a LanceDB database.
     pub async fn open(path: &Path) -> Result<Self> {
         Self::open_with_dimension(path, default_embedding_dimension()).await
@@ -61,7 +78,7 @@ impl LanceDbStore {
 
     /// Get the Arrow schema for the chunks table.
     ///
-    /// Extended schema includes metadata for incremental indexing:
+    /// Extended schema includes metadata for tweakcc indexing:
     /// - workspace: workspace identifier
     /// - content_hash: SHA256 hash of file content
     /// - mtime: file modification timestamp
@@ -85,7 +102,7 @@ impl LanceDbStore {
                 ),
                 true, // nullable for chunks without embeddings
             ),
-            // Extended metadata fields for incremental indexing
+            // Extended metadata fields for tweakcc indexing
             Field::new("workspace", DataType::Utf8, false),
             Field::new("content_hash", DataType::Utf8, false),
             Field::new("mtime", DataType::Int64, false),
@@ -94,6 +111,8 @@ impl LanceDbStore {
             Field::new("parent_symbol", DataType::Utf8, true),
             // Is overview chunk (nullable, defaults to false for backward compatibility)
             Field::new("is_overview", DataType::Boolean, true),
+            // BM25 sparse embedding (JSON string, nullable)
+            Field::new("bm25_embedding", DataType::Utf8, true),
         ])
     }
 
@@ -170,7 +189,13 @@ impl LanceDbStore {
     }
 
     /// Convert chunks to Arrow RecordBatch.
-    fn chunks_to_batch(&self, chunks: &[CodeChunk]) -> Result<RecordBatch> {
+    ///
+    /// Optionally includes BM25 sparse embeddings as JSON strings.
+    fn chunks_to_batch(
+        &self,
+        chunks: &[CodeChunk],
+        bm25_embeddings: Option<&[String]>,
+    ) -> Result<RecordBatch> {
         // Core chunk fields
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
         let source_ids: Vec<&str> = chunks.iter().map(|c| c.source_id.as_str()).collect();
@@ -229,6 +254,16 @@ impl LanceDbStore {
         // Is overview chunk (nullable)
         let is_overviews: Vec<Option<bool>> = chunks.iter().map(|c| Some(c.is_overview)).collect();
 
+        // BM25 sparse embeddings (nullable JSON strings)
+        let bm25_emb_values: Vec<Option<&str>> = if let Some(embeddings) = bm25_embeddings {
+            embeddings
+                .iter()
+                .map(|e| if e.is_empty() { None } else { Some(e.as_str()) })
+                .collect()
+        } else {
+            vec![None; chunks.len()]
+        };
+
         let schema = Arc::new(self.get_schema());
         RecordBatch::try_new(
             schema,
@@ -247,6 +282,7 @@ impl LanceDbStore {
                 Arc::new(Int64Array::from(indexed_ats)),
                 Arc::new(StringArray::from(parent_symbols)),
                 Arc::new(BooleanArray::from(is_overviews)),
+                Arc::new(StringArray::from(bm25_emb_values)),
             ],
         )
         .map_err(|e| RetrievalErr::LanceDbQueryFailed {
@@ -293,14 +329,26 @@ impl LanceDbStore {
         })
     }
 
-    /// Store a batch of code chunks.
+    /// Store a batch of code chunks (without BM25 embeddings).
     pub async fn store_chunks(&self, chunks: &[CodeChunk]) -> Result<()> {
+        self.store_chunks_with_bm25(chunks, None).await
+    }
+
+    /// Store a batch of code chunks with optional BM25 embeddings.
+    ///
+    /// If `bm25_embeddings` is provided, it must have the same length as `chunks`.
+    /// Each string should be a JSON-serialized SparseEmbedding.
+    pub async fn store_chunks_with_bm25(
+        &self,
+        chunks: &[CodeChunk],
+        bm25_embeddings: Option<&[String]>,
+    ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
 
         let table = self.get_or_create_table().await?;
-        let batch = self.chunks_to_batch(chunks)?;
+        let batch = self.chunks_to_batch(chunks, bm25_embeddings)?;
 
         // Create a RecordBatchIterator for LanceDB
         let schema = batch.schema();
@@ -640,7 +688,25 @@ impl LanceDbStore {
     ///
     /// Returns an error if the embedding dimension doesn't match the configured dimension.
     /// This prevents silent quality degradation from dimension mismatches.
+    ///
+    /// Note: This method discards distance information. For better search quality,
+    /// use `search_vector_with_distance` which preserves the actual similarity scores.
     pub async fn search_vector(&self, embedding: &[f32], limit: i32) -> Result<Vec<CodeChunk>> {
+        let results = self.search_vector_with_distance(embedding, limit).await?;
+        Ok(results.into_iter().map(|(chunk, _)| chunk).collect())
+    }
+
+    /// Search using vector similarity, returning chunks with their distance scores.
+    ///
+    /// Returns `Vec<(CodeChunk, f32)>` where the f32 is the L2 distance from the query vector.
+    /// Lower distance = more similar. Use `1.0 / (1.0 + distance)` to convert to similarity score.
+    ///
+    /// Returns an error if the embedding dimension doesn't match the configured dimension.
+    pub async fn search_vector_with_distance(
+        &self,
+        embedding: &[f32],
+        limit: i32,
+    ) -> Result<Vec<(CodeChunk, f32)>> {
         // Validate embedding dimension matches configured dimension
         if embedding.len() != self.dimension as usize {
             return Err(RetrievalErr::EmbeddingDimensionMismatch {
@@ -680,17 +746,29 @@ impl LanceDbStore {
                 cause: e.to_string(),
             })?;
 
-        let mut chunks = Vec::new();
+        let mut results_with_distance = Vec::new();
         let mut stream = results;
         while let Some(batch) = futures::StreamExt::next(&mut stream).await {
             let batch = batch.map_err(|e| RetrievalErr::LanceDbQueryFailed {
                 table: self.table_name.clone(),
                 cause: e.to_string(),
             })?;
-            chunks.extend(Self::batch_to_chunks(&batch)?);
+
+            // Extract distances from _distance column (added by LanceDB vector search)
+            let distances = batch
+                .column_by_name("_distance")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+
+            let chunks = Self::batch_to_chunks(&batch)?;
+
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                // Default to 0.0 distance if not available (shouldn't happen for vector search)
+                let distance = distances.map(|d| d.value(i)).unwrap_or(0.0);
+                results_with_distance.push((chunk, distance));
+            }
         }
 
-        Ok(chunks)
+        Ok(results_with_distance)
     }
 
     /// Search using full-text search (BM25), returning ChunkRefs.
@@ -920,6 +998,66 @@ impl LanceDbStore {
             .map(|c| c as i64)
     }
 
+    /// List all chunks in the store with a default safety limit.
+    ///
+    /// Used for populating BM25 search cache during index loading.
+    ///
+    /// **Safety:** To prevent OOM on large repositories, a default limit of
+    /// 100,000 chunks is applied. For larger repos, use `list_all_chunks_with_limit`
+    /// with `None` (be careful!) or process chunks in batches.
+    pub async fn list_all_chunks(&self) -> Result<Vec<CodeChunk>> {
+        self.list_all_chunks_with_limit(Some(100_000)).await
+    }
+
+    /// List chunks with a configurable limit.
+    ///
+    /// - `limit: Some(n)` - Returns at most `n` chunks
+    /// - `limit: None` - No limit (use with caution on large repos!)
+    pub async fn list_all_chunks_with_limit(&self, limit: Option<i32>) -> Result<Vec<CodeChunk>> {
+        if !self.table_exists().await? {
+            return Ok(Vec::new());
+        }
+
+        let table = self
+            .db
+            .open_table(&self.table_name)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let query = table.query();
+        let results = if let Some(n) = limit {
+            query
+                .limit(n as usize)
+                .execute()
+                .await
+                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                    table: self.table_name.clone(),
+                    cause: e.to_string(),
+                })?
+        } else {
+            query.execute().await.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?
+        };
+
+        let mut chunks = Vec::new();
+        let mut stream = results;
+        while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+            let batch = batch.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+            chunks.extend(Self::batch_to_chunks(&batch)?);
+        }
+
+        Ok(chunks)
+    }
+
     /// Create a vector index for faster similarity search.
     ///
     /// Uses automatic index type selection (no quantization).
@@ -1012,7 +1150,7 @@ impl LanceDbStore {
         Ok(())
     }
 
-    // ========== Catalog-like operations for incremental indexing ==========
+    // ========== Catalog-like operations for tweakcc indexing ==========
 
     /// Get file metadata for a specific file in a workspace.
     ///
@@ -1204,30 +1342,356 @@ impl LanceDbStore {
 
         Ok((count_before - count_after) as i32)
     }
+
+    // ========== Index Policy Methods ==========
+
+    /// Get current index status.
+    ///
+    /// Returns information about table existence, chunk count,
+    /// and whether index creation is recommended.
+    pub async fn get_index_status(&self, policy: &IndexPolicy) -> Result<IndexStatus> {
+        let table_exists = self.table_exists().await?;
+
+        if !table_exists {
+            return Ok(IndexStatus::default());
+        }
+
+        let chunk_count = self.count().await?;
+
+        let vector_index_recommended =
+            policy.chunk_threshold > 0 && chunk_count >= policy.chunk_threshold;
+
+        let fts_index_recommended =
+            policy.fts_chunk_threshold > 0 && chunk_count >= policy.fts_chunk_threshold;
+
+        Ok(IndexStatus {
+            table_exists,
+            chunk_count,
+            vector_index_recommended,
+            fts_index_recommended,
+        })
+    }
+
+    /// Apply index policy - create indexes if thresholds are met.
+    ///
+    /// Returns true if any index was created.
+    pub async fn apply_index_policy(
+        &self,
+        policy: &IndexPolicy,
+        quantization_config: Option<&crate::config::QuantizationConfig>,
+    ) -> Result<bool> {
+        let status = self.get_index_status(policy).await?;
+
+        if !status.table_exists {
+            return Ok(false);
+        }
+
+        let mut created = false;
+
+        if status.vector_index_recommended || policy.force_rebuild {
+            self.create_vector_index_with_config(quantization_config)
+                .await?;
+            created = true;
+        }
+
+        if status.fts_index_recommended || policy.force_rebuild {
+            self.create_fts_index().await?;
+            created = true;
+        }
+
+        Ok(created)
+    }
+
+    /// Check if index creation is needed based on policy.
+    pub async fn needs_index(&self, policy: &IndexPolicy) -> Result<bool> {
+        let status = self.get_index_status(policy).await?;
+        Ok(status.needs_indexing())
+    }
+
+    // ========== BM25 Metadata Methods ==========
+
+    /// Get the schema for BM25 metadata table.
+    fn bm25_metadata_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("avgdl", DataType::Float32, false),
+            Field::new("total_docs", DataType::Int64, false),
+            Field::new("updated_at", DataType::Int64, false),
+        ])
+    }
+
+    /// Check if BM25 metadata table exists.
+    pub async fn bm25_metadata_exists(&self) -> Result<bool> {
+        let tables = self.db.table_names().execute().await.map_err(|e| {
+            RetrievalErr::LanceDbQueryFailed {
+                table: BM25_METADATA_TABLE.to_string(),
+                cause: e.to_string(),
+            }
+        })?;
+        Ok(tables.contains(&BM25_METADATA_TABLE.to_string()))
+    }
+
+    /// Save BM25 metadata.
+    pub async fn save_bm25_metadata(&self, metadata: &Bm25Metadata) -> Result<()> {
+        let schema = Arc::new(Self::bm25_metadata_schema());
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Float32Array::from(vec![metadata.avgdl])),
+                Arc::new(Int64Array::from(vec![metadata.total_docs])),
+                Arc::new(Int64Array::from(vec![metadata.updated_at])),
+            ],
+        )
+        .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+            table: BM25_METADATA_TABLE.to_string(),
+            cause: e.to_string(),
+        })?;
+
+        let reader = arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)], schema.clone());
+
+        if self.bm25_metadata_exists().await? {
+            let table = self
+                .db
+                .open_table(BM25_METADATA_TABLE)
+                .execute()
+                .await
+                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                    table: BM25_METADATA_TABLE.to_string(),
+                    cause: e.to_string(),
+                })?;
+
+            table
+                .delete("avgdl >= 0")
+                .await
+                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                    table: BM25_METADATA_TABLE.to_string(),
+                    cause: format!("Failed to delete old metadata: {e}"),
+                })?;
+
+            table
+                .add(reader)
+                .execute()
+                .await
+                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                    table: BM25_METADATA_TABLE.to_string(),
+                    cause: format!("Failed to add new metadata: {e}"),
+                })?;
+        } else {
+            self.db
+                .create_table(BM25_METADATA_TABLE, reader)
+                .execute()
+                .await
+                .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                    table: BM25_METADATA_TABLE.to_string(),
+                    cause: e.to_string(),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Load BM25 metadata.
+    pub async fn load_bm25_metadata(&self) -> Result<Option<Bm25Metadata>> {
+        if !self.bm25_metadata_exists().await? {
+            return Ok(None);
+        }
+
+        let table = self
+            .db
+            .open_table(BM25_METADATA_TABLE)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: BM25_METADATA_TABLE.to_string(),
+                cause: e.to_string(),
+            })?;
+
+        let mut stream = table.query().limit(1).execute().await.map_err(|e| {
+            RetrievalErr::LanceDbQueryFailed {
+                table: BM25_METADATA_TABLE.to_string(),
+                cause: e.to_string(),
+            }
+        })?;
+
+        use futures::StreamExt;
+        if let Some(batch_result) = stream.next().await {
+            let batch = batch_result.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: BM25_METADATA_TABLE.to_string(),
+                cause: e.to_string(),
+            })?;
+
+            if batch.num_rows() == 0 {
+                return Ok(None);
+            }
+
+            let avgdl = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .map(|a| a.value(0))
+                .unwrap_or(100.0);
+
+            let total_docs = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.value(0))
+                .unwrap_or(0);
+
+            let updated_at = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.value(0))
+                .unwrap_or(0);
+
+            return Ok(Some(Bm25Metadata {
+                avgdl,
+                total_docs,
+                updated_at,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    /// Load all chunk contents for BM25 scorer restoration.
+    pub async fn load_all_chunk_contents(&self) -> Result<HashMap<String, String>> {
+        let mut result = HashMap::new();
+
+        if !self.table_exists().await? {
+            return Ok(result);
+        }
+
+        let table = self
+            .db
+            .open_table(&self.table_name)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let mut stream = table
+            .query()
+            .select(lancedb::query::Select::Columns(vec![
+                "id".to_string(),
+                "content".to_string(),
+            ]))
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        use futures::StreamExt;
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+            let ids = batch
+                .column_by_name("id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let contents = batch
+                .column_by_name("content")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+
+            if let (Some(ids_col), Some(contents_col)) = (ids, contents) {
+                for i in 0..batch.num_rows() {
+                    let id = ids_col.value(i).to_string();
+                    let content = contents_col.value(i).to_string();
+                    result.insert(id, content);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Load all BM25 embeddings from chunks.
+    pub async fn load_all_bm25_embeddings(&self) -> Result<HashMap<String, SparseEmbedding>> {
+        let mut result = HashMap::new();
+
+        if !self.table_exists().await? {
+            return Ok(result);
+        }
+
+        let table = self
+            .db
+            .open_table(&self.table_name)
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        let mut stream = table
+            .query()
+            .select(lancedb::query::Select::Columns(vec![
+                "id".to_string(),
+                "bm25_embedding".to_string(),
+            ]))
+            .execute()
+            .await
+            .map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+        use futures::StreamExt;
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result.map_err(|e| RetrievalErr::LanceDbQueryFailed {
+                table: self.table_name.clone(),
+                cause: e.to_string(),
+            })?;
+
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| RetrievalErr::LanceDbQueryFailed {
+                    table: self.table_name.clone(),
+                    cause: "Invalid id column".to_string(),
+                })?;
+
+            let embeddings = batch
+                .column_by_name("bm25_embedding")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+
+            if let Some(embeddings_col) = embeddings {
+                for i in 0..batch.num_rows() {
+                    let id = ids.value(i).to_string();
+                    let json = embeddings_col.value(i);
+                    if !json.is_empty() {
+                        if let Some(embedding) = SparseEmbedding::from_json(json) {
+                            result.insert(id, embedding);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
 }
 
-/// File metadata for incremental indexing.
-///
-/// Contains the metadata needed for change detection without
-/// loading the full chunk content.
-#[derive(Debug, Clone)]
-pub struct FileMetadata {
-    /// File path (relative to workspace)
-    pub filepath: String,
-    /// Workspace identifier
-    pub workspace: String,
-    /// Content hash for change detection
-    pub content_hash: String,
-    /// File modification time
-    pub mtime: i64,
-    /// Index timestamp
-    pub indexed_at: i64,
-}
+// ============================================================================
+// BM25 Metadata Table Constant
+// ============================================================================
+
+const BM25_METADATA_TABLE: &str = "bm25_metadata";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    // ========== LanceDbStore Integration Tests ==========
 
     /// Helper to create a test chunk with metadata.
     fn test_chunk(

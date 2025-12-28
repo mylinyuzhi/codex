@@ -56,6 +56,7 @@ fn parse_markdown_definition(content: &str) -> Result<AgentDefinition, SubagentE
 
 /// Substitute template variables in a string.
 /// Supports ${variable} syntax.
+#[allow(dead_code)] // Pre-built infrastructure for variable templating
 pub fn substitute_variables(
     template: &str,
     variables: &std::collections::HashMap<String, String>,

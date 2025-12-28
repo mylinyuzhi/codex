@@ -3,6 +3,8 @@
 //! All tool names should be defined here to avoid hardcoded strings
 //! and ensure consistency across the codebase.
 
+#![allow(dead_code)] // Tool name constants registry for future use
+
 // File/Directory Tools
 pub const READ_FILE: &str = "read_file";
 pub const LIST_DIR: &str = "list_dir";
@@ -31,7 +33,6 @@ pub const CODE_SEARCH: &str = "code_search";
 // Task/Agent Tools
 pub const TASK: &str = "Task";
 pub const TASK_OUTPUT: &str = "TaskOutput";
-pub const TODO_WRITE: &str = "TodoWrite";
 
 // Background Shell Tools
 pub const BASH_OUTPUT: &str = "BashOutput";

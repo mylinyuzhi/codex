@@ -1593,6 +1593,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bm25"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cbd8ffdfb7b4c2ff038726178a780a94f90525ed0ad264c0afaa75dd8c18a64"
+dependencies = [
+ "cached",
+ "deunicode",
+ "fxhash",
+ "rayon",
+ "rust-stemmers",
+ "stop-words",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "bon"
 version = "3.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1703,6 +1718,39 @@ checksum = "113b4343b5f6617e7ad401ced8de3cc8b012e73a594347c307b90db3e9271289"
 dependencies = [
  "bytes",
 ]
+
+[[package]]
+name = "cached"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "801927ee168e17809ab8901d9f01f700cd7d8d6a6527997fee44e4b0327a253c"
+dependencies = [
+ "ahash",
+ "cached_proc_macro",
+ "cached_proc_macro_types",
+ "hashbrown 0.15.4",
+ "once_cell",
+ "thiserror 2.0.17",
+ "web-time",
+]
+
+[[package]]
+name = "cached_proc_macro"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9225bdcf4e4a9a4c08bf16607908eb2fbf746828d5e0b5e019726dbf6571f201"
+dependencies = [
+ "darling 0.20.11",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
+name = "cached_proc_macro_types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "cassowary"
@@ -2523,6 +2571,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -2659,21 +2708,29 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "bm25",
  "chrono",
  "clap",
  "codex-file-ignore",
  "codex-utils-cache",
+ "crossterm",
+ "derive_more 2.0.1",
  "dirs 6.0.0",
  "fastembed",
  "futures",
  "hex",
+ "insta",
+ "itertools 0.14.0",
  "lance-index",
  "lancedb",
  "lru 0.12.5",
  "notify 7.0.0",
  "notify-debouncer-mini",
  "once_cell",
+ "petgraph 0.8.3",
  "pretty_assertions",
+ "ratatui",
+ "ratatui-macros",
  "regex",
  "reqwest",
  "rusqlite",
@@ -2683,20 +2740,27 @@ dependencies = [
  "sha2",
  "tempfile",
  "text-splitter",
+ "textwrap 0.16.2",
  "thiserror 2.0.17",
  "tiktoken-rs",
  "tokio",
+ "tokio-stream",
  "tokio-test",
+ "tokio-util",
  "toml 0.9.5",
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-go",
+ "tree-sitter-highlight",
  "tree-sitter-java",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-tags",
  "tree-sitter-typescript",
+ "unicode-segmentation",
+ "unicode-width 0.2.1",
+ "vt100",
 ]
 
 [[package]]
@@ -4306,6 +4370,12 @@ dependencies = [
  "quote",
  "syn 2.0.111",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "diff"
@@ -10758,6 +10828,15 @@ name = "stfu8"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51f1e89f093f99e7432c491c382b88a6860a5adbe6bf02574bf0a08efff1978"
+
+[[package]]
+name = "stop-words"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "645a3d441ccf4bf47f2e4b7681461986681a6eeea9937d4c3bc9febd61d17c71"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "streaming-iterator"

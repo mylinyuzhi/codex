@@ -32,6 +32,9 @@ tracing = { workspace = true }
 # Binary detection
 which = "7.0"
 
+# Text diffing for incremental sync
+similar = { workspace = true }
+
 # Home directory detection
 dirs = "5.0"
 

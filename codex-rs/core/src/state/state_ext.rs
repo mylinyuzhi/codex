@@ -51,6 +51,7 @@ pub fn get_compact_state_mut(
 /// Get CompactState for a conversation (read-only).
 ///
 /// Returns None if no state exists for this conversation.
+#[allow(dead_code)] // Reserved for state management
 pub fn get_compact_state(
     conversation_id: ConversationId,
 ) -> Option<dashmap::mapref::one::Ref<'static, ConversationId, CompactState>> {
@@ -59,6 +60,7 @@ pub fn get_compact_state(
 }
 
 /// Clear CompactState for a conversation (for testing or session cleanup).
+#[allow(dead_code)]
 pub fn clear_compact_state(conversation_id: ConversationId) {
     let states = get_compact_states();
     states.remove(&conversation_id);
@@ -105,12 +107,14 @@ pub fn get_read_files(conversation_id: ConversationId) -> Vec<ReadFileEntry> {
 }
 
 /// Clear ReadFileState for a conversation (for testing or session cleanup).
+#[allow(dead_code)]
 pub fn clear_read_file_state(conversation_id: ConversationId) {
     let states = get_read_file_states();
     states.remove(&conversation_id);
 }
 
 /// Clear all state for a conversation (both CompactState and ReadFileState).
+#[allow(dead_code)]
 pub fn clear_all_state(conversation_id: ConversationId) {
     clear_compact_state(conversation_id);
     clear_read_file_state(conversation_id);

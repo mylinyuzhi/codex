@@ -9,15 +9,13 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use super::constants::DEFAULT_RECENCY_HALF_LIFE_DAYS;
+use super::constants::DEFAULT_RRF_K;
+use super::constants::LN_2;
+use super::constants::SECONDS_PER_DAY;
 use crate::types::CodeChunk;
 use crate::types::ScoreType;
 use crate::types::SearchResult;
-
-/// Default RRF constant (k parameter).
-const DEFAULT_K: f32 = 60.0;
-
-/// Default recency decay half-life in days.
-const DEFAULT_RECENCY_HALF_LIFE_DAYS: f32 = 7.0;
 
 /// RRF fusion configuration.
 #[derive(Debug, Clone)]
@@ -42,7 +40,7 @@ pub struct RrfConfig {
 impl Default for RrfConfig {
     fn default() -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight: 0.5,
             vector_weight: 0.3,
             snippet_weight: 0.0,
@@ -57,7 +55,7 @@ impl RrfConfig {
     /// Create a new RRF config with custom weights.
     pub fn new(bm25_weight: f32, vector_weight: f32, snippet_weight: f32) -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight,
             vector_weight,
             snippet_weight,
@@ -75,7 +73,7 @@ impl RrfConfig {
         recent_weight: f32,
     ) -> Self {
         Self {
-            k: DEFAULT_K,
+            k: DEFAULT_RRF_K,
             bm25_weight,
             vector_weight,
             snippet_weight,
@@ -163,10 +161,10 @@ pub fn recency_score(modified_time: Option<i64>, half_life_days: f32) -> f32 {
     }
 
     let age_seconds = (now - mtime) as f32;
-    let age_days = age_seconds / 86400.0;
+    let age_days = age_seconds / SECONDS_PER_DAY;
 
     // Exponential decay: score = exp(-ln(2) * age / half_life)
-    let decay_rate = 0.693 / half_life_days; // ln(2) ≈ 0.693
+    let decay_rate = LN_2 / half_life_days;
     (-decay_rate * age_days).exp()
 }
 
@@ -629,5 +627,102 @@ mod tests {
         assert!(ids.contains(&"b"));
         assert!(ids.contains(&"c"));
         assert!(ids.contains(&"d"));
+    }
+
+    // ========== Additional edge case tests ==========
+
+    #[test]
+    fn test_fuse_empty_inputs() {
+        let config = RrfConfig::default();
+
+        // All empty
+        let fused = fuse_results(&[], &[], &[], &config, 10);
+        assert!(fused.is_empty());
+
+        // Only BM25
+        let bm25 = vec![make_result("a", 1.0, ScoreType::Bm25)];
+        let fused = fuse_results(&bm25, &[], &[], &config, 10);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].chunk.id, "a");
+
+        // Only vector
+        let vector = vec![make_result("b", 0.9, ScoreType::Vector)];
+        let fused = fuse_results(&[], &vector, &[], &config, 10);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].chunk.id, "b");
+    }
+
+    #[test]
+    fn test_fuse_limit_zero() {
+        let bm25 = vec![make_result("a", 1.0, ScoreType::Bm25)];
+        let config = RrfConfig::default();
+
+        let fused = fuse_results(&bm25, &[], &[], &config, 0);
+        assert!(fused.is_empty());
+    }
+
+    #[test]
+    fn test_fuse_limit_smaller_than_results() {
+        let bm25 = vec![
+            make_result("a", 1.0, ScoreType::Bm25),
+            make_result("b", 0.8, ScoreType::Bm25),
+            make_result("c", 0.6, ScoreType::Bm25),
+        ];
+        let config = RrfConfig::default();
+
+        let fused = fuse_results(&bm25, &[], &[], &config, 2);
+        assert_eq!(fused.len(), 2);
+    }
+
+    #[test]
+    fn test_rrf_score_ordering() {
+        // Verify that RRF score decreases with rank
+        let config = RrfConfig::default();
+        let score_rank0 = rrf_score(0, config.bm25_weight, config.k);
+        let score_rank1 = rrf_score(1, config.bm25_weight, config.k);
+        let score_rank10 = rrf_score(10, config.bm25_weight, config.k);
+
+        assert!(score_rank0 > score_rank1);
+        assert!(score_rank1 > score_rank10);
+    }
+
+    #[test]
+    fn test_fuse_duplicate_item_accumulates_score() {
+        // Item appearing in multiple sources should have accumulated score
+        let bm25 = vec![make_result("dup", 1.0, ScoreType::Bm25)];
+        let vector = vec![make_result("dup", 0.9, ScoreType::Vector)];
+        let snippet = vec![make_result("dup", 0.8, ScoreType::Hybrid)];
+
+        let config = RrfConfig::new(0.5, 0.3, 0.2);
+        let fused = fuse_results(&bm25, &vector, &snippet, &config, 10);
+
+        assert_eq!(fused.len(), 1);
+
+        // Score should be sum of RRF contributions from all three sources
+        // rank 0 in all three: 0.5/60 + 0.3/60 + 0.2/60 = 1.0/60
+        let expected_score = (0.5 + 0.3 + 0.2) / 60.0;
+        assert!(
+            (fused[0].score - expected_score).abs() < 0.001,
+            "Expected score ~{:.4}, got {:.4}",
+            expected_score,
+            fused[0].score
+        );
+    }
+
+    #[test]
+    fn test_weight_configuration_affects_ranking() {
+        // Item A appears in BM25 only, Item B appears in vector only
+        let bm25 = vec![make_result("a", 1.0, ScoreType::Bm25)];
+        let vector = vec![make_result("b", 0.9, ScoreType::Vector)];
+
+        // High BM25 weight -> A should rank first
+        let config_bm25 = RrfConfig::new(0.8, 0.2, 0.0);
+        let fused = fuse_results(&bm25, &vector, &[], &config_bm25, 10);
+        assert_eq!(fused[0].chunk.id, "a");
+
+        // High vector weight -> B should rank first
+        let config_vector = RrfConfig::new(0.2, 0.8, 0.0);
+        let fused = fuse_results(&bm25, &vector, &[], &config_vector, 10);
+        assert_eq!(fused[0].chunk.id, "b");
     }
 }

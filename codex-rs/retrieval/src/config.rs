@@ -11,6 +11,10 @@ pub struct RetrievalConfig {
     #[serde(default)]
     pub enabled: bool,
 
+    /// Working directory (set at runtime, not from config file)
+    #[serde(skip)]
+    pub workdir: Option<PathBuf>,
+
     /// Directory for storing index data
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
@@ -42,12 +46,17 @@ pub struct RetrievalConfig {
     /// Query rewrite configuration (optional, for LLM-based query enhancement)
     #[serde(default)]
     pub query_rewrite: Option<QueryRewriteConfig>,
+
+    /// Repo map configuration (optional, for PageRank-based context generation)
+    #[serde(default)]
+    pub repo_map: Option<RepoMapConfig>,
 }
 
 impl Default for RetrievalConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            workdir: None,
             data_dir: default_data_dir(),
             indexing: IndexingConfig::default(),
             chunking: ChunkingConfig::default(),
@@ -56,6 +65,7 @@ impl Default for RetrievalConfig {
             extended_reranker: None,
             embedding: None,
             query_rewrite: None,
+            repo_map: None,
         }
     }
 }
@@ -546,15 +556,17 @@ pub struct SearchConfig {
 
     /// BM25 k1 parameter (term frequency saturation, code-optimized default)
     ///
-    /// NOTE: Not currently used - LanceDB 0.22 doesn't expose BM25 params.
-    /// Added for future-proofing when LanceDB supports custom BM25 parameters.
+    /// Controls how much weight is given to recurring tokens.
+    /// Lower values (0.8) are better for code with repeated keywords.
+    /// Default: 0.8 (vs standard 1.2)
     #[serde(default = "default_bm25_k1")]
     pub bm25_k1: f32,
 
     /// BM25 b parameter (document length normalization, code-optimized default)
     ///
-    /// NOTE: Not currently used - LanceDB 0.22 doesn't expose BM25 params.
-    /// Added for future-proofing when LanceDB supports custom BM25 parameters.
+    /// Controls document length normalization (0=none, 1=full).
+    /// Lower values (0.5) are better for code with varying function lengths.
+    /// Default: 0.5 (vs standard 0.75)
     #[serde(default = "default_bm25_b")]
     pub bm25_b: f32,
 }
@@ -741,6 +753,51 @@ pub fn default_embedding_dimension() -> i32 {
 }
 fn default_embedding_batch_size() -> i32 {
     100
+}
+
+// ============================================================================
+// Local Embedding Configuration (fastembed)
+// ============================================================================
+
+/// Local embedding provider configuration.
+///
+/// Uses fastembed-rs with ONNX Runtime for local inference.
+/// Models are downloaded on first use and cached locally.
+///
+/// ## Example
+///
+/// ```toml
+/// [retrieval.embedding]
+/// provider = "fastembed"
+/// model = "nomic-embed-text-v1.5"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalEmbeddingConfig {
+    /// Model name (e.g., "nomic-embed-text-v1.5", "bge-small-en-v1.5")
+    #[serde(default = "default_local_embedding_model")]
+    pub model: String,
+
+    /// Model cache directory (defaults to ~/.cache/fastembed)
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Show download progress when fetching model
+    #[serde(default)]
+    pub show_download_progress: bool,
+}
+
+impl Default for LocalEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            model: default_local_embedding_model(),
+            cache_dir: None,
+            show_download_progress: false,
+        }
+    }
+}
+
+fn default_local_embedding_model() -> String {
+    "nomic-embed-text-v1.5".to_string()
 }
 
 /// Query rewrite configuration.
@@ -1150,4 +1207,149 @@ impl std::fmt::Display for ConfigWarning {
             }
         }
     }
+}
+
+// ============================================================================
+// Repo Map Configuration
+// ============================================================================
+
+/// Refresh mode for repo map caching.
+///
+/// Controls when the repo map cache is used vs regenerated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RefreshMode {
+    /// Cache if computation takes > 1 second (default)
+    #[default]
+    Auto,
+    /// Cache based on file set only (ignore mention changes)
+    Files,
+    /// Never use cache, always regenerate
+    Always,
+    /// Only regenerate on explicit force_refresh
+    Manual,
+}
+
+/// Repo map configuration.
+///
+/// Enables PageRank-based context generation for LLMs, providing
+/// token-budgeted, semantically-ranked code context based on file
+/// dependencies and user intent. Inspired by Aider's repo map feature.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RepoMapConfig {
+    /// Whether repo map is enabled
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum tokens for repo map output
+    #[serde(default = "default_map_tokens")]
+    pub map_tokens: i32,
+
+    /// Token multiplier when no chat files are present
+    #[serde(default = "default_map_mul_no_files")]
+    pub map_mul_no_files: f32,
+
+    /// Cache TTL in seconds
+    #[serde(default = "default_repo_map_cache_ttl")]
+    pub cache_ttl_secs: i64,
+
+    /// Weight multiplier for chat file references (default 50x)
+    #[serde(default = "default_chat_file_weight")]
+    pub chat_file_weight: f32,
+
+    /// Weight multiplier for mentioned identifiers (default 10x)
+    #[serde(default = "default_mentioned_ident_weight")]
+    pub mentioned_ident_weight: f32,
+
+    /// Weight penalty for private symbols (default 0.1x)
+    #[serde(default = "default_private_symbol_weight")]
+    pub private_symbol_weight: f32,
+
+    /// Weight boost for well-named identifiers (snake_case/camelCase with len≥8, default 10x)
+    #[serde(default = "default_naming_style_weight")]
+    pub naming_style_weight: f32,
+
+    /// Weight boost for fuzzy term matching (BM25-like, default 5x per full match)
+    #[serde(default = "default_term_match_weight")]
+    pub term_match_weight: f32,
+
+    /// PageRank damping factor (default 0.85)
+    #[serde(default = "default_damping_factor")]
+    pub damping_factor: f64,
+
+    /// PageRank max iterations (default 100)
+    #[serde(default = "default_pagerank_max_iterations")]
+    pub max_iterations: i32,
+
+    /// PageRank convergence tolerance (default 1e-6)
+    #[serde(default = "default_pagerank_tolerance")]
+    pub tolerance: f64,
+
+    /// Refresh mode for caching behavior
+    #[serde(default)]
+    pub refresh_mode: RefreshMode,
+}
+
+impl Default for RepoMapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            map_tokens: default_map_tokens(),
+            map_mul_no_files: default_map_mul_no_files(),
+            cache_ttl_secs: default_repo_map_cache_ttl(),
+            chat_file_weight: default_chat_file_weight(),
+            mentioned_ident_weight: default_mentioned_ident_weight(),
+            private_symbol_weight: default_private_symbol_weight(),
+            naming_style_weight: default_naming_style_weight(),
+            term_match_weight: default_term_match_weight(),
+            damping_factor: default_damping_factor(),
+            max_iterations: default_pagerank_max_iterations(),
+            tolerance: default_pagerank_tolerance(),
+            refresh_mode: RefreshMode::default(),
+        }
+    }
+}
+
+fn default_map_tokens() -> i32 {
+    1024
+}
+
+fn default_map_mul_no_files() -> f32 {
+    8.0
+}
+
+fn default_repo_map_cache_ttl() -> i64 {
+    3600 // 1 hour
+}
+
+fn default_chat_file_weight() -> f32 {
+    50.0
+}
+
+fn default_mentioned_ident_weight() -> f32 {
+    10.0
+}
+
+fn default_private_symbol_weight() -> f32 {
+    0.1
+}
+
+fn default_naming_style_weight() -> f32 {
+    10.0 // 10x boost for snake_case/camelCase identifiers with length >= 8
+}
+
+fn default_term_match_weight() -> f32 {
+    5.0 // 5x boost for symbols with term overlap (BM25-like fuzzy matching)
+}
+
+fn default_damping_factor() -> f64 {
+    0.85
+}
+
+fn default_pagerank_max_iterations() -> i32 {
+    100
+}
+
+fn default_pagerank_tolerance() -> f64 {
+    1e-6
 }

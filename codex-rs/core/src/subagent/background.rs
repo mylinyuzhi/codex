@@ -300,6 +300,7 @@ impl BackgroundTaskStore {
 // would cause data loss. Use Arc<BackgroundTaskStore> for sharing.
 
 /// Wrap BackgroundTaskStore in Arc for sharing.
+#[allow(dead_code)] // Type alias for shared ownership pattern
 pub type SharedBackgroundTaskStore = Arc<BackgroundTaskStore>;
 
 #[cfg(test)]

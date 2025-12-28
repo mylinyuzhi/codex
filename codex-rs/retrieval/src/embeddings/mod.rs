@@ -2,6 +2,11 @@
 //!
 //! Provides implementations of the `EmbeddingProvider` trait for various
 //! embedding services. Use `EmbeddingRegistry` for runtime provider lookup.
+//!
+//! ## Available Providers
+//!
+//! - `openai`: OpenAI Embeddings API (remote)
+//! - `fastembed`: Local ONNX models via fastembed-rs (requires `local-embeddings` feature)
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,9 +17,16 @@ pub mod cache;
 pub mod openai;
 pub mod queue;
 
+#[cfg(feature = "local-embeddings")]
+pub mod fastembed;
+
+pub use cache::CacheLookupResult;
 pub use cache::EmbeddingCache;
 pub use openai::OpenAIEmbeddings;
 pub use queue::EmbeddingQueue;
+
+#[cfg(feature = "local-embeddings")]
+pub use fastembed::FastembedEmbeddingProvider;
 
 /// Registry for embedding providers.
 ///

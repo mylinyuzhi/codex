@@ -245,8 +245,8 @@ mod tests {
     use std::path::Path;
 
     fn make_context(
-        is_main_agent: bool,
-        is_plan_mode: bool,
+        _is_main_agent: bool,
+        _is_plan_mode: bool,
     ) -> (FileTracker, PlanState, Vec<BackgroundTaskInfo>) {
         (FileTracker::new(), PlanState::default(), vec![])
     }

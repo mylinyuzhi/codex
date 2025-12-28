@@ -73,7 +73,7 @@ impl LocalReranker {
             "bge-reranker-base" | "bgererankerbase" => RerankerModel::BGERerankerBase,
             "bge-reranker-v2-m3" | "bgererankerv2m3" => RerankerModel::BGERerankerV2M3,
             "jina-reranker-v2" | "jinarerankerv2basemultilingual" => {
-                RerankerModel::JINARerankerV2BaseMultilingual
+                RerankerModel::JINARerankerV2BaseMultiligual
             }
             "jina-reranker-v1-turbo" | "jinarerankerv1turboen" => {
                 RerankerModel::JINARerankerV1TurboEn

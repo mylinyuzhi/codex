@@ -8,6 +8,7 @@
 //! - Rust (rust-analyzer)
 //! - Go (gopls)
 //! - Python (pyright)
+//! - TypeScript/JavaScript (typescript-language-server)
 //!
 //! # Example
 //!
@@ -33,6 +34,7 @@
 mod client;
 mod server;
 
+pub mod client_ext;
 pub mod config;
 pub mod diagnostics;
 pub mod error;

@@ -28,6 +28,7 @@ impl std::fmt::Display for CompactTrigger {
 }
 
 /// Metadata attached to a compact boundary marker.
+#[allow(dead_code)] // Metadata structure for compaction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactMetadata {
     /// How the compaction was triggered
@@ -39,7 +40,7 @@ pub struct CompactMetadata {
 /// Compact boundary marker for tracking compaction points.
 ///
 /// Used to identify where in the conversation history compaction occurred,
-/// enabling incremental summarization of only the new messages since the
+/// enabling tweakcc summarization of only the new messages since the
 /// last compaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactBoundary {

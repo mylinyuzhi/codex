@@ -100,7 +100,7 @@ impl BackgroundShellStore {
         self.shells.get(shell_id).map(|s| s.status)
     }
 
-    /// Get output from a background shell with incremental read and filter support.
+    /// Get output from a background shell with tweakcc read and filter support.
     ///
     /// # Arguments
     /// - `shell_id`: The shell identifier
@@ -400,7 +400,7 @@ impl BackgroundShellStore {
                     }
                 }
 
-                // has_unread = buffer not empty (incremental-only storage)
+                // has_unread = buffer not empty (tweakcc-only storage)
                 let has_unread = shell.has_unread_output();
                 has_unread || (shell.status.is_finished() && !shell.notified)
             })
@@ -674,7 +674,7 @@ mod tests {
         // Wait a bit for the task to complete
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        // First read (incremental mode)
+        // First read (tweakcc mode)
         let output1 = store
             .get_output(&shell_id, false, Duration::from_secs(1), None, 100)
             .await;
@@ -683,7 +683,7 @@ mod tests {
         assert!(!out1.stdout.is_empty());
         assert_eq!(out1.stdout_lines, 2);
 
-        // Buffer should be cleared after read (incremental-only storage)
+        // Buffer should be cleared after read (tweakcc-only storage)
         let shell = store.shells.get(&shell_id).unwrap();
         assert!(!shell.has_unread_output());
     }

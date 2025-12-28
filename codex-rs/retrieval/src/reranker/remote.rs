@@ -43,7 +43,9 @@ pub struct RemoteReranker {
     model: String,
     api_key_env: String,
     base_url: Option<String>,
+    #[allow(dead_code)] // Reserved for retry configuration
     timeout_secs: i32,
+    #[allow(dead_code)]
     max_retries: i32,
     top_n: Option<i32>,
     client: reqwest::Client,

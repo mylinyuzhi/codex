@@ -29,6 +29,23 @@ impl SqliteStore {
             path: path_buf.clone(),
             cause: e.to_string(),
         })?;
+
+        // Performance and reliability pragmas
+        // - WAL mode: enables concurrent reads while writing
+        // - busy_timeout: retry on lock instead of immediate failure
+        // - synchronous NORMAL: balance between safety and speed
+        // - cache_size: 2MB in-memory cache for faster repeated reads
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -2000;",
+        )
+        .map_err(|e| RetrievalErr::SqliteError {
+            path: path_buf.clone(),
+            cause: format!("pragma init failed: {e}"),
+        })?;
+
         Self::init_schema(&conn, &path_buf)?;
 
         Ok(Self {
@@ -61,37 +78,12 @@ impl SqliteStore {
         let path = self.path.clone();
 
         spawn_blocking(move || {
-            // Recover from mutex poisoning with state validation
-            let guard = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!(path = %path.display(), "Mutex poisoned, recovering");
-                let inner = poisoned.into_inner();
-
-                // Validate connection state after poisoning recovery
-                // If not in autocommit mode, an interrupted transaction may be in progress
-                if !inner.is_autocommit() {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "Connection not in autocommit after poisoning recovery, attempting rollback"
-                    );
-                    // Attempt to rollback any pending transaction and log result
-                    match inner.execute("ROLLBACK", []) {
-                        Ok(_) => {
-                            tracing::info!(
-                                path = %path.display(),
-                                "Successfully rolled back pending transaction after mutex poisoning"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                path = %path.display(),
-                                error = %e,
-                                "ROLLBACK failed after mutex poisoning recovery - connection may be in inconsistent state"
-                            );
-                        }
-                    }
-                }
-                inner
-            });
+            // Fail fast on mutex poisoning - attempting to recover from a panic
+            // in a critical section is dangerous and can lead to data corruption.
+            let guard = conn.lock().map_err(|_| RetrievalErr::SqliteError {
+                path: path.clone(),
+                cause: "Mutex poisoned - connection corrupted, cannot safely continue".to_string(),
+            })?;
             f(&guard)
         })
         .await
@@ -111,36 +103,12 @@ impl SqliteStore {
         let path = self.path.clone();
 
         spawn_blocking(move || {
-            // Recover from mutex poisoning with state validation
-            let mut guard = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!(path = %path.display(), "Mutex poisoned in transaction, recovering");
-                let inner = poisoned.into_inner();
-
-                // Validate connection state after poisoning recovery
-                if !inner.is_autocommit() {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "Connection not in autocommit after poisoning recovery, attempting rollback"
-                    );
-                    // Attempt to rollback any pending transaction and log result
-                    match inner.execute("ROLLBACK", []) {
-                        Ok(_) => {
-                            tracing::info!(
-                                path = %path.display(),
-                                "Successfully rolled back pending transaction after mutex poisoning"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                path = %path.display(),
-                                error = %e,
-                                "ROLLBACK failed after mutex poisoning recovery - connection may be in inconsistent state"
-                            );
-                        }
-                    }
-                }
-                inner
-            });
+            // Fail fast on mutex poisoning - attempting to recover from a panic
+            // in a critical section is dangerous and can lead to data corruption.
+            let mut guard = conn.lock().map_err(|_| RetrievalErr::SqliteError {
+                path: path.clone(),
+                cause: "Mutex poisoned - connection corrupted, cannot safely continue".to_string(),
+            })?;
 
             let tx = guard.transaction().map_err(|e| RetrievalErr::SqliteError {
                 path: path.clone(),
@@ -163,7 +131,7 @@ impl SqliteStore {
 
 /// SQLite schema for retrieval metadata.
 ///
-/// Simplified schema without branch tracking - incremental updates based on
+/// Simplified schema without branch tracking - tweakcc updates based on
 /// file content changes only.
 const SCHEMA: &str = r#"
 -- Schema version tracking
@@ -173,7 +141,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (2, strftime('%s', 'now'));
 
--- Index catalog (incremental update tracking)
+-- Index catalog (tweakcc update tracking)
 -- Simplified: no branch column, unique by (workspace, filepath)
 CREATE TABLE IF NOT EXISTS catalog (
     id INTEGER PRIMARY KEY,
@@ -257,6 +225,28 @@ CREATE TRIGGER IF NOT EXISTS snippets_au AFTER UPDATE ON snippets BEGIN
     INSERT INTO snippets_fts(rowid, name, signature, docs)
     VALUES (new.id, new.name, new.signature, new.docs);
 END;
+
+-- Repo map tag cache (definitions and references for PageRank graph) v2
+CREATE TABLE IF NOT EXISTS repomap_tags (
+    id INTEGER PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    mtime INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    is_definition INTEGER NOT NULL,  -- 1=definition, 0=reference
+    tag_kind TEXT NOT NULL,          -- function/method/class/struct/etc.
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,                  -- nullable
+    docs TEXT,                       -- nullable
+    UNIQUE(workspace, filepath, name, is_definition, start_line)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_file ON repomap_tags(workspace, filepath);
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_name ON repomap_tags(name);
+CREATE INDEX IF NOT EXISTS idx_repomap_tags_def ON repomap_tags(is_definition);
 "#;
 
 /// Extension trait for optional query results.
