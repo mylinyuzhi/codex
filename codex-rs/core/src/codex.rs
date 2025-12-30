@@ -514,7 +514,18 @@ impl Session {
             web_search_config: Some(per_turn_config.ext.web_search_config.clone()),
         });
 
+        // Apply Plan Mode tool filter if active (read-only tools + plan file write)
+        let stores = crate::subagent::get_or_create_stores(conversation_id);
+        if stores.is_plan_mode_active().unwrap_or(false) {
+            if let Ok(plan_state) = stores.get_plan_mode_state() {
+                tools_config.tool_filter = Some(crate::tools::spec_ext::ToolFilter::for_plan_mode(
+                    plan_state.plan_file_path.as_deref(),
+                ));
+            }
+        }
+
         // Apply tool filter if configured (for subagent sessions)
+        // Note: subagent filter overrides plan mode filter if both are set
         if let Some(filter) = &per_turn_config.ext.tool_filter {
             tools_config.tool_filter = Some(filter.clone());
         }
@@ -1681,6 +1692,50 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
+            }
+            Op::SetPlanMode {
+                active,
+                plan_file_path,
+            } => {
+                crate::codex_ext::handle_set_plan_mode(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    active,
+                    plan_file_path.as_deref(),
+                )
+                .await;
+            }
+            Op::PlanModeApproval {
+                approved,
+                permission_mode,
+            } => {
+                crate::codex_ext::handle_plan_mode_approval(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    approved,
+                    permission_mode,
+                )
+                .await;
+            }
+            Op::EnterPlanModeApproval { approved } => {
+                crate::codex_ext::handle_enter_plan_mode_approval(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    approved,
+                )
+                .await;
+            }
+            Op::UserQuestionAnswer {
+                tool_call_id,
+                answers,
+            } => {
+                crate::codex_ext::handle_user_question_answer(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    tool_call_id,
+                    answers,
+                )
+                .await;
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }

@@ -35,7 +35,7 @@ impl PlanModeGenerator {
             if plan_exists {
                 format!(
                     "## Plan File Info:\n\
-                     A plan file already exists at {path}. You can read it and make tweakcc \
+                     A plan file already exists at {path}. You can read it and make incremental \
                      edits using the Edit tool."
                 )
             } else {
@@ -80,7 +80,16 @@ impl PlanModeGenerator {
              - Ensure the plan is concise but detailed enough to execute\n\
              - Include paths of critical files to be modified\n\n\
              ### Phase 5: Call ExitPlanMode\n\
-             At the very end of your turn, call ExitPlanMode to indicate you are done planning."
+             At the very end of your turn, once you have asked the user questions and are happy \
+             with your final plan file - you should always call ExitPlanMode to indicate to the \
+             user that you are done planning.\n\n\
+             This is critical - your turn should only end with either asking the user a question \
+             (using AskUserQuestion) or calling ExitPlanMode. Do not stop unless it's for these \
+             2 reasons.\n\n\
+             NOTE: At any point in this workflow you should feel free to ask the user questions \
+             or clarifications using AskUserQuestion. Don't make large assumptions about user intent. \
+             The goal is to present a well-researched plan to the user, and tie any loose ends \
+             before implementation begins."
         )
     }
 

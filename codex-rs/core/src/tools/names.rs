@@ -43,6 +43,13 @@ pub const THINK: &str = "think";
 pub const VIEW_IMAGE: &str = "view_image";
 pub const UPDATE_PLAN: &str = "update_plan";
 
+// Plan Mode Tools
+pub const EXIT_PLAN_MODE: &str = "ExitPlanMode";
+pub const ENTER_PLAN_MODE: &str = "EnterPlanMode";
+
+// User Interaction Tools
+pub const ASK_USER_QUESTION: &str = "AskUserQuestion";
+
 // MCP Resource Tools
 pub const LIST_MCP_RESOURCES: &str = "list_mcp_resources";
 pub const LIST_MCP_RESOURCE_TEMPLATES: &str = "list_mcp_resource_templates";

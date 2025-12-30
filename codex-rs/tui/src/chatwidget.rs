@@ -68,6 +68,10 @@ use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol_ext::ExtEventMsg;
+use codex_protocol::protocol_ext::PlanModeEntryRequestEvent;
+use codex_protocol::protocol_ext::PlanModeExitRequestEvent;
+use codex_protocol::protocol_ext::UserQuestionRequestEvent;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1736,6 +1740,21 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Plan => {
+                // Plan mode uses cached slug - same session = same plan file
+                // Let core handle path generation for consistency
+                if self.conversation_id().is_some() {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::SetPlanMode {
+                        active: true,
+                        plan_file_path: None, // Core generates with cached slug
+                    }));
+                    self.add_info_message("Entering plan mode...".to_string(), None);
+                } else {
+                    self.add_to_history(history_cell::new_error_event(
+                        "Cannot enter plan mode: No active conversation.".to_string(),
+                    ));
+                }
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -2122,9 +2141,58 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::Ext(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_) => {}
+            EventMsg::Ext(ext_msg) => self.on_ext_event(ext_msg),
         }
+    }
+
+    fn on_ext_event(&mut self, ext_msg: ExtEventMsg) {
+        match ext_msg {
+            ExtEventMsg::PlanModeEntryRequest(ev) => {
+                self.on_plan_mode_entry_request(ev);
+            }
+            ExtEventMsg::PlanModeExitRequest(ev) => {
+                self.on_plan_mode_exit_request(ev);
+            }
+            ExtEventMsg::UserQuestionRequest(ev) => {
+                self.on_user_question_request(ev);
+            }
+            ExtEventMsg::PlanModeEntered(_) | ExtEventMsg::PlanModeExited(_) => {
+                // These events are informational, no TUI action needed
+            }
+            // Other extension events (compact, subagent activity) are handled elsewhere or ignored
+            _ => {}
+        }
+    }
+
+    fn on_plan_mode_entry_request(&mut self, _ev: PlanModeEntryRequestEvent) {
+        // Push plan mode entry request to the approval overlay
+        let request = ApprovalRequest::EnterPlanMode;
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    fn on_plan_mode_exit_request(&mut self, ev: PlanModeExitRequestEvent) {
+        // Push plan approval request to the approval overlay
+        let request = ApprovalRequest::Plan {
+            plan_content: ev.plan_content,
+            plan_file_path: ev.plan_file_path,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    fn on_user_question_request(&mut self, ev: UserQuestionRequestEvent) {
+        // Push user question request to the approval overlay
+        let request = ApprovalRequest::UserQuestion {
+            tool_call_id: ev.tool_call_id,
+            questions: ev.questions,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {

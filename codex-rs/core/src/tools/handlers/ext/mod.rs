@@ -1,7 +1,10 @@
 //! Extension handlers for downstream features
 
+pub mod ask_user_question;
 pub mod bash_output;
 pub mod code_search;
+pub mod enter_plan_mode;
+pub mod exit_plan_mode;
 pub mod glob_files;
 pub mod kill_shell;
 pub mod list_dir;

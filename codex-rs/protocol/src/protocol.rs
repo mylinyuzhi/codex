@@ -51,6 +51,7 @@ pub use crate::protocol_ext::ExtEventMsg;
 pub use crate::protocol_ext::MicroCompactCompletedEvent;
 pub use crate::protocol_ext::SubagentActivityEvent;
 pub use crate::protocol_ext::SubagentEventType;
+pub use crate::protocol_ext::PlanExitPermissionMode;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -234,6 +235,38 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+
+    /// Set Plan Mode state.
+    SetPlanMode {
+        /// Whether Plan Mode is active.
+        active: bool,
+        /// Plan file path (set when entering Plan Mode).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan_file_path: Option<String>,
+    },
+
+    /// User's approval decision for Plan Mode exit.
+    PlanModeApproval {
+        /// Whether the user approved the plan.
+        approved: bool,
+        /// Permission mode for post-plan execution (if approved).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<PlanExitPermissionMode>,
+    },
+
+    /// User's approval decision for entering Plan Mode.
+    EnterPlanModeApproval {
+        /// Whether the user approved entering plan mode.
+        approved: bool,
+    },
+
+    /// User's answer to AskUserQuestion tool.
+    UserQuestionAnswer {
+        /// The tool call ID for this question.
+        tool_call_id: String,
+        /// User's answers (question header -> selected answer or custom text).
+        answers: std::collections::HashMap<String, String>,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve

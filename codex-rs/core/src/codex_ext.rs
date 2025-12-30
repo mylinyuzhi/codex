@@ -122,7 +122,7 @@ pub async fn run_system_reminder_injection(
     // Use plan state from stores for reminder tracking, or fallback to empty
     let fallback_plan_state;
     let plan_state: PlanState = match &agent_stores {
-        Some(stores) => stores.get_plan_state(),
+        Some(stores) => stores.get_plan_state().unwrap_or_default(),
         None => {
             fallback_plan_state = PlanState::default();
             fallback_plan_state
@@ -132,6 +132,17 @@ pub async fn run_system_reminder_injection(
     // Get LSP diagnostics store if available (lazy initialized on first LSP tool use)
     let diagnostics_store = get_lsp_diagnostics_store();
 
+    // Detect re-entry: user re-enters Plan Mode with existing plan file from previous session
+    let is_plan_reentry = if is_plan_mode && is_main_agent {
+        agent_stores
+            .as_ref()
+            .and_then(|s| s.get_plan_mode_state().ok())
+            .map(|state| state.is_reentry())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     let ctx = build_generator_context(
         current_count,
         agent_id,
@@ -140,7 +151,7 @@ pub async fn run_system_reminder_injection(
         cwd,
         is_plan_mode,
         plan_file_path,
-        false, // is_plan_reentry
+        is_plan_reentry,
         file_tracker,
         &plan_state,
         &background_tasks,
@@ -150,6 +161,15 @@ pub async fn run_system_reminder_injection(
     );
 
     inject_system_reminders(history, orchestrator, &ctx).await;
+
+    // Clear re-entry flag after first reminder injection to avoid repeated re-entry prompts
+    if is_plan_reentry {
+        if let Some(stores) = &agent_stores {
+            if let Err(e) = stores.clear_plan_reentry() {
+                tracing::warn!("failed to clear plan reentry flag: {e}");
+            }
+        }
+    }
 
     // Mark tasks as notified using batch methods for efficiency
     // Group task IDs by type to reduce lock contention
@@ -190,17 +210,222 @@ pub async fn maybe_inject_system_reminders(
     conversation_id: Option<&ConversationId>,
     critical_instruction: Option<&str>,
 ) {
+    // Get plan mode state from stores
+    let (is_plan_mode, plan_file_path) = conversation_id
+        .map(|id| {
+            let stores = get_or_create_stores(*id);
+            match stores.get_plan_mode_state() {
+                Ok(state) => (
+                    state.is_active,
+                    state
+                        .plan_file_path
+                        .map(|p| p.to_string_lossy().to_string()),
+                ),
+                Err(e) => {
+                    tracing::warn!("failed to get plan mode state: {e}");
+                    (false, None)
+                }
+            }
+        })
+        .unwrap_or((false, None));
+
     let _ = run_system_reminder_injection(
         history,
         "main",
         true, // is_main_agent
         cwd,
-        false, // is_plan_mode
-        None,  // plan_file_path
+        is_plan_mode,
+        plan_file_path.as_deref(),
         conversation_id,
         critical_instruction,
     )
     .await;
+}
+
+// =============================================================================
+// Plan Mode Handlers (called from codex.rs submission_loop)
+// =============================================================================
+
+use async_channel::Sender;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol_ext::ExtEventMsg;
+use codex_protocol::protocol_ext::PlanExitPermissionMode;
+use codex_protocol::protocol_ext::PlanModeEnteredEvent;
+use codex_protocol::protocol_ext::PlanModeExitedEvent;
+
+/// Handle Op::SetPlanMode - enter or configure plan mode.
+///
+/// This is called from `codex.rs` submission_loop to minimize changes to that file.
+///
+/// Plan file path uses cached slug (aligned with Claude Code):
+/// - Same session = same plan file regardless of how many times /plan is called
+/// - This enables proper re-entry detection
+pub async fn handle_set_plan_mode(
+    conversation_id: ConversationId,
+    tx_event: &Sender<Event>,
+    active: bool,
+    _plan_file_path: Option<&str>, // Ignored - core generates with cached slug
+) {
+    if active {
+        let stores = get_or_create_stores(conversation_id);
+        let path = match stores.enter_plan_mode(conversation_id) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("failed to enter plan mode: {e}");
+                return;
+            }
+        };
+        // Use path from enter_plan_mode (cached slug)
+        let path_str = path.to_string_lossy().to_string();
+
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::Ext(ExtEventMsg::PlanModeEntered(PlanModeEnteredEvent {
+                plan_file_path: path_str,
+            })),
+        };
+        if let Err(e) = tx_event.send(event).await {
+            tracing::error!("failed to send PlanModeEntered event: {e}");
+        }
+    }
+    // Note: exit is handled via Op::PlanModeApproval, not SetPlanMode { active: false }
+}
+
+/// Handle Op::PlanModeApproval - user approved or rejected the plan.
+///
+/// This is called from `codex.rs` submission_loop to minimize changes to that file.
+///
+/// # Arguments
+/// * `permission_mode` - If approved, determines post-plan permission behavior:
+///   - `BypassPermissions`: Auto-approve all tools
+///   - `AcceptEdits`: Auto-approve file edits only
+///   - `Default`: Manual approval for everything
+#[allow(unused_variables)] // permission_mode reserved for future auto-approval implementation
+pub async fn handle_plan_mode_approval(
+    conversation_id: ConversationId,
+    tx_event: &Sender<Event>,
+    approved: bool,
+    permission_mode: Option<PlanExitPermissionMode>,
+) {
+    let stores = get_or_create_stores(conversation_id);
+    if let Err(e) = stores.exit_plan_mode(approved) {
+        tracing::error!("failed to exit plan mode: {e}");
+        // Continue to send event anyway to keep TUI in sync
+    }
+
+    // TODO: Apply permission_mode to session config when approved
+    // This would set auto-approval rules based on mode:
+    // - BypassPermissions: auto-approve all tools
+    // - AcceptEdits: auto-approve write_file, smart_edit
+    // - Default: no auto-approval
+    if approved {
+        if let Some(mode) = &permission_mode {
+            tracing::info!("Plan approved with permission mode: {:?}", mode);
+            // Future: stores.set_permission_mode(mode.clone());
+        }
+    }
+
+    let event = Event {
+        id: String::new(),
+        msg: EventMsg::Ext(ExtEventMsg::PlanModeExited(PlanModeExitedEvent {
+            approved,
+        })),
+    };
+    if let Err(e) = tx_event.send(event).await {
+        tracing::error!("failed to send PlanModeExited event: {e}");
+    }
+}
+
+/// Handle Op::EnterPlanModeApproval - user approved or rejected entering plan mode.
+///
+/// This is called from `codex.rs` submission_loop when the LLM requests to enter plan mode.
+pub async fn handle_enter_plan_mode_approval(
+    conversation_id: ConversationId,
+    tx_event: &Sender<Event>,
+    approved: bool,
+) {
+    if approved {
+        let stores = get_or_create_stores(conversation_id);
+        match stores.enter_plan_mode(conversation_id) {
+            Ok(plan_file_path) => {
+                let event = Event {
+                    id: String::new(),
+                    msg: EventMsg::Ext(ExtEventMsg::PlanModeEntered(PlanModeEnteredEvent {
+                        plan_file_path: plan_file_path.display().to_string(),
+                    })),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    tracing::error!("failed to send PlanModeEntered event: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::error!("failed to enter plan mode: {e}");
+            }
+        }
+    }
+    // If not approved, no action needed - the tool will receive the rejection via normal flow
+}
+
+/// Handle Op::UserQuestionAnswer - user answered the LLM's question.
+///
+/// This is called from `codex.rs` submission_loop when the user answers an AskUserQuestion tool.
+/// The tool_call_id is used to correlate the answer with the original tool call.
+///
+/// ## Answer Injection Mechanism
+///
+/// The handler (ask_user_question.rs) is blocking on a oneshot channel waiting
+/// for the user's answer. When this function is called, it:
+/// 1. Formats the user's answers
+/// 2. Sends the answer through the channel via `stores.send_user_answer()`
+/// 3. This unblocks the handler, which returns the answer as the tool result
+/// 4. The LLM receives the actual user answer (not "Waiting for response...")
+///
+/// This matches Claude Code's `onAllow(updatedInput with answers)` callback mechanism.
+#[allow(unused_variables)]
+pub async fn handle_user_question_answer(
+    conversation_id: ConversationId,
+    tx_event: &Sender<Event>,
+    tool_call_id: String,
+    answers: std::collections::HashMap<String, String>,
+) {
+    // Log the user's answers for debugging
+    tracing::info!(
+        "Received user question answer for tool_call_id={}: {:?}",
+        tool_call_id,
+        answers
+    );
+
+    // Format answers for injection into conversation
+    let formatted_answers: Vec<String> = answers
+        .iter()
+        .map(|(header, answer)| format!("{}: {}", header, answer))
+        .collect();
+    let answers_text = if formatted_answers.is_empty() {
+        "User cancelled or provided no answer.".to_string()
+    } else {
+        formatted_answers.join("\n")
+    };
+
+    // Send the answer through the oneshot channel.
+    // This unblocks the handler which is awaiting on the receiver.
+    let stores = get_or_create_stores(conversation_id);
+    let sent = stores.send_user_answer(&tool_call_id, answers_text);
+
+    if sent {
+        tracing::debug!("Successfully sent answer through channel for tool_call_id={tool_call_id}");
+    } else {
+        // Channel was not found or already closed.
+        // This can happen if the handler timed out or the session ended.
+        tracing::warn!(
+            "Failed to send answer - channel not found for tool_call_id={tool_call_id}"
+        );
+        // Fallback: store in pending_user_answers for potential retry
+        stores.set_pending_user_answer(
+            tool_call_id,
+            "Answer received but channel was closed.".to_string(),
+        );
+    }
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use std::time::Duration;
 
 mod approval_overlay;
+mod approval_overlay_ext;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;

@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use tokio::sync::oneshot;
 
 // Note: inject_call_count uses Ordering::Relaxed because:
 // 1. We only need monotonic increment, not synchronization
@@ -21,6 +22,9 @@ use super::AgentRegistry;
 use super::BackgroundTaskStore;
 use super::TranscriptStore;
 use crate::config::system_reminder::SystemReminderConfig;
+use crate::error::CodexErr;
+use crate::plan_mode::PlanModeState;
+use crate::plan_mode::cleanup_plan_slug;
 use crate::system_reminder::FileTracker;
 use crate::system_reminder::PlanState;
 use crate::system_reminder::PlanStep;
@@ -37,7 +41,9 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 /// - ReminderOrchestrator: Cached system reminder orchestrator (avoids per-turn allocation)
 /// - FileTracker: Tracks file reads for change detection
 /// - PlanState: Tracks plan state for reminder generation
+/// - PlanModeState: Tracks plan mode state (active, file path, re-entry)
 /// - inject_call_count: Tracks main agent reminder injection calls
+/// - pending_user_answers: Stores pending answers from AskUserQuestion tool
 #[derive(Debug)]
 pub struct SubagentStores {
     pub registry: Arc<AgentRegistry>,
@@ -46,9 +52,18 @@ pub struct SubagentStores {
     pub reminder_orchestrator: Arc<SystemReminderOrchestrator>,
     pub file_tracker: Arc<FileTracker>,
     pub plan_state: Arc<RwLock<PlanState>>,
+    /// Plan mode state (is_active, plan_file_path, re-entry detection).
+    pub plan_mode: Arc<RwLock<PlanModeState>>,
     /// Counter for main agent reminder injection calls.
     /// Used by PlanReminderGenerator to determine if reminder should fire.
     inject_call_count: AtomicI32,
+    /// Pending answers from AskUserQuestion tool, keyed by tool_call_id.
+    pending_user_answers: Arc<RwLock<std::collections::HashMap<String, String>>>,
+    /// Oneshot channels for AskUserQuestion answer injection.
+    /// Key: tool_call_id, Value: oneshot sender for receiving user answer.
+    /// This enables the handler to block until the user responds.
+    user_answer_channels:
+        Arc<RwLock<std::collections::HashMap<String, oneshot::Sender<String>>>>,
 }
 
 /// Build default search paths for custom agent discovery.
@@ -90,7 +105,10 @@ impl SubagentStores {
             )),
             file_tracker: Arc::new(FileTracker::new()),
             plan_state: Arc::new(RwLock::new(PlanState::default())),
+            plan_mode: Arc::new(RwLock::new(PlanModeState::new())),
             inject_call_count: AtomicI32::new(0),
+            pending_user_answers: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            user_answer_channels: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -108,8 +126,15 @@ impl SubagentStores {
     /// Update plan state from UpdatePlanArgs.
     ///
     /// Called by the update_plan handler to track plan state for reminder generation.
-    pub fn update_plan_state(&self, args: &UpdatePlanArgs, current_count: i32) {
-        let mut state = self.plan_state.write().expect("plan_state lock poisoned");
+    pub fn update_plan_state(
+        &self,
+        args: &UpdatePlanArgs,
+        current_count: i32,
+    ) -> Result<(), CodexErr> {
+        let mut state = self
+            .plan_state
+            .write()
+            .map_err(|_| CodexErr::Fatal("plan_state lock poisoned".to_string()))?;
         state.steps = args
             .plan
             .iter()
@@ -120,14 +145,122 @@ impl SubagentStores {
             .collect();
         state.is_empty = state.steps.is_empty();
         state.last_update_count = current_count;
+        Ok(())
     }
 
     /// Get a snapshot of the current plan state.
-    pub fn get_plan_state(&self) -> PlanState {
+    pub fn get_plan_state(&self) -> Result<PlanState, CodexErr> {
         self.plan_state
             .read()
-            .expect("plan_state lock poisoned")
-            .clone()
+            .map_err(|_| CodexErr::Fatal("plan_state lock poisoned".to_string()))
+            .map(|state| state.clone())
+    }
+
+    // ========================================================================
+    // Plan Mode helpers
+    // ========================================================================
+
+    /// Enter Plan Mode and return the plan file path.
+    pub fn enter_plan_mode(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<std::path::PathBuf, CodexErr> {
+        let mut state = self
+            .plan_mode
+            .write()
+            .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))?;
+        state.enter(conversation_id)
+    }
+
+    /// Exit Plan Mode.
+    pub fn exit_plan_mode(&self, approved: bool) -> Result<(), CodexErr> {
+        let mut state = self
+            .plan_mode
+            .write()
+            .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))?;
+        state.exit(approved);
+        Ok(())
+    }
+
+    /// Get a snapshot of the current plan mode state.
+    pub fn get_plan_mode_state(&self) -> Result<PlanModeState, CodexErr> {
+        self.plan_mode
+            .read()
+            .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))
+            .map(|state| state.clone())
+    }
+
+    /// Check if Plan Mode is currently active.
+    pub fn is_plan_mode_active(&self) -> Result<bool, CodexErr> {
+        self.plan_mode
+            .read()
+            .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))
+            .map(|state| state.is_active)
+    }
+
+    /// Clear the re-entry flag after re-entry prompt is shown.
+    ///
+    /// Called after the first reminder injection when re-entering Plan Mode
+    /// to avoid repeated re-entry prompts on subsequent turns.
+    pub fn clear_plan_reentry(&self) -> Result<(), CodexErr> {
+        let mut state = self
+            .plan_mode
+            .write()
+            .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))?;
+        state.clear_reentry();
+        Ok(())
+    }
+
+    // ========================================================================
+    // AskUserQuestion helpers
+    // ========================================================================
+
+    /// Store a pending user answer for an AskUserQuestion tool call.
+    pub fn set_pending_user_answer(&self, tool_call_id: String, answer: String) {
+        if let Ok(mut answers) = self.pending_user_answers.write() {
+            answers.insert(tool_call_id, answer);
+        }
+    }
+
+    /// Get and remove a pending user answer for an AskUserQuestion tool call.
+    pub fn take_pending_user_answer(&self, tool_call_id: &str) -> Option<String> {
+        if let Ok(mut answers) = self.pending_user_answers.write() {
+            answers.remove(tool_call_id)
+        } else {
+            None
+        }
+    }
+
+    /// Create a oneshot channel for receiving user answer.
+    ///
+    /// The handler calls this to get a receiver that it will await.
+    /// When the user responds, `send_user_answer` is called to send
+    /// the answer through the channel, unblocking the handler.
+    ///
+    /// Returns the receiver that the handler should await.
+    pub fn create_answer_channel(&self, tool_call_id: &str) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut channels) = self.user_answer_channels.write() {
+            channels.insert(tool_call_id.to_string(), tx);
+        }
+        rx
+    }
+
+    /// Send user answer through the oneshot channel.
+    ///
+    /// Called by codex_ext.rs when the user responds to an AskUserQuestion.
+    /// This unblocks the handler's await and allows it to return the answer
+    /// as the tool result.
+    ///
+    /// Returns true if the answer was sent successfully, false if the channel
+    /// was not found or was already closed.
+    pub fn send_user_answer(&self, tool_call_id: &str, answer: String) -> bool {
+        if let Ok(mut channels) = self.user_answer_channels.write() {
+            if let Some(tx) = channels.remove(tool_call_id) {
+                return tx.send(answer).is_ok();
+            }
+        }
+        false
     }
 }
 
@@ -167,8 +300,11 @@ pub fn get_or_create_stores(conversation_id: ConversationId) -> Arc<SubagentStor
 /// Should be called when a session is terminated to free memory.
 /// Not calling this won't cause memory leaks for short-lived processes,
 /// but long-running servers should call this on session cleanup.
+///
+/// Also cleans up plan slug cache to ensure new sessions get fresh slugs.
 pub fn cleanup_stores(conversation_id: &ConversationId) {
     STORES_REGISTRY.remove(conversation_id);
+    cleanup_plan_slug(conversation_id);
 }
 
 /// Get stores if they exist (without creating new ones).
