@@ -5,6 +5,46 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+// ============================================
+// Nested Memory Configuration
+// ============================================
+
+/// Nested memory configuration.
+///
+/// Controls automatic discovery and injection of AGENTS.md and rules files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NestedMemoryConfig {
+    /// Enable nested memory discovery (default: true).
+    pub enabled: bool,
+    /// Enable user rules from ~/.codex/rules/ (default: true).
+    pub user_rules: bool,
+    /// Enable project AGENTS.md files (default: true).
+    pub project_settings: bool,
+    /// Enable local AGENTS.local.md files (default: true).
+    pub local_settings: bool,
+    /// Maximum content size in bytes (default: 40000).
+    pub max_content_size: i32,
+    /// Maximum lines per file (default: 3000).
+    pub max_lines: i32,
+    /// Maximum @import recursion depth (default: 5).
+    pub max_import_depth: i32,
+}
+
+impl Default for NestedMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            user_rules: true,
+            project_settings: true,
+            local_settings: true,
+            max_content_size: 40000,
+            max_lines: 3000,
+            max_import_depth: 5,
+        }
+    }
+}
+
 /// Minimum severity level for LSP diagnostics to be injected.
 ///
 /// Only diagnostics at or above this severity level will be included in system reminders.
@@ -20,6 +60,25 @@ pub enum LspDiagnosticsMinSeverity {
     Info,
     /// Inject all diagnostics including hints (least restrictive).
     Hint,
+}
+
+/// Output style configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct OutputStyleConfig {
+    /// Currently selected output style name (default: "default").
+    pub current_style: String,
+    /// Enable output style attachment (default: true).
+    pub enabled: bool,
+}
+
+impl Default for OutputStyleConfig {
+    fn default() -> Self {
+        Self {
+            current_style: "default".to_string(),
+            enabled: true,
+        }
+    }
 }
 
 /// System reminder configuration.
@@ -43,6 +102,14 @@ pub struct SystemReminderConfig {
     /// Custom timeout in milliseconds (default: 1000).
     #[serde(default)]
     pub timeout_ms: Option<i64>,
+
+    /// Nested memory configuration.
+    #[serde(default)]
+    pub nested_memory: NestedMemoryConfig,
+
+    /// Output style configuration.
+    #[serde(default)]
+    pub output_style: OutputStyleConfig,
 }
 
 impl Default for SystemReminderConfig {
@@ -52,11 +119,13 @@ impl Default for SystemReminderConfig {
             critical_instruction: None,
             attachments: AttachmentSettings::default(),
             timeout_ms: Some(1000),
+            nested_memory: NestedMemoryConfig::default(),
+            output_style: OutputStyleConfig::default(),
         }
     }
 }
 
-/// Per-attachment enable/disable settings (Phase 1: 6 types).
+/// Per-attachment enable/disable settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AttachmentSettings {
@@ -75,6 +144,21 @@ pub struct AttachmentSettings {
     /// Minimum severity for LSP diagnostics (default: error only).
     #[serde(default)]
     pub lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
+    /// Nested memory - auto-included AGENTS.md and rules (default: true).
+    pub nested_memory: bool,
+    /// @mentioned files - auto-include files from @file syntax (default: true).
+    #[serde(default = "default_true")]
+    pub at_mentioned_files: bool,
+    /// Agent mentions - invoke agents from @agent-type syntax (default: true).
+    #[serde(default = "default_true")]
+    pub agent_mentions: bool,
+    /// Output style instructions (default: true).
+    #[serde(default = "default_true")]
+    pub output_style: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AttachmentSettings {
@@ -87,6 +171,10 @@ impl Default for AttachmentSettings {
             background_task: true,
             lsp_diagnostics: true,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            nested_memory: true,
+            at_mentioned_files: true,
+            agent_mentions: true,
+            output_style: true,
         }
     }
 }
@@ -116,6 +204,19 @@ mod tests {
         assert!(settings.changed_files);
         assert!(settings.background_task);
         assert!(settings.lsp_diagnostics);
+        assert!(settings.nested_memory);
+    }
+
+    #[test]
+    fn test_nested_memory_config_default() {
+        let config = NestedMemoryConfig::default();
+        assert!(config.enabled);
+        assert!(config.user_rules);
+        assert!(config.project_settings);
+        assert!(config.local_settings);
+        assert_eq!(config.max_content_size, 40000);
+        assert_eq!(config.max_lines, 3000);
+        assert_eq!(config.max_import_depth, 5);
     }
 
     #[test]
@@ -171,6 +272,7 @@ mod tests {
                 ..Default::default()
             },
             timeout_ms: Some(1500),
+            ..Default::default()
         };
 
         let toml_str = toml::to_string(&config).unwrap();

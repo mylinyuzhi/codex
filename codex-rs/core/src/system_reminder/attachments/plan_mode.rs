@@ -11,7 +11,6 @@ use crate::system_reminder::generator::GeneratorContext;
 use crate::system_reminder::throttle::ThrottleConfig;
 use crate::system_reminder::throttle::default_throttle_config;
 use crate::system_reminder::types::AttachmentType;
-use crate::system_reminder::types::ReminderTier;
 use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 use std::path::Path;
@@ -131,10 +130,6 @@ impl AttachmentGenerator for PlanModeGenerator {
         AttachmentType::PlanMode
     }
 
-    fn tier(&self) -> ReminderTier {
-        ReminderTier::Core
-    }
-
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.is_plan_mode {
             return Ok(None);
@@ -183,6 +178,7 @@ mod tests {
     use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use crate::system_reminder::file_tracker::FileTracker;
     use crate::system_reminder::generator::PlanState;
+    use crate::system_reminder::types::ReminderTier;
 
     fn make_context<'a>(
         is_plan_mode: bool,
@@ -195,6 +191,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test-agent",
             file_tracker,
@@ -206,6 +203,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         }
     }
 

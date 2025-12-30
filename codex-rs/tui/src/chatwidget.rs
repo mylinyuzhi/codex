@@ -116,6 +116,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
+use crate::output_style::output_style_selection_params;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -362,6 +363,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Plan mode flag; tracks whether plan mode is active.
+    is_plan_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
@@ -373,6 +376,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    // Current output style name
+    current_output_style: String,
 }
 
 struct UserMessage {
@@ -1248,6 +1253,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        // TODO: Check permission mode for post-plan auto-approval
+        // If stores.should_auto_approve(tool_name):
+        //   - BypassPermissions: auto-approve all tools
+        //   - AcceptEdits: auto-approve file edit tools
+        //   - Default: show overlay (current behavior)
+        // This requires passing permission mode from core to TUI.
+        // See: stores.should_auto_approve() in subagent/stores.rs
+
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -1481,12 +1494,14 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
@@ -1568,12 +1583,14 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
@@ -1740,23 +1757,11 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
-            SlashCommand::Plan => {
-                // Plan mode uses cached slug - same session = same plan file
-                // Let core handle path generation for consistency
-                if self.conversation_id().is_some() {
-                    self.app_event_tx.send(AppEvent::CodexOp(Op::SetPlanMode {
-                        active: true,
-                        plan_file_path: None, // Core generates with cached slug
-                    }));
-                    self.add_info_message("Entering plan mode...".to_string(), None);
-                } else {
-                    self.add_to_history(history_cell::new_error_event(
-                        "Cannot enter plan mode: No active conversation.".to_string(),
-                    ));
-                }
-            }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::OutputStyle => {
+                self.open_output_style_popup();
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -2157,8 +2162,15 @@ impl ChatWidget {
             ExtEventMsg::UserQuestionRequest(ev) => {
                 self.on_user_question_request(ev);
             }
-            ExtEventMsg::PlanModeEntered(_) | ExtEventMsg::PlanModeExited(_) => {
-                // These events are informational, no TUI action needed
+            ExtEventMsg::PlanModeEntered(_) => {
+                self.is_plan_mode = true;
+                self.bottom_pane.set_plan_mode(true);
+                self.request_redraw();
+            }
+            ExtEventMsg::PlanModeExited(_) => {
+                self.is_plan_mode = false;
+                self.bottom_pane.set_plan_mode(false);
+                self.request_redraw();
             }
             // Other extension events (compact, subagent activity) are handled elsewhere or ignored
             _ => {}
@@ -2570,6 +2582,23 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    /// Open a popup to choose an output style.
+    pub(crate) fn open_output_style_popup(&mut self) {
+        let params = output_style_selection_params(
+            &self.config.cwd,
+            &self.config.codex_home,
+            &self.current_output_style,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    /// Set the current output style.
+    pub(crate) fn set_output_style(&mut self, style_name: &str) {
+        self.current_output_style = style_name.to_string();
     }
 
     fn is_auto_model(model: &str) -> bool {
@@ -3587,6 +3616,10 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn is_plan_mode(&self) -> bool {
+        self.is_plan_mode
     }
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {

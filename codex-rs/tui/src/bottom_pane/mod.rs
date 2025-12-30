@@ -367,6 +367,10 @@ impl BottomPane {
         }
     }
 
+    pub fn set_plan_mode(&mut self, active: bool) {
+        self.composer.set_plan_mode(active);
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {

@@ -83,12 +83,9 @@ impl ToolHandler for AskUserQuestionHandler {
             ));
         };
 
-        let input: AskUserQuestionInput =
-            serde_json::from_str(arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "Failed to parse AskUserQuestion input: {e}"
-                ))
-            })?;
+        let input: AskUserQuestionInput = serde_json::from_str(arguments).map_err(|e| {
+            FunctionCallError::RespondToModel(format!("Failed to parse AskUserQuestion input: {e}"))
+        })?;
 
         // 2. Validate questions
         if input.questions.is_empty() {

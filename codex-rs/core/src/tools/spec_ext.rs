@@ -29,13 +29,13 @@ use tracing::info;
 /// Design principle: Only the main agent should interact with the user.
 /// Subagents run in a restricted context and cannot request user input.
 pub const ALWAYS_BLOCKED_TOOLS: &[&str] = &[
-    names::TASK,             // Prevent recursive subagent spawning
-    names::TASK_OUTPUT,      // Associated with Task
-    names::UPDATE_PLAN,      // Main agent responsibility only
-    names::BASH_OUTPUT,      // Background shell is main agent only
-    names::KILL_SHELL,       // Background shell is main agent only
-    names::ENTER_PLAN_MODE,  // Only main agent can request plan mode
-    names::EXIT_PLAN_MODE,   // Only main agent can exit plan mode
+    names::TASK,              // Prevent recursive subagent spawning
+    names::TASK_OUTPUT,       // Associated with Task
+    names::UPDATE_PLAN,       // Main agent responsibility only
+    names::BASH_OUTPUT,       // Background shell is main agent only
+    names::KILL_SHELL,        // Background shell is main agent only
+    names::ENTER_PLAN_MODE,   // Only main agent can request plan mode
+    names::EXIT_PLAN_MODE,    // Only main agent can exit plan mode
     names::ASK_USER_QUESTION, // Only main agent can ask user questions
 ];
 

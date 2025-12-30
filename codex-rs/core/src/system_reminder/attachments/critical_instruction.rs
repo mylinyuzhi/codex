@@ -9,7 +9,6 @@ use crate::system_reminder::generator::AttachmentGenerator;
 use crate::system_reminder::generator::GeneratorContext;
 use crate::system_reminder::throttle::ThrottleConfig;
 use crate::system_reminder::types::AttachmentType;
-use crate::system_reminder::types::ReminderTier;
 use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 
@@ -40,10 +39,6 @@ impl AttachmentGenerator for CriticalInstructionGenerator {
 
     fn attachment_type(&self) -> AttachmentType {
         AttachmentType::CriticalInstruction
-    }
-
-    fn tier(&self) -> ReminderTier {
-        ReminderTier::Core
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -86,6 +81,7 @@ mod tests {
     use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use crate::system_reminder::file_tracker::FileTracker;
     use crate::system_reminder::generator::PlanState;
+    use crate::system_reminder::types::ReminderTier;
     use std::path::Path;
 
     fn make_context<'a>(
@@ -97,6 +93,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test-agent",
             file_tracker,
@@ -108,6 +105,8 @@ mod tests {
             critical_instruction,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         }
     }
 

@@ -31,6 +31,18 @@ use crate::system_reminder::PlanStep;
 use crate::system_reminder::SystemReminderOrchestrator;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol_ext::PlanExitPermissionMode;
+
+/// Approved plan content after ExitPlanMode approval.
+///
+/// Used for one-time injection into context via PlanApprovedGenerator.
+#[derive(Debug, Clone)]
+pub struct ApprovedPlan {
+    /// Full plan content
+    pub content: String,
+    /// Path to the plan file
+    pub file_path: String,
+}
 
 /// Session-scoped subagent stores.
 ///
@@ -44,6 +56,8 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 /// - PlanModeState: Tracks plan mode state (active, file path, re-entry)
 /// - inject_call_count: Tracks main agent reminder injection calls
 /// - pending_user_answers: Stores pending answers from AskUserQuestion tool
+/// - approved_plan: Approved plan content for post-ExitPlanMode injection
+/// - permission_mode: Post-plan permission mode for auto-approval
 #[derive(Debug)]
 pub struct SubagentStores {
     pub registry: Arc<AgentRegistry>,
@@ -62,8 +76,13 @@ pub struct SubagentStores {
     /// Oneshot channels for AskUserQuestion answer injection.
     /// Key: tool_call_id, Value: oneshot sender for receiving user answer.
     /// This enables the handler to block until the user responds.
-    user_answer_channels:
-        Arc<RwLock<std::collections::HashMap<String, oneshot::Sender<String>>>>,
+    user_answer_channels: Arc<RwLock<std::collections::HashMap<String, oneshot::Sender<String>>>>,
+    /// Approved plan content after ExitPlanMode approval.
+    /// Consumed by PlanApprovedGenerator for one-time injection.
+    approved_plan: Arc<RwLock<Option<ApprovedPlan>>>,
+    /// Post-plan permission mode for auto-approval.
+    /// Set when user approves ExitPlanMode with a permission mode.
+    permission_mode: Arc<RwLock<Option<PlanExitPermissionMode>>>,
 }
 
 /// Build default search paths for custom agent discovery.
@@ -109,6 +128,8 @@ impl SubagentStores {
             inject_call_count: AtomicI32::new(0),
             pending_user_answers: Arc::new(RwLock::new(std::collections::HashMap::new())),
             user_answer_channels: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            approved_plan: Arc::new(RwLock::new(None)),
+            permission_mode: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -261,6 +282,90 @@ impl SubagentStores {
             }
         }
         false
+    }
+
+    // ========================================================================
+    // Approved Plan helpers (for post-ExitPlanMode injection)
+    // ========================================================================
+
+    /// Set the approved plan content for one-time injection.
+    ///
+    /// Called by codex_ext.rs when user approves ExitPlanMode.
+    pub fn set_approved_plan(&self, plan: ApprovedPlan) {
+        if let Ok(mut approved) = self.approved_plan.write() {
+            *approved = Some(plan);
+        }
+    }
+
+    /// Take (consume) the approved plan for injection.
+    ///
+    /// Returns the plan and clears the stored value.
+    /// Called by PlanApprovedGenerator for one-time injection.
+    pub fn take_approved_plan(&self) -> Option<ApprovedPlan> {
+        if let Ok(mut approved) = self.approved_plan.write() {
+            approved.take()
+        } else {
+            None
+        }
+    }
+
+    /// Check if there's an approved plan pending injection.
+    pub fn has_approved_plan(&self) -> bool {
+        self.approved_plan
+            .read()
+            .map(|p| p.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Get the plan file path from plan mode state.
+    pub fn get_plan_file_path(&self) -> Option<std::path::PathBuf> {
+        self.plan_mode
+            .read()
+            .ok()
+            .and_then(|state| state.plan_file_path.clone())
+    }
+
+    // ========================================================================
+    // Permission Mode helpers (for post-plan auto-approval)
+    // ========================================================================
+
+    /// Set the permission mode for post-plan auto-approval.
+    ///
+    /// Called by codex_ext.rs when user approves ExitPlanMode with a permission mode.
+    pub fn set_permission_mode(&self, mode: PlanExitPermissionMode) {
+        if let Ok(mut pm) = self.permission_mode.write() {
+            *pm = Some(mode);
+        }
+    }
+
+    /// Get the current permission mode.
+    pub fn get_permission_mode(&self) -> Option<PlanExitPermissionMode> {
+        self.permission_mode.read().ok().and_then(|pm| pm.clone())
+    }
+
+    /// Clear the permission mode (e.g., on session end or new plan mode).
+    pub fn clear_permission_mode(&self) {
+        if let Ok(mut pm) = self.permission_mode.write() {
+            *pm = None;
+        }
+    }
+
+    /// Check if a tool should be auto-approved based on permission mode.
+    ///
+    /// - `BypassPermissions`: Auto-approve all tools
+    /// - `AcceptEdits`: Auto-approve file edit tools only
+    /// - `Default`: No auto-approval
+    pub fn should_auto_approve(&self, tool_name: &str) -> bool {
+        match self.get_permission_mode() {
+            Some(PlanExitPermissionMode::BypassPermissions) => true,
+            Some(PlanExitPermissionMode::AcceptEdits) => {
+                matches!(
+                    tool_name,
+                    "write_file" | "smart_edit" | "str_replace_based_edit_tool"
+                )
+            }
+            Some(PlanExitPermissionMode::Default) | None => false,
+        }
     }
 }
 

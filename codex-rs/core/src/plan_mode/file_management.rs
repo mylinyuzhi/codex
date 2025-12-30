@@ -13,6 +13,9 @@ use codex_protocol::ConversationId;
 use dashmap::DashMap;
 use rand::prelude::IndexedRandom;
 
+use super::wordlist::ACTIONS;
+use super::wordlist::ADJECTIVES;
+use super::wordlist::NOUNS;
 use crate::error::CodexErr;
 
 // =============================================================================
@@ -23,137 +26,11 @@ use crate::error::CodexErr;
 /// Same session ALWAYS gets the same plan file regardless of how many times /plan is called.
 static PLAN_SLUG_CACHE: LazyLock<DashMap<ConversationId, String>> = LazyLock::new(DashMap::new);
 
-/// Word lists for generating human-readable plan slugs.
-/// ~8,000+ combinations (like Claude Code's ~8 million with larger lists).
-const ADJECTIVES: &[&str] = &[
-    "bright",
-    "calm",
-    "dancing",
-    "eager",
-    "flowing",
-    "gentle",
-    "hidden",
-    "joyful",
-    "lively",
-    "nimble",
-    "peaceful",
-    "quiet",
-    "radiant",
-    "rippling",
-    "serene",
-    "silent",
-    "sparkling",
-    "swift",
-    "tranquil",
-    "wandering",
-    "wise",
-    "amber",
-    "azure",
-    "coral",
-    "crimson",
-    "emerald",
-    "golden",
-    "ivory",
-    "jade",
-    "lunar",
-    "misty",
-    "obsidian",
-    "pearl",
-    "ruby",
-    "sapphire",
-    "silver",
-    "solar",
-    "velvet",
-    "violet",
-    "winter",
-];
-
-const ACTIONS: &[&str] = &[
-    "brewing",
-    "climbing",
-    "dancing",
-    "drifting",
-    "exploring",
-    "floating",
-    "gliding",
-    "hoping",
-    "jumping",
-    "learning",
-    "playing",
-    "racing",
-    "sailing",
-    "singing",
-    "soaring",
-    "thinking",
-    "wandering",
-    "weaving",
-    "wiggling",
-    "building",
-    "crafting",
-    "designing",
-    "dreaming",
-    "flying",
-    "growing",
-    "healing",
-    "mapping",
-    "painting",
-    "reading",
-    "running",
-    "searching",
-    "sketching",
-    "solving",
-    "spinning",
-    "studying",
-    "tracing",
-    "traveling",
-    "writing",
-];
-
-const NOUNS: &[&str] = &[
-    "aurora",
-    "blossom",
-    "cascade",
-    "crystal",
-    "dawn",
-    "ember",
-    "falcon",
-    "galaxy",
-    "harbor",
-    "lagoon",
-    "meadow",
-    "nebula",
-    "oasis",
-    "phoenix",
-    "river",
-    "shamir",
-    "stream",
-    "tide",
-    "valley",
-    "willow",
-    "zen",
-    "beacon",
-    "canyon",
-    "delta",
-    "forest",
-    "glacier",
-    "horizon",
-    "island",
-    "jungle",
-    "kindle",
-    "lighthouse",
-    "mountain",
-    "ocean",
-    "prairie",
-    "quartz",
-    "rainbow",
-    "summit",
-    "temple",
-    "voyage",
-    "waterfall",
-];
-
 /// Generate a random plan slug.
 /// Format: `{adjective}-{action}-{noun}` (e.g., "bright-exploring-aurora")
+///
+/// Uses word lists from `wordlist.rs` (aligned with Claude Code).
+/// Total combinations: ~8.5 million (220 adj × 110 act × 350 noun)
 fn generate_random_plan_slug() -> String {
     let mut rng = rand::rng();
     let adj = ADJECTIVES.choose(&mut rng).unwrap_or(&"unknown");

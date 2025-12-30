@@ -60,6 +60,8 @@ use toml_edit::DocumentMut;
 mod constraint;
 pub mod edit;
 pub mod mod_ext;
+pub mod output_style;
+pub mod output_style_loader;
 pub mod profile;
 pub mod service;
 pub mod system_reminder;

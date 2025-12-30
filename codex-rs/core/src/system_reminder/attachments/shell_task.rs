@@ -153,6 +153,7 @@ mod tests {
             turn_number: 1,
             is_main_agent,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test-agent",
             file_tracker,
@@ -164,6 +165,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         }
     }
 

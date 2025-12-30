@@ -7,6 +7,7 @@ use super::throttle::ThrottleConfig;
 use super::types::AttachmentType;
 use super::types::ReminderTier;
 use super::types::SystemReminder;
+use crate::config::output_style::OutputStyle;
 use crate::config::system_reminder::LspDiagnosticsMinSeverity;
 use crate::config::system_reminder::SystemReminderConfig;
 use crate::error::Result;
@@ -63,6 +64,8 @@ pub struct GeneratorContext<'a> {
     pub is_main_agent: bool,
     /// Whether this turn has user input.
     pub has_user_input: bool,
+    /// Raw user prompt text (for @mention parsing in UserPrompt tier generators).
+    pub user_prompt: Option<&'a str>,
     /// Current working directory.
     pub cwd: &'a Path,
     /// Session/Agent ID.
@@ -85,6 +88,19 @@ pub struct GeneratorContext<'a> {
     pub diagnostics_store: Option<Arc<DiagnosticsStore>>,
     /// Minimum severity level for LSP diagnostics filtering.
     pub lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
+    /// Currently active output style (None = default).
+    pub output_style: Option<&'a OutputStyle>,
+    /// Approved plan content for post-ExitPlanMode injection (one-time).
+    pub approved_plan: Option<ApprovedPlanInfo>,
+}
+
+/// Approved plan info for one-time injection.
+#[derive(Debug, Clone)]
+pub struct ApprovedPlanInfo {
+    /// Full plan content
+    pub content: String,
+    /// Path to the plan file
+    pub file_path: String,
 }
 
 // ============================================

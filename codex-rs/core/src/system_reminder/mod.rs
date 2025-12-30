@@ -12,10 +12,12 @@
 pub mod attachments;
 pub mod file_tracker;
 pub mod generator;
+pub mod generator_ext;
 pub mod throttle;
 pub mod types;
 
 pub use file_tracker::FileTracker;
+pub use generator::ApprovedPlanInfo;
 pub use generator::AttachmentGenerator;
 pub use generator::BackgroundTaskInfo;
 pub use generator::BackgroundTaskStatus;
@@ -35,10 +37,15 @@ pub use types::SystemReminder;
 pub use types::XmlTag;
 
 use crate::config::system_reminder::SystemReminderConfig;
+use attachments::AgentMentionsGenerator;
 use attachments::AgentTaskGenerator;
+use attachments::AtMentionedFilesGenerator;
 use attachments::ChangedFilesGenerator;
 use attachments::CriticalInstructionGenerator;
 use attachments::LspDiagnosticsGenerator;
+use attachments::NestedMemoryGenerator;
+use attachments::OutputStyleGenerator;
+use attachments::PlanApprovedGenerator;
 use attachments::PlanModeGenerator;
 use attachments::PlanToolReminderGenerator;
 use attachments::ShellTaskGenerator;
@@ -69,13 +76,21 @@ impl SystemReminderOrchestrator {
         let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let generators: Vec<Arc<dyn AttachmentGenerator>> = vec![
+            // Core tier
             Arc::new(CriticalInstructionGenerator::new()),
+            Arc::new(PlanApprovedGenerator::new()),
             Arc::new(PlanModeGenerator::new()),
             Arc::new(PlanToolReminderGenerator::new()),
             Arc::new(ChangedFilesGenerator::new()),
+            Arc::new(NestedMemoryGenerator::new(config.nested_memory.clone())),
+            // MainAgentOnly tier
             Arc::new(ShellTaskGenerator::new()),
             Arc::new(AgentTaskGenerator::new()),
             Arc::new(LspDiagnosticsGenerator::new()),
+            Arc::new(OutputStyleGenerator::new()),
+            // UserPrompt tier
+            Arc::new(AtMentionedFilesGenerator::new()),
+            Arc::new(AgentMentionsGenerator::new()),
         ];
 
         Self {
@@ -264,6 +279,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -275,6 +291,8 @@ mod tests {
             critical_instruction: Some("test instruction"),
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -291,6 +309,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -302,6 +321,8 @@ mod tests {
             critical_instruction: Some("Always run tests"),
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -324,6 +345,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -335,6 +357,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -359,6 +383,10 @@ mod tests {
                 background_task: false,
                 lsp_diagnostics: false,
                 lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+                nested_memory: false,
+                at_mentioned_files: false,
+                agent_mentions: false,
+                output_style: true,
             },
             ..Default::default()
         };
@@ -369,6 +397,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -380,6 +409,8 @@ mod tests {
             critical_instruction: Some("test"),
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -412,7 +443,7 @@ mod tests {
     fn test_orchestrator_default() {
         let orchestrator = SystemReminderOrchestrator::default();
         assert!(orchestrator.config.enabled);
-        assert_eq!(orchestrator.generators.len(), 7);
+        assert_eq!(orchestrator.generators.len(), 12);
     }
 
     #[tokio::test]
@@ -440,6 +471,7 @@ mod tests {
             turn_number: 6,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -451,6 +483,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders1 = orchestrator.generate_all(&ctx1).await;
@@ -467,6 +501,7 @@ mod tests {
             turn_number: 7,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -478,6 +513,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders2 = orchestrator.generate_all(&ctx2).await;
@@ -494,6 +531,7 @@ mod tests {
             turn_number: 10,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -505,6 +543,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders3 = orchestrator.generate_all(&ctx3).await;
@@ -541,6 +581,7 @@ mod tests {
             turn_number: 5,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -552,6 +593,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders1 = orchestrator.generate_all(&ctx1).await;
@@ -568,6 +611,7 @@ mod tests {
             turn_number: 9,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test",
             file_tracker: &tracker,
@@ -579,6 +623,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         };
 
         let reminders2 = orchestrator.generate_all(&ctx2).await;

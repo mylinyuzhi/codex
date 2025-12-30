@@ -143,11 +143,22 @@ pub async fn run_system_reminder_injection(
         false
     };
 
+    // Take approved plan for one-time injection (if pending)
+    // Convert to ApprovedPlanInfo for generator context
+    let approved_plan = agent_stores
+        .as_ref()
+        .and_then(|s| s.take_approved_plan())
+        .map(|p| crate::system_reminder::ApprovedPlanInfo {
+            content: p.content,
+            file_path: p.file_path,
+        });
+
     let ctx = build_generator_context(
         current_count,
         agent_id,
         is_main_agent,
         true, // has_user_input
+        None, // user_prompt - TODO: pass actual user prompt for @mention parsing
         cwd,
         is_plan_mode,
         plan_file_path,
@@ -158,6 +169,8 @@ pub async fn run_system_reminder_injection(
         critical_instruction,
         diagnostics_store,
         LspDiagnosticsMinSeverity::default(), // Use default severity filtering (errors only)
+        None,                                 // output_style - TODO: load from config
+        approved_plan,                        // approved plan for one-time injection
     );
 
     inject_system_reminders(history, orchestrator, &ctx).await;
@@ -301,28 +314,41 @@ pub async fn handle_set_plan_mode(
 ///   - `BypassPermissions`: Auto-approve all tools
 ///   - `AcceptEdits`: Auto-approve file edits only
 ///   - `Default`: Manual approval for everything
-#[allow(unused_variables)] // permission_mode reserved for future auto-approval implementation
 pub async fn handle_plan_mode_approval(
     conversation_id: ConversationId,
     tx_event: &Sender<Event>,
     approved: bool,
     permission_mode: Option<PlanExitPermissionMode>,
 ) {
+    use crate::subagent::ApprovedPlan;
+
     let stores = get_or_create_stores(conversation_id);
     if let Err(e) = stores.exit_plan_mode(approved) {
         tracing::error!("failed to exit plan mode: {e}");
         // Continue to send event anyway to keep TUI in sync
     }
 
-    // TODO: Apply permission_mode to session config when approved
-    // This would set auto-approval rules based on mode:
-    // - BypassPermissions: auto-approve all tools
-    // - AcceptEdits: auto-approve write_file, smart_edit
-    // - Default: no auto-approval
     if approved {
-        if let Some(mode) = &permission_mode {
-            tracing::info!("Plan approved with permission mode: {:?}", mode);
-            // Future: stores.set_permission_mode(mode.clone());
+        // Read plan file and store for one-time injection via PlanApprovedGenerator
+        if let Some(plan_path) = stores.get_plan_file_path() {
+            match std::fs::read_to_string(&plan_path) {
+                Ok(content) => {
+                    stores.set_approved_plan(ApprovedPlan {
+                        content,
+                        file_path: plan_path.display().to_string(),
+                    });
+                    tracing::info!("Plan content stored for injection: {}", plan_path.display());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read plan file for injection: {e}");
+                }
+            }
+        }
+
+        // Apply permission mode for post-plan auto-approval
+        if let Some(mode) = permission_mode {
+            tracing::info!("Setting permission mode: {:?}", mode);
+            stores.set_permission_mode(mode);
         }
     }
 
@@ -417,9 +443,7 @@ pub async fn handle_user_question_answer(
     } else {
         // Channel was not found or already closed.
         // This can happen if the handler timed out or the session ended.
-        tracing::warn!(
-            "Failed to send answer - channel not found for tool_call_id={tool_call_id}"
-        );
+        tracing::warn!("Failed to send answer - channel not found for tool_call_id={tool_call_id}");
         // Fallback: store in pending_user_answers for potential retry
         stores.set_pending_user_answer(
             tool_call_id,

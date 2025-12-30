@@ -284,7 +284,9 @@ pub fn format_restored_context(restored: &RestoredContext) -> Vec<String> {
     // Format plan
     if let Some(plan) = &restored.plan {
         parts.push(format!(
-            "--- Restored plan file: {} ---\n{}",
+            "--- Restored plan file: {} ---\n{}\n\n\
+             If this plan is relevant to the current work and not already complete, \
+             continue working on it.",
             plan.filename, plan.content
         ));
     }

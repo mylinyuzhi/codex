@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::approval_overlay_ext;
+pub use super::approval_overlay_ext::MultiQuestionState;
+pub use super::approval_overlay_ext::MultiSelectState;
 use super::approval_overlay_ext::build_question_header_lines;
 use super::approval_overlay_ext::build_question_title;
 use super::approval_overlay_ext::build_user_question_header;
 use super::approval_overlay_ext::get_selected_labels;
 use super::approval_overlay_ext::toggle_checkbox_label;
-pub use super::approval_overlay_ext::MultiQuestionState;
-pub use super::approval_overlay_ext::MultiSelectState;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -80,7 +80,6 @@ pub(crate) enum ApprovalRequest {
         questions: Vec<UserQuestion>,
     },
 }
-
 
 /// Modal overlay asking the user to approve or deny one or more requests.
 pub(crate) struct ApprovalOverlay {
@@ -331,7 +330,9 @@ impl ApprovalOverlay {
                     if let Some(ref mut mq_state) = self.multi_question_state {
                         // Collect this answer
                         for (header, answer) in answers.iter() {
-                            mq_state.collected_answers.insert(header.clone(), answer.clone());
+                            mq_state
+                                .collected_answers
+                                .insert(header.clone(), answer.clone());
                         }
 
                         // Advance to next question
@@ -360,7 +361,10 @@ impl ApprovalOverlay {
                 }
                 (
                     ApprovalVariant::UserQuestion { .. },
-                    ApprovalDecision::UserQuestionConfirm { tool_call_id, header },
+                    ApprovalDecision::UserQuestionConfirm {
+                        tool_call_id,
+                        header,
+                    },
                 ) => {
                     // Multi-select confirm: collect toggled selections and send/advance
                     let selected_labels = self.get_multi_select_labels();

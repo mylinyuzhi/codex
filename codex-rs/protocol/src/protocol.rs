@@ -49,9 +49,9 @@ pub use crate::protocol_ext::CompactFailedEvent;
 pub use crate::protocol_ext::CompactThresholdExceededEvent;
 pub use crate::protocol_ext::ExtEventMsg;
 pub use crate::protocol_ext::MicroCompactCompletedEvent;
+pub use crate::protocol_ext::PlanExitPermissionMode;
 pub use crate::protocol_ext::SubagentActivityEvent;
 pub use crate::protocol_ext::SubagentEventType;
-pub use crate::protocol_ext::PlanExitPermissionMode;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.

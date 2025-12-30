@@ -19,6 +19,7 @@
 
 mod file_management;
 mod state;
+mod wordlist;
 
 pub use file_management::cleanup_plan_slug;
 pub use file_management::get_plan_file_path;
