@@ -110,7 +110,10 @@ pub(crate) async fn handle_update_plan(
     // Use current inject count to track when plan was last updated
     let stores = get_or_create_stores(session.conversation_id);
     let current_count = stores.get_inject_count();
-    stores.update_plan_state(&args, current_count);
+    if let Err(e) = stores.update_plan_state(&args, current_count) {
+        tracing::warn!("failed to update plan state: {e}");
+        // Continue anyway - plan update is not critical for tool to succeed
+    }
 
     session
         .send_event(turn_context, EventMsg::PlanUpdate(args))

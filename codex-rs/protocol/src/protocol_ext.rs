@@ -30,6 +30,21 @@ pub enum ExtEventMsg {
 
     /// Context usage exceeded auto-compact threshold.
     CompactThresholdExceeded(CompactThresholdExceededEvent),
+
+    /// Plan Mode has been entered.
+    PlanModeEntered(PlanModeEnteredEvent),
+
+    /// Plan Mode entry requested (waiting for user approval).
+    PlanModeEntryRequest(PlanModeEntryRequestEvent),
+
+    /// Plan Mode exit requested (waiting for user approval).
+    PlanModeExitRequest(PlanModeExitRequestEvent),
+
+    /// Plan Mode has been exited.
+    PlanModeExited(PlanModeExitedEvent),
+
+    /// LLM requests to ask the user questions.
+    UserQuestionRequest(UserQuestionRequestEvent),
 }
 
 // ============================================================================
@@ -136,4 +151,87 @@ pub struct CompactThresholdExceededEvent {
     pub threshold_tokens: i64,
     /// Percentage of context window used.
     pub usage_percent: f64,
+}
+
+// ============================================================================
+// Plan Mode Events
+// ============================================================================
+
+/// Permission mode for post-plan execution.
+///
+/// Aligned with Claude Code's plan exit options (chunks.88.mjs).
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanExitPermissionMode {
+    /// Auto-approve all tools (no permission prompts).
+    BypassPermissions,
+    /// Auto-approve file edits only (write_file, smart_edit).
+    AcceptEdits,
+    /// Manual approval for everything (default behavior).
+    #[default]
+    Default,
+}
+
+/// Event emitted when Plan Mode is entered.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PlanModeEnteredEvent {
+    /// Path to the plan file.
+    pub plan_file_path: String,
+}
+
+/// Event emitted when Plan Mode entry is requested (waiting for user approval).
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PlanModeEntryRequestEvent {
+    // No fields needed - just a request for user approval
+}
+
+/// Event emitted when Plan Mode exit is requested (waiting for user approval).
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PlanModeExitRequestEvent {
+    /// Content of the plan file.
+    pub plan_content: String,
+    /// Path to the plan file.
+    pub plan_file_path: String,
+}
+
+/// Event emitted when Plan Mode is exited.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PlanModeExitedEvent {
+    /// Whether the user approved the plan.
+    pub approved: bool,
+}
+
+// ============================================================================
+// User Question Events
+// ============================================================================
+
+/// Event emitted when LLM requests to ask the user questions.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UserQuestionRequestEvent {
+    /// The tool call ID for this question request.
+    pub tool_call_id: String,
+    /// Questions to ask the user (1-4 questions).
+    pub questions: Vec<UserQuestion>,
+}
+
+/// A single question to ask the user.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UserQuestion {
+    /// The complete question text.
+    pub question: String,
+    /// Short header/label for the question (max 12 chars).
+    pub header: String,
+    /// Available options for this question (2-4 options).
+    pub options: Vec<QuestionOption>,
+    /// Whether multiple answers can be selected.
+    pub multi_select: bool,
+}
+
+/// An option for a user question.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct QuestionOption {
+    /// Display text for this option (1-5 words).
+    pub label: String,
+    /// Explanation of what this option means.
+    pub description: String,
 }

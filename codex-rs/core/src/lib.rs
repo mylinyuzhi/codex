@@ -145,5 +145,8 @@ pub mod codex_ext;
 pub mod system_reminder;
 mod system_reminder_inject;
 
+// Plan mode module
+pub mod plan_mode;
+
 // Background shell module
 pub mod shell_background;

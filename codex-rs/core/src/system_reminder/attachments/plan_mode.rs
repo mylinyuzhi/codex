@@ -11,7 +11,6 @@ use crate::system_reminder::generator::GeneratorContext;
 use crate::system_reminder::throttle::ThrottleConfig;
 use crate::system_reminder::throttle::default_throttle_config;
 use crate::system_reminder::types::AttachmentType;
-use crate::system_reminder::types::ReminderTier;
 use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 use std::path::Path;
@@ -80,7 +79,16 @@ impl PlanModeGenerator {
              - Ensure the plan is concise but detailed enough to execute\n\
              - Include paths of critical files to be modified\n\n\
              ### Phase 5: Call ExitPlanMode\n\
-             At the very end of your turn, call ExitPlanMode to indicate you are done planning."
+             At the very end of your turn, once you have asked the user questions and are happy \
+             with your final plan file - you should always call ExitPlanMode to indicate to the \
+             user that you are done planning.\n\n\
+             This is critical - your turn should only end with either asking the user a question \
+             (using AskUserQuestion) or calling ExitPlanMode. Do not stop unless it's for these \
+             2 reasons.\n\n\
+             NOTE: At any point in this workflow you should feel free to ask the user questions \
+             or clarifications using AskUserQuestion. Don't make large assumptions about user intent. \
+             The goal is to present a well-researched plan to the user, and tie any loose ends \
+             before implementation begins."
         )
     }
 
@@ -120,10 +128,6 @@ impl AttachmentGenerator for PlanModeGenerator {
 
     fn attachment_type(&self) -> AttachmentType {
         AttachmentType::PlanMode
-    }
-
-    fn tier(&self) -> ReminderTier {
-        ReminderTier::Core
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -174,6 +178,7 @@ mod tests {
     use crate::config::system_reminder::LspDiagnosticsMinSeverity;
     use crate::system_reminder::file_tracker::FileTracker;
     use crate::system_reminder::generator::PlanState;
+    use crate::system_reminder::types::ReminderTier;
 
     fn make_context<'a>(
         is_plan_mode: bool,
@@ -186,6 +191,7 @@ mod tests {
             turn_number: 1,
             is_main_agent: true,
             has_user_input: true,
+            user_prompt: None,
             cwd: Path::new("/test"),
             agent_id: "test-agent",
             file_tracker,
@@ -197,6 +203,8 @@ mod tests {
             critical_instruction: None,
             diagnostics_store: None,
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
+            output_style: None,
+            approved_plan: None,
         }
     }
 

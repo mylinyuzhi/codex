@@ -12,6 +12,8 @@ use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec::ToolsConfig;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
@@ -19,13 +21,22 @@ use tracing::info;
 // ToolFilter - Unified tool filtering for main session and subagents
 // ============================================================================
 
-/// Tools blocked for ALL subagents (recursive/dangerous).
+/// Tools blocked for ALL subagents (recursive/dangerous/user-interactive).
+///
+/// This aligns with Claude Code's ALWAYS_EXCLUDED_TOOLS (chunks.107.mjs):
+/// - Task, ExitPlanMode, EnterPlanMode, AskUserQuestion
+///
+/// Design principle: Only the main agent should interact with the user.
+/// Subagents run in a restricted context and cannot request user input.
 pub const ALWAYS_BLOCKED_TOOLS: &[&str] = &[
-    names::TASK,        // Prevent recursive subagent spawning
-    names::TASK_OUTPUT, // Associated with Task
-    names::UPDATE_PLAN, // Main agent responsibility only
-    names::BASH_OUTPUT, // Background shell is main agent only
-    names::KILL_SHELL,  // Background shell is main agent only
+    names::TASK,              // Prevent recursive subagent spawning
+    names::TASK_OUTPUT,       // Associated with Task
+    names::UPDATE_PLAN,       // Main agent responsibility only
+    names::BASH_OUTPUT,       // Background shell is main agent only
+    names::KILL_SHELL,        // Background shell is main agent only
+    names::ENTER_PLAN_MODE,   // Only main agent can request plan mode
+    names::EXIT_PLAN_MODE,    // Only main agent can exit plan mode
+    names::ASK_USER_QUESTION, // Only main agent can ask user questions
 ];
 
 /// Unified tool filter - can be used by main session and subagents.
@@ -33,6 +44,7 @@ pub const ALWAYS_BLOCKED_TOOLS: &[&str] = &[
 /// Design:
 /// - Main session: `tool_filter = None` (no filtering)
 /// - Subagent: `ToolFilter::from_agent_definition()` (security applied at construction)
+/// - Plan Mode: `ToolFilter::for_plan_mode()` (read-only tools + plan file write)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolFilter {
     /// Whitelist: only allow these tools (None = allow all).
@@ -40,6 +52,9 @@ pub struct ToolFilter {
 
     /// Blacklist: block these tools (includes security tiers at construction).
     pub blocked_tools: HashSet<String>,
+
+    /// Plan file path for Plan Mode (write_file/smart_edit only allowed for this path).
+    pub plan_file_path: Option<PathBuf>,
 }
 
 impl ToolFilter {
@@ -59,6 +74,38 @@ impl ToolFilter {
                 ToolAccess::List(tools) => Some(tools.iter().cloned().collect()),
             },
             blocked_tools: blocked,
+            plan_file_path: None,
+        }
+    }
+
+    /// Create a ToolFilter for Plan Mode.
+    ///
+    /// Allows read-only tools + plan file write only.
+    /// - think, read_file, list_dir, glob_files, grep_files
+    /// - web_fetch, web_search, Task
+    /// - exit_plan_mode
+    /// - write_file/smart_edit only for plan file
+    pub fn for_plan_mode(plan_file_path: Option<&Path>) -> Self {
+        let allowed: HashSet<String> = [
+            names::THINK,
+            names::READ_FILE,
+            names::LIST_DIR,
+            names::GLOB_FILES,
+            names::GREP_FILES,
+            names::WEB_FETCH,
+            names::WEB_SEARCH,
+            names::TASK,
+            names::EXIT_PLAN_MODE,
+            // write_file and smart_edit are handled specially in is_allowed_in_plan_mode
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        Self {
+            allowed_tools: Some(allowed),
+            blocked_tools: HashSet::new(),
+            plan_file_path: plan_file_path.map(|p| p.to_path_buf()),
         }
     }
 
@@ -74,6 +121,21 @@ impl ToolFilter {
             None => true,
             Some(allowed) => allowed.contains(tool_name),
         }
+    }
+
+    /// Check if a tool is allowed in Plan Mode.
+    ///
+    /// Special handling: write_file/smart_edit only allowed for plan file.
+    pub fn is_allowed_in_plan_mode(&self, tool_name: &str, target_path: Option<&Path>) -> bool {
+        // Special handling for write tools
+        if tool_name == names::WRITE_FILE || tool_name == names::SMART_EDIT {
+            return match (&self.plan_file_path, target_path) {
+                (Some(plan_path), Some(target)) => plan_path == target,
+                _ => false,
+            };
+        }
+
+        self.is_allowed(tool_name)
     }
 }
 
@@ -329,6 +391,39 @@ pub fn register_background_shell_tools(builder: &mut ToolRegistryBuilder, config
     }
 }
 
+/// Register exit_plan_mode tool (always enabled).
+///
+/// This tool allows the LLM to request exiting plan mode and trigger user approval.
+pub fn register_exit_plan_mode(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::exit_plan_mode::create_exit_plan_mode_tool;
+    use crate::tools::handlers::ext::exit_plan_mode::ExitPlanModeHandler;
+
+    builder.push_spec(create_exit_plan_mode_tool());
+    builder.register_handler(names::EXIT_PLAN_MODE, Arc::new(ExitPlanModeHandler));
+}
+
+/// Register enter_plan_mode tool (always enabled).
+///
+/// This tool allows the LLM to request entering plan mode and trigger user approval.
+pub fn register_enter_plan_mode(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::enter_plan_mode::create_enter_plan_mode_tool;
+    use crate::tools::handlers::ext::enter_plan_mode::EnterPlanModeHandler;
+
+    builder.push_spec(create_enter_plan_mode_tool());
+    builder.register_handler(names::ENTER_PLAN_MODE, Arc::new(EnterPlanModeHandler));
+}
+
+/// Register ask_user_question tool (always enabled).
+///
+/// This tool allows the LLM to ask the user questions during execution.
+pub fn register_ask_user_question(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::ask_user_question::create_ask_user_question_tool;
+    use crate::tools::handlers::ext::ask_user_question::AskUserQuestionHandler;
+
+    builder.push_spec(create_ask_user_question_tool());
+    builder.register_handler(names::ASK_USER_QUESTION, Arc::new(AskUserQuestionHandler));
+}
+
 /// Register all extension tools.
 /// This consolidates all ext tool registrations into a single call
 /// to minimize modifications to spec.rs::build_specs().
@@ -364,6 +459,15 @@ pub fn register_ext_tools(builder: &mut ToolRegistryBuilder, config: &ToolsConfi
 
     // background shell tools: requires feature flag
     register_background_shell_tools(builder, config);
+
+    // exit_plan_mode: always enabled for plan mode support
+    register_exit_plan_mode(builder);
+
+    // enter_plan_mode: always enabled for plan mode support
+    register_enter_plan_mode(builder);
+
+    // ask_user_question: always enabled for user interaction
+    register_ask_user_question(builder);
 }
 
 #[cfg(test)]
@@ -456,6 +560,7 @@ mod tests {
                 "glob_files".to_string(),
             ])),
             blocked_tools: HashSet::new(),
+            plan_file_path: None,
         };
         assert!(filter.is_allowed("read_file"));
         assert!(filter.is_allowed("glob_files"));
@@ -466,6 +571,7 @@ mod tests {
         let filter = ToolFilter {
             allowed_tools: None,
             blocked_tools: HashSet::from(["shell".to_string(), "write_file".to_string()]),
+            plan_file_path: None,
         };
         assert!(filter.is_allowed("read_file"));
         assert!(filter.is_allowed("glob_files"));
@@ -479,6 +585,7 @@ mod tests {
                 "shell".to_string(),
             ])),
             blocked_tools: HashSet::from(["shell".to_string()]),
+            plan_file_path: None,
         };
         assert!(filter.is_allowed("read_file"));
         assert!(!filter.is_allowed("shell")); // blocked takes precedence
@@ -521,6 +628,7 @@ mod tests {
                 "think".to_string(),
             ])),
             blocked_tools: std::collections::HashSet::new(),
+            plan_file_path: None,
         });
 
         let (tools_filtered, _) = build_specs(&tools_config, None).build();
@@ -561,6 +669,7 @@ mod tests {
                 "shell_command".to_string(),
                 "write_file".to_string(),
             ]),
+            plan_file_path: None,
         });
 
         let (tools_filtered, _) = build_specs(&tools_config, None).build();

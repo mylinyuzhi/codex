@@ -52,6 +52,7 @@ pub use registry::AgentRegistry;
 pub use result::SubagentResult;
 pub use result::SubagentStatus;
 pub use result::TokenUsage;
+pub use stores::ApprovedPlan;
 pub use stores::SubagentStores;
 pub use stores::cleanup_stores;
 pub use stores::get_or_create_stores;

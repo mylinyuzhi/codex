@@ -3,8 +3,11 @@
 //! Contains extension tool specifications that can be conditionally registered
 //! based on features and model family capabilities.
 
+pub mod ask_user_question;
 pub mod bash_output;
 pub mod code_search;
+pub mod enter_plan_mode;
+pub mod exit_plan_mode;
 pub mod glob_files;
 pub mod kill_shell;
 pub mod list_dir;

@@ -97,6 +97,8 @@ pub enum AttachmentType {
     PlanMode,
     /// Plan mode re-entry instructions.
     PlanModeReentry,
+    /// Approved plan injection (one-time after ExitPlanMode approval).
+    PlanApproved,
     /// File change notification.
     ChangedFiles,
     /// User-defined critical instruction.
@@ -107,6 +109,16 @@ pub enum AttachmentType {
     BackgroundTask,
     /// LSP diagnostics notification.
     LspDiagnostics,
+
+    // === User prompt tier ===
+    /// Files mentioned via @file, @"path", @file#L10-20 in user prompt.
+    AtMentionedFiles,
+    /// Agent mentions via @agent-type in user prompt.
+    AgentMentions,
+
+    // === Main agent only (Phase 1) ===
+    /// Output style instructions (e.g., Explanatory, Learning).
+    OutputStyle,
 
     // === Phase 2 (Future) ===
     /// Tool call result metadata.
@@ -142,7 +154,11 @@ impl AttachmentType {
             | AttachmentType::SessionMemory
             | AttachmentType::TokenUsage
             | AttachmentType::BudgetUsd
-            | AttachmentType::LspDiagnostics => ReminderTier::MainAgentOnly,
+            | AttachmentType::LspDiagnostics
+            | AttachmentType::OutputStyle => ReminderTier::MainAgentOnly,
+            AttachmentType::AtMentionedFiles | AttachmentType::AgentMentions => {
+                ReminderTier::UserPrompt
+            }
             _ => ReminderTier::Core,
         }
     }
@@ -154,6 +170,7 @@ impl fmt::Display for AttachmentType {
             AttachmentType::PlanToolReminder => "plan_tool_reminder",
             AttachmentType::PlanMode => "plan_mode",
             AttachmentType::PlanModeReentry => "plan_mode_reentry",
+            AttachmentType::PlanApproved => "plan_approved",
             AttachmentType::ChangedFiles => "changed_files",
             AttachmentType::CriticalInstruction => "critical_instruction",
             AttachmentType::ToolResult => "tool_result",
@@ -164,6 +181,9 @@ impl fmt::Display for AttachmentType {
             AttachmentType::SessionMemory => "session_memory",
             AttachmentType::TokenUsage => "token_usage",
             AttachmentType::BudgetUsd => "budget_usd",
+            AttachmentType::AtMentionedFiles => "at_mentioned_files",
+            AttachmentType::AgentMentions => "agent_mentions",
+            AttachmentType::OutputStyle => "output_style",
         };
         write!(f, "{name}")
     }

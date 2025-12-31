@@ -291,7 +291,9 @@ impl EmbeddingCache {
     }
 
     /// Execute a function with the connection.
-    fn with_conn<F, T>(&self, f: F) -> crate::error::Result<T>
+    ///
+    /// Internal API for cache_ext bulk operations.
+    pub(crate) fn with_conn<F, T>(&self, f: F) -> crate::error::Result<T>
     where
         F: FnOnce(&rusqlite::Connection, &str) -> crate::error::Result<T>,
     {
@@ -306,23 +308,14 @@ impl EmbeddingCache {
     ///
     /// More efficient than sequential queries for large batches.
     /// Returns both hits and misses for efficient downstream processing.
-    ///
-    /// # Arguments
-    /// * `entries` - Slice of (filepath, content_hash) pairs to look up
-    ///
-    /// # Returns
-    /// `CacheLookupResult` with hits (found embeddings) and misses (not found)
     pub fn get_batch_bulk(&self, entries: &[(String, String)]) -> Result<CacheLookupResult> {
         if entries.is_empty() {
             return Ok(CacheLookupResult::default());
         }
 
-        // Clone entries for the closure
         let entries_clone: Vec<(String, String)> = entries.to_vec();
 
         self.with_conn(|conn, artifact_id| {
-            // Build parameterized query with placeholders
-            // SQLite doesn't support tuple IN directly, so we use OR conditions
             let mut conditions = Vec::with_capacity(entries_clone.len());
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -337,12 +330,10 @@ impl EmbeddingCache {
                 conditions.join(" OR ")
             );
 
-            // Add artifact_id as first parameter
             let mut all_params: Vec<Box<dyn rusqlite::ToSql>> =
                 vec![Box::new(artifact_id.to_string())];
             all_params.extend(params_vec);
 
-            // Convert to references for rusqlite
             let params_refs: Vec<&dyn rusqlite::ToSql> =
                 all_params.iter().map(|p| p.as_ref()).collect();
 
@@ -365,7 +356,6 @@ impl EmbeddingCache {
                     cause: e.to_string(),
                 })?;
 
-            // Collect hits
             let mut hits = Vec::new();
             let mut found_keys: HashSet<(String, String)> = HashSet::new();
 
@@ -376,7 +366,6 @@ impl EmbeddingCache {
                 }
             }
 
-            // Determine misses
             let misses: Vec<(String, String)> = entries_clone
                 .iter()
                 .filter(|(f, h)| !found_keys.contains(&(f.clone(), h.clone())))
@@ -390,17 +379,13 @@ impl EmbeddingCache {
     /// Lookup with deduplication by content hash.
     ///
     /// When multiple files have identical content, only one embedding needs to
-    /// be computed. This method returns unique content hashes that need embedding.
-    ///
-    /// # Returns
-    /// Tuple of (cached embeddings, unique content hashes needing embedding)
+    /// be computed. Returns unique content hashes that need embedding.
     pub fn get_batch_deduplicated(
         &self,
         entries: &[(String, String)],
     ) -> Result<(Vec<(String, String, Vec<f32>)>, Vec<String>)> {
         let result = self.get_batch_bulk(entries)?;
 
-        // Collect unique content hashes from misses
         let mut unique_hashes: HashSet<String> = HashSet::new();
         for (_, hash) in &result.misses {
             unique_hashes.insert(hash.clone());

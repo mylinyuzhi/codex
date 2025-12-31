@@ -61,6 +61,7 @@ mod model_migration;
 mod notifications;
 pub mod onboarding;
 mod oss_selection;
+mod output_style;
 mod pager_overlay;
 pub mod public_widgets;
 mod render;

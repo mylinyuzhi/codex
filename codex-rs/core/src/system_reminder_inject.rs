@@ -2,7 +2,9 @@
 //!
 //! Minimal integration hooks - bulk logic in system_reminder/ module.
 
+use crate::config::output_style::OutputStyle;
 use crate::config::system_reminder::LspDiagnosticsMinSeverity;
+use crate::system_reminder::ApprovedPlanInfo;
 use crate::system_reminder::BackgroundTaskInfo;
 use crate::system_reminder::FileTracker;
 use crate::system_reminder::GeneratorContext;
@@ -82,6 +84,7 @@ pub fn build_generator_context<'a>(
     agent_id: &'a str,
     is_main_agent: bool,
     has_user_input: bool,
+    user_prompt: Option<&'a str>,
     cwd: &'a Path,
     is_plan_mode: bool,
     plan_file_path: Option<&'a str>,
@@ -92,12 +95,15 @@ pub fn build_generator_context<'a>(
     critical_instruction: Option<&'a str>,
     diagnostics_store: Option<Arc<DiagnosticsStore>>,
     lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
+    output_style: Option<&'a OutputStyle>,
+    approved_plan: Option<ApprovedPlanInfo>,
 ) -> GeneratorContext<'a> {
     GeneratorContext {
         turn_number,
         agent_id,
         is_main_agent,
         has_user_input,
+        user_prompt,
         cwd,
         is_plan_mode,
         plan_file_path,
@@ -108,6 +114,8 @@ pub fn build_generator_context<'a>(
         critical_instruction,
         diagnostics_store,
         lsp_diagnostics_min_severity,
+        output_style,
+        approved_plan,
     }
 }
 
@@ -209,6 +217,7 @@ mod tests {
             "test-agent",
             true,
             true,
+            None, // user_prompt
             Path::new("/test"),
             false,
             None,
@@ -219,6 +228,8 @@ mod tests {
             Some("Critical: Always test"),
             None,
             LspDiagnosticsMinSeverity::default(),
+            None, // output_style
+            None, // approved_plan
         );
 
         inject_system_reminders(&mut history, &orchestrator, &ctx).await;
