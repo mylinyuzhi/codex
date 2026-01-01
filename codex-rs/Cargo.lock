@@ -2587,10 +2587,14 @@ dependencies = [
 name = "codex-lsp"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "codex-file-ignore",
+ "crossterm",
  "dirs 5.0.1",
  "lsp-types 0.95.1",
  "pretty_assertions",
+ "ratatui",
  "serde",
  "serde_json",
  "similar",
@@ -2599,6 +2603,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-subscriber",
  "which 7.0.3",
 ]
 
