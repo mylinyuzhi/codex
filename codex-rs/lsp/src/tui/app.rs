@@ -3,11 +3,16 @@
 use super::event::Event;
 use super::ops;
 use anyhow::Result;
-use codex_lsp::{
-    DiagnosticEntry, DiagnosticsStore, Location, LspClient, LspServerManager, ResolvedSymbol,
-    SymbolKind,
-};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use codex_lsp::DiagnosticEntry;
+use codex_lsp::DiagnosticsStore;
+use codex_lsp::Location;
+use codex_lsp::LspClient;
+use codex_lsp::LspServerManager;
+use codex_lsp::ResolvedSymbol;
+use codex_lsp::SymbolKind;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -382,7 +387,11 @@ impl App {
         Ok(())
     }
 
-    async fn handle_file_input_key(&mut self, key: KeyEvent, tx: mpsc::Sender<Event>) -> Result<()> {
+    async fn handle_file_input_key(
+        &mut self,
+        key: KeyEvent,
+        tx: mpsc::Sender<Event>,
+    ) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
@@ -535,16 +544,32 @@ impl App {
             Some(LspResult::HoverInfo(Some(content))) => content.lines().count() + 2,
             Some(LspResult::HoverInfo(None)) => 1,
             Some(LspResult::Symbols(syms)) => {
-                if syms.is_empty() { 1 } else { syms.len() + 2 }
+                if syms.is_empty() {
+                    1
+                } else {
+                    syms.len() + 2
+                }
             }
             Some(LspResult::WorkspaceSymbols(syms)) => {
-                if syms.is_empty() { 1 } else { syms.len() + 2 }
+                if syms.is_empty() {
+                    1
+                } else {
+                    syms.len() + 2
+                }
             }
             Some(LspResult::CallHierarchy(ch)) => {
                 // header + empty + items + incoming section + outgoing section
                 let items_lines = ch.items.len() + 3;
-                let incoming_lines = if ch.incoming.is_empty() { 3 } else { ch.incoming.len() + 2 };
-                let outgoing_lines = if ch.outgoing.is_empty() { 3 } else { ch.outgoing.len() + 2 };
+                let incoming_lines = if ch.incoming.is_empty() {
+                    3
+                } else {
+                    ch.incoming.len() + 2
+                };
+                let outgoing_lines = if ch.outgoing.is_empty() {
+                    3
+                } else {
+                    ch.outgoing.len() + 2
+                };
                 items_lines + incoming_lines + outgoing_lines
             }
             Some(LspResult::HealthOk(_)) => 2,
@@ -577,7 +602,8 @@ impl App {
         let symbol_kind = self.symbol_kind;
 
         tokio::spawn(async move {
-            let result = ops::execute_operation(operation, manager, file, symbol, symbol_kind).await;
+            let result =
+                ops::execute_operation(operation, manager, file, symbol, symbol_kind).await;
             let _ = tx.send(Event::LspResult(result)).await;
         });
 

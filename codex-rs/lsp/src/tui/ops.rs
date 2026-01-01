@@ -1,7 +1,10 @@
 //! LSP operation wrappers.
 
-use super::app::{CallHierarchyResult, LspResult, Operation};
-use codex_lsp::{LspServerManager, SymbolKind};
+use super::app::CallHierarchyResult;
+use super::app::LspResult;
+use super::app::Operation;
+use codex_lsp::LspServerManager;
+use codex_lsp::SymbolKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -224,7 +227,10 @@ async fn execute_call_hierarchy(
             }
 
             // First, prepare call hierarchy to get the items
-            let items = match client.prepare_call_hierarchy(&file, &symbol, symbol_kind).await {
+            let items = match client
+                .prepare_call_hierarchy(&file, &symbol, symbol_kind)
+                .await
+            {
                 Ok(items) => items,
                 Err(e) => {
                     return LspResult::Error(format!("Prepare call hierarchy failed: {e}"));
@@ -283,10 +289,7 @@ async fn execute_call_hierarchy(
     }
 }
 
-async fn execute_health_check(
-    manager: Arc<LspServerManager>,
-    file: Option<PathBuf>,
-) -> LspResult {
+async fn execute_health_check(manager: Arc<LspServerManager>, file: Option<PathBuf>) -> LspResult {
     // If a file is specified, get the client for that file type
     // Otherwise, try to find any client
     let extensions = manager.all_supported_extensions();

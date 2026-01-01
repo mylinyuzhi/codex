@@ -3,7 +3,9 @@
 use super::super::app::App;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 pub fn render_file_input(app: &App, frame: &mut Frame, area: Rect) {
     let op_name = app
@@ -43,7 +45,9 @@ pub fn render_file_input(app: &App, frame: &mut Frame, area: Rect) {
 
     // Hints
     lines.push(Line::from(""));
-    lines.push(Line::from(" Hint: Use relative path like 'src/lib.rs'".dim()));
+    lines.push(Line::from(
+        " Hint: Use relative path like 'src/lib.rs'".dim(),
+    ));
 
     Paragraph::new(lines)
         .block(

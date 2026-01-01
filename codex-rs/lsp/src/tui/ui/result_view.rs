@@ -1,10 +1,14 @@
 //! Result view widget for displaying LSP operation results.
 
-use super::super::app::{App, CallHierarchyResult, LspResult};
+use super::super::app::App;
+use super::super::app::CallHierarchyResult;
+use super::super::app::LspResult;
 use super::utils::relative_path;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let Some(result) = &app.result else {

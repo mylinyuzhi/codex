@@ -8,14 +8,17 @@ mod ui;
 use anyhow::Result;
 use app::App;
 use clap::Parser;
-use codex_lsp::{DiagnosticsStore, LspServerManager};
-use crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use codex_lsp::DiagnosticsStore;
+use codex_lsp::LspServerManager;
+use crossterm::execute;
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::terminal::LeaveAlternateScreen;
+use crossterm::terminal::disable_raw_mode;
+use crossterm::terminal::enable_raw_mode;
 use event::Event;
 use ratatui::prelude::*;
-use std::io::{self, stdout};
+use std::io::stdout;
+use std::io::{self};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;

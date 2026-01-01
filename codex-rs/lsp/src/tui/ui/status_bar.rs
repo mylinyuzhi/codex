@@ -3,7 +3,9 @@
 use super::super::app::App;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let title = " LSP Test TUI ";
@@ -29,10 +31,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .unwrap_or_else(|| "No file".to_string());
 
     // Operation info
-    let op_info = app
-        .operation
-        .map(|op| op.display_name())
-        .unwrap_or("None");
+    let op_info = app.operation.map(|op| op.display_name()).unwrap_or("None");
 
     // Build status lines
     let lines = vec![

@@ -5,16 +5,15 @@ use super::utils::relative_path_buf;
 use codex_lsp::DiagnosticSeverityLevel;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let diagnostics = &app.cached_diagnostics;
 
     if diagnostics.is_empty() {
-        let lines = vec![
-            Line::from(""),
-            Line::from(" No diagnostics reported".dim()),
-        ];
+        let lines = vec![Line::from(""), Line::from(" No diagnostics reported".dim())];
         Paragraph::new(lines)
             .block(
                 Block::default()

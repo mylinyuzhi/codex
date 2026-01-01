@@ -8,9 +8,12 @@ mod result_view;
 mod status_bar;
 pub mod utils;
 
-use super::app::{App, Mode};
+use super::app::App;
+use super::app::Mode;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 /// Main render function for the TUI.
 pub fn render(app: &App, frame: &mut Frame) {
@@ -82,11 +85,7 @@ fn render_help_bar(app: &App, frame: &mut Frame, area: Rect) {
 
     let loading_indicator = if app.loading { " [Loading...]" } else { "" };
 
-    let help_line = Line::from(vec![
-        " ".into(),
-        help_text.dim(),
-        loading_indicator.cyan(),
-    ]);
+    let help_line = Line::from(vec![" ".into(), help_text.dim(), loading_indicator.cyan()]);
 
     Paragraph::new(help_line)
         .block(Block::default().borders(Borders::TOP))

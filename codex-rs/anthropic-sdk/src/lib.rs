@@ -42,31 +42,31 @@ pub use types::{
     // Content types
     CacheControl,
     CacheControlType,
+    // Usage types
+    CacheCreation,
     CacheTtl,
     ContentBlock,
     ContentBlockParam,
-    ImageMediaType,
-    ImageSource,
     // Message types
     CountTokensParams,
+    ImageMediaType,
+    ImageSource,
     Message,
     MessageCreateParams,
     MessageParam,
-    ServiceTier,
-    ThinkingConfig,
-    // Usage types
-    CacheCreation,
     MessageTokensCount,
-    Usage,
     // Common types
     Metadata,
     Role,
+    ServiceTier,
     StopReason,
     SystemPrompt,
     SystemPromptBlock,
     TextCitation,
+    ThinkingConfig,
     Tool,
     ToolChoice,
     ToolResultContent,
     ToolResultContentBlock,
+    Usage,
 };

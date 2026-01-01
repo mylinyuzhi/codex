@@ -1969,6 +1969,7 @@ dependencies = [
 name = "codex-api"
 version = "0.0.0"
 dependencies = [
+ "anthropic-sdk",
  "anyhow",
  "assert_matches",
  "async-trait",

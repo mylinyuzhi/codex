@@ -1,9 +1,12 @@
 //! Menu widget for operation selection.
 
-use super::super::app::{App, Operation};
+use super::super::app::App;
+use super::super::app::Operation;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let operations = Operation::all();
