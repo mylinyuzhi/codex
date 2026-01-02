@@ -127,6 +127,7 @@ pub struct UnifiedCoordinator {
     /// Workspace root directory.
     workdir: PathBuf,
     /// SQLite store.
+    #[allow(dead_code)]
     db: Arc<SqliteStore>,
     /// Index pipeline (for search).
     index_pipeline: Option<Arc<IndexPipeline>>,

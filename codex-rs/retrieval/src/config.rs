@@ -1,5 +1,6 @@
 //! Configuration for the retrieval system.
 
+use codex_utils::LoggingConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -50,6 +51,10 @@ pub struct RetrievalConfig {
     /// Repo map configuration (optional, for PageRank-based context generation)
     #[serde(default)]
     pub repo_map: Option<RepoMapConfig>,
+
+    /// Logging configuration
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 impl Default for RetrievalConfig {
@@ -66,6 +71,7 @@ impl Default for RetrievalConfig {
             embedding: None,
             query_rewrite: None,
             repo_map: None,
+            logging: LoggingConfig::default(),
         }
     }
 }
@@ -1134,6 +1140,22 @@ impl RetrievalConfig {
             path: path.to_path_buf(),
             cause: e.to_string(),
         })
+    }
+
+    /// Load config from specific file, or return default if file doesn't exist.
+    ///
+    /// Unlike `load()`, this does NOT fall back to default config directories.
+    /// Useful for testing and explicit config file specification.
+    pub fn load_with_config_file(config_path: &std::path::Path) -> crate::error::Result<Self> {
+        if config_path.exists() {
+            Self::from_file(config_path)
+        } else {
+            tracing::warn!(
+                path = %config_path.display(),
+                "Config file not found, using defaults"
+            );
+            Ok(Self::default())
+        }
     }
 
     /// Validate configuration consistency.

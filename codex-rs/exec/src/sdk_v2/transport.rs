@@ -30,18 +30,21 @@ pub enum TransportError {
     #[error("Unexpected end of input")]
     EndOfInput,
 
+    #[allow(dead_code)]
     #[error("Request timeout")]
     Timeout,
 
+    #[allow(dead_code)]
     #[error("Request cancelled")]
     Cancelled,
 
+    #[allow(dead_code)]
     #[error("Unexpected message type: expected {expected}, got {actual}")]
     UnexpectedMessage { expected: String, actual: String },
 }
 
 /// Pending control request awaiting response.
-struct PendingRequest {
+pub(super) struct PendingRequest {
     sender: oneshot::Sender<ControlResponse>,
 }
 
@@ -87,6 +90,7 @@ impl SdkTransport {
     ///
     /// This is used when the CLI needs to ask the SDK for a decision
     /// (e.g., permission check, hook callback).
+    #[allow(dead_code)]
     pub async fn send_control_request(
         &mut self,
         request: ControlRequest,
@@ -130,7 +134,8 @@ impl SdkTransport {
     }
 
     /// Get a clone of the pending requests map for concurrent access.
-    pub fn pending_requests(&self) -> Arc<Mutex<HashMap<String, PendingRequest>>> {
+    #[allow(dead_code)]
+    pub(super) fn pending_requests(&self) -> Arc<Mutex<HashMap<String, PendingRequest>>> {
         Arc::clone(&self.pending_requests)
     }
 }

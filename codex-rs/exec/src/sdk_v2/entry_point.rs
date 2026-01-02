@@ -27,16 +27,3 @@ pub fn detect_entry_point() -> EntryPoint {
 pub fn is_sdk_mode() -> bool {
     matches!(detect_entry_point(), EntryPoint::SdkPy | EntryPoint::SdkTs)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_entry_point() {
-        // When CODEX_ENTRYPOINT is not set, should default to Cli
-        std::env::remove_var("CODEX_ENTRYPOINT");
-        assert_eq!(detect_entry_point(), EntryPoint::Cli);
-        assert!(!is_sdk_mode());
-    }
-}

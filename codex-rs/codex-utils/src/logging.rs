@@ -40,6 +40,16 @@ impl Default for LoggingConfig {
     }
 }
 
+impl LoggingConfig {
+    /// Create config with a specific log level (for standalone tools without full Config).
+    pub fn with_level(level: &str) -> Self {
+        Self {
+            level: level.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Timezone configuration for log timestamps
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
