@@ -38,11 +38,20 @@ use crate::event_emitter;
 use crate::events::RetrievalEvent;
 use crate::events::SearchMode;
 use crate::events::SearchResultSummary;
+use crate::indexing::FeatureFlags;
 use crate::indexing::FileWatcher;
+use crate::indexing::FilterSummary;
+use crate::indexing::IndexCoordinator;
 use crate::indexing::IndexManager;
 use crate::indexing::IndexProgress;
+use crate::indexing::IndexState;
 use crate::indexing::IndexStats;
+use crate::indexing::Readiness;
 use crate::indexing::RebuildMode;
+use crate::indexing::SharedCoordinator;
+use crate::indexing::SharedUnifiedCoordinator;
+use crate::indexing::TriggerSource;
+use crate::indexing::UnifiedCoordinator;
 use crate::indexing::WatchEvent;
 use crate::query::rewriter::QueryRewriter;
 use crate::query::rewriter::RewrittenQuery;
@@ -50,6 +59,7 @@ use crate::query::rewriter::SimpleRewriter;
 use crate::repomap::RepoMapRequest;
 use crate::repomap::RepoMapResult;
 use crate::repomap::RepoMapService;
+use crate::repomap::TagReadiness;
 use crate::search::HybridSearcher;
 use crate::search::RecentFilesCache;
 use crate::storage::SqliteStore;
@@ -57,6 +67,7 @@ use crate::storage::lancedb::LanceDbStore;
 use crate::traits::EmbeddingProvider;
 use crate::types::CodeChunk;
 use crate::types::ScoreType;
+use crate::types::SearchOutput;
 use crate::types::SearchResult;
 
 /// Maximum number of cached RetrievalService instances.
@@ -136,6 +147,10 @@ pub struct RetrievalService {
     recent_files: RwLock<RecentFilesCache>,
     /// Workspace root for hydrating content from files.
     workspace_root: Option<PathBuf>,
+    /// Index coordinator for managing index state and triggers (legacy).
+    coordinator: RwLock<Option<SharedCoordinator>>,
+    /// Unified coordinator for both search and repomap pipelines (new architecture).
+    unified_coordinator: RwLock<Option<SharedUnifiedCoordinator>>,
 }
 
 impl RetrievalService {
@@ -229,6 +244,8 @@ impl RetrievalService {
             rewriter,
             recent_files,
             workspace_root,
+            coordinator: RwLock::new(None),
+            unified_coordinator: RwLock::new(None),
         })
     }
 
@@ -270,6 +287,8 @@ impl RetrievalService {
             rewriter,
             recent_files,
             workspace_root,
+            coordinator: RwLock::new(None),
+            unified_coordinator: RwLock::new(None),
         })
     }
 
@@ -279,29 +298,95 @@ impl RetrievalService {
         self
     }
 
+    /// Get the file filter summary for event emission.
+    fn filter_summary(&self) -> Option<FilterSummary> {
+        let summary = FilterSummary {
+            include_dirs: self.config.indexing.include_dirs.clone(),
+            exclude_dirs: self.config.indexing.exclude_dirs.clone(),
+            include_extensions: self.config.indexing.include_extensions.clone(),
+            exclude_extensions: self.config.indexing.exclude_extensions.clone(),
+        };
+        if summary.has_filters() {
+            Some(summary)
+        } else {
+            None
+        }
+    }
+
     /// Search for code matching the query.
     ///
     /// Applies query rewriting if enabled, then performs hybrid search.
+    /// Returns `SearchOutput` containing results and filter configuration.
     ///
     /// # Arguments
     /// * `query` - Search query string
     /// * `limit` - Maximum number of results (if None, uses config.search.n_final)
-    pub async fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query: &str) -> Result<SearchOutput> {
         self.search_with_limit(query, None).await
     }
 
     /// Search with explicit limit parameter.
-    pub async fn search_with_limit(
-        &self,
-        query: &str,
-        limit: Option<i32>,
-    ) -> Result<Vec<SearchResult>> {
+    ///
+    /// Returns `NotReady` error if the index is not initialized or is currently building.
+    /// Search is allowed when index is Ready or Stale (incremental updates pending).
+    pub async fn search_with_limit(&self, query: &str, limit: Option<i32>) -> Result<SearchOutput> {
         let start_time = std::time::Instant::now();
         let query_id = generate_query_id();
         let limit = limit.unwrap_or(self.config.search.n_final);
 
         if !self.features.has_search() {
-            return Ok(Vec::new());
+            return Ok(SearchOutput {
+                results: Vec::new(),
+                filter: self.filter_summary(),
+            });
+        }
+
+        // Check index state (if coordinator is available)
+        if let Ok(coord) = self.coordinator().await {
+            let state = coord.state().await;
+            match state {
+                IndexState::Building { .. } => {
+                    let workspace = self
+                        .workspace_root
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    return Err(RetrievalErr::NotReady {
+                        workspace,
+                        reason: "Index is currently building".to_string(),
+                    });
+                }
+                IndexState::Uninitialized => {
+                    let workspace = self
+                        .workspace_root
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    return Err(RetrievalErr::NotReady {
+                        workspace,
+                        reason: "Index not initialized".to_string(),
+                    });
+                }
+                IndexState::Failed { error, .. } => {
+                    let workspace = self
+                        .workspace_root
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    return Err(RetrievalErr::NotReady {
+                        workspace,
+                        reason: format!("Index failed: {}", error),
+                    });
+                }
+                // Ready or Stale - allow search
+                IndexState::Ready { .. } | IndexState::Stale { .. } => {}
+            }
         }
 
         // Emit search started event
@@ -353,6 +438,7 @@ impl RetrievalService {
 
         // Emit search completed or error event
         let duration_ms = start_time.elapsed().as_millis() as i64;
+        let filter = self.filter_summary();
         match &results {
             Ok(results) => {
                 event_emitter::emit(RetrievalEvent::SearchCompleted {
@@ -362,6 +448,7 @@ impl RetrievalService {
                         .map(|r| SearchResultSummary::from(r.clone()))
                         .collect(),
                     total_duration_ms: duration_ms,
+                    filter: filter.clone(),
                 });
             }
             Err(e) => {
@@ -373,7 +460,7 @@ impl RetrievalService {
             }
         }
 
-        results
+        results.map(|r| SearchOutput { results: r, filter })
     }
 
     /// Get SearchResults from recently accessed files for RRF fusion.
@@ -412,12 +499,15 @@ impl RetrievalService {
     /// Search using BM25 full-text search only.
     ///
     /// Unlike `search()`, this bypasses vector search and RRF fusion.
-    pub async fn search_bm25(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
+    pub async fn search_bm25(&self, query: &str, limit: i32) -> Result<SearchOutput> {
         let start_time = std::time::Instant::now();
         let query_id = generate_query_id();
 
         if !self.features.code_search {
-            return Ok(Vec::new());
+            return Ok(SearchOutput {
+                results: Vec::new(),
+                filter: self.filter_summary(),
+            });
         }
 
         // Emit search started event
@@ -439,6 +529,7 @@ impl RetrievalService {
 
         // Emit completion event
         let duration_ms = start_time.elapsed().as_millis() as i64;
+        let filter = self.filter_summary();
         match &results {
             Ok(results) => {
                 event_emitter::emit(RetrievalEvent::SearchCompleted {
@@ -448,6 +539,7 @@ impl RetrievalService {
                         .map(|r| SearchResultSummary::from(r.clone()))
                         .collect(),
                     total_duration_ms: duration_ms,
+                    filter: filter.clone(),
                 });
             }
             Err(e) => {
@@ -459,18 +551,21 @@ impl RetrievalService {
             }
         }
 
-        results
+        results.map(|r| SearchOutput { results: r, filter })
     }
 
     /// Search using vector similarity only.
     ///
     /// Returns empty results if embeddings are not configured.
-    pub async fn search_vector(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
+    pub async fn search_vector(&self, query: &str, limit: i32) -> Result<SearchOutput> {
         let start_time = std::time::Instant::now();
         let query_id = generate_query_id();
 
         if !self.has_vector_search() {
-            return Ok(Vec::new());
+            return Ok(SearchOutput {
+                results: Vec::new(),
+                filter: self.filter_summary(),
+            });
         }
 
         // Emit search started event
@@ -495,6 +590,7 @@ impl RetrievalService {
 
         // Emit completion event
         let duration_ms = start_time.elapsed().as_millis() as i64;
+        let filter = self.filter_summary();
         match &results {
             Ok(results) => {
                 event_emitter::emit(RetrievalEvent::SearchCompleted {
@@ -504,6 +600,7 @@ impl RetrievalService {
                         .map(|r| SearchResultSummary::from(r.clone()))
                         .collect(),
                     total_duration_ms: duration_ms,
+                    filter: filter.clone(),
                 });
             }
             Err(e) => {
@@ -515,7 +612,7 @@ impl RetrievalService {
             }
         }
 
-        results
+        results.map(|r| SearchOutput { results: r, filter })
     }
 
     /// Rewrite a query without searching.
@@ -547,6 +644,246 @@ impl RetrievalService {
     /// Check if vector search is available.
     pub fn has_vector_search(&self) -> bool {
         self.features.vector_search && self.searcher.has_vector_search()
+    }
+
+    // ========== Index Coordinator API ==========
+
+    /// Get or create the index coordinator.
+    ///
+    /// The coordinator manages index state, periodic checks, and worker threads.
+    /// It is lazily initialized on first access.
+    pub async fn coordinator(&self) -> Result<SharedCoordinator> {
+        // Fast path: check if already initialized
+        {
+            let guard = self.coordinator.read().await;
+            if let Some(ref coord) = *guard {
+                return Ok(Arc::clone(coord));
+            }
+        }
+
+        // Slow path: initialize coordinator
+        let mut guard = self.coordinator.write().await;
+
+        // Double-check after acquiring write lock
+        if let Some(ref coord) = *guard {
+            return Ok(Arc::clone(coord));
+        }
+
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let workspace = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .to_string();
+
+        let db_path = self.config.data_dir.join("retrieval.db");
+        std::fs::create_dir_all(&self.config.data_dir)?;
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+
+        let coord = Arc::new(IndexCoordinator::new(
+            self.config.clone(),
+            workspace,
+            workdir.clone(),
+            store,
+        ));
+
+        *guard = Some(Arc::clone(&coord));
+        Ok(coord)
+    }
+
+    /// Trigger index check from Session startup.
+    ///
+    /// This method should be called when a Session is started to ensure
+    /// the index is initialized or updated. It will:
+    /// - Initialize the index if not yet done
+    /// - Check freshness via mtime comparison
+    /// - Queue incremental updates if needed
+    ///
+    /// This is a non-blocking operation; the actual indexing happens
+    /// asynchronously in background workers.
+    pub async fn trigger_index_check(&self) -> Result<()> {
+        let coord = self.coordinator().await?;
+        coord.try_trigger_index(TriggerSource::SessionStart).await
+    }
+
+    /// Get the current index state.
+    ///
+    /// Returns the current state of the index (Uninitialized, Building, Ready, etc.)
+    pub async fn get_index_state(&self) -> Result<IndexState> {
+        let coord = self.coordinator().await?;
+        Ok(coord.state().await)
+    }
+
+    /// Check if the index is ready for search.
+    ///
+    /// Returns true if the index is in Ready or Stale state.
+    pub async fn is_index_ready(&self) -> bool {
+        match self.coordinator().await {
+            Ok(coord) => coord.is_ready().await,
+            Err(_) => false,
+        }
+    }
+
+    /// Start the index coordinator workers and timer.
+    ///
+    /// This starts background workers for processing file change events
+    /// and a periodic timer for mtime checks.
+    pub async fn start_coordinator(&self) -> Result<()> {
+        let coord = self.coordinator().await?;
+
+        // Start workers
+        let worker_count = self.config.indexing.worker_count;
+        let db_path = self.config.data_dir.join("retrieval.db");
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+        let manager = Arc::new(IndexManager::new(self.config.clone(), store));
+
+        coord.start_workers(worker_count, manager);
+
+        // Start timer
+        let check_interval = self.config.indexing.check_interval_secs;
+        if check_interval > 0 {
+            coord.start_timer(std::time::Duration::from_secs(check_interval as u64));
+        }
+
+        Ok(())
+    }
+
+    /// Stop the index coordinator.
+    ///
+    /// Stops all background workers and the periodic timer.
+    pub async fn stop_coordinator(&self) {
+        if let Ok(coord) = self.coordinator().await {
+            coord.stop();
+        }
+    }
+
+    // ========== Unified Coordinator API (New Architecture) ==========
+
+    /// Get or create the unified coordinator.
+    ///
+    /// The unified coordinator manages both search (IndexPipeline) and repomap
+    /// (TagPipeline) with independent event queues and worker pools.
+    pub async fn unified_coordinator(&self) -> Result<SharedUnifiedCoordinator> {
+        // Fast path
+        {
+            let guard = self.unified_coordinator.read().await;
+            if let Some(ref coord) = *guard {
+                return Ok(Arc::clone(coord));
+            }
+        }
+
+        // Slow path
+        let mut guard = self.unified_coordinator.write().await;
+
+        // Double-check
+        if let Some(ref coord) = *guard {
+            return Ok(Arc::clone(coord));
+        }
+
+        let workdir = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| RetrievalErr::NotEnabled)?;
+
+        let db_path = self.config.data_dir.join("retrieval.db");
+        std::fs::create_dir_all(&self.config.data_dir)?;
+        let store = Arc::new(SqliteStore::open(&db_path)?);
+
+        // Determine feature flags from config
+        let features = FeatureFlags {
+            search_enabled: true,
+            repomap_enabled: self.config.repo_map.is_some(),
+        };
+
+        let coord = Arc::new(UnifiedCoordinator::new(
+            self.config.clone(),
+            features,
+            workdir.clone(),
+            store,
+        )?);
+
+        *guard = Some(Arc::clone(&coord));
+        Ok(coord)
+    }
+
+    /// Start the unified pipeline (workers for both search and repomap).
+    ///
+    /// This initializes and starts background workers for processing file events.
+    /// Call this after `unified_coordinator()` to enable event processing.
+    pub async fn start_unified_pipeline(&self) -> Result<()> {
+        let coord = self.unified_coordinator().await?;
+        coord.start_workers().await;
+
+        // Start timer for periodic freshness checks
+        let check_interval = self.config.indexing.check_interval_secs;
+        if check_interval > 0 {
+            coord.start_timer(std::time::Duration::from_secs(check_interval as u64));
+        }
+
+        tracing::info!(
+            search = coord.features().search_enabled,
+            repomap = coord.features().repomap_enabled,
+            "Unified pipeline started"
+        );
+        Ok(())
+    }
+
+    /// Trigger session start via the unified pipeline.
+    ///
+    /// Scans all files and dispatches events to both search and repomap pipelines.
+    /// Returns receivers for batch completion if you need to wait for indexing.
+    pub async fn trigger_unified_session_start(
+        &self,
+    ) -> Result<crate::indexing::SessionStartResult> {
+        let coord = self.unified_coordinator().await?;
+        coord.trigger_session_start().await
+    }
+
+    /// Get search readiness from the unified pipeline.
+    ///
+    /// Returns `None` if search is not enabled or unified coordinator is not initialized.
+    pub async fn search_readiness(&self) -> Option<Readiness> {
+        match self.unified_coordinator().await {
+            Ok(coord) => coord.search_readiness().await,
+            Err(_) => None,
+        }
+    }
+
+    /// Get repomap readiness from the unified pipeline.
+    ///
+    /// Returns `None` if repomap is not enabled or unified coordinator is not initialized.
+    pub async fn repomap_readiness(&self) -> Option<TagReadiness> {
+        match self.unified_coordinator().await {
+            Ok(coord) => coord.repomap_readiness().await,
+            Err(_) => None,
+        }
+    }
+
+    /// Check if the unified pipeline search is ready.
+    pub async fn is_unified_search_ready(&self) -> bool {
+        match self.search_readiness().await {
+            Some(Readiness::Ready { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if the unified pipeline repomap is ready.
+    pub async fn is_unified_repomap_ready(&self) -> bool {
+        match self.repomap_readiness().await {
+            Some(TagReadiness::Ready { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Stop the unified coordinator and all pipelines.
+    pub async fn stop_unified_coordinator(&self) {
+        if let Ok(coord) = self.unified_coordinator().await {
+            coord.stop().await;
+        }
     }
 
     // ========== Recent Files API ==========
@@ -828,7 +1165,10 @@ impl RetrievalService {
         let repo_map_config = self.config.repo_map.clone().unwrap_or_default();
         let mut repomap_service = RepoMapService::new(repo_map_config, store, workdir.clone())?;
 
-        repomap_service.generate(&request, false).await
+        let mut result = repomap_service.generate(&request, false).await?;
+        // Add filter info so LLM knows what files are indexed
+        result.filter = self.filter_summary();
+        Ok(result)
     }
 
     /// Internal: read and chunk a file.
@@ -1110,5 +1450,81 @@ mod tests {
         // But get_recent_chunks returns empty (file doesn't exist)
         let chunks = service.get_recent_chunks(100).await;
         assert!(chunks.is_empty());
+    }
+
+    // ========== Unified Pipeline Tests ==========
+
+    #[tokio::test]
+    async fn test_unified_coordinator_creation() {
+        let dir = TempDir::new().unwrap();
+        let mut config = RetrievalConfig::default();
+        config.data_dir = dir.path().to_path_buf();
+        config.enabled = true;
+
+        let features = RetrievalFeatures::with_code_search();
+        let service = RetrievalService::with_workspace(config, features, dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Get unified coordinator
+        let coord = service.unified_coordinator().await.unwrap();
+
+        // Check features
+        assert!(coord.features().search_enabled);
+        // repomap disabled since repo_map config is None
+        assert!(!coord.features().repomap_enabled);
+
+        // Stop
+        coord.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_unified_pipeline_session_start() {
+        let dir = TempDir::new().unwrap();
+        let mut config = RetrievalConfig::default();
+        config.data_dir = dir.path().to_path_buf();
+        config.enabled = true;
+
+        // Create test files
+        std::fs::write(dir.path().join("test1.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.path().join("test2.rs"), "fn foo() {}").unwrap();
+
+        let features = RetrievalFeatures::with_code_search();
+        let service = RetrievalService::with_workspace(config, features, dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Start pipeline
+        service.start_unified_pipeline().await.unwrap();
+
+        // Trigger session start
+        let result = service.trigger_unified_session_start().await.unwrap();
+
+        // Should have scanned files
+        assert!(result.file_count >= 2);
+        assert!(result.index_receiver.is_some());
+
+        // Cleanup
+        service.stop_unified_coordinator().await;
+    }
+
+    #[tokio::test]
+    async fn test_search_readiness() {
+        let dir = TempDir::new().unwrap();
+        let mut config = RetrievalConfig::default();
+        config.data_dir = dir.path().to_path_buf();
+        config.enabled = true;
+
+        let features = RetrievalFeatures::with_code_search();
+        let service = RetrievalService::with_workspace(config, features, dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Before initialization, readiness should be Uninitialized or NotReady
+        let readiness = service.search_readiness().await;
+        assert!(readiness.is_some());
+
+        // Cleanup
+        service.stop_unified_coordinator().await;
     }
 }

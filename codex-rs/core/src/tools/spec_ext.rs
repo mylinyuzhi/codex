@@ -322,6 +322,18 @@ pub fn register_code_search(builder: &mut ToolRegistryBuilder) {
     builder.register_handler("code_search", Arc::new(CodeSearchHandler::new()));
 }
 
+/// Register repomap tool.
+///
+/// RepoMap generates a condensed map of the codebase structure.
+/// Retrieval has its own independent configuration system (~/.codex/retrieval.toml).
+/// Tool is always registered; handler checks availability at runtime.
+pub fn register_repomap(builder: &mut ToolRegistryBuilder) {
+    use crate::tools::ext::repomap::create_repomap_tool;
+    use crate::tools::handlers::ext::repomap::RepoMapHandler;
+    builder.push_spec_with_parallel_support(create_repomap_tool(), true);
+    builder.register_handler("repomap", Arc::new(RepoMapHandler::new()));
+}
+
 /// Register LSP tool for code intelligence.
 ///
 /// LSP tool provides AI-friendly LSP operations using symbol name + kind matching.
@@ -449,6 +461,7 @@ pub fn register_ext_tools(builder: &mut ToolRegistryBuilder, config: &ToolsConfi
     // code_search: requires feature flag
     if config.include_code_search {
         register_code_search(builder);
+        register_repomap(builder);
     }
 
     // lsp: requires feature flag

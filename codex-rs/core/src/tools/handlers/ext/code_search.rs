@@ -111,22 +111,45 @@ impl ToolHandler for CodeSearchHandler {
         };
 
         // 4. Perform search
-        let results = service
+        let search_output = service
             .search(&args.query)
             .await
             .map_err(|e| FunctionCallError::RespondToModel(format!("Search failed: {e}")))?;
 
         // 5. Format results
-        let output = if results.is_empty() {
-            "No matching code found.".to_string()
+        let output = if search_output.results.is_empty() {
+            let mut msg = String::new();
+            // Show filter info even with no results
+            if let Some(filter) = &search_output.filter {
+                msg.push_str(&format!(
+                    "[Index Filter: {}]\n\n",
+                    filter.to_display_string()
+                ));
+            }
+            msg.push_str("No matching code found.");
+            msg
         } else {
             let mut lines = Vec::new();
+
+            // Show filter info at the top
+            if let Some(filter) = &search_output.filter {
+                lines.push(format!(
+                    "[Index Filter: {}]\n\n",
+                    filter.to_display_string()
+                ));
+            }
+
             lines.push(format!(
                 "Found {} result(s):\n",
-                results.len().min(limit as usize)
+                search_output.results.len().min(limit as usize)
             ));
 
-            for (i, result) in results.iter().take(limit as usize).enumerate() {
+            for (i, result) in search_output
+                .results
+                .iter()
+                .take(limit as usize)
+                .enumerate()
+            {
                 lines.push(format!(
                     "--- Result {} ---\nFile: {}:{}-{}\nScore: {:.3}\n```{}\n{}\n```\n",
                     i + 1,

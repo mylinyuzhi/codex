@@ -272,7 +272,7 @@ fn test_file_walker_finds_source_files() {
     std::fs::write(dir.path().join("src/lib.rs"), "pub fn foo() {}").unwrap();
     std::fs::write(dir.path().join("README.md"), "# Test").unwrap();
 
-    let walker = FileWalker::new(10); // 10MB max
+    let walker = FileWalker::new(dir.path(), 10); // 10MB max
     let files = walker.walk(dir.path()).expect("walk failed");
 
     // Should find at least the .rs files
@@ -296,7 +296,7 @@ fn test_file_walker_respects_gitignore() {
     std::fs::write(dir.path().join("build.log"), "ignored").unwrap();
     std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
 
-    let walker = FileWalker::new(10);
+    let walker = FileWalker::new(dir.path(), 10);
     let files = walker.walk(dir.path()).expect("walk failed");
 
     // Should not include target/ or .log files

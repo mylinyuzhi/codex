@@ -25,6 +25,7 @@ use std::time::UNIX_EPOCH;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::indexing::FilterSummary;
 use crate::indexing::IndexStats;
 use crate::indexing::RebuildMode;
 use crate::types::ScoreType;
@@ -160,6 +161,9 @@ pub enum RetrievalEvent {
         query_id: String,
         results: Vec<SearchResultSummary>,
         total_duration_ms: i64,
+        /// Active file filter configuration (for LLM context).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filter: Option<FilterSummary>,
     },
 
     /// Search operation failed.
@@ -177,6 +181,9 @@ pub enum RetrievalEvent {
         workspace: String,
         mode: RebuildModeInfo,
         estimated_files: i32,
+        /// Active file filter configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filter: Option<FilterSummary>,
     },
 
     /// Index phase changed.
@@ -730,8 +737,276 @@ impl LoggingConsumer {
     }
 
     fn log_event(&self, event: &RetrievalEvent) {
-        let event_type = event.event_type();
         match event {
+            // ================================================================
+            // Lifecycle Events
+            // ================================================================
+            RetrievalEvent::SessionStarted { session_id, .. } => {
+                tracing::info!(session_id = %session_id, "Session started");
+            }
+            RetrievalEvent::SessionEnded {
+                session_id,
+                duration_ms,
+            } => {
+                tracing::info!(session_id = %session_id, duration_ms = duration_ms, "Session ended");
+            }
+
+            // ================================================================
+            // Search Pipeline Events
+            // ================================================================
+            RetrievalEvent::SearchStarted {
+                query, mode, limit, ..
+            } => {
+                tracing::info!(query = %query, mode = ?mode, limit = limit, "Search started");
+            }
+            RetrievalEvent::QueryPreprocessed {
+                tokens,
+                language,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    tokens_count = tokens.len(),
+                    language = %language,
+                    duration_ms = duration_ms,
+                    "Query preprocessed"
+                );
+            }
+            RetrievalEvent::QueryRewritten {
+                original,
+                rewritten,
+                translated,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    original = %original,
+                    rewritten = %rewritten,
+                    translated = translated,
+                    duration_ms = duration_ms,
+                    "Query rewritten"
+                );
+            }
+            RetrievalEvent::Bm25SearchStarted { query_terms, .. } => {
+                tracing::debug!(terms_count = query_terms.len(), "BM25 search started");
+            }
+            RetrievalEvent::Bm25SearchCompleted {
+                results,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    results = results.len(),
+                    duration_ms = duration_ms,
+                    "BM25 search completed"
+                );
+            }
+            RetrievalEvent::VectorSearchStarted { embedding_dim, .. } => {
+                tracing::debug!(embedding_dim = embedding_dim, "Vector search started");
+            }
+            RetrievalEvent::VectorSearchCompleted {
+                results,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    results = results.len(),
+                    duration_ms = duration_ms,
+                    "Vector search completed"
+                );
+            }
+            RetrievalEvent::SnippetSearchStarted { symbol_query, .. } => {
+                let pattern = symbol_query.name_pattern.as_deref().unwrap_or("*");
+                tracing::debug!(name_pattern = %pattern, "Snippet search started");
+            }
+            RetrievalEvent::SnippetSearchCompleted {
+                results,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    results = results.len(),
+                    duration_ms = duration_ms,
+                    "Snippet search completed"
+                );
+            }
+            RetrievalEvent::FusionStarted {
+                bm25_count,
+                vector_count,
+                snippet_count,
+                ..
+            } => {
+                tracing::debug!(
+                    bm25 = bm25_count,
+                    vector = vector_count,
+                    snippet = snippet_count,
+                    "Fusion started"
+                );
+            }
+            RetrievalEvent::FusionCompleted {
+                merged_count,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    merged = merged_count,
+                    duration_ms = duration_ms,
+                    "Fusion completed"
+                );
+            }
+            RetrievalEvent::RerankingStarted {
+                backend,
+                input_count,
+                ..
+            } => {
+                tracing::debug!(
+                    backend = %backend,
+                    input_count = input_count,
+                    "Reranking started"
+                );
+            }
+            RetrievalEvent::RerankingCompleted {
+                adjustments,
+                duration_ms,
+                ..
+            } => {
+                tracing::debug!(
+                    adjustments = adjustments.len(),
+                    duration_ms = duration_ms,
+                    "Reranking completed"
+                );
+            }
+            RetrievalEvent::SearchCompleted {
+                results,
+                total_duration_ms,
+                ..
+            } => {
+                tracing::info!(
+                    results = results.len(),
+                    duration_ms = total_duration_ms,
+                    "Search completed"
+                );
+            }
+            RetrievalEvent::SearchError {
+                error, retryable, ..
+            } => {
+                tracing::error!(error = %error, retryable = retryable, "Search failed");
+            }
+
+            // ================================================================
+            // Index Events
+            // ================================================================
+            RetrievalEvent::IndexBuildStarted {
+                workspace,
+                estimated_files,
+                ..
+            } => {
+                tracing::info!(
+                    workspace = %workspace,
+                    estimated_files = estimated_files,
+                    "Indexing started"
+                );
+            }
+            RetrievalEvent::IndexPhaseChanged {
+                phase, description, ..
+            } => {
+                tracing::info!(phase = ?phase, "Index phase: {}", description);
+            }
+            RetrievalEvent::IndexFileProcessed {
+                path,
+                chunks,
+                status,
+                ..
+            } => {
+                tracing::debug!(path = %path, chunks = chunks, status = ?status, "Indexed file");
+            }
+            RetrievalEvent::IndexBuildCompleted {
+                workspace,
+                stats,
+                duration_ms,
+            } => {
+                tracing::info!(
+                    workspace = %workspace,
+                    files = stats.file_count,
+                    chunks = stats.chunk_count,
+                    duration_ms = duration_ms,
+                    "Indexing completed"
+                );
+            }
+            RetrievalEvent::IndexBuildFailed { workspace, error } => {
+                tracing::error!(workspace = %workspace, error = %error, "Index build failed");
+            }
+
+            // ================================================================
+            // Watch Events
+            // ================================================================
+            RetrievalEvent::WatchStarted { workspace, paths } => {
+                tracing::info!(workspace = %workspace, paths = paths.len(), "Watch started");
+            }
+            RetrievalEvent::FileChanged { path, kind, .. } => {
+                tracing::debug!(path = %path, kind = ?kind, "File changed");
+            }
+            RetrievalEvent::IncrementalIndexTriggered {
+                workspace,
+                changed_files,
+            } => {
+                tracing::info!(
+                    workspace = %workspace,
+                    changed_files = changed_files,
+                    "Incremental index triggered"
+                );
+            }
+            RetrievalEvent::WatchStopped { workspace } => {
+                tracing::info!(workspace = %workspace, "Watch stopped");
+            }
+
+            // ================================================================
+            // RepoMap Events
+            // ================================================================
+            RetrievalEvent::RepoMapStarted {
+                max_tokens,
+                chat_files,
+                other_files,
+                ..
+            } => {
+                tracing::info!(
+                    max_tokens = max_tokens,
+                    chat_files = chat_files,
+                    other_files = other_files,
+                    "RepoMap: generating"
+                );
+            }
+            RetrievalEvent::PageRankComputed {
+                iterations,
+                top_files,
+                ..
+            } => {
+                tracing::debug!(
+                    iterations = iterations,
+                    top_files = top_files.len(),
+                    "PageRank computed"
+                );
+            }
+            RetrievalEvent::RepoMapGenerated {
+                tokens,
+                files,
+                duration_ms,
+                ..
+            } => {
+                tracing::info!(
+                    tokens = tokens,
+                    files = files,
+                    duration_ms = duration_ms,
+                    "RepoMap: generated"
+                );
+            }
+            RetrievalEvent::RepoMapCacheHit { cache_key, .. } => {
+                tracing::debug!(cache_key = %cache_key, "RepoMap: cache hit");
+            }
+
+            // ================================================================
+            // Diagnostic Events
+            // ================================================================
             RetrievalEvent::DiagnosticLog {
                 level,
                 module,
@@ -754,9 +1029,6 @@ impl LoggingConsumer {
                     tracing::error!(module = %module, "{}", message)
                 }
             },
-            _ => {
-                tracing::debug!(event_type = event_type, "retrieval event");
-            }
         }
     }
 }
@@ -822,6 +1094,7 @@ mod tests {
             query_id: "q-123".to_string(),
             results: vec![],
             total_duration_ms: 100,
+            filter: None,
         };
 
         let line = event.to_json_line();
@@ -835,6 +1108,7 @@ mod tests {
             workspace: "test".to_string(),
             mode: RebuildModeInfo::Clean,
             estimated_files: 100,
+            filter: None,
         };
 
         assert_eq!(event.event_type(), "index_build_started");

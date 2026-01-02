@@ -269,7 +269,7 @@ pub async fn run_main(
 
     // use RUST_LOG env var, default to info for codex crates.
     // Build file_layer with config-driven settings
-    let file_layer = codex_core::configure_fmt_layer!(
+    let file_layer = codex_utils::configure_fmt_layer!(
         tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             // `with_target(true)` is the default, but we previously disabled it for file output.

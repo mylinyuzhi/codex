@@ -97,70 +97,126 @@ pub const BUILTIN_SERVERS: &[BuiltinServer] = &[
 
 /// Unified LSP server configuration
 /// Works for both built-in server overrides and custom servers
+/// Helper functions for skip_serializing_if
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_default_max_restarts(v: &i32) -> bool {
+    *v == default_max_restarts()
+}
+
+fn is_default_restart_on_crash(v: &bool) -> bool {
+    *v == default_restart_on_crash()
+}
+
+fn is_default_startup_timeout_ms(v: &i64) -> bool {
+    *v == default_startup_timeout_ms()
+}
+
+fn is_default_shutdown_timeout_ms(v: &i64) -> bool {
+    *v == default_shutdown_timeout_ms()
+}
+
+fn is_default_request_timeout_ms(v: &i64) -> bool {
+    *v == default_request_timeout_ms()
+}
+
+fn is_default_health_check_interval_ms(v: &i64) -> bool {
+    *v == default_health_check_interval_ms()
+}
+
+fn is_default_notification_buffer_size(v: &i32) -> bool {
+    *v == default_notification_buffer_size()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct LspServerConfig {
     /// Disable this server (default: false)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub disabled: bool,
 
     /// Command to execute (required for custom servers, optional for built-ins)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
     /// Command-line arguments
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 
     /// File extensions this server handles (required for custom servers)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_extensions: Vec<String>,
 
     /// Language identifiers for this server
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub languages: Vec<String>,
 
     /// Environment variables to set when spawning server process
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
 
     /// Initialization options for LSP
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub initialization_options: serde_json::Value,
 
     /// Workspace settings to send via workspace/didChangeConfiguration
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub settings: serde_json::Value,
 
     /// Explicit workspace folder path (default: auto-detected)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_folder: Option<PathBuf>,
 
     // ---- Lifecycle configuration ----
     /// Max restart attempts before giving up (default: 3)
-    #[serde(default = "default_max_restarts")]
+    #[serde(
+        default = "default_max_restarts",
+        skip_serializing_if = "is_default_max_restarts"
+    )]
     pub max_restarts: i32,
 
     /// Auto-restart on crash (default: true)
-    #[serde(default = "default_restart_on_crash")]
+    #[serde(
+        default = "default_restart_on_crash",
+        skip_serializing_if = "is_default_restart_on_crash"
+    )]
     pub restart_on_crash: bool,
 
     /// Startup/init timeout in milliseconds (default: 10_000)
-    #[serde(default = "default_startup_timeout_ms")]
+    #[serde(
+        default = "default_startup_timeout_ms",
+        skip_serializing_if = "is_default_startup_timeout_ms"
+    )]
     pub startup_timeout_ms: i64,
 
     /// Shutdown timeout in milliseconds (default: 5_000)
-    #[serde(default = "default_shutdown_timeout_ms")]
+    #[serde(
+        default = "default_shutdown_timeout_ms",
+        skip_serializing_if = "is_default_shutdown_timeout_ms"
+    )]
     pub shutdown_timeout_ms: i64,
 
     /// Request timeout in milliseconds (default: 30_000)
-    #[serde(default = "default_request_timeout_ms")]
+    #[serde(
+        default = "default_request_timeout_ms",
+        skip_serializing_if = "is_default_request_timeout_ms"
+    )]
     pub request_timeout_ms: i64,
 
     /// Health check interval in milliseconds (default: 30_000)
-    #[serde(default = "default_health_check_interval_ms")]
+    #[serde(
+        default = "default_health_check_interval_ms",
+        skip_serializing_if = "is_default_health_check_interval_ms"
+    )]
     pub health_check_interval_ms: i64,
 
     /// Notification channel buffer size (default: 100)
-    #[serde(default = "default_notification_buffer_size")]
+    #[serde(
+        default = "default_notification_buffer_size",
+        skip_serializing_if = "is_default_notification_buffer_size"
+    )]
     pub notification_buffer_size: i32,
 }
 
@@ -277,6 +333,220 @@ impl LspServersConfig {
             .get(server_id)
             .map(|c| c.disabled)
             .unwrap_or(false)
+    }
+
+    /// Format a human-readable timestamp for backup files
+    /// Format: YYYYMMDD_HHMMSS (e.g., 20250102_143025)
+    fn format_backup_timestamp() -> String {
+        chrono::Local::now().format("%Y%m%d_%H%M%S").to_string()
+    }
+
+    /// Add a server to config file (creates file and directory if needed)
+    ///
+    /// This adds a minimal config entry for a built-in server, which will
+    /// be completed from the builtin template at runtime.
+    /// Creates a backup of existing config before modifying.
+    pub fn add_server_to_file(config_dir: &Path, server_id: &str) -> std::io::Result<()> {
+        let config_path = config_dir.join(LSP_SERVERS_CONFIG_FILE);
+
+        // Create backup if file exists
+        if config_path.exists() {
+            let backup_path = config_dir.join(format!(
+                "{}.backup.{}",
+                LSP_SERVERS_CONFIG_FILE,
+                Self::format_backup_timestamp()
+            ));
+            std::fs::copy(&config_path, &backup_path)?;
+            debug!(backup = %backup_path.display(), "Created config backup");
+        }
+
+        // Load existing config or create default
+        let mut config = if config_path.exists() {
+            Self::from_file(&config_path)?
+        } else {
+            // Ensure directory exists
+            std::fs::create_dir_all(config_dir)?;
+            Self::default()
+        };
+
+        // Only add if not already present
+        if !config.servers.contains_key(server_id) {
+            config
+                .servers
+                .insert(server_id.to_string(), LspServerConfig::default());
+
+            // Write back
+            let json = serde_json::to_string_pretty(&config).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to serialize config: {e}"),
+                )
+            })?;
+            std::fs::write(&config_path, json)?;
+            debug!(
+                server = server_id,
+                path = %config_path.display(),
+                "Added server to config file"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Write config to file
+    pub fn to_file(&self, path: &Path) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to serialize config: {e}"),
+            )
+        })?;
+        std::fs::write(path, json)
+    }
+
+    /// Remove a server from config file
+    ///
+    /// Returns Ok(true) if server was removed, Ok(false) if server was not found.
+    /// Creates a backup of existing config before modifying.
+    pub fn remove_server_from_file(config_dir: &Path, server_id: &str) -> std::io::Result<bool> {
+        let config_path = config_dir.join(LSP_SERVERS_CONFIG_FILE);
+
+        if !config_path.exists() {
+            return Ok(false);
+        }
+
+        // Create backup
+        let backup_path = config_dir.join(format!(
+            "{}.backup.{}",
+            LSP_SERVERS_CONFIG_FILE,
+            Self::format_backup_timestamp()
+        ));
+        std::fs::copy(&config_path, &backup_path)?;
+        debug!(backup = %backup_path.display(), "Created config backup");
+
+        // Load and modify config
+        let mut config = Self::from_file(&config_path)?;
+        let removed = config.servers.remove(server_id).is_some();
+
+        if removed {
+            // Write back
+            let json = serde_json::to_string_pretty(&config).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to serialize config: {e}"),
+                )
+            })?;
+            std::fs::write(&config_path, json)?;
+            debug!(
+                server = server_id,
+                path = %config_path.display(),
+                "Removed server from config file"
+            );
+        }
+
+        Ok(removed)
+    }
+
+    /// Toggle a server's disabled status in config file
+    ///
+    /// Returns Ok(Some(new_disabled_state)) on success, Ok(None) if server not found.
+    /// Creates a backup of existing config before modifying.
+    pub fn toggle_server_disabled(
+        config_dir: &Path,
+        server_id: &str,
+    ) -> std::io::Result<Option<bool>> {
+        let config_path = config_dir.join(LSP_SERVERS_CONFIG_FILE);
+
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        // Create backup
+        let backup_path = config_dir.join(format!(
+            "{}.backup.{}",
+            LSP_SERVERS_CONFIG_FILE,
+            Self::format_backup_timestamp()
+        ));
+        std::fs::copy(&config_path, &backup_path)?;
+        debug!(backup = %backup_path.display(), "Created config backup");
+
+        // Load and modify config
+        let mut config = Self::from_file(&config_path)?;
+
+        let new_state = if let Some(server_config) = config.servers.get_mut(server_id) {
+            server_config.disabled = !server_config.disabled;
+            Some(server_config.disabled)
+        } else {
+            None
+        };
+
+        if new_state.is_some() {
+            // Write back
+            let json = serde_json::to_string_pretty(&config).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to serialize config: {e}"),
+                )
+            })?;
+            std::fs::write(&config_path, json)?;
+            debug!(
+                server = server_id,
+                new_disabled = new_state,
+                path = %config_path.display(),
+                "Toggled server disabled state"
+            );
+        }
+
+        Ok(new_state)
+    }
+
+    /// Check which config level a server is configured at
+    ///
+    /// Returns the config level if configured, None otherwise.
+    pub fn detect_config_level(
+        server_id: &str,
+        user_dir: &Path,
+        project_dir: &Path,
+    ) -> Option<ConfigLevel> {
+        // Check project-level first (higher priority)
+        let project_path = project_dir.join(LSP_SERVERS_CONFIG_FILE);
+        if project_path.exists() {
+            if let Ok(config) = Self::from_file(&project_path) {
+                if config.servers.contains_key(server_id) {
+                    return Some(ConfigLevel::Project);
+                }
+            }
+        }
+
+        // Check user-level
+        let user_path = user_dir.join(LSP_SERVERS_CONFIG_FILE);
+        if user_path.exists() {
+            if let Ok(config) = Self::from_file(&user_path) {
+                if config.servers.contains_key(server_id) {
+                    return Some(ConfigLevel::User);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Configuration level for a server
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigLevel {
+    /// User-level config (~/.codex/lsp_servers.json)
+    User,
+    /// Project-level config (.codex/lsp_servers.json)
+    Project,
+}
+
+impl std::fmt::Display for ConfigLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigLevel::User => write!(f, "User"),
+            ConfigLevel::Project => write!(f, "Project"),
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 //! Status bar widget showing server status and current file.
 
 use super::super::app::App;
+use codex_lsp::ServerStatus;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::Block;
@@ -10,11 +11,23 @@ use ratatui::widgets::Paragraph;
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let title = " LSP Test TUI ";
 
-    // Server status
-    let server_status = if app.client.is_some() {
+    // Server status - show running count if we have cached server info
+    let server_status = if !app.cached_servers.is_empty() {
+        let running_count = app
+            .cached_servers
+            .iter()
+            .filter(|s| matches!(s.status, ServerStatus::Running))
+            .count();
+        let total_count = app.cached_servers.len();
+        if running_count > 0 {
+            format!("{running_count}/{total_count} running").green()
+        } else {
+            format!("0/{total_count} running").dim()
+        }
+    } else if app.client.is_some() {
         "connected".green()
     } else {
-        "disconnected".red()
+        "disconnected".dim()
     };
 
     // Current file

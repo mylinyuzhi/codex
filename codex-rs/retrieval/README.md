@@ -18,6 +18,12 @@ retrieval/src/
 ├── service.rs          # Main RetrievalService entry point
 ├── config.rs           # RetrievalConfig
 ├── indexing/           # File walking, change detection, IndexManager
+│   ├── unified_coordinator.rs  # Manages both Search and RepoMap pipelines
+│   ├── index_pipeline.rs       # Search indexing pipeline
+│   ├── worker_pool.rs          # Generic parallel worker pool
+│   ├── event_queue.rs          # Generic event queue with deduplication
+│   ├── batch_tracker.rs        # Batch completion tracking
+│   └── lag_tracker.rs          # Watermark-based lag detection
 ├── chunking/           # Code splitting, AST-aware chunking
 ├── embeddings/         # Embedding providers (fastembed, OpenAI)
 ├── search/             # BM25, vector search, hybrid fusion
@@ -26,7 +32,101 @@ retrieval/src/
 ├── query/              # Query preprocessing, LLM rewriting
 ├── reranker/           # Rule-based and neural reranking
 └── repomap/            # PageRank-based context generation
+    └── tag_pipeline.rs         # Tag extraction pipeline
 ```
+
+## Unified Event Pipeline
+
+The indexing system uses a unified event-driven architecture for both Search and RepoMap:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Unified Event Pipeline                               │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                       TriggerSource                                   │   │
+│  │  SessionStart ──► scan_all_files() ──► batch_id + N events           │   │
+│  │  Timer        ──► check_freshness() ──► detect changes → events      │   │
+│  │  Watcher      ──► file event ──► single event                        │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                │                                             │
+│           ┌───────────────────┴───────────────────┐                         │
+│           ▼                                       ▼                         │
+│  ┌─────────────────────┐              ┌─────────────────────┐               │
+│  │  IndexEventQueue    │              │  TagEventQueue      │               │
+│  │  (for Search)       │              │  (for RepoMap)      │               │
+│  │  - dedup by path    │              │  - dedup by path    │               │
+│  │  - merge priority   │              │  - merge priority   │               │
+│  └─────────┬───────────┘              └─────────┬───────────┘               │
+│            ▼                                    ▼                           │
+│  ┌─────────────────────┐              ┌─────────────────────┐               │
+│  │  IndexWorkerPool    │              │  TagWorkerPool      │               │
+│  │  (N workers)        │              │  (N workers)        │               │
+│  │  - chunking         │              │  - tree-sitter      │               │
+│  │  - embeddings       │              │  - tag extraction   │               │
+│  │  - BM25 indexing    │              │  - cache update     │               │
+│  └─────────┬───────────┘              └─────────┬───────────┘               │
+│            ▼                                    ▼                           │
+│  ┌─────────────────────┐              ┌─────────────────────┐               │
+│  │  LagTracker         │              │  LagTracker         │               │
+│  │  (watermark-based)  │              │  (watermark-based)  │               │
+│  │  BatchTracker       │              │  BatchTracker       │               │
+│  └─────────────────────┘              └─────────────────────┘               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | Description |
+|-----------|-------------|
+| **UnifiedCoordinator** | Manages both IndexPipeline and TagPipeline with shared file scanning |
+| **EventQueue** | Generic queue with path-based deduplication and merge priority (Deleted > Modified > Created) |
+| **WorkerPool** | Parallel event processing with file-level locking |
+| **BatchTracker** | Tracks SessionStart batch completion with `oneshot::Receiver<BatchResult>` |
+| **LagTracker** | Watermark-based tracking for out-of-order parallel completion |
+
+### Trigger Sources
+
+| Source | Behavior | State Change |
+|--------|----------|--------------|
+| **SessionStart** | Full scan, creates batch, waits for completion | Building → Ready |
+| **Timer** | Periodic mtime check, incremental events | No state change (stays Ready) |
+| **Watcher** | Real-time file events, incremental | No state change (stays Ready) |
+
+### Strict Mode
+
+Two-level strict mode controls when the service reports Ready:
+
+**Config Level** (`retrieval.toml`):
+```toml
+[indexing.strict]
+init = true         # First build must complete all events (default: true)
+incremental = false # Incremental updates don't block Ready (default: false)
+```
+
+**Query Level** (per-request):
+- `strict=true`: Returns error if NotReady
+- `strict=false`: Returns partial results with `is_partial` flag
+
+### Watermark Algorithm
+
+Handles out-of-order parallel completion correctly:
+
+```
+分配顺序: [seq=1, seq=2, seq=3, seq=4, seq=5]
+完成顺序: [seq=3, seq=1, seq=5, seq=2, seq=4] (乱序)
+
+watermark = min(pending) - 1
+lag = next_seq - watermark - 1
+
+当 lag = 0 时，所有 events 都已完成
+```
+
+### Tracing
+
+All events include `trace_id` for full-chain debugging:
+- Format: `{source}-{epoch}-{timestamp}` (e.g., `session-1-1704067200123`)
+- Logged at key points: queue push, worker start/complete, batch complete
 
 ## Supported Languages (AST)
 
@@ -122,6 +222,13 @@ cargo build -p codex-retrieval --features local
 Configuration file: `~/.codex/retrieval.toml` or `{project}/.codex/retrieval.toml`
 
 See [QUICKSTART.md](QUICKSTART.md) for complete configuration examples.
+
+## Logging
+
+Logs are written to `~/.codex/log/retrieval.log`. Use `-v` flags to control verbosity in CLI mode:
+- `-v` or no flag: info level
+- `-vv`: debug level
+- `-vvv`: trace level
 
 ### Key Configuration Sections
 

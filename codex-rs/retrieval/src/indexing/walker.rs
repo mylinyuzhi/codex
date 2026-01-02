@@ -8,6 +8,8 @@ use codex_file_ignore::IgnoreConfig;
 use codex_file_ignore::IgnoreService;
 
 use crate::error::Result;
+use crate::indexing::file_filter::FileFilter;
+use crate::indexing::file_filter::FilterSummary;
 
 /// File walker for traversing directories.
 ///
@@ -17,27 +19,53 @@ pub struct FileWalker {
     ignore_service: IgnoreService,
     max_file_size: u64,
     follow_symlinks: bool,
+    file_filter: FileFilter,
 }
 
 impl FileWalker {
-    /// Create a new file walker.
-    pub fn new(max_file_size_mb: i32) -> Self {
+    /// Create a new file walker with default filter (uses default text extensions).
+    pub fn new(workdir: &Path, max_file_size_mb: i32) -> Self {
+        Self::with_filter(workdir, max_file_size_mb, &[], &[], &[], &[])
+    }
+
+    /// Create a file walker with custom filter configuration.
+    pub fn with_filter(
+        workdir: &Path,
+        max_file_size_mb: i32,
+        include_dirs: &[String],
+        exclude_dirs: &[String],
+        include_extensions: &[String],
+        exclude_extensions: &[String],
+    ) -> Self {
         let config = IgnoreConfig::respecting_all();
         Self {
             ignore_service: IgnoreService::new(config),
             max_file_size: (max_file_size_mb as u64) * 1024 * 1024,
             follow_symlinks: true,
+            file_filter: FileFilter::new(
+                workdir,
+                include_dirs,
+                exclude_dirs,
+                include_extensions,
+                exclude_extensions,
+            ),
         }
     }
 
     /// Create a file walker with custom symlink behavior.
-    pub fn with_symlink_follow(max_file_size_mb: i32, follow: bool) -> Self {
+    pub fn with_symlink_follow(workdir: &Path, max_file_size_mb: i32, follow: bool) -> Self {
         let config = IgnoreConfig::respecting_all();
         Self {
             ignore_service: IgnoreService::new(config),
             max_file_size: (max_file_size_mb as u64) * 1024 * 1024,
             follow_symlinks: follow,
+            file_filter: FileFilter::new(workdir, &[], &[], &[], &[]),
         }
+    }
+
+    /// Get the filter summary.
+    pub fn filter_summary(&self) -> FilterSummary {
+        self.file_filter.summary()
     }
 
     /// Walk a directory and return file paths.
@@ -88,8 +116,8 @@ impl FileWalker {
                 }
             }
 
-            // Skip non-text files by extension
-            if !is_text_file(&resolved_path) {
+            // Skip files that don't match filter criteria
+            if !self.file_filter.should_include(&resolved_path) {
                 continue;
             }
 
@@ -119,130 +147,37 @@ impl FileWalker {
     }
 }
 
-/// Check if a file is likely a text file based on extension.
-fn is_text_file(path: &Path) -> bool {
-    let text_extensions = [
-        // Programming languages
-        "rs",
-        "go",
-        "py",
-        "java",
-        "js",
-        "jsx",
-        "ts",
-        "tsx",
-        "c",
-        "cpp",
-        "cc",
-        "cxx",
-        "h",
-        "hpp",
-        "cs",
-        "rb",
-        "php",
-        "swift",
-        "kt",
-        "kts",
-        "scala",
-        "lua",
-        "sh",
-        "bash",
-        "zsh",
-        "fish",
-        "pl",
-        "pm",
-        "r",
-        "m",
-        "mm",
-        "hs",
-        "ex",
-        "exs",
-        "erl",
-        "hrl",
-        "clj",
-        "cljs",
-        "elm",
-        "fs",
-        "fsx",
-        "ml",
-        "mli",
-        "nim",
-        "zig",
-        "v",
-        "vala",
-        "d",
-        "dart",
-        "groovy",
-        "gradle",
-        // Web
-        "html",
-        "htm",
-        "css",
-        "scss",
-        "sass",
-        "less",
-        "vue",
-        "svelte",
-        // Data/Config
-        "json",
-        "yaml",
-        "yml",
-        "toml",
-        "xml",
-        "ini",
-        "cfg",
-        "conf",
-        "properties",
-        // Documentation
-        "md",
-        "rst",
-        "txt",
-        "adoc",
-        // SQL
-        "sql",
-        // Build
-        "mk",
-        "cmake",
-        "makefile",
-        "dockerfile",
-        // Other
-        "proto",
-        "thrift",
-        "graphql",
-        "gql",
-    ];
-
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| text_extensions.contains(&ext.to_lowercase().as_str()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_is_text_file() {
-        assert!(is_text_file(Path::new("main.rs")));
-        assert!(is_text_file(Path::new("package.json")));
-        assert!(is_text_file(Path::new("README.md")));
-        assert!(!is_text_file(Path::new("image.png")));
-        assert!(!is_text_file(Path::new("binary.exe")));
-    }
-
-    #[test]
     fn test_with_symlink_follow() {
-        let walker = FileWalker::with_symlink_follow(10, false);
+        let walker = FileWalker::with_symlink_follow(Path::new("/tmp"), 10, false);
         assert!(!walker.follow_symlinks);
 
-        let walker = FileWalker::with_symlink_follow(10, true);
+        let walker = FileWalker::with_symlink_follow(Path::new("/tmp"), 10, true);
         assert!(walker.follow_symlinks);
     }
 
     #[test]
     fn test_walker_default_follows_symlinks() {
-        let walker = FileWalker::new(10);
+        let walker = FileWalker::new(Path::new("/tmp"), 10);
         assert!(walker.follow_symlinks);
+    }
+
+    #[test]
+    fn test_filter_summary() {
+        let walker = FileWalker::with_filter(
+            Path::new("/project"),
+            10,
+            &["src".to_string()],
+            &["vendor".to_string()],
+            &["rs".to_string()],
+            &["test.rs".to_string()],
+        );
+        let summary = walker.filter_summary();
+        assert!(summary.has_filters());
     }
 
     #[cfg(unix)]
@@ -266,7 +201,7 @@ mod tests {
         let broken_link = root.join("broken.rs");
         symlink(root.join("nonexistent.rs"), &broken_link).unwrap();
 
-        let walker = FileWalker::new(10);
+        let walker = FileWalker::new(root, 10);
         let files = walker.walk(root).unwrap();
 
         // Should find real file and valid symlink, but skip broken symlink

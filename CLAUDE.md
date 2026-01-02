@@ -49,6 +49,26 @@ cargo build              # ⭐ REQUIRED - catches downstream issues
 cargo test --all-features
 ```
 
+### High Conflict Risk Files
+
+**⚠️ These files have the highest upstream conflict risk - modify with extreme caution:**
+
+| File | Purpose | Risk |
+|------|---------|------|
+| `core/src/client.rs` | Model client, streaming logic | Very High |
+| `core/src/codex.rs` | Session management, submission loop | Very High |
+
+**Strategy:**
+1. **Evaluate carefully** before any modification
+2. **Prefer `*_ext.rs` pattern** - put new logic in extension files
+3. **Minimize direct changes** - only add minimal integration calls (1-2 lines)
+4. **Keep upstream compatibility** as top priority
+
+**Existing extension files (follow this pattern):**
+- `client_ext.rs` - adapter integration
+- `codex_ext.rs` - plan mode handling
+- `client_ultrathink_ext.rs` - reasoning budget logic
+
 ### Extension Pattern (Upstream Sync)
 
 **⚠️ CRITICAL: This repo syncs upstream regularly. Minimize conflicts by preferring extension files.**

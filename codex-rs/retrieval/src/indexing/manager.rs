@@ -268,10 +268,22 @@ impl IndexManager {
             RebuildMode::Incremental => RebuildModeInfo::Incremental,
             RebuildMode::Clean => RebuildModeInfo::Clean,
         };
+        let filter_summary = crate::indexing::FilterSummary {
+            include_dirs: config.indexing.include_dirs.clone(),
+            exclude_dirs: config.indexing.exclude_dirs.clone(),
+            include_extensions: config.indexing.include_extensions.clone(),
+            exclude_extensions: config.indexing.exclude_extensions.clone(),
+        };
+        let filter = if filter_summary.has_filters() {
+            Some(filter_summary)
+        } else {
+            None
+        };
         event_emitter::emit(RetrievalEvent::IndexBuildStarted {
             workspace: workspace.to_string(),
             mode: mode_info,
             estimated_files: 0, // Will update after scan
+            filter,
         });
 
         // Phase 1: Walk files
@@ -284,7 +296,14 @@ impl IndexManager {
             description: "Scanning files...".to_string(),
         });
 
-        let walker = FileWalker::new(config.indexing.max_file_size_mb);
+        let walker = FileWalker::with_filter(
+            root,
+            config.indexing.max_file_size_mb,
+            &config.indexing.include_dirs,
+            &config.indexing.exclude_dirs,
+            &config.indexing.include_extensions,
+            &config.indexing.exclude_extensions,
+        );
         let files = walker.walk(root)?;
         let total_files = files.len();
 
@@ -794,7 +813,7 @@ impl IndexManager {
 }
 
 /// Index statistics for a workspace.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexStats {
     /// Number of indexed files
     pub file_count: i64,

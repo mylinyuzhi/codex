@@ -18,13 +18,10 @@
       "WebFetch(domain:news.ycombinator.com)",
       "WebFetch(domain:devtalk.com)",
       "WebFetch(domain:microsoft.github.io)",
-
       "Bash(cargo:*)",
       "Bash(just:*)",
       "Bash(rustc:*)",
-
       "Bash(git:*)",
-
       "Bash(ls:*)",
       "Bash(tree:*)",
       "Bash(cat:*)",
@@ -46,9 +43,15 @@
       "Bash(mkdir:*)",
       "Bash(pkill:*)",
       "Bash(brew list:*)",
-
       "Bash(python3:*)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(curl:*)",
+      "Bash(rust-analyzer:*)",
+      "Bash(rustup component add:*)",
+      "Bash(brew install:*)",
+      "Bash(ollama pull:*)",
+      "Bash(timeout 5 cargo run:*)",
+      "Bash(RUST_LOG=codex_retrieval=debug cargo run:*)"
     ],
     "deny": [],
     "ask": []

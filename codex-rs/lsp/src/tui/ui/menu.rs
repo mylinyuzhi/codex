@@ -61,5 +61,7 @@ fn get_operation_details(op: Operation) -> &'static str {
         Operation::DocumentSymbols => "List all symbols in a document",
         Operation::CallHierarchy => "Show incoming and outgoing calls for a function",
         Operation::HealthCheck => "Check if the language server is healthy",
+        Operation::InstallBinaries => "Install LSP server binaries (no config change)",
+        Operation::ConfigureServers => "Configure LSP servers (add/remove/disable)",
     }
 }

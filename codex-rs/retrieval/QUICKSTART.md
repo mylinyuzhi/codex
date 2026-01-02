@@ -66,22 +66,21 @@ mkdir -p ~/.codex
 # ~/.codex/retrieval.toml
 # Minimal local config - no external API dependencies
 
-[retrieval]
 enabled = true
 data_dir = "~/.codex/retrieval"
 
 # Embedding: Local fastembed (auto-downloads on first use)
-[retrieval.embedding]
+[embedding]
 provider = "fastembed"
 model = "nomic-embed-text-v1.5"   # 768 dims, ~274MB
 dimension = 768
 batch_size = 100
 
 # Query Rewriting: Local Ollama
-[retrieval.query_rewrite]
+[query_rewrite]
 enabled = true
 
-[retrieval.query_rewrite.llm]
+[query_rewrite.llm]
 provider = "ollama"
 model = "qwen3:0.6b"
 base_url = "http://localhost:11434/v1"
@@ -90,15 +89,15 @@ max_tokens = 500
 timeout_secs = 30
 
 # Reranking: Local fastembed
-[retrieval.extended_reranker]
+[extended_reranker]
 backend = "local"
 
-[retrieval.extended_reranker.local]
+[extended_reranker.local]
 model = "jina-reranker-v1-turbo"  # ~137MB, fastest
 batch_size = 32
 
 # Repo Map: PageRank-based context generation
-[retrieval.repo_map]
+[repo_map]
 enabled = true
 map_tokens = 1024
 damping_factor = 0.85
@@ -110,32 +109,31 @@ damping_factor = 0.85
 # ~/.codex/retrieval.toml
 # Remote config - requires API keys
 
-[retrieval]
 enabled = true
 data_dir = "~/.codex/retrieval"
 
 # Embedding: OpenAI API
-[retrieval.embedding]
+[embedding]
 provider = "openai"
 model = "text-embedding-3-small"
 dimension = 1536
 batch_size = 100
 
 # Query Rewriting: OpenAI API
-[retrieval.query_rewrite]
+[query_rewrite]
 enabled = true
 
-[retrieval.query_rewrite.llm]
+[query_rewrite.llm]
 provider = "openai"
 model = "gpt-4o-mini"
 temperature = 0.3
 max_tokens = 500
 
 # Reranking: Cohere API
-[retrieval.extended_reranker]
+[extended_reranker]
 backend = "remote"
 
-[retrieval.extended_reranker.remote]
+[extended_reranker.remote]
 provider = "cohere"
 model = "rerank-english-v3.0"
 api_key_env = "COHERE_API_KEY"
@@ -490,30 +488,29 @@ ollama pull qwen3:0.6b
 # 3. Create config
 mkdir -p ~/.codex
 cat > ~/.codex/retrieval.toml << 'EOF'
-[retrieval]
 enabled = true
 data_dir = "~/.codex/retrieval"
 
-[retrieval.embedding]
+[embedding]
 provider = "fastembed"
 model = "nomic-embed-text-v1.5"
 dimension = 768
 
-[retrieval.query_rewrite]
+[query_rewrite]
 enabled = true
 
-[retrieval.query_rewrite.llm]
+[query_rewrite.llm]
 provider = "ollama"
 model = "qwen3:0.6b"
 base_url = "http://localhost:11434/v1"
 
-[retrieval.extended_reranker]
+[extended_reranker]
 backend = "local"
 
-[retrieval.extended_reranker.local]
+[extended_reranker.local]
 model = "jina-reranker-v1-turbo"
 
-[retrieval.repo_map]
+[repo_map]
 enabled = true
 map_tokens = 1024
 EOF

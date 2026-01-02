@@ -1,6 +1,7 @@
 //! Event types for LSP Test TUI.
 
 use super::app::LspResult;
+use codex_lsp::InstallEvent;
 use crossterm::event::KeyEvent;
 
 /// TUI events
@@ -15,4 +16,6 @@ pub enum Event {
     Tick,
     /// LSP operation completed
     LspResult(LspResult),
+    /// Installation progress event
+    InstallProgress(InstallEvent),
 }

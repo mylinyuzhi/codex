@@ -17,6 +17,7 @@ path = "src/bin/retrieval_cli.rs"
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-appender = { workspace = true }
 
 # File watching (notify-debouncer-mini requires notify 7.x)
 notify = "7"
@@ -71,6 +72,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -86,6 +88,7 @@ fastembed = { version = "4", optional = true }
 
 # Internal
 codex-file-ignore = { workspace = true }
+codex-utils = { workspace = true }
 codex-utils-cache = { path = "../utils/cache" }
 dirs = { workspace = true }
 

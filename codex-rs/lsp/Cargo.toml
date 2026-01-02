@@ -16,7 +16,7 @@ required-features = ["tui"]
 
 [features]
 default = []
-tui = ["dep:ratatui", "dep:crossterm", "dep:clap", "dep:anyhow", "dep:tracing-subscriber"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:clap", "dep:anyhow", "dep:tracing-subscriber", "dep:tracing-appender"]
 
 [lints]
 workspace = true
@@ -47,8 +47,12 @@ similar = { workspace = true }
 # Home directory detection
 dirs = "5.0"
 
+# Date/time formatting
+chrono = "0.4"
+
 # Internal dependencies
 codex-file-ignore = { path = "../file-ignore" }
+codex-utils = { workspace = true }
 
 # TUI dependencies (optional, for lsp-tui binary)
 ratatui = { workspace = true, optional = true }
@@ -56,6 +60,7 @@ crossterm = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 anyhow = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"], optional = true }
+tracing-appender = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

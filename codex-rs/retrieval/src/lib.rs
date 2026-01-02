@@ -70,6 +70,7 @@ pub use types::ChunkRef;
 pub use types::CodeChunk;
 pub use types::HydratedChunk;
 pub use types::ScoreType;
+pub use types::SearchOutput;
 pub use types::SearchQuery;
 pub use types::SearchResult;
 pub use types::SourceFileId;
