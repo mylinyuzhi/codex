@@ -3,6 +3,8 @@
 //! Provides high-level methods for sending control requests to the SDK
 //! and handling responses.
 
+#![allow(dead_code, unused_imports)]
+
 use std::time::Duration;
 
 use codex_sdk_protocol::control::CanUseToolRequest;

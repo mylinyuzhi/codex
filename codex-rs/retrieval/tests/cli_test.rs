@@ -491,7 +491,8 @@ n_final = 20
 #[test]
 fn test_config_load_nonexistent_returns_default() {
     let dir = TempDir::new().unwrap();
-    // Load from directory without config file - should return default
-    let config = RetrievalConfig::load(dir.path()).unwrap();
+    let nonexistent_config = dir.path().join("nonexistent.toml");
+    // Use explicit config file path - does not fall back to global config
+    let config = RetrievalConfig::load_with_config_file(&nonexistent_config).unwrap();
     assert!(!config.enabled); // Default is disabled
 }

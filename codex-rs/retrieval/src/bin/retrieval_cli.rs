@@ -183,8 +183,21 @@ async fn main() -> anyhow::Result<()> {
     let events_mode = cli.events;
     let cli_mode = cli.no_tui || events_mode || cli.command.is_some();
 
-    // Initialize tracing based on mode (keep guard alive for logging)
-    let _log_guard = init_tracing(cli_mode, events_mode, cli.verbose);
+    // Canonicalize workdir early for config loading
+    let workdir = cli.workdir.canonicalize().unwrap_or(cli.workdir.clone());
+
+    // Load config from specified file or default locations
+    // Config is loaded before tracing so we can use config.logging
+    let config = if let Some(config_path) = &cli.config {
+        // Use explicit config file - returns default if not found (with warning)
+        RetrievalConfig::load_with_config_file(config_path)?
+    } else {
+        RetrievalConfig::load(&workdir)?
+    };
+
+    // Initialize tracing with config.logging (keep guard alive for logging)
+    // Priority: RUST_LOG > CLI -v flags > config.logging.level > fallback "info"
+    let _log_guard = init_tracing(&config.logging, cli.verbose);
 
     // Register LoggingConsumer to sync events with tracing logs
     event_emitter::EventEmitter::register_consumer(Arc::new(std::sync::RwLock::new(
@@ -198,19 +211,6 @@ async fn main() -> anyhow::Result<()> {
         events_mode = events_mode,
         "Retrieval CLI starting"
     );
-
-    // Canonicalize workdir
-    let workdir = cli.workdir.canonicalize().unwrap_or(cli.workdir.clone());
-
-    // Load config from specified file or default locations
-    let config = if let Some(config_path) = &cli.config {
-        if !config_path.exists() {
-            anyhow::bail!("Config file not found: {}", config_path.display());
-        }
-        RetrievalConfig::from_file(config_path)?
-    } else {
-        RetrievalConfig::load(&workdir)?
-    };
 
     // Set up event consumer for --events mode
     let _event_guard = if events_mode {
@@ -301,9 +301,15 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
 ///
 /// Logs are written to `~/.codex/log/retrieval.log`.
 /// Returns a guard that must be kept alive for the duration of logging.
-fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<WorkerGuard> {
+///
+/// Priority chain for log level:
+/// 1. RUST_LOG env var (highest, handled by configure_fmt_layer!)
+/// 2. CLI -v flags (if verbose > 0, overrides config)
+/// 3. config.logging.level (from retrieval.toml)
+/// 4. fallback "codex_retrieval=info" (lowest)
+fn init_tracing(config_logging: &codex_utils::LoggingConfig, verbose: u8) -> Option<WorkerGuard> {
     use tracing_appender::non_blocking;
-    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
 
     // Determine log directory: ~/.codex/log/
     let log_dir = dirs::home_dir()
@@ -312,9 +318,8 @@ fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<Worker
 
     // Create log directory if it doesn't exist
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("Warning: Could not create log directory: {}", e);
-        // Fall back to stderr-only logging
-        return init_tracing_stderr(cli_mode, events_mode, verbose);
+        eprintln!("Warning: Could not create log directory: {e}");
+        return init_tracing_stderr(config_logging, verbose);
     }
 
     // Open log file with append mode
@@ -322,7 +327,6 @@ fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<Worker
     let mut log_file_opts = OpenOptions::new();
     log_file_opts.create(true).append(true);
 
-    // Set file permissions to 0600 on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -332,64 +336,68 @@ fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<Worker
     let log_file = match log_file_opts.open(&log_path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("Warning: Could not open log file: {}", e);
-            return init_tracing_stderr(cli_mode, events_mode, verbose);
+            eprintln!("Warning: Could not open log file: {e}");
+            return init_tracing_stderr(config_logging, verbose);
         }
     };
 
-    // Create non-blocking writer
     let (non_blocking, guard) = non_blocking(log_file);
 
-    // Determine log level filter
-    let filter_str = if events_mode {
-        "codex_retrieval=info"
-    } else if cli_mode {
-        match verbose {
-            0 => "codex_retrieval=info",
-            1 => "codex_retrieval=info",
-            2 => "codex_retrieval=debug",
-            _ => "codex_retrieval=trace",
-        }
+    // CLI -v flags override config level when specified
+    let logging_config = if verbose > 0 {
+        let level = match verbose {
+            1 => "info",
+            2 => "debug",
+            _ => "trace",
+        };
+        codex_utils::LoggingConfig::with_level(level)
     } else {
-        // TUI mode
-        "codex_retrieval=info"
+        config_logging.clone()
     };
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_str));
+    // Use codex-utils logging infrastructure for timezone-aware timestamps
+    let file_layer = codex_utils::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_ansi(false),
+        &logging_config,
+        "codex_retrieval=info"
+    );
 
-    // Build subscriber with file writer
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(non_blocking)
-        .with_target(true)
-        .with_ansi(false)
-        .try_init();
+    let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
     Some(guard)
 }
 
 /// Fallback: stderr-only logging when file logging fails.
-fn init_tracing_stderr(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<WorkerGuard> {
-    use tracing_subscriber::EnvFilter;
+fn init_tracing_stderr(
+    config_logging: &codex_utils::LoggingConfig,
+    verbose: u8,
+) -> Option<WorkerGuard> {
+    use tracing_subscriber::prelude::*;
 
-    let filter = if events_mode {
-        EnvFilter::from_default_env().add_directive("codex_retrieval=warn".parse().unwrap())
-    } else if cli_mode {
+    // CLI -v flags override config level when specified
+    let logging_config = if verbose > 0 {
         let level = match verbose {
-            0 => "codex_retrieval=warn",
-            1 => "codex_retrieval=info",
-            2 => "codex_retrieval=debug",
-            _ => "codex_retrieval=trace",
+            1 => "info",
+            2 => "debug",
+            _ => "trace",
         };
-        EnvFilter::from_default_env().add_directive(level.parse().unwrap())
+        codex_utils::LoggingConfig::with_level(level)
     } else {
-        EnvFilter::from_default_env().add_directive("codex_retrieval=warn".parse().unwrap())
+        config_logging.clone()
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    // Use codex-utils logging infrastructure for consistent formatting
+    let stderr_layer = codex_utils::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(true),
+        &logging_config,
+        "codex_retrieval=info"
+    );
+
+    let _ = tracing_subscriber::registry().with(stderr_layer).try_init();
 
     None
 }

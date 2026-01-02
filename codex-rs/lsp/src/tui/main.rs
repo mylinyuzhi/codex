@@ -24,7 +24,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing_appender::non_blocking;
-use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser, Debug)]
@@ -141,16 +140,17 @@ async fn main() -> Result<()> {
 
     let log_file = log_file_opts.open(log_dir.join("lsp.log"))?;
 
-    let (non_blocking_writer, _guard) = non_blocking(log_file);
+    let (non_blocking, _guard) = non_blocking(log_file);
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("codex_lsp=info"));
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking_writer)
-        .with_target(true)
-        .with_ansi(false)
-        .with_filter(env_filter);
+    // Use codex-utils logging infrastructure for timezone-aware timestamps
+    let logging_config = codex_utils::LoggingConfig::default();
+    let file_layer = codex_utils::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_ansi(false),
+        &logging_config,
+        "codex_lsp=info"
+    );
 
     tracing_subscriber::registry().with(file_layer).init();
 
