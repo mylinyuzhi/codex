@@ -3,6 +3,7 @@
 //! Handles the SDK mode lifecycle including handshake, message processing,
 //! and event streaming.
 
+use codex_sdk_protocol::PROTOCOL_VERSION;
 use codex_sdk_protocol::control::CliHello;
 use codex_sdk_protocol::control::SdkHello;
 use codex_sdk_protocol::messages::CliMessage;
@@ -10,7 +11,6 @@ use codex_sdk_protocol::messages::ResultMessage;
 use codex_sdk_protocol::messages::ResultSubtype;
 use codex_sdk_protocol::messages::SdkMessage;
 use codex_sdk_protocol::messages::StreamEventMessage;
-use codex_sdk_protocol::PROTOCOL_VERSION;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -156,10 +156,10 @@ async fn process_user_message(
     user_msg: codex_sdk_protocol::messages::UserMessage,
 ) -> Result<(), anyhow::Error> {
     use codex_sdk_protocol::events::ThreadEvent;
-use codex_sdk_protocol::events::ThreadStartedEvent;
-use codex_sdk_protocol::events::TurnCompletedEvent;
-use codex_sdk_protocol::events::TurnStartedEvent;
-use codex_sdk_protocol::events::Usage;
+    use codex_sdk_protocol::events::ThreadStartedEvent;
+    use codex_sdk_protocol::events::TurnCompletedEvent;
+    use codex_sdk_protocol::events::TurnStartedEvent;
+    use codex_sdk_protocol::events::Usage;
 
     // TODO: This is a placeholder. The real implementation should:
     // 1. Create or resume a conversation

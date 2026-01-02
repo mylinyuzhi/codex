@@ -388,6 +388,30 @@ pub struct SearchResult {
     pub is_stale: Option<bool>,
 }
 
+/// Search output containing results and filter configuration.
+///
+/// This allows LLM callers to understand what files/directories are included
+/// or excluded from the search index.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOutput {
+    /// Search results
+    pub results: Vec<SearchResult>,
+    /// Active filter configuration (if any)
+    pub filter: Option<crate::indexing::FilterSummary>,
+}
+
+impl SearchOutput {
+    /// Returns true if there are no results.
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    /// Returns the number of results.
+    pub fn len(&self) -> usize {
+        self.results.len()
+    }
+}
+
 /// Type of score for search results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -3,12 +3,18 @@
 use super::event::Event;
 use super::ops;
 use anyhow::Result;
+use codex_lsp::ConfigLevel;
 use codex_lsp::DiagnosticEntry;
 use codex_lsp::DiagnosticsStore;
+use codex_lsp::InstallEvent;
 use codex_lsp::Location;
 use codex_lsp::LspClient;
+use codex_lsp::LspInstaller;
 use codex_lsp::LspServerManager;
 use codex_lsp::ResolvedSymbol;
+use codex_lsp::ServerConfigInfo;
+use codex_lsp::ServerStatus;
+use codex_lsp::ServerStatusInfo;
 use codex_lsp::SymbolKind;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -16,6 +22,7 @@ use crossterm::event::KeyModifiers;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::info;
 
 /// Application modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,6 +38,14 @@ pub enum Mode {
     Results,
     /// Showing diagnostics
     Diagnostics,
+    /// Showing LSP servers status (for Install Binaries)
+    Servers,
+    /// Configure LSP servers (add/remove/disable)
+    ConfigServers,
+    /// Selecting config level (user vs project) before adding to config
+    ConfigLevelSelect,
+    /// Installing a server (shows progress)
+    Installing,
     /// Showing help
     Help,
 }
@@ -43,6 +58,10 @@ impl Mode {
             Mode::SymbolInput => "Symbol Input",
             Mode::Results => "Results",
             Mode::Diagnostics => "Diagnostics",
+            Mode::Servers => "Servers",
+            Mode::ConfigServers => "Config Servers",
+            Mode::ConfigLevelSelect => "Config Level",
+            Mode::Installing => "Installing",
             Mode::Help => "Help",
         }
     }
@@ -61,6 +80,8 @@ pub enum Operation {
     DocumentSymbols,
     CallHierarchy,
     HealthCheck,
+    InstallBinaries,
+    ConfigureServers,
 }
 
 impl Operation {
@@ -76,6 +97,8 @@ impl Operation {
             Operation::DocumentSymbols,
             Operation::CallHierarchy,
             Operation::HealthCheck,
+            Operation::InstallBinaries,
+            Operation::ConfigureServers,
         ]
     }
 
@@ -91,15 +114,29 @@ impl Operation {
             Operation::DocumentSymbols => "Document Symbols",
             Operation::CallHierarchy => "Call Hierarchy",
             Operation::HealthCheck => "Health Check",
+            Operation::InstallBinaries => "Install Binaries",
+            Operation::ConfigureServers => "Configure Servers",
         }
     }
 
     pub fn needs_file(&self) -> bool {
-        !matches!(self, Operation::WorkspaceSymbol | Operation::HealthCheck)
+        !matches!(
+            self,
+            Operation::WorkspaceSymbol
+                | Operation::HealthCheck
+                | Operation::InstallBinaries
+                | Operation::ConfigureServers
+        )
     }
 
     pub fn needs_symbol(&self) -> bool {
-        !matches!(self, Operation::DocumentSymbols | Operation::HealthCheck)
+        !matches!(
+            self,
+            Operation::DocumentSymbols
+                | Operation::HealthCheck
+                | Operation::InstallBinaries
+                | Operation::ConfigureServers
+        )
     }
 }
 
@@ -212,6 +249,32 @@ pub struct CallHierarchyResult {
     pub outgoing: Vec<String>,
 }
 
+/// Structured error with operation context for TUI display and LLM/API callers
+#[derive(Debug, Clone)]
+pub struct LspErrorContext {
+    /// The operation that was being executed
+    pub operation: String,
+    /// The file path involved (if any)
+    pub file: Option<String>,
+    /// The symbol being queried (if any)
+    pub symbol: Option<String>,
+    /// The error message
+    pub error: String,
+}
+
+impl std::fmt::Display for LspErrorContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {}", self.operation, self.error)?;
+        if let Some(ref file) = self.file {
+            write!(f, " (file: {})", file)?;
+        }
+        if let Some(ref symbol) = self.symbol {
+            write!(f, " (symbol: {})", symbol)?;
+        }
+        Ok(())
+    }
+}
+
 /// Result data from LSP operations
 #[derive(Debug)]
 pub enum LspResult {
@@ -220,8 +283,9 @@ pub enum LspResult {
     Symbols(Vec<ResolvedSymbol>),
     WorkspaceSymbols(Vec<codex_lsp::SymbolInformation>),
     CallHierarchy(CallHierarchyResult),
+    ServerList(Vec<ServerStatusInfo>),
     HealthOk(String),
-    Error(String),
+    Error(LspErrorContext),
 }
 
 /// Main application state
@@ -256,6 +320,28 @@ pub struct App {
     pub diag_scroll: usize,
     /// Cached diagnostics (fetched when entering diagnostics mode)
     pub cached_diagnostics: Vec<DiagnosticEntry>,
+    /// Cached server status list (for Install Binaries)
+    pub cached_servers: Vec<ServerStatusInfo>,
+    /// Servers scroll offset
+    pub servers_scroll: usize,
+    /// Currently selected server index in Servers mode
+    pub selected_server: usize,
+    /// Cached server config list (for Configure Servers)
+    pub cached_config_servers: Vec<ServerConfigInfo>,
+    /// Selected server index in ConfigServers mode
+    pub selected_config_server: usize,
+    /// Config scroll offset
+    pub config_servers_scroll: usize,
+    /// Whether config has been changed (need restart)
+    pub config_changed: bool,
+    /// Installation output lines
+    pub install_output: Vec<String>,
+    /// Currently installing server ID
+    pub installing_server: Option<String>,
+    /// Server ID pending config level selection before install
+    pub pending_install_server: Option<String>,
+    /// Selected config level (0 = user, 1 = project)
+    pub config_level_selection: usize,
     /// Status message
     pub status_message: Option<String>,
     /// Should quit
@@ -286,6 +372,17 @@ impl App {
             result_scroll: 0,
             diag_scroll: 0,
             cached_diagnostics: Vec::new(),
+            cached_servers: Vec::new(),
+            servers_scroll: 0,
+            selected_server: 0,
+            cached_config_servers: Vec::new(),
+            selected_config_server: 0,
+            config_servers_scroll: 0,
+            config_changed: false,
+            install_output: Vec::new(),
+            installing_server: None,
+            pending_install_server: None,
+            config_level_selection: 0,
             status_message: None,
             should_quit: false,
             loading: false,
@@ -309,8 +406,45 @@ impl App {
                 self.mode = Mode::Results;
                 self.loading = false;
             }
+            Event::InstallProgress(install_event) => {
+                self.handle_install_progress(install_event).await;
+            }
         }
         Ok(())
+    }
+
+    /// Handle installation progress events
+    async fn handle_install_progress(&mut self, event: InstallEvent) {
+        match event {
+            InstallEvent::Started { server_id, method } => {
+                self.install_output.push(format!(
+                    "Starting installation of {} using {}...",
+                    server_id, method
+                ));
+            }
+            InstallEvent::Output(line) => {
+                self.install_output.push(line);
+            }
+            InstallEvent::Completed { server_id } => {
+                self.install_output
+                    .push(format!("Successfully installed {}!", server_id));
+                self.install_output.push(String::new());
+                self.install_output.push(
+                    "Binary installed. Use 'Configure Servers' to add to config.".to_string(),
+                );
+                self.status_message = Some(format!("{} binary installed!", server_id));
+                self.loading = false;
+
+                // Refresh server list to show new installation status
+                self.cached_servers = self.manager.get_all_builtin_servers_status().await;
+            }
+            InstallEvent::Failed { server_id, error } => {
+                self.install_output
+                    .push(format!("ERROR: Failed to install {}: {}", server_id, error));
+                self.status_message = Some(format!("Failed to install {}", server_id));
+                self.loading = false;
+            }
+        }
     }
 
     async fn handle_key(&mut self, key: KeyEvent, tx: mpsc::Sender<Event>) -> Result<()> {
@@ -326,6 +460,10 @@ impl App {
             Mode::SymbolInput => self.handle_symbol_input_key(key, tx).await?,
             Mode::Results => self.handle_results_key(key)?,
             Mode::Diagnostics => self.handle_diagnostics_key(key)?,
+            Mode::Servers => self.handle_servers_key(key, tx).await?,
+            Mode::ConfigServers => self.handle_config_servers_key(key).await?,
+            Mode::ConfigLevelSelect => self.handle_config_level_select_key(key, tx).await?,
+            Mode::Installing => self.handle_installing_key(key)?,
             Mode::Help => self.handle_help_key(key)?,
         }
         Ok(())
@@ -341,6 +479,12 @@ impl App {
                 self.cached_diagnostics = self.diagnostics.get_all().await;
                 self.diag_scroll = 0;
                 self.mode = Mode::Diagnostics;
+            }
+            KeyCode::Char('s') => {
+                // Fetch server status before entering servers mode
+                self.cached_servers = self.manager.get_all_servers_status().await;
+                self.servers_scroll = 0;
+                self.mode = Mode::Servers;
             }
             KeyCode::Char('?') | KeyCode::Char('h') => {
                 self.mode = Mode::Help;
@@ -369,6 +513,30 @@ impl App {
                     }
                 } else if op.needs_symbol() {
                     self.mode = Mode::SymbolInput;
+                } else if matches!(op, Operation::InstallBinaries) {
+                    // Go to Servers view showing ALL builtin servers (not just configured ones)
+                    self.cached_servers = self.manager.get_all_builtin_servers_status().await;
+                    self.servers_scroll = 0;
+                    self.mode = Mode::Servers;
+                    // Auto-select first NotInstalled server
+                    self.selected_server = self
+                        .cached_servers
+                        .iter()
+                        .position(|s| matches!(s.status, ServerStatus::NotInstalled))
+                        .unwrap_or(0);
+                } else if matches!(op, Operation::ConfigureServers) {
+                    // Go to ConfigServers view
+                    let user_dir = dirs::home_dir()
+                        .map(|h| h.join(".codex"))
+                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                    let project_dir = self.workspace.join(".codex");
+                    self.cached_config_servers = self
+                        .manager
+                        .get_all_servers_for_config(&user_dir, &project_dir)
+                        .await;
+                    self.config_servers_scroll = 0;
+                    self.selected_config_server = 0;
+                    self.mode = Mode::ConfigServers;
                 } else {
                     // Execute immediately (HealthCheck)
                     self.execute_operation(tx).await?;
@@ -535,6 +703,362 @@ impl App {
         Ok(())
     }
 
+    async fn handle_servers_key(&mut self, key: KeyEvent, tx: mpsc::Sender<Event>) -> Result<()> {
+        let server_count = self.cached_servers.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Menu;
+            }
+            KeyCode::Char('r') => {
+                // Refresh server status
+                self.cached_servers = self.manager.get_all_servers_status().await;
+                // Ensure selected_server is still valid
+                if self.selected_server >= server_count && server_count > 0 {
+                    self.selected_server = server_count - 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('i') => {
+                // Install selected server binary if it's not installed
+                if let Some(server) = self.cached_servers.get(self.selected_server) {
+                    if matches!(server.status, ServerStatus::NotInstalled) {
+                        // Directly install binary (no config modification)
+                        self.start_installation(server.id.clone(), tx).await?;
+                    } else {
+                        self.status_message =
+                            Some(format!("Server '{}' is already installed", server.id));
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if self.selected_server > 0 {
+                    self.selected_server -= 1;
+                    // Adjust scroll if selected is above visible area
+                    if self.selected_server < self.servers_scroll {
+                        self.servers_scroll = self.selected_server;
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if server_count > 0 && self.selected_server < server_count - 1 {
+                    self.selected_server += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                self.selected_server = self.selected_server.saturating_sub(10);
+                self.servers_scroll = self.servers_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                if server_count > 0 {
+                    self.selected_server = (self.selected_server + 10).min(server_count - 1);
+                }
+            }
+            KeyCode::Home => {
+                self.selected_server = 0;
+                self.servers_scroll = 0;
+            }
+            KeyCode::End => {
+                if server_count > 0 {
+                    self.selected_server = server_count - 1;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handle key events in ConfigServers mode
+    /// Keys: a = add to config, d = disable/enable, x = remove from config
+    async fn handle_config_servers_key(&mut self, key: KeyEvent) -> Result<()> {
+        use codex_lsp::config::LspServersConfig;
+
+        let server_count = self.cached_config_servers.len();
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Check if config changed and show message
+                if self.config_changed {
+                    self.status_message = Some("Config changed. Restart TUI to apply.".to_string());
+                    self.config_changed = false;
+                }
+                self.mode = Mode::Menu;
+            }
+            KeyCode::Char('r') => {
+                // Refresh server list
+                let user_dir = dirs::home_dir()
+                    .map(|h| h.join(".codex"))
+                    .unwrap_or_else(|| PathBuf::from(".codex"));
+                let project_dir = self.workspace.join(".codex");
+                self.cached_config_servers = self
+                    .manager
+                    .get_all_servers_for_config(&user_dir, &project_dir)
+                    .await;
+                // Ensure selected_config_server is still valid
+                if self.selected_config_server >= server_count && server_count > 0 {
+                    self.selected_config_server = server_count - 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('a') => {
+                // Add to config - only if binary is installed and not yet configured
+                if let Some(server) = self.cached_config_servers.get(self.selected_config_server) {
+                    if server.binary_installed && server.config_level.is_none() {
+                        // Go to config level selection
+                        self.pending_install_server = Some(server.id.clone());
+                        self.mode = Mode::ConfigLevelSelect;
+                    } else if !server.binary_installed {
+                        self.status_message = Some(format!(
+                            "'{}' not installed. Use Install Binaries first.",
+                            server.id
+                        ));
+                    } else {
+                        self.status_message = Some(format!(
+                            "'{}' already configured at {} level",
+                            server.id,
+                            server
+                                .config_level
+                                .as_ref()
+                                .map(|l| l.to_string())
+                                .unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            KeyCode::Char('d') => {
+                // Disable/Enable toggle - only for configured servers
+                if let Some(server) = self.cached_config_servers.get(self.selected_config_server) {
+                    if let Some(config_level) = &server.config_level {
+                        let config_dir = match config_level {
+                            ConfigLevel::User => dirs::home_dir().map(|h| h.join(".codex")),
+                            ConfigLevel::Project => Some(self.workspace.join(".codex")),
+                        };
+
+                        if let Some(dir) = config_dir {
+                            match LspServersConfig::toggle_server_disabled(&dir, &server.id) {
+                                Ok(Some(new_disabled)) => {
+                                    let state = if new_disabled { "disabled" } else { "enabled" };
+                                    self.status_message = Some(format!(
+                                        "'{}' is now {}. Restart to apply.",
+                                        server.id, state
+                                    ));
+                                    self.config_changed = true;
+                                    // Refresh list
+                                    let user_dir = dirs::home_dir()
+                                        .map(|h| h.join(".codex"))
+                                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                                    let project_dir = self.workspace.join(".codex");
+                                    self.cached_config_servers = self
+                                        .manager
+                                        .get_all_servers_for_config(&user_dir, &project_dir)
+                                        .await;
+                                }
+                                Ok(None) => {
+                                    self.status_message =
+                                        Some(format!("'{}' not found in config", server.id));
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("Failed to toggle: {e}"));
+                                }
+                            }
+                        }
+                    } else {
+                        self.status_message =
+                            Some(format!("'{}' is not configured. Add it first.", server.id));
+                    }
+                }
+            }
+            KeyCode::Char('x') => {
+                // Remove from config - only for configured servers
+                if let Some(server) = self.cached_config_servers.get(self.selected_config_server) {
+                    if let Some(config_level) = &server.config_level {
+                        let config_dir = match config_level {
+                            ConfigLevel::User => dirs::home_dir().map(|h| h.join(".codex")),
+                            ConfigLevel::Project => Some(self.workspace.join(".codex")),
+                        };
+
+                        if let Some(dir) = config_dir {
+                            match LspServersConfig::remove_server_from_file(&dir, &server.id) {
+                                Ok(true) => {
+                                    self.status_message = Some(format!(
+                                        "'{}' removed from config. Restart to apply.",
+                                        server.id
+                                    ));
+                                    self.config_changed = true;
+                                    // Refresh list
+                                    let user_dir = dirs::home_dir()
+                                        .map(|h| h.join(".codex"))
+                                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                                    let project_dir = self.workspace.join(".codex");
+                                    self.cached_config_servers = self
+                                        .manager
+                                        .get_all_servers_for_config(&user_dir, &project_dir)
+                                        .await;
+                                }
+                                Ok(false) => {
+                                    self.status_message =
+                                        Some(format!("'{}' not found in config", server.id));
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("Failed to remove: {e}"));
+                                }
+                            }
+                        }
+                    } else {
+                        self.status_message = Some(format!("'{}' is not configured", server.id));
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if self.selected_config_server > 0 {
+                    self.selected_config_server -= 1;
+                    if self.selected_config_server < self.config_servers_scroll {
+                        self.config_servers_scroll = self.selected_config_server;
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if server_count > 0 && self.selected_config_server < server_count - 1 {
+                    self.selected_config_server += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                self.selected_config_server = self.selected_config_server.saturating_sub(10);
+                self.config_servers_scroll = self.config_servers_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                if server_count > 0 {
+                    self.selected_config_server =
+                        (self.selected_config_server + 10).min(server_count - 1);
+                }
+            }
+            KeyCode::Home => {
+                self.selected_config_server = 0;
+                self.config_servers_scroll = 0;
+            }
+            KeyCode::End => {
+                if server_count > 0 {
+                    self.selected_config_server = server_count - 1;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handle key events in ConfigLevelSelect mode
+    /// This is used by ConfigureServers when adding a server to config
+    async fn handle_config_level_select_key(
+        &mut self,
+        key: KeyEvent,
+        _tx: mpsc::Sender<Event>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Cancel and go back to ConfigServers
+                self.pending_install_server = None;
+                self.mode = Mode::ConfigServers;
+            }
+            KeyCode::Up | KeyCode::Char('1') => {
+                self.config_level_selection = 0; // User level
+            }
+            KeyCode::Down | KeyCode::Char('2') => {
+                self.config_level_selection = 1; // Project level
+            }
+            KeyCode::Enter => {
+                // Add server to config
+                if let Some(server_id) = self.pending_install_server.take() {
+                    self.add_server_to_config(&server_id)?;
+                    self.config_changed = true;
+                    // Refresh config servers list
+                    let user_dir = dirs::home_dir()
+                        .map(|h| h.join(".codex"))
+                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                    let project_dir = self.workspace.join(".codex");
+                    self.cached_config_servers = self
+                        .manager
+                        .get_all_servers_for_config(&user_dir, &project_dir)
+                        .await;
+                    self.mode = Mode::ConfigServers;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Add a server to the config file at the selected level
+    fn add_server_to_config(&mut self, server_id: &str) -> Result<()> {
+        use codex_lsp::config::LspServersConfig;
+
+        let config_dir = if self.config_level_selection == 0 {
+            dirs::home_dir().map(|h| h.join(".codex"))
+        } else {
+            Some(self.workspace.join(".codex"))
+        };
+
+        if let Some(dir) = config_dir {
+            if let Err(e) = LspServersConfig::add_server_to_file(&dir, server_id) {
+                self.status_message = Some(format!("Failed to add server: {e}"));
+            } else {
+                self.status_message = Some(format!(
+                    "{} added to config. Restart to activate.",
+                    server_id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle key events in Installing mode
+    fn handle_installing_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Return to Servers mode
+                self.mode = Mode::Servers;
+                self.installing_server = None;
+                // Don't clear install_output - keep it for reference
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Start installation of a server binary (no config modification)
+    async fn start_installation(
+        &mut self,
+        server_id: String,
+        tx: mpsc::Sender<Event>,
+    ) -> Result<()> {
+        info!(server = %server_id, "Starting server binary installation");
+
+        self.mode = Mode::Installing;
+        self.installing_server = Some(server_id.clone());
+        self.install_output.clear();
+        self.install_output
+            .push("Installing binary only (no config change)...".to_string());
+        self.loading = true;
+
+        // Create channel for progress events
+        let (progress_tx, mut progress_rx) = mpsc::channel::<InstallEvent>(100);
+
+        // Spawn installer task
+        let server_id_clone = server_id.clone();
+        tokio::spawn(async move {
+            let installer = LspInstaller::new(Some(progress_tx));
+            let _ = installer.install_server(&server_id_clone).await;
+        });
+
+        // Spawn progress forwarding task
+        let event_tx = tx;
+        tokio::spawn(async move {
+            while let Some(event) = progress_rx.recv().await {
+                if event_tx.send(Event::InstallProgress(event)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     /// Calculate the number of lines in the current result for scroll bounds.
     pub fn result_line_count(&self) -> usize {
         match &self.result {
@@ -571,6 +1095,13 @@ impl App {
                     ch.outgoing.len() + 2
                 };
                 items_lines + incoming_lines + outgoing_lines
+            }
+            Some(LspResult::ServerList(servers)) => {
+                if servers.is_empty() {
+                    2
+                } else {
+                    servers.len() + 3
+                }
             }
             Some(LspResult::HealthOk(_)) => 2,
             Some(LspResult::Error(_)) => 2,

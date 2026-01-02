@@ -71,8 +71,8 @@ impl ControlProtocol {
         tool_use_id: &str,
         agent_id: &str,
     ) -> Result<CanUseToolResponse, ControlError> {
-        let request = ControlRequest::Inbound(InboundControlRequest::CanUseTool(
-            CanUseToolRequest {
+        let request =
+            ControlRequest::Inbound(InboundControlRequest::CanUseTool(CanUseToolRequest {
                 tool_name: tool_name.to_string(),
                 input: input.clone(),
                 permission_suggestions: suggestions,
@@ -80,8 +80,7 @@ impl ControlProtocol {
                 decision_reason: None,
                 tool_use_id: tool_use_id.to_string(),
                 agent_id: agent_id.to_string(),
-            },
-        ));
+            }));
 
         let response = self.send_request_with_timeout(request).await?;
 
@@ -104,14 +103,13 @@ impl ControlProtocol {
         input: HookInput,
         tool_use_id: Option<&str>,
     ) -> Result<HookOutput, ControlError> {
-        let request = ControlRequest::Inbound(InboundControlRequest::HookCallback(
-            HookCallbackRequest {
+        let request =
+            ControlRequest::Inbound(InboundControlRequest::HookCallback(HookCallbackRequest {
                 callback_id: callback_id.to_string(),
                 hook_event,
                 input,
                 tool_use_id: tool_use_id.map(|s| s.to_string()),
-            },
-        ));
+            }));
 
         let response = self.send_request_with_timeout(request).await?;
 
@@ -134,12 +132,11 @@ impl ControlProtocol {
         server_name: &str,
         message: JsonValue,
     ) -> Result<McpMessageResponse, ControlError> {
-        let request = ControlRequest::Inbound(InboundControlRequest::McpMessage(
-            McpMessageRequest {
+        let request =
+            ControlRequest::Inbound(InboundControlRequest::McpMessage(McpMessageRequest {
                 server_name: server_name.to_string(),
                 message,
-            },
-        ));
+            }));
 
         let response = self.send_request_with_timeout(request).await?;
 
@@ -157,10 +154,13 @@ impl ControlProtocol {
         &mut self,
         request: ControlRequest,
     ) -> Result<ControlResponse, ControlError> {
-        tokio::time::timeout(self.request_timeout, self.transport.send_control_request(request))
-            .await
-            .map_err(|_| ControlError::Timeout)?
-            .map_err(ControlError::Transport)
+        tokio::time::timeout(
+            self.request_timeout,
+            self.transport.send_control_request(request),
+        )
+        .await
+        .map_err(|_| ControlError::Timeout)?
+        .map_err(ControlError::Transport)
     }
 }
 

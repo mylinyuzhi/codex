@@ -133,7 +133,6 @@ pub mod compact_v2;
 pub mod otel_init;
 
 mod error_ext;
-pub mod logging_ext;
 mod model_provider_info_ext;
 pub use model_provider_info_ext::ModelProviderInfoExt;
 

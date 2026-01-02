@@ -3,6 +3,7 @@
 use crate::client::LspClient;
 use crate::config::BUILTIN_SERVERS;
 use crate::config::BuiltinServer;
+use crate::config::ConfigLevel;
 use crate::config::LifecycleConfig;
 use crate::config::LspServerConfig;
 use crate::config::LspServersConfig;
@@ -36,10 +37,16 @@ struct ServerInfo {
     id: String,
     command: String,
     args: Vec<String>,
+    /// File extensions this server handles
+    extensions: Vec<String>,
+    /// Language identifiers (reserved for future use)
+    _languages: Vec<String>,
     env: HashMap<String, String>,
     init_options: Option<serde_json::Value>,
     settings: Option<serde_json::Value>,
     lifecycle_config: LifecycleConfig,
+    /// Installation hint for when command is not found
+    install_hint: String,
 }
 
 /// LSP server manager - manages multiple server instances
@@ -81,9 +88,9 @@ impl LspServerManager {
             Ok(p) => p,
             Err(e) => {
                 warn!(
-                    "Failed to canonicalize path {}: {}, using original path",
-                    file_path.display(),
-                    e
+                    path = %file_path.display(),
+                    error = %e,
+                    "Failed to canonicalize path, using original"
                 );
                 file_path.to_path_buf()
             }
@@ -282,7 +289,11 @@ impl LspServerManager {
             }
             Err(e) => {
                 lifecycle.set_restarting(false);
-                if lifecycle.record_crash().await {
+
+                // ServerNotInstalled is permanent - don't retry
+                if matches!(e, LspErr::ServerNotInstalled { .. }) {
+                    lifecycle.set_health(ServerHealth::Failed).await;
+                } else if lifecycle.record_crash().await {
                     // Can retry - but return error for this call
                     // Next call will attempt restart
                     warn!("LSP server {} failed to start: {}", server_info.id, e);
@@ -293,43 +304,128 @@ impl LspServerManager {
     }
 
     /// Find server configuration for file extension
+    ///
+    /// Only servers declared in lsp_servers.json are considered.
+    /// Builtin templates are used to complete missing config fields.
     async fn find_server_for_extension(&self, ext: &str) -> Result<ServerInfo> {
-        // First, check custom servers (those with command defined)
+        // Only check configured servers (no auto-matching of builtins)
         for (id, config) in &self.config.servers {
             if config.disabled {
                 continue;
             }
 
-            if config.is_custom() {
-                // Custom server: check file_extensions
-                if config.file_extensions.iter().any(|e| e == ext) {
-                    return Ok(self.build_server_info_from_config(id, config));
-                }
+            // Build server info with template completion
+            let server_info = self.build_server_info(id, config).await?;
+
+            // Check if this server handles the extension
+            if server_info.extensions.iter().any(|e| e == ext) {
+                return Ok(server_info);
             }
         }
 
-        // Then, check builtin servers
-        let builtin =
-            BuiltinServer::find_by_extension(ext).ok_or_else(|| LspErr::NoServerForExtension {
-                ext: ext.to_string(),
-            })?;
-
-        // Check if disabled in config
-        if self.config.is_disabled(builtin.id) {
-            return Err(LspErr::NoServerForExtension {
-                ext: ext.to_string(),
-            });
-        }
-
-        self.build_server_info_from_builtin(builtin).await
+        Err(LspErr::NoServerForExtension {
+            ext: ext.to_string(),
+        })
     }
 
-    /// Build ServerInfo from a unified server config (custom server)
-    fn build_server_info_from_config(&self, id: &str, config: &LspServerConfig) -> ServerInfo {
-        ServerInfo {
+    /// Build server info from config, completing missing fields from builtin template
+    ///
+    /// This unified method handles both:
+    /// - Builtin references (e.g., `"rust-analyzer": {}`) - fills from template
+    /// - Custom servers (e.g., `"clangd": {"command": "clangd"}`) - uses config as-is
+    async fn build_server_info(&self, id: &str, config: &LspServerConfig) -> Result<ServerInfo> {
+        // Try to find a builtin template for this ID
+        let template = BuiltinServer::find_by_id(id);
+
+        // --- Command: user config > template ---
+        let command = config.command.clone().or_else(|| {
+            template.map(|t| {
+                t.commands[0]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
+        });
+
+        let Some(command) = command else {
+            return Err(LspErr::MissingCommand {
+                server_id: id.to_string(),
+                hint: "Add 'command' field to config".to_string(),
+            });
+        };
+
+        // --- Args: user config > template ---
+        let args = if config.args.is_empty() {
+            template
+                .map(|t| {
+                    t.commands[0]
+                        .split_whitespace()
+                        .skip(1)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            config.args.clone()
+        };
+
+        // --- Extensions: user config > template ---
+        let extensions = if config.file_extensions.is_empty() {
+            template
+                .map(|t| t.extensions.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default()
+        } else {
+            config.file_extensions.clone()
+        };
+
+        // --- Languages: user config > template ---
+        let languages = if config.languages.is_empty() {
+            template
+                .map(|t| t.languages.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default()
+        } else {
+            config.languages.clone()
+        };
+
+        // --- Install hint: template > generic ---
+        let install_hint = template
+            .map(|t| t.install_hint.to_string())
+            .unwrap_or_else(|| format!("Install the LSP server '{command}' manually"));
+
+        // Log completion (only if template was used and fields were completed)
+        if let Some(tmpl) = template {
+            let completed_fields: Vec<&str> = [
+                config.command.is_none().then_some("command"),
+                config.args.is_empty().then_some("args"),
+                config.file_extensions.is_empty().then_some("extensions"),
+                config.languages.is_empty().then_some("languages"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+
+            if !completed_fields.is_empty() {
+                info!(
+                    server = id,
+                    template = tmpl.id,
+                    completed_fields = ?completed_fields,
+                    command = %command,
+                    extensions = ?extensions,
+                    "Completed server config from builtin template"
+                );
+            }
+        }
+
+        // Note: command_exists check is done in spawn_server(), not here
+        // This allows find_server_for_extension() to succeed for config validation
+
+        Ok(ServerInfo {
             id: id.to_string(),
-            command: config.command.clone().unwrap_or_default(),
-            args: config.args.clone(),
+            command,
+            args,
+            extensions,
+            _languages: languages,
             env: config.env.clone(),
             init_options: if config.initialization_options.is_null() {
                 None
@@ -342,109 +438,7 @@ impl LspServerManager {
                 Some(config.settings.clone())
             },
             lifecycle_config: LifecycleConfig::from(config),
-        }
-    }
-
-    /// Build ServerInfo from a builtin server
-    ///
-    /// Note: This method resolves the command asynchronously to avoid blocking
-    /// when checking for binary availability with `which::which()`.
-    async fn build_server_info_from_builtin(
-        &self,
-        builtin: &'static BuiltinServer,
-    ) -> Result<ServerInfo> {
-        let server_config = self.config.get(builtin.id);
-
-        // Get command: use config override or first builtin command
-        let (command, args) = if let Some(config) = server_config {
-            if let Some(custom_cmd) = &config.command {
-                // Custom command specified - use it with args from config
-                (custom_cmd.clone(), config.args.clone())
-            } else {
-                Self::get_builtin_command_fallback(builtin).await
-            }
-        } else {
-            Self::get_builtin_command_fallback(builtin).await
-        };
-
-        let lifecycle_config = server_config.map(LifecycleConfig::from).unwrap_or_default();
-
-        let env = server_config.map(|c| c.env.clone()).unwrap_or_default();
-
-        let init_options = server_config.and_then(|c| {
-            if c.initialization_options.is_null() {
-                None
-            } else {
-                Some(c.initialization_options.clone())
-            }
-        });
-
-        let settings = server_config.and_then(|c| {
-            if c.settings.is_null() {
-                None
-            } else {
-                Some(c.settings.clone())
-            }
-        });
-
-        Ok(ServerInfo {
-            id: builtin.id.to_string(),
-            command,
-            args,
-            env,
-            init_options,
-            settings,
-            lifecycle_config,
-        })
-    }
-
-    /// Get command from builtin server (uses first command as fallback)
-    ///
-    /// This method uses `spawn_blocking` to avoid blocking the async runtime
-    /// when calling `which::which()` to check for binary availability.
-    async fn get_builtin_command_fallback(
-        builtin: &'static BuiltinServer,
-    ) -> (String, Vec<String>) {
-        // Move blocking which::which() calls to the blocking thread pool
-        tokio::task::spawn_blocking(move || {
-            // Try to find an available binary
-            for cmd in builtin.commands {
-                let parts: Vec<&str> = cmd.split_whitespace().collect();
-                if parts.is_empty() {
-                    continue;
-                }
-
-                let program = parts[0];
-                if which::which(program).is_ok() {
-                    let args = parts[1..].iter().map(|s| s.to_string()).collect();
-                    return (program.to_string(), args);
-                }
-            }
-
-            // Fallback to first command (will fail at spawn time if not found)
-            let first_cmd = builtin.commands.first().unwrap_or(&"");
-            let parts: Vec<&str> = first_cmd.split_whitespace().collect();
-            if parts.is_empty() {
-                (String::new(), Vec::new())
-            } else {
-                let program = parts[0].to_string();
-                let args = parts[1..].iter().map(|s| s.to_string()).collect();
-                (program, args)
-            }
-        })
-        .await
-        .unwrap_or_else(|_| {
-            // JoinError fallback - use first command
-            let first_cmd = builtin.commands.first().unwrap_or(&"");
-            let parts: Vec<&str> = first_cmd.split_whitespace().collect();
-            if parts.is_empty() {
-                (String::new(), Vec::new())
-            } else {
-                (
-                    parts[0].to_string(),
-                    parts[1..].iter().map(|s| s.to_string()).collect(),
-                )
-            }
+            install_hint,
         })
     }
 
@@ -476,6 +470,17 @@ impl LspServerManager {
         file_path.parent().unwrap_or(file_path).to_path_buf()
     }
 
+    /// Check if a command exists in PATH using `which`
+    async fn command_exists(cmd: &str) -> bool {
+        if cmd.is_empty() {
+            return false;
+        }
+        let cmd = cmd.to_string();
+        tokio::task::spawn_blocking(move || which::which(&cmd).is_ok())
+            .await
+            .unwrap_or(false)
+    }
+
     /// Spawn a new LSP server process
     async fn spawn_server(&self, server_info: &ServerInfo, root_path: &Path) -> Result<LspClient> {
         info!(
@@ -486,6 +491,19 @@ impl LspServerManager {
             server_info.args,
             server_info.env.len()
         );
+
+        // Check if command exists before trying to spawn
+        if !Self::command_exists(&server_info.command).await {
+            warn!(
+                "LSP server '{}' not installed: command '{}' not found. Install: {}",
+                server_info.id, server_info.command, server_info.install_hint
+            );
+            return Err(LspErr::ServerNotInstalled {
+                server_id: server_info.id.clone(),
+                command: server_info.command.clone(),
+                install_hint: server_info.install_hint.clone(),
+            });
+        }
 
         // Build command
         let mut cmd = Command::new(&server_info.command);
@@ -585,19 +603,30 @@ impl LspServerManager {
             .collect()
     }
 
-    /// List all supported file extensions (builtin + custom)
+    /// List all supported file extensions (only configured servers)
+    ///
+    /// With opt-in design, only servers declared in lsp_servers.json are included.
+    /// Extensions are resolved from:
+    /// - Builtin template (if server ID matches a builtin)
+    /// - User config's file_extensions field
     pub fn all_supported_extensions(&self) -> Vec<String> {
-        let mut exts: Vec<String> = BUILTIN_SERVERS
-            .iter()
-            .flat_map(|s| s.extensions.iter())
-            .map(|s| s.to_string())
-            .collect();
+        let mut exts: Vec<String> = Vec::new();
 
-        // Add custom server extensions
-        for config in self.config.servers.values() {
-            if config.is_custom() && !config.disabled {
-                exts.extend(config.file_extensions.iter().cloned());
+        for (id, config) in &self.config.servers {
+            if config.disabled {
+                continue;
             }
+
+            // Get extensions from user config or builtin template
+            let extensions = if !config.file_extensions.is_empty() {
+                config.file_extensions.clone()
+            } else if let Some(builtin) = BuiltinServer::find_by_id(id) {
+                builtin.extensions.iter().map(|s| s.to_string()).collect()
+            } else {
+                Vec::new()
+            };
+
+            exts.extend(extensions);
         }
 
         exts.sort();
@@ -727,6 +756,351 @@ impl LspServerManager {
 
         warmed
     }
+
+    /// Get status of all configured LSP servers
+    ///
+    /// With opt-in design, only servers declared in lsp_servers.json are included.
+    pub async fn get_all_servers_status(&self) -> Vec<ServerStatusInfo> {
+        let mut statuses = Vec::new();
+
+        // Only iterate over configured servers (opt-in design)
+        for (id, config) in &self.config.servers {
+            // Try to find builtin template
+            let template = BuiltinServer::find_by_id(id);
+
+            // Resolve command: user config > template
+            let command = config
+                .command
+                .clone()
+                .or_else(|| {
+                    template.map(|t| {
+                        t.commands[0]
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default();
+
+            // Resolve extensions: user config > template
+            let extensions = if !config.file_extensions.is_empty() {
+                config.file_extensions.clone()
+            } else if let Some(tmpl) = template {
+                tmpl.extensions.iter().map(|s| s.to_string()).collect()
+            } else {
+                Vec::new()
+            };
+
+            // Resolve install hint: template > generic
+            let install_hint = template
+                .map(|t| t.install_hint.to_string())
+                .unwrap_or_else(|| format!("Install '{command}' manually"));
+
+            // Check if command exists
+            let program = command.split_whitespace().next().unwrap_or("");
+            let installed = Self::command_exists(program).await;
+
+            let status = if config.disabled {
+                ServerStatus::Disabled
+            } else if command.is_empty() {
+                ServerStatus::NotInstalled // Missing command
+            } else if !installed {
+                ServerStatus::NotInstalled
+            } else {
+                // Check if running by looking at lifecycles
+                let mut is_running = false;
+                let lifecycles = self.lifecycles.lock().await;
+                for ((server_id, _), lifecycle) in lifecycles.iter() {
+                    if server_id == id {
+                        let health = lifecycle.health().await;
+                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                            is_running = true;
+                            break;
+                        }
+                    }
+                }
+                if is_running {
+                    ServerStatus::Running
+                } else {
+                    ServerStatus::Idle
+                }
+            };
+
+            statuses.push(ServerStatusInfo {
+                id: id.clone(),
+                extensions,
+                status,
+                install_hint,
+            });
+        }
+
+        statuses
+    }
+
+    /// Get status of ALL builtin servers (for installation UI)
+    ///
+    /// Unlike `get_all_servers_status()`, this includes ALL builtin servers
+    /// regardless of whether they're in lsp_servers.json. Use this for
+    /// the InstallServer UI to show all available servers for installation.
+    pub async fn get_all_builtin_servers_status(&self) -> Vec<ServerStatusInfo> {
+        let mut statuses = Vec::new();
+
+        for builtin in BUILTIN_SERVERS {
+            // Check if command exists
+            let command = builtin
+                .commands
+                .first()
+                .and_then(|c| c.split_whitespace().next())
+                .unwrap_or("");
+            let installed = Self::command_exists(command).await;
+
+            // Check if already configured (and possibly running)
+            let is_disabled = self
+                .config
+                .servers
+                .get(builtin.id)
+                .map(|c| c.disabled)
+                .unwrap_or(false);
+
+            let status = if is_disabled {
+                ServerStatus::Disabled
+            } else if !installed {
+                ServerStatus::NotInstalled
+            } else {
+                // Check if running
+                let mut is_running = false;
+                let lifecycles = self.lifecycles.lock().await;
+                for ((server_id, _), lifecycle) in lifecycles.iter() {
+                    if server_id == builtin.id {
+                        let health = lifecycle.health().await;
+                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                            is_running = true;
+                            break;
+                        }
+                    }
+                }
+                if is_running {
+                    ServerStatus::Running
+                } else {
+                    ServerStatus::Idle
+                }
+            };
+
+            statuses.push(ServerStatusInfo {
+                id: builtin.id.to_string(),
+                extensions: builtin.extensions.iter().map(|s| s.to_string()).collect(),
+                status,
+                install_hint: builtin.install_hint.to_string(),
+            });
+        }
+
+        statuses
+    }
+
+    /// Get count of active (running) LSP servers
+    pub async fn active_server_count(&self) -> i32 {
+        let lifecycles = self.lifecycles.lock().await;
+        let mut count = 0;
+        for lifecycle in lifecycles.values() {
+            let health = lifecycle.health().await;
+            if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Get all servers for Configure Servers UI
+    ///
+    /// Returns a merged list of:
+    /// - All installed builtin servers (even if not configured)
+    /// - All configured servers (even if not installed)
+    ///
+    /// This enables the user to:
+    /// - Add installed servers to config
+    /// - Toggle/remove configured servers
+    pub async fn get_all_servers_for_config(
+        &self,
+        user_config_dir: &Path,
+        project_config_dir: &Path,
+    ) -> Vec<ServerConfigInfo> {
+        let mut servers = HashMap::new();
+
+        // 1. Add all builtin servers
+        for builtin in BUILTIN_SERVERS {
+            let command = builtin
+                .commands
+                .first()
+                .and_then(|c| c.split_whitespace().next())
+                .unwrap_or("");
+            let installed = Self::command_exists(command).await;
+
+            // Detect config level
+            let config_level = LspServersConfig::detect_config_level(
+                builtin.id,
+                user_config_dir,
+                project_config_dir,
+            );
+
+            // Check if disabled in config
+            let is_disabled = self
+                .config
+                .servers
+                .get(builtin.id)
+                .map(|c| c.disabled)
+                .unwrap_or(false);
+
+            // Determine status
+            let status = if is_disabled {
+                ServerStatus::Disabled
+            } else if !installed {
+                ServerStatus::NotInstalled
+            } else {
+                // Check if running
+                let mut is_running = false;
+                let lifecycles = self.lifecycles.lock().await;
+                for ((server_id, _), lifecycle) in lifecycles.iter() {
+                    if server_id == builtin.id {
+                        let health = lifecycle.health().await;
+                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                            is_running = true;
+                            break;
+                        }
+                    }
+                }
+                if is_running {
+                    ServerStatus::Running
+                } else {
+                    ServerStatus::Idle
+                }
+            };
+
+            servers.insert(
+                builtin.id.to_string(),
+                ServerConfigInfo {
+                    id: builtin.id.to_string(),
+                    extensions: builtin.extensions.iter().map(|s| s.to_string()).collect(),
+                    binary_installed: installed,
+                    config_level,
+                    status,
+                    install_hint: builtin.install_hint.to_string(),
+                },
+            );
+        }
+
+        // 2. Add custom servers from config (not in builtins)
+        for (id, config) in &self.config.servers {
+            if servers.contains_key(id) {
+                continue; // Already added from builtins
+            }
+
+            // Get command
+            let command = config.command.clone().unwrap_or_default();
+            let program = command.split_whitespace().next().unwrap_or("");
+            let installed = !command.is_empty() && Self::command_exists(program).await;
+
+            // Detect config level
+            let config_level =
+                LspServersConfig::detect_config_level(id, user_config_dir, project_config_dir);
+
+            // Determine status
+            let status = if config.disabled {
+                ServerStatus::Disabled
+            } else if !installed {
+                ServerStatus::NotInstalled
+            } else {
+                // Check if running
+                let mut is_running = false;
+                let lifecycles = self.lifecycles.lock().await;
+                for ((server_id, _), lifecycle) in lifecycles.iter() {
+                    if server_id == id {
+                        let health = lifecycle.health().await;
+                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                            is_running = true;
+                            break;
+                        }
+                    }
+                }
+                if is_running {
+                    ServerStatus::Running
+                } else {
+                    ServerStatus::Idle
+                }
+            };
+
+            servers.insert(
+                id.clone(),
+                ServerConfigInfo {
+                    id: id.clone(),
+                    extensions: config.file_extensions.clone(),
+                    binary_installed: installed,
+                    config_level,
+                    status,
+                    install_hint: format!("Install '{command}' manually"),
+                },
+            );
+        }
+
+        // Sort by id for consistent display
+        let mut result: Vec<_> = servers.into_values().collect();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result
+    }
+}
+
+/// Status of an LSP server
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerStatus {
+    /// Server is running and healthy
+    Running,
+    /// Server is installed but not currently running
+    Idle,
+    /// Server command not found in PATH
+    NotInstalled,
+    /// Server is disabled in config
+    Disabled,
+}
+
+impl std::fmt::Display for ServerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerStatus::Running => write!(f, "Running"),
+            ServerStatus::Idle => write!(f, "Idle"),
+            ServerStatus::NotInstalled => write!(f, "Not Installed"),
+            ServerStatus::Disabled => write!(f, "Disabled"),
+        }
+    }
+}
+
+/// Information about an LSP server's status
+#[derive(Debug, Clone)]
+pub struct ServerStatusInfo {
+    /// Server identifier
+    pub id: String,
+    /// File extensions this server handles
+    pub extensions: Vec<String>,
+    /// Current status
+    pub status: ServerStatus,
+    /// Installation hint
+    pub install_hint: String,
+}
+
+/// Information about an LSP server for configuration UI
+#[derive(Debug, Clone)]
+pub struct ServerConfigInfo {
+    /// Server identifier
+    pub id: String,
+    /// File extensions this server handles
+    pub extensions: Vec<String>,
+    /// Whether the binary is installed
+    pub binary_installed: bool,
+    /// Config level (None = not configured)
+    pub config_level: Option<ConfigLevel>,
+    /// Server status
+    pub status: ServerStatus,
+    /// Installation hint
+    pub install_hint: String,
 }
 
 impl std::fmt::Debug for LspServerManager {
@@ -750,20 +1124,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_server_for_extension() {
-        let config = LspServersConfig::default();
+    async fn test_find_server_for_extension_opt_in() {
+        // With no config, no servers should be available (opt-in design)
+        let empty_config = LspServersConfig::default();
+        let diagnostics = Arc::new(DiagnosticsStore::new());
+        let manager = LspServerManager::new(empty_config, diagnostics);
+
+        // No config = no servers
+        assert!(manager.find_server_for_extension(".rs").await.is_err());
+        assert!(manager.find_server_for_extension(".go").await.is_err());
+        assert!(manager.find_server_for_extension(".txt").await.is_err());
+
+        // With config, servers should be available
+        let mut config = LspServersConfig::default();
+        config.servers.insert(
+            "rust-analyzer".to_string(),
+            LspServerConfig::default(), // Uses builtin template
+        );
+        config.servers.insert(
+            "gopls".to_string(),
+            LspServerConfig::default(), // Uses builtin template
+        );
+
         let diagnostics = Arc::new(DiagnosticsStore::new());
         let manager = LspServerManager::new(config, diagnostics);
 
         assert!(manager.find_server_for_extension(".rs").await.is_ok());
         assert!(manager.find_server_for_extension(".go").await.is_ok());
-        assert!(manager.find_server_for_extension(".py").await.is_ok());
         assert!(manager.find_server_for_extension(".txt").await.is_err());
     }
 
     #[tokio::test]
     async fn test_find_server_disabled() {
         let mut config = LspServersConfig::default();
+        // Add rust-analyzer (disabled) and gopls (enabled)
         config.servers.insert(
             "rust-analyzer".to_string(),
             LspServerConfig {
@@ -771,11 +1165,17 @@ mod tests {
                 ..Default::default()
             },
         );
+        config.servers.insert(
+            "gopls".to_string(),
+            LspServerConfig::default(), // Uses builtin template
+        );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
         let manager = LspServerManager::new(config, diagnostics);
 
+        // rust-analyzer is disabled
         assert!(manager.find_server_for_extension(".rs").await.is_err());
+        // gopls is enabled
         assert!(manager.find_server_for_extension(".go").await.is_ok());
     }
 
@@ -846,6 +1246,12 @@ mod tests {
     fn test_all_supported_extensions() {
         let mut config = LspServersConfig::default();
 
+        // Add builtin reference (uses template for extensions)
+        config
+            .servers
+            .insert("rust-analyzer".to_string(), LspServerConfig::default());
+
+        // Add custom server with explicit extensions
         config.servers.insert(
             "typescript-lsp".to_string(),
             LspServerConfig {
@@ -861,10 +1267,12 @@ mod tests {
         let manager = LspServerManager::new(config, diagnostics);
 
         let exts = manager.all_supported_extensions();
-        assert!(exts.contains(&".rs".to_string()));
-        assert!(exts.contains(&".go".to_string()));
-        assert!(exts.contains(&".py".to_string()));
-        assert!(exts.contains(&".ts".to_string()));
+        // Only configured servers should be included
+        assert!(exts.contains(&".rs".to_string())); // From rust-analyzer builtin template
+        assert!(exts.contains(&".ts".to_string())); // From custom typescript-lsp
+        // These are NOT included (not configured)
+        assert!(!exts.contains(&".go".to_string()));
+        assert!(!exts.contains(&".py".to_string()));
     }
 
     #[tokio::test]

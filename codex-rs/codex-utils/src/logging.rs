@@ -1,12 +1,60 @@
-//! Extension module for unified logging infrastructure.
+//! Shared logging infrastructure for codex-rs.
 //!
-//! This module provides helper functions for logging configuration that can be
-//! used by both exec and tui modes, eliminating duplicate code.
-//! Following the upstream sync pattern to minimize merge conflicts.
+//! This module provides timezone-aware logging utilities that can be used
+//! by all crates in the workspace without circular dependencies.
 
-use crate::config::types_ext::LoggingConfig;
-use crate::config::types_ext::TimezoneConfig;
+use serde::Deserialize;
+use serde::Serialize;
 use tracing_subscriber::filter::EnvFilter;
+
+/// Logging configuration for tracing subscriber
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LoggingConfig {
+    /// Show file name and line number in log output
+    pub location: bool,
+
+    /// Show module path (target) in log output
+    pub target: bool,
+
+    /// Timezone for log timestamps
+    pub timezone: TimezoneConfig,
+
+    /// Default log level (trace, debug, info, warn, error)
+    pub level: String,
+
+    /// Module-specific log levels (e.g., "codex_core=debug,codex_tui=info")
+    #[serde(default)]
+    pub modules: Vec<String>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            location: false,                 // Don't show file/line by default (keep logs clean)
+            target: false,                   // Don't show module path by default
+            timezone: TimezoneConfig::Local, // Use local timezone by default
+            level: "info".to_string(),
+            modules: vec![],
+        }
+    }
+}
+
+/// Timezone configuration for log timestamps
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TimezoneConfig {
+    /// Use local timezone
+    Local,
+    /// Use UTC timezone
+    Utc,
+}
+
+impl Default for TimezoneConfig {
+    fn default() -> Self {
+        Self::Local
+    }
+}
 
 /// Timezone-aware time formatter for tracing subscribers.
 ///
@@ -88,8 +136,8 @@ pub fn build_env_filter(logging: &LoggingConfig, fallback_default: &str) -> EnvF
 #[macro_export]
 macro_rules! configure_fmt_layer {
     ($base_layer:expr, $logging:expr, $fallback:expr) => {{
-        let env_filter = $crate::logging_ext::build_env_filter($logging, $fallback);
-        let timer = $crate::logging_ext::ConfigurableTimer::new($logging.timezone.clone());
+        let env_filter = $crate::logging::build_env_filter($logging, $fallback);
+        let timer = $crate::logging::ConfigurableTimer::new($logging.timezone.clone());
 
         let mut layer = $base_layer.with_timer(timer);
 
@@ -135,7 +183,7 @@ mod tests {
         let logging = LoggingConfig::default();
         let filter = build_env_filter(&logging, "error");
         // Verify filter was created successfully (just check it doesn't panic)
-        let _ = format!("{:?}", filter);
+        let _ = format!("{filter:?}");
     }
 
     #[test]
@@ -151,7 +199,7 @@ mod tests {
             ],
         };
         let filter = build_env_filter(&logging, "error");
-        let filter_str = format!("{:?}", filter);
+        let filter_str = format!("{filter:?}");
         // Verify modules were applied
         assert!(filter_str.contains("codex_core") || filter_str.contains("debug"));
     }

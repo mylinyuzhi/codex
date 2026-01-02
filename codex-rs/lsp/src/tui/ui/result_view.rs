@@ -165,17 +165,47 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
             lines
         }
+        LspResult::ServerList(servers) => {
+            // This is handled by the Servers mode, not Results mode
+            // But we need to handle it here for completeness
+            if servers.is_empty() {
+                vec![Line::from(" No servers configured".dim())]
+            } else {
+                let mut lines = vec![Line::from(
+                    " Server list - press 's' to view in dedicated mode".dim(),
+                )];
+                for server in servers {
+                    lines.push(Line::from(format!(
+                        "   {} ({:?})",
+                        server.id, server.status
+                    )));
+                }
+                lines
+            }
+        }
         LspResult::HealthOk(msg) => {
             vec![
                 Line::from(""),
                 Line::from(vec![" ".into(), msg.clone().green().bold()]),
             ]
         }
-        LspResult::Error(err) => {
-            vec![
+        LspResult::Error(ctx) => {
+            let mut lines = vec![
                 Line::from(""),
-                Line::from(vec![" Error: ".red().bold(), err.clone().red()]),
-            ]
+                Line::from(vec![" Operation: ".dim(), ctx.operation.clone().into()]),
+            ];
+            if let Some(ref file) = ctx.file {
+                lines.push(Line::from(vec![" File: ".dim(), file.clone().into()]));
+            }
+            if let Some(ref symbol) = ctx.symbol {
+                lines.push(Line::from(vec![" Symbol: ".dim(), symbol.clone().into()]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                " Error: ".red().bold(),
+                ctx.error.clone().red(),
+            ]));
+            lines
         }
     };
 

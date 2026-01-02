@@ -107,6 +107,39 @@ pub struct IndexingConfig {
     /// Maximum total chunks allowed (prevents runaway indexing)
     #[serde(default = "default_max_chunks")]
     pub max_chunks: i64,
+
+    /// Periodic timer check interval in seconds (0 disables timer)
+    ///
+    /// Timer triggers mtime-based freshness checks to catch file changes
+    /// that may have been missed by the file watcher.
+    #[serde(default = "default_check_interval_secs")]
+    pub check_interval_secs: i64,
+
+    /// Number of worker threads for event processing
+    ///
+    /// Workers process file change events from the event queue concurrently.
+    /// Higher values improve throughput but increase resource usage.
+    #[serde(default = "default_worker_count")]
+    pub worker_count: i32,
+
+    /// Directories to include (relative to workdir).
+    /// Empty means include all directories.
+    #[serde(default)]
+    pub include_dirs: Vec<String>,
+
+    /// Directories to exclude (relative to workdir).
+    #[serde(default)]
+    pub exclude_dirs: Vec<String>,
+
+    /// File extensions to include (whitelist mode).
+    /// Empty means use the default text file extension list.
+    #[serde(default)]
+    pub include_extensions: Vec<String>,
+
+    /// File extensions to exclude (blacklist mode).
+    /// Supports compound extensions like "test.ts", "spec.js".
+    #[serde(default)]
+    pub exclude_extensions: Vec<String>,
 }
 
 impl Default for IndexingConfig {
@@ -119,6 +152,12 @@ impl Default for IndexingConfig {
             watch_enabled: false,
             watch_debounce_ms: default_watch_debounce_ms(),
             max_chunks: default_max_chunks(),
+            check_interval_secs: default_check_interval_secs(),
+            worker_count: default_worker_count(),
+            include_dirs: Vec::new(),
+            exclude_dirs: Vec::new(),
+            include_extensions: Vec::new(),
+            exclude_extensions: Vec::new(),
         }
     }
 }
@@ -169,6 +208,33 @@ impl IndexingConfig {
                 cause: format!("must be positive, got {}", self.max_chunks),
             });
         }
+
+        // Validate extension format (no leading dots)
+        for ext in &self.include_extensions {
+            if ext.starts_with('.') {
+                return Err(RetrievalErr::ConfigError {
+                    field: "indexing.include_extensions".to_string(),
+                    cause: format!(
+                        "extension '{}' should not start with '.', use '{}' instead",
+                        ext,
+                        ext.trim_start_matches('.')
+                    ),
+                });
+            }
+        }
+        for ext in &self.exclude_extensions {
+            if ext.starts_with('.') {
+                return Err(RetrievalErr::ConfigError {
+                    field: "indexing.exclude_extensions".to_string(),
+                    cause: format!(
+                        "extension '{}' should not start with '.', use '{}' instead",
+                        ext,
+                        ext.trim_start_matches('.')
+                    ),
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -190,6 +256,12 @@ fn default_watch_debounce_ms() -> i32 {
 }
 fn default_max_chunks() -> i64 {
     500_000 // 500k chunks should be sufficient for most projects
+}
+fn default_check_interval_secs() -> i64 {
+    300 // 5 minutes
+}
+fn default_worker_count() -> i32 {
+    4
 }
 
 /// Chunking configuration.

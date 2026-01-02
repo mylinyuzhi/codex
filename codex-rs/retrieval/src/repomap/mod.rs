@@ -14,6 +14,7 @@ pub mod graph;
 pub mod important_files;
 pub mod pagerank;
 pub mod renderer;
+pub mod tag_pipeline;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -38,6 +39,14 @@ pub use graph::DependencyGraph;
 pub use graph::extract_terms;
 pub use pagerank::PageRanker;
 pub use renderer::TreeRenderer;
+pub use tag_pipeline::SharedTagPipeline;
+pub use tag_pipeline::TagEventProcessor;
+pub use tag_pipeline::TagPipeline;
+pub use tag_pipeline::TagPipelineState;
+pub use tag_pipeline::TagReadiness;
+pub use tag_pipeline::TagStats;
+pub use tag_pipeline::TagStrictModeConfig;
+pub use tag_pipeline::TagWorkerPool;
 
 /// Ranked file with PageRank score.
 #[derive(Debug, Clone)]
@@ -99,6 +108,11 @@ pub struct RepoMapResult {
     pub files_included: i32,
     /// Generation time in milliseconds
     pub generation_time_ms: i64,
+    /// Active filter configuration (if any).
+    ///
+    /// Allows LLM callers to understand what files/directories are
+    /// included or excluded from the index used to build this map.
+    pub filter: Option<crate::indexing::FilterSummary>,
 }
 
 /// Main repo map service.
@@ -253,6 +267,7 @@ impl RepoMapService {
                                 tokens,
                                 files_included,
                                 generation_time_ms: 0, // Cached result
+                                filter: None,          // Cache doesn't store filter
                             });
                         }
                     }
@@ -270,6 +285,7 @@ impl RepoMapService {
                             tokens,
                             files_included,
                             generation_time_ms: 0, // Cached result
+                            filter: None,          // Cache doesn't store filter
                         });
                     }
                 }
@@ -409,6 +425,7 @@ impl RepoMapService {
             tokens,
             files_included: file_tags.len() as i32,
             generation_time_ms,
+            filter: None, // Will be set by caller
         };
 
         // Save for caching (used by Manual and Auto refresh modes)

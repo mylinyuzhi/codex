@@ -10,6 +10,16 @@ pub enum LspErr {
     #[error("LSP server not found: {server}. Install: {hint}")]
     ServerNotFound { server: String, hint: String },
 
+    /// Server command not installed (command not in PATH)
+    #[error(
+        "LSP server '{server_id}' not installed: command '{command}' not found. Install: {install_hint}"
+    )]
+    ServerNotInstalled {
+        server_id: String,
+        command: String,
+        install_hint: String,
+    },
+
     /// Server failed to start
     #[error("failed to start LSP server {server}: {reason}")]
     ServerStartFailed { server: String, reason: String },
@@ -42,6 +52,10 @@ pub enum LspErr {
     #[error("no LSP server available for file extension: {ext}")]
     NoServerForExtension { ext: String },
 
+    /// Server config missing command and no builtin template found
+    #[error("Server '{server_id}' missing command and no builtin template found. {hint}")]
+    MissingCommand { server_id: String, hint: String },
+
     /// Server does not support the requested operation
     #[error("LSP server does not support {operation}")]
     OperationNotSupported { operation: String },
@@ -73,6 +87,10 @@ pub enum LspErr {
     /// Configuration error
     #[error("LSP configuration error: {0}")]
     ConfigError(String),
+
+    /// Installation error
+    #[error("LSP server installation failed: {0}")]
+    InstallError(String),
 
     /// IO error
     #[error(transparent)]

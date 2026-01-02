@@ -349,6 +349,7 @@ mod tests {
             query_id: "q-1".to_string(),
             results: vec![],
             total_duration_ms: 50,
+            filter: None,
         });
 
         // Check collected events

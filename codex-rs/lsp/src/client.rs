@@ -1,8 +1,5 @@
 //! LSP client for communicating with a single language server
 
-use crate::client_ext::DocumentContent;
-use crate::client_ext::MAX_INCREMENTAL_CONTENT_SIZE;
-use crate::client_ext::compute_incremental_changes;
 use crate::diagnostics::DiagnosticsStore;
 use crate::error::LspErr;
 use crate::error::Result;
@@ -33,6 +30,7 @@ use lsp_types::Location;
 use lsp_types::PartialResultParams;
 use lsp_types::Position;
 use lsp_types::PublishDiagnosticsParams;
+use lsp_types::Range;
 use lsp_types::ReferenceContext;
 use lsp_types::ReferenceParams;
 use lsp_types::SymbolInformation;
@@ -45,6 +43,9 @@ use lsp_types::VersionedTextDocumentIdentifier;
 use lsp_types::WorkDoneProgressParams;
 use lsp_types::WorkspaceSymbolParams;
 use lsp_types::WorkspaceSymbolResponse;
+use similar::Algorithm;
+use similar::DiffOp;
+use similar::TextDiff;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -63,11 +64,30 @@ use tracing::warn;
 /// Maximum number of files to track as opened (prevents unbounded memory growth)
 const MAX_OPENED_FILES: usize = 500;
 
+/// Maximum content size for incremental sync tracking (1 MB)
+///
+/// Files larger than this will use full document sync to avoid
+/// excessive memory usage for storing document content.
+const MAX_INCREMENTAL_CONTENT_SIZE: usize = 1024 * 1024;
+
 /// Maximum number of symbol cache entries (prevents unbounded memory growth)
 const MAX_SYMBOL_CACHE_SIZE: usize = 100;
 
 /// Health check timeout in seconds
 const HEALTH_CHECK_TIMEOUT_SECS: i32 = 5;
+
+/// Stores document content for incremental sync tracking
+#[derive(Debug, Clone)]
+struct DocumentContent {
+    /// Original text content
+    text: String,
+}
+
+impl DocumentContent {
+    fn new(text: String) -> Self {
+        Self { text }
+    }
+}
 
 /// Cached document symbols with version tracking and LRU support
 #[derive(Debug, Clone)]
@@ -160,11 +180,8 @@ impl LspClient {
         let buffer_size = timeout_config.notification_buffer_size.max(10) as usize;
         let (notification_tx, notification_rx) = mpsc::channel(buffer_size);
 
-        let connection = Arc::new(JsonRpcConnection::new(
-            stdin,
-            stdout,
-            notification_tx.clone(),
-        ));
+        let connection =
+            Arc::new(JsonRpcConnection::new(stdin, stdout, notification_tx.clone()).await);
 
         let root_uri = Url::from_file_path(root_path)
             .map_err(|_| LspErr::Internal(format!("invalid root path: {}", root_path.display())))?;
@@ -1714,6 +1731,122 @@ impl Drop for LspClient {
     }
 }
 
+/// Compute incremental changes between old and new content using Myers diff algorithm
+///
+/// Returns a vector of `TextDocumentContentChangeEvent` that can be sent to the LSP server.
+/// If no changes are detected, returns an empty vector.
+fn compute_incremental_changes(
+    old: &DocumentContent,
+    new_text: &str,
+) -> Vec<TextDocumentContentChangeEvent> {
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Myers)
+        .diff_lines(old.text.as_str(), new_text);
+
+    let mut events = Vec::new();
+
+    for group in diff.grouped_ops(0) {
+        for op in group {
+            match op {
+                DiffOp::Equal { .. } => {}
+                DiffOp::Delete {
+                    old_index, old_len, ..
+                } => {
+                    let start_line = old_index as u32;
+                    let end_line = (old_index + old_len) as u32;
+
+                    events.push(TextDocumentContentChangeEvent {
+                        range: Some(Range {
+                            start: Position {
+                                line: start_line,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: end_line,
+                                character: 0,
+                            },
+                        }),
+                        range_length: None,
+                        text: String::new(),
+                    });
+                }
+                DiffOp::Insert {
+                    old_index,
+                    new_index,
+                    new_len,
+                } => {
+                    let insert_line = old_index as u32;
+                    let new_lines: String = new_text
+                        .lines()
+                        .skip(new_index)
+                        .take(new_len)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let text = if new_index + new_len < new_text.lines().count() {
+                        format!("{new_lines}\n")
+                    } else {
+                        new_lines
+                    };
+
+                    events.push(TextDocumentContentChangeEvent {
+                        range: Some(Range {
+                            start: Position {
+                                line: insert_line,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: insert_line,
+                                character: 0,
+                            },
+                        }),
+                        range_length: None,
+                        text,
+                    });
+                }
+                DiffOp::Replace {
+                    old_index,
+                    old_len,
+                    new_index,
+                    new_len,
+                } => {
+                    let start_line = old_index as u32;
+                    let end_line = (old_index + old_len) as u32;
+                    let new_lines: String = new_text
+                        .lines()
+                        .skip(new_index)
+                        .take(new_len)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let text = if new_index + new_len < new_text.lines().count() {
+                        format!("{new_lines}\n")
+                    } else {
+                        new_lines
+                    };
+
+                    events.push(TextDocumentContentChangeEvent {
+                        range: Some(Range {
+                            start: Position {
+                                line: start_line,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: end_line,
+                                character: 0,
+                            },
+                        }),
+                        range_length: None,
+                        text,
+                    });
+                }
+            }
+        }
+    }
+
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1759,6 +1892,56 @@ mod tests {
                 language_id, expected,
                 "Extension '{}' should map to '{}'",
                 ext, expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_incremental_no_changes() {
+        let old = DocumentContent::new("foo\nbar\nbaz\n".to_string());
+        let changes = compute_incremental_changes(&old, "foo\nbar\nbaz\n");
+        assert!(
+            changes.is_empty(),
+            "Expected no changes for identical content"
+        );
+    }
+
+    #[test]
+    fn test_incremental_single_line_modification() {
+        let old = DocumentContent::new("foo\nbar\nbaz\n".to_string());
+        let changes = compute_incremental_changes(&old, "foo\nBAR\nbaz\n");
+
+        assert!(!changes.is_empty(), "Expected changes for modified line");
+
+        let has_line_1_change = changes
+            .iter()
+            .any(|c| c.range.as_ref().map(|r| r.start.line == 1).unwrap_or(false));
+        assert!(has_line_1_change, "Expected change event for line 1");
+    }
+
+    #[test]
+    fn test_incremental_line_insertion() {
+        let old = DocumentContent::new("foo\nbaz\n".to_string());
+        let changes = compute_incremental_changes(&old, "foo\nbar\nbaz\n");
+        assert!(!changes.is_empty(), "Expected changes for inserted line");
+    }
+
+    #[test]
+    fn test_incremental_line_deletion() {
+        let old = DocumentContent::new("foo\nbar\nbaz\n".to_string());
+        let changes = compute_incremental_changes(&old, "foo\nbaz\n");
+        assert!(!changes.is_empty(), "Expected changes for deleted line");
+    }
+
+    #[test]
+    fn test_incremental_change_has_range() {
+        let old = DocumentContent::new("foo\nbar\nbaz\n".to_string());
+        let changes = compute_incremental_changes(&old, "foo\nBAR\nbaz\n");
+
+        for change in &changes {
+            assert!(
+                change.range.is_some(),
+                "Incremental changes should have range"
             );
         }
     }

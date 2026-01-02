@@ -146,7 +146,11 @@ pub struct JsonRpcConnection {
 
 impl JsonRpcConnection {
     /// Create connection from child process stdio
-    pub fn new(
+    ///
+    /// This is async to ensure the reader task is ready before returning,
+    /// preventing race conditions where requests are sent before the reader
+    /// is ready to receive responses.
+    pub async fn new(
         stdin: ChildStdin,
         stdout: ChildStdout,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,
@@ -157,15 +161,37 @@ impl JsonRpcConnection {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        // Spawn reader task with shutdown support
+        // Create ready signal channel
+        let (ready_tx, ready_rx) = oneshot::channel::<()>();
+
+        // Spawn reader task with shutdown support and ready signaling
         let reader_handle = tokio::spawn(async move {
+            // Create BufReader first, then signal ready
+            let reader = BufReader::new(stdout);
+
+            // Signal that reader is ready to receive data
+            let _ = ready_tx.send(());
+
+            // Enter the read loop
             if let Err(e) =
-                Self::read_loop_with_shutdown(stdout, pending_clone, notification_tx, shutdown_rx)
-                    .await
+                Self::read_loop_inner(reader, pending_clone, notification_tx, shutdown_rx).await
             {
                 warn!("LSP read loop ended with error: {}", e);
             }
         });
+
+        // Wait for reader to be ready (with timeout to prevent hang)
+        match timeout(Duration::from_secs(1), ready_rx).await {
+            Ok(Ok(())) => {
+                debug!("Reader task signaled ready");
+            }
+            Ok(Err(_)) => {
+                warn!("Reader task ready channel closed unexpectedly");
+            }
+            Err(_) => {
+                warn!("Timeout waiting for reader task to be ready");
+            }
+        }
 
         info!("JSON-RPC connection established");
 
@@ -306,14 +332,27 @@ impl JsonRpcConnection {
     }
 
     /// Read loop for incoming messages with shutdown support
+    #[allow(dead_code)]
     async fn read_loop_with_shutdown(
         stdout: ChildStdout,
         pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Result<()> {
+        let reader = BufReader::new(stdout);
+        Self::read_loop_inner(reader, pending, notification_tx, shutdown_rx).await
+    }
+
+    /// Inner read loop that takes a pre-created BufReader
+    ///
+    /// This allows the caller to create the BufReader first and signal readiness
+    /// before entering the read loop, preventing race conditions.
+    async fn read_loop_inner(
+        mut reader: BufReader<ChildStdout>,
+        pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+        notification_tx: mpsc::Sender<(String, serde_json::Value)>,
         mut shutdown_rx: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut reader = BufReader::new(stdout);
-
         loop {
             // Check shutdown signal
             if *shutdown_rx.borrow() {

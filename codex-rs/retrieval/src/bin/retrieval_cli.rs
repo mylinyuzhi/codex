@@ -16,7 +16,13 @@
 //! # Event stream mode (JSON-lines)
 //! retrieval_cli --events search "query"
 //! ```
+//!
+//! ## Logging
+//!
+//! Logs are written to `~/.codex/log/retrieval.log` by default.
+//! Use `-v` flags to control verbosity in CLI mode.
 
+use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::io::Write;
 use std::io::{self};
@@ -26,9 +32,11 @@ use std::sync::Arc;
 
 use clap::Parser;
 use clap::Subcommand;
+use tracing_appender::non_blocking::WorkerGuard;
 
 use codex_retrieval::EventConsumer;
 use codex_retrieval::JsonLinesConsumer;
+use codex_retrieval::LoggingConsumer;
 use codex_retrieval::RebuildMode;
 use codex_retrieval::RepoMapRequest;
 use codex_retrieval::RetrievalConfig;
@@ -38,8 +46,8 @@ use codex_retrieval::SqliteStore;
 use codex_retrieval::SymbolQuery;
 use codex_retrieval::WatchEventKind;
 use codex_retrieval::event_emitter;
+use codex_retrieval::events::LogLevel;
 use codex_retrieval::indexing::IndexStatus;
-use codex_retrieval::tui::run_tui;
 use tokio_util::sync::CancellationToken;
 
 /// Extract workspace name from a directory path.
@@ -175,8 +183,21 @@ async fn main() -> anyhow::Result<()> {
     let events_mode = cli.events;
     let cli_mode = cli.no_tui || events_mode || cli.command.is_some();
 
-    // Initialize tracing based on mode
-    init_tracing(cli_mode, events_mode, cli.verbose);
+    // Initialize tracing based on mode (keep guard alive for logging)
+    let _log_guard = init_tracing(cli_mode, events_mode, cli.verbose);
+
+    // Register LoggingConsumer to sync events with tracing logs
+    event_emitter::EventEmitter::register_consumer(Arc::new(std::sync::RwLock::new(
+        LoggingConsumer::new(LogLevel::Debug),
+    )));
+
+    // Log startup info
+    tracing::info!(
+        target: "codex_retrieval",
+        cli_mode = cli_mode,
+        events_mode = events_mode,
+        "Retrieval CLI starting"
+    );
 
     // Canonicalize workdir
     let workdir = cli.workdir.canonicalize().unwrap_or(cli.workdir.clone());
@@ -228,36 +249,132 @@ async fn main() -> anyhow::Result<()> {
         let mut tui_config = config.clone();
         tui_config.workdir = Some(workdir.clone());
 
-        // Create service if retrieval is enabled
-        let service = if config.enabled {
-            match RetrievalService::new(config, hybrid_features()).await {
-                Ok(svc) => Some(Arc::new(svc)),
+        // Create service if retrieval is enabled - use with_workspace for operations
+        let (service, not_enabled_reason) = if config.enabled {
+            match RetrievalService::with_workspace(config, hybrid_features(), workdir.clone()).await
+            {
+                Ok(svc) => (Some(Arc::new(svc)), None),
                 Err(e) => {
-                    eprintln!("Warning: Could not initialize retrieval service: {}", e);
-                    eprintln!("TUI will be display-only.");
-                    None
+                    tracing::warn!("Could not initialize retrieval service: {}", e);
+                    (None, Some(format!("Service error: {}", e)))
                 }
             }
         } else {
-            eprintln!("Note: Retrieval not enabled. Configure via .codex/retrieval.toml");
-            eprintln!("TUI will be display-only.");
-            None
+            (
+                None,
+                Some(get_not_enabled_message(&workdir, cli.config.as_ref())),
+            )
         };
 
-        run_tui(tui_config, service).await?;
+        // Set error banner in TUI if not enabled
+        let mut app = codex_retrieval::tui::App::new(tui_config, service);
+        if let Some(reason) = not_enabled_reason {
+            app.error_banner = Some(reason);
+        }
+
+        // Initialize terminal and run
+        let mut terminal = codex_retrieval::tui::init_terminal()?;
+        let result = app.run(&mut terminal).await;
+        codex_retrieval::tui::restore_terminal()?;
+        result?;
     }
+
+    // Explicitly drop the log guard to flush remaining logs
+    drop(_log_guard);
 
     Ok(())
 }
 
-fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) {
+/// Get user-friendly message when retrieval is not enabled.
+fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> String {
+    if config_path.is_some() {
+        "Retrieval not enabled. Set 'enabled = true' in your config file.".to_string()
+    } else {
+        format!(
+            "Retrieval not enabled. Create config at {}/.codex/retrieval.toml or ~/.codex/retrieval.toml",
+            workdir.display()
+        )
+    }
+}
+
+/// Initialize tracing with file-based logging.
+///
+/// Logs are written to `~/.codex/log/retrieval.log`.
+/// Returns a guard that must be kept alive for the duration of logging.
+fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<WorkerGuard> {
+    use tracing_appender::non_blocking;
+    use tracing_subscriber::EnvFilter;
+
+    // Determine log directory: ~/.codex/log/
+    let log_dir = dirs::home_dir()
+        .map(|h| h.join(".codex").join("log"))
+        .unwrap_or_else(|| PathBuf::from(".codex/log"));
+
+    // Create log directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("Warning: Could not create log directory: {}", e);
+        // Fall back to stderr-only logging
+        return init_tracing_stderr(cli_mode, events_mode, verbose);
+    }
+
+    // Open log file with append mode
+    let log_path = log_dir.join("retrieval.log");
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.create(true).append(true);
+
+    // Set file permissions to 0600 on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_file_opts.mode(0o600);
+    }
+
+    let log_file = match log_file_opts.open(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Warning: Could not open log file: {}", e);
+            return init_tracing_stderr(cli_mode, events_mode, verbose);
+        }
+    };
+
+    // Create non-blocking writer
+    let (non_blocking, guard) = non_blocking(log_file);
+
+    // Determine log level filter
+    let filter_str = if events_mode {
+        "codex_retrieval=info"
+    } else if cli_mode {
+        match verbose {
+            0 => "codex_retrieval=info",
+            1 => "codex_retrieval=info",
+            2 => "codex_retrieval=debug",
+            _ => "codex_retrieval=trace",
+        }
+    } else {
+        // TUI mode
+        "codex_retrieval=info"
+    };
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_str));
+
+    // Build subscriber with file writer
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_ansi(false)
+        .try_init();
+
+    Some(guard)
+}
+
+/// Fallback: stderr-only logging when file logging fails.
+fn init_tracing_stderr(cli_mode: bool, events_mode: bool, verbose: u8) -> Option<WorkerGuard> {
     use tracing_subscriber::EnvFilter;
 
     let filter = if events_mode {
-        // Events mode: minimal stderr output
         EnvFilter::from_default_env().add_directive("codex_retrieval=warn".parse().unwrap())
     } else if cli_mode {
-        // CLI mode: configurable verbosity
         let level = match verbose {
             0 => "codex_retrieval=warn",
             1 => "codex_retrieval=info",
@@ -266,7 +383,6 @@ fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) {
         };
         EnvFilter::from_default_env().add_directive(level.parse().unwrap())
     } else {
-        // TUI mode: minimal stderr output (TUI handles display)
         EnvFilter::from_default_env().add_directive("codex_retrieval=warn".parse().unwrap())
     };
 
@@ -274,6 +390,8 @@ fn init_tracing(cli_mode: bool, events_mode: bool, verbose: u8) {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+
+    None
 }
 
 fn setup_event_consumer(
@@ -328,11 +446,18 @@ async fn run_command(
     let mut service_config = config.clone();
     service_config.workdir = Some(workdir.clone());
 
-    // Commands that need service
+    // Commands that need service - use with_workspace to set workspace_root
     let service = match &cmd {
-        Command::Status | Command::Build { .. } | Command::Watch | Command::Repomap { .. } => Some(
-            Arc::new(RetrievalService::new(service_config.clone(), hybrid_features()).await?),
-        ),
+        Command::Status | Command::Build { .. } | Command::Watch | Command::Repomap { .. } => {
+            Some(Arc::new(
+                RetrievalService::with_workspace(
+                    service_config.clone(),
+                    hybrid_features(),
+                    workdir.clone(),
+                )
+                .await?,
+            ))
+        }
         _ => None,
     };
 
@@ -373,10 +498,13 @@ async fn run_repl(
     );
     println!();
 
-    // Create service for operations commands
+    // Create service for operations commands - use with_workspace for build/watch support
     let mut service_config = config.clone();
     service_config.workdir = Some(workdir.clone());
-    let service = Arc::new(RetrievalService::new(service_config, hybrid_features()).await?);
+    let service = Arc::new(
+        RetrievalService::with_workspace(service_config, hybrid_features(), workdir.clone())
+            .await?,
+    );
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -559,11 +687,16 @@ async fn cmd_watch(service: Arc<RetrievalService>) -> anyhow::Result<()> {
 
 async fn cmd_search(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::Result<()> {
     let service = RetrievalService::new(config.clone(), hybrid_features()).await?;
-    let results = service.search_with_limit(query, Some(limit)).await?;
+    let output = service.search_with_limit(query, Some(limit)).await?;
 
-    println!("[Hybrid] Found {} results:\n", results.len());
+    // Display filter info if configured
+    if let Some(filter) = &output.filter {
+        println!("[Index Filter: {}]\n", filter.to_display_string());
+    }
 
-    for (i, result) in results.iter().enumerate() {
+    println!("[Hybrid] Found {} results:\n", output.results.len());
+
+    for (i, result) in output.results.iter().enumerate() {
         println!(
             "{}. {}:{}-{} (score: {:.3}, type: {:?})",
             i + 1,
@@ -586,11 +719,16 @@ async fn cmd_search(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow
 
 async fn cmd_bm25(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::Result<()> {
     let service = RetrievalService::new(config.clone(), bm25_features()).await?;
-    let results = service.search_bm25(query, limit).await?;
+    let output = service.search_bm25(query, limit).await?;
 
-    println!("[BM25] Found {} results:\n", results.len());
+    // Display filter info if configured
+    if let Some(filter) = &output.filter {
+        println!("[Index Filter: {}]\n", filter.to_display_string());
+    }
 
-    for (i, result) in results.iter().enumerate() {
+    println!("[BM25] Found {} results:\n", output.results.len());
+
+    for (i, result) in output.results.iter().enumerate() {
         println!(
             "{}. {}:{}-{} (score: {:.3})",
             i + 1,
@@ -617,11 +755,16 @@ async fn cmd_vector(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow
         return Ok(());
     }
 
-    let results = service.search_vector(query, limit).await?;
+    let output = service.search_vector(query, limit).await?;
 
-    println!("[Vector] Found {} results:\n", results.len());
+    // Display filter info if configured
+    if let Some(filter) = &output.filter {
+        println!("[Index Filter: {}]\n", filter.to_display_string());
+    }
 
-    for (i, result) in results.iter().enumerate() {
+    println!("[Vector] Found {} results:\n", output.results.len());
+
+    for (i, result) in output.results.iter().enumerate() {
         println!(
             "{}. {}:{}-{} (score: {:.3})",
             i + 1,
@@ -721,6 +864,34 @@ fn cmd_config(config: &RetrievalConfig) -> anyhow::Result<()> {
     println!("  batch_size: {}", config.indexing.batch_size);
     println!("  watch_enabled: {}", config.indexing.watch_enabled);
     println!("  watch_debounce_ms: {}", config.indexing.watch_debounce_ms);
+    println!();
+    println!("File Filtering:");
+    if config.indexing.include_dirs.is_empty()
+        && config.indexing.exclude_dirs.is_empty()
+        && config.indexing.include_extensions.is_empty()
+        && config.indexing.exclude_extensions.is_empty()
+    {
+        println!("  (default: all directories, standard text file extensions)");
+    } else {
+        if !config.indexing.include_dirs.is_empty() {
+            println!("  include_dirs: {:?}", config.indexing.include_dirs);
+        }
+        if !config.indexing.exclude_dirs.is_empty() {
+            println!("  exclude_dirs: {:?}", config.indexing.exclude_dirs);
+        }
+        if !config.indexing.include_extensions.is_empty() {
+            println!(
+                "  include_extensions: {:?}",
+                config.indexing.include_extensions
+            );
+        }
+        if !config.indexing.exclude_extensions.is_empty() {
+            println!(
+                "  exclude_extensions: {:?}",
+                config.indexing.exclude_extensions
+            );
+        }
+    }
     println!();
     println!("Chunking:");
     println!("  max_tokens: {}", config.chunking.max_tokens);

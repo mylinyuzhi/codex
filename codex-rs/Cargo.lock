@@ -2298,6 +2298,7 @@ dependencies = [
  "codex-protocol",
  "codex-retrieval",
  "codex-rmcp-client",
+ "codex-utils",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
@@ -2381,6 +2382,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "codex-sdk-protocol",
+ "codex-utils",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -2604,8 +2606,10 @@ name = "codex-lsp"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "codex-file-ignore",
+ "codex-utils",
  "crossterm",
  "dirs 5.0.1",
  "lsp-types 0.95.1",
@@ -2619,6 +2623,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "which 7.0.3",
 ]
@@ -2755,6 +2760,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-file-ignore",
+ "codex-utils",
  "codex-utils-cache",
  "crossterm",
  "derive_more 2.0.1",
@@ -2792,6 +2798,7 @@ dependencies = [
  "tokio-util",
  "toml 0.9.5",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-go",
@@ -2803,6 +2810,7 @@ dependencies = [
  "tree-sitter-typescript",
  "unicode-segmentation",
  "unicode-width 0.2.1",
+ "uuid",
  "vt100",
 ]
 
@@ -2880,6 +2888,7 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-protocol",
+ "codex-utils",
  "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "color-eyre",
@@ -2998,6 +3007,16 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "codex-utils"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
