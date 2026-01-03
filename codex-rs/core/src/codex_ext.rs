@@ -6,6 +6,7 @@
 use codex_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::config::system_reminder::LspDiagnosticsMinSeverity;
 use crate::config::system_reminder::SystemReminderConfig;
@@ -453,6 +454,79 @@ pub async fn handle_user_question_answer(
             "Answer received but channel was closed.".to_string(),
         );
     }
+}
+
+// =============================================================================
+// Retrieval Initialization (called from entry points: exec, tui, app-server)
+// =============================================================================
+
+/// Initialize retrieval service for a workdir (non-blocking).
+///
+/// This function:
+/// 1. Checks if code_search feature is enabled
+/// 2. Spawns background task to initialize service
+/// 3. Returns immediately - service initializes asynchronously
+///
+/// The initialized service is automatically cached globally by `RetrievalService`.
+/// Tool handlers access it via `RetrievalService::for_workdir()` which returns
+/// the same cached instance.
+///
+/// # Arguments
+/// * `cwd` - Working directory for the retrieval service
+/// * `include_code_search` - Whether code_search feature is enabled in config
+///
+/// # Example
+/// ```ignore
+/// // In entry point (exec, tui, app-server) after cwd is known:
+/// let default_cwd = config.cwd.to_path_buf();
+/// codex_core::spawn_retrieval_init(&default_cwd, config.include_code_search);
+/// ```
+pub fn spawn_retrieval_init(cwd: &Path, include_code_search: bool) {
+    if !include_code_search {
+        tracing::debug!("Retrieval init skipped: code_search feature not enabled");
+        return;
+    }
+
+    let cwd: PathBuf = cwd.to_path_buf();
+    tokio::spawn(async move {
+        match codex_retrieval::RetrievalFacade::for_workdir(&cwd).await {
+            Ok(service) => {
+                // Start worker pool for background indexing
+                if let Err(e) = service.start_pipeline().await {
+                    tracing::warn!("Failed to start retrieval workers: {e}");
+                    return;
+                }
+
+                // Trigger file scanning + indexing
+                if let Err(e) = service.index_service().trigger_session_start().await {
+                    tracing::warn!("Failed to trigger retrieval indexing: {e}");
+                }
+
+                // Pre-warm BM25 for fast first search
+                if let Err(e) = service.search_service().warmup().await {
+                    tracing::debug!("BM25 warmup skipped: {e}");
+                }
+
+                tracing::info!(
+                    workdir = %cwd.display(),
+                    "Retrieval service initialized"
+                );
+            }
+            Err(codex_retrieval::RetrievalErr::NotEnabled) => {
+                tracing::debug!(
+                    workdir = %cwd.display(),
+                    "Retrieval not configured (no retrieval.toml)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    workdir = %cwd.display(),
+                    error = %e,
+                    "Retrieval init failed"
+                );
+            }
+        }
+    });
 }
 
 #[cfg(test)]

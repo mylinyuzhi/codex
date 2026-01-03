@@ -276,6 +276,18 @@ pub fn fuse_all_results(
     config: &RrfConfig,
     limit: i32,
 ) -> Vec<SearchResult> {
+    tracing::trace!(
+        bm25 = bm25_results.len(),
+        vector = vector_results.len(),
+        snippet = snippet_results.len(),
+        recent = recent_results.len(),
+        bm25_weight = config.bm25_weight,
+        vector_weight = config.vector_weight,
+        snippet_weight = config.snippet_weight,
+        recent_weight = config.recent_weight,
+        "RRF fusion started"
+    );
+
     // Accumulate scores by chunk ID
     let mut scores: HashMap<String, (f32, CodeChunk)> = HashMap::new();
 

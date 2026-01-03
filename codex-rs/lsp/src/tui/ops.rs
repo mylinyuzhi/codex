@@ -204,7 +204,7 @@ async fn execute_workspace_symbol(manager: Arc<LspServerManager>, query: String)
     );
 
     // Try to get any client - use the manager's supported extensions to find one
-    let extensions = manager.all_supported_extensions();
+    let extensions = manager.all_supported_extensions().await;
     if extensions.is_empty() {
         return make_error(
             "workspace_symbol",
@@ -460,7 +460,7 @@ async fn execute_health_check(manager: Arc<LspServerManager>, file: Option<PathB
 
     // If a file is specified, get the client for that file type
     // Otherwise, try to find any client
-    let extensions = manager.all_supported_extensions();
+    let extensions = manager.all_supported_extensions().await;
     if extensions.is_empty() {
         return make_error("health_check", "No language servers configured", None, None);
     }

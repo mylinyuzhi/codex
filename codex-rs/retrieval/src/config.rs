@@ -1,6 +1,6 @@
 //! Configuration for the retrieval system.
 
-use codex_utils::LoggingConfig;
+use codex_utils_common::LoggingConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -1328,23 +1328,6 @@ impl std::fmt::Display for ConfigWarning {
 // Repo Map Configuration
 // ============================================================================
 
-/// Refresh mode for repo map caching.
-///
-/// Controls when the repo map cache is used vs regenerated.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RefreshMode {
-    /// Cache if computation takes > 1 second (default)
-    #[default]
-    Auto,
-    /// Cache based on file set only (ignore mention changes)
-    Files,
-    /// Never use cache, always regenerate
-    Always,
-    /// Only regenerate on explicit force_refresh
-    Manual,
-}
-
 /// Repo map configuration.
 ///
 /// Enables PageRank-based context generation for LLMs, providing
@@ -1363,10 +1346,6 @@ pub struct RepoMapConfig {
     /// Token multiplier when no chat files are present
     #[serde(default = "default_map_mul_no_files")]
     pub map_mul_no_files: f32,
-
-    /// Cache TTL in seconds
-    #[serde(default = "default_repo_map_cache_ttl")]
-    pub cache_ttl_secs: i64,
 
     /// Weight multiplier for chat file references (default 50x)
     #[serde(default = "default_chat_file_weight")]
@@ -1399,10 +1378,6 @@ pub struct RepoMapConfig {
     /// PageRank convergence tolerance (default 1e-6)
     #[serde(default = "default_pagerank_tolerance")]
     pub tolerance: f64,
-
-    /// Refresh mode for caching behavior
-    #[serde(default)]
-    pub refresh_mode: RefreshMode,
 }
 
 impl Default for RepoMapConfig {
@@ -1411,7 +1386,6 @@ impl Default for RepoMapConfig {
             enabled: false,
             map_tokens: default_map_tokens(),
             map_mul_no_files: default_map_mul_no_files(),
-            cache_ttl_secs: default_repo_map_cache_ttl(),
             chat_file_weight: default_chat_file_weight(),
             mentioned_ident_weight: default_mentioned_ident_weight(),
             private_symbol_weight: default_private_symbol_weight(),
@@ -1420,7 +1394,6 @@ impl Default for RepoMapConfig {
             damping_factor: default_damping_factor(),
             max_iterations: default_pagerank_max_iterations(),
             tolerance: default_pagerank_tolerance(),
-            refresh_mode: RefreshMode::default(),
         }
     }
 }
@@ -1431,10 +1404,6 @@ fn default_map_tokens() -> i32 {
 
 fn default_map_mul_no_files() -> f32 {
     8.0
-}
-
-fn default_repo_map_cache_ttl() -> i64 {
-    3600 // 1 hour
 }
 
 fn default_chat_file_weight() -> f32 {

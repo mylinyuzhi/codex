@@ -433,6 +433,17 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Initialize retrieval service early (background task)
+        // This starts indexing immediately when cwd is known, rather than waiting
+        // for the first code_search or repomap tool invocation.
+        codex_core::spawn_retrieval_init(
+            &config.cwd,
+            config
+                .features
+                .enabled(codex_core::features::Feature::Retrieval),
+        );
+
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 

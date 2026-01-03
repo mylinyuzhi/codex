@@ -21,14 +21,14 @@ use crate::error::Result;
 use crate::error::RetrievalErr;
 
 /// File change event type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Simplified to a single variant - the processor checks file existence
+/// to determine the actual action (update if exists, delete if not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WatchEventKind {
-    /// File was created
-    Created,
-    /// File was modified
-    Modified,
-    /// File was deleted
-    Deleted,
+    /// File was changed (processor checks existence for actual action)
+    #[default]
+    Changed,
 }
 
 /// File change event.
@@ -200,24 +200,21 @@ impl FileWatcher {
 
     /// Convert notify events to our WatchEvent type.
     fn convert_events(&self, events: Vec<DebouncedEvent>) -> Vec<WatchEvent> {
+        let raw_count = events.len();
         let mut watch_events = Vec::new();
+        let mut skipped_count = 0;
 
         for event in events {
             let path = &event.path;
 
             // Skip non-file events and hidden files
             if self.should_skip(path) {
+                skipped_count += 1;
                 continue;
             }
 
-            // Determine event kind based on file existence
-            let kind = if path.exists() {
-                // Could be created or modified - notify-debouncer-mini
-                // doesn't distinguish, so we treat it as Modified
-                WatchEventKind::Modified
-            } else {
-                WatchEventKind::Deleted
-            };
+            // All events are Changed - processor will check file existence
+            let kind = WatchEventKind::Changed;
 
             watch_events.push(WatchEvent {
                 path: path.clone(),
@@ -226,8 +223,17 @@ impl FileWatcher {
         }
 
         // Deduplicate by path (keep last event for each path)
+        let before_dedup = watch_events.len();
         let mut seen = std::collections::HashSet::new();
         watch_events.retain(|e| seen.insert(e.path.clone()));
+
+        tracing::debug!(
+            raw = raw_count,
+            skipped = skipped_count,
+            before_dedup = before_dedup,
+            after_dedup = watch_events.len(),
+            "Converted watch events"
+        );
 
         watch_events
     }

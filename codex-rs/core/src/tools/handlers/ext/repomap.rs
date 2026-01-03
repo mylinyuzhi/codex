@@ -85,8 +85,8 @@ impl ToolHandler for RepoMapHandler {
         // 2. Get working directory from invocation context
         let cwd = invocation.turn.cwd.clone();
 
-        // 3. Try to get RetrievalService (loads config from retrieval.toml)
-        let service = match codex_retrieval::RetrievalService::for_workdir(&cwd).await {
+        // 3. Try to get RetrievalFacade (loads config from retrieval.toml)
+        let service = match codex_retrieval::RetrievalFacade::for_workdir(&cwd).await {
             Ok(s) => s,
             Err(codex_retrieval::RetrievalErr::NotEnabled) => {
                 return Ok(ToolOutput::Function {
@@ -121,7 +121,7 @@ impl ToolHandler for RepoMapHandler {
             max_tokens,
         };
 
-        // 5. Generate repomap
+        // 5. Generate repomap (using facade's simple API)
         let result = service.generate_repomap(request).await.map_err(|e| {
             FunctionCallError::RespondToModel(format!("RepoMap generation failed: {e}"))
         })?;

@@ -18,7 +18,7 @@
 //!
 //! let diagnostics = Arc::new(DiagnosticsStore::new());
 //! let config = LspServersConfig::default();
-//! let manager = LspServerManager::new(config, diagnostics);
+//! let manager = LspServerManager::new(config, None, diagnostics);
 //!
 //! // Get client for a Rust file
 //! let client = manager.get_client(Path::new("src/lib.rs")).await?;

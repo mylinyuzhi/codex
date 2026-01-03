@@ -104,6 +104,22 @@ impl BatchTracker {
     ) -> oneshot::Receiver<BatchResult> {
         let (tx, rx) = oneshot::channel();
 
+        // Handle empty batch immediately
+        if total <= 0 {
+            tracing::info!(
+                batch_id = %batch_id,
+                "Batch started with 0 items, completing immediately"
+            );
+            let result = BatchResult {
+                batch_id: batch_id.clone(),
+                completed: 0,
+                failed: 0,
+                duration_ms: 0,
+            };
+            let _ = tx.send(result);
+            return rx;
+        }
+
         let state = BatchState {
             total,
             processed: AtomicI64::new(0),

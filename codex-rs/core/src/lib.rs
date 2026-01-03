@@ -142,6 +142,7 @@ pub mod subagent;
 // Extension modules for lifecycle management
 pub mod codex_ext;
 pub mod hooks_ext;
+pub use codex_ext::spawn_retrieval_init;
 
 // System reminder module
 pub mod system_reminder;

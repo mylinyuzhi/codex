@@ -52,7 +52,7 @@ chrono = "0.4"
 
 # Internal dependencies
 codex-file-ignore = { path = "../file-ignore" }
-codex-utils = { workspace = true }
+codex-utils-common = { workspace = true }
 
 # TUI dependencies (optional, for lsp-tui binary)
 ratatui = { workspace = true, optional = true }

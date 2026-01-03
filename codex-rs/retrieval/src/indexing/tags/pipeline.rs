@@ -40,6 +40,10 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
+use crate::repomap::RepoMapCache;
+use crate::tags::extractor::TagExtractor;
+
+// Import from parent indexing module (use crate:: since super:: refers to tags/)
 use crate::indexing::BatchId;
 use crate::indexing::BatchResult;
 use crate::indexing::BatchTracker;
@@ -47,14 +51,19 @@ use crate::indexing::EventProcessor;
 use crate::indexing::FileIndexLocks;
 use crate::indexing::LagInfo;
 use crate::indexing::LagTracker;
+use crate::indexing::PipelineReadiness;
+use crate::indexing::PipelineState;
 use crate::indexing::TagEventKind;
+use crate::indexing::TagEventQueue;
 use crate::indexing::TrackedEvent;
 use crate::indexing::WorkerPool;
 use crate::indexing::WorkerPoolConfig;
+use crate::indexing::compute_readiness;
 use crate::indexing::new_tag_event_queue;
-use crate::tags::extractor::TagExtractor;
+use crate::indexing::now_timestamp;
 
-use super::RepoMapCache;
+// Re-export StrictModeConfig with alias for backward compatibility
+pub use crate::indexing::StrictModeConfig as TagStrictModeConfig;
 
 /// Tag extraction statistics.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,88 +86,11 @@ impl Default for TagStats {
     }
 }
 
-/// Tag pipeline state.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TagPipelineState {
-    /// Pipeline has not been initialized yet.
-    Uninitialized,
-    /// Pipeline is extracting tags for initial build.
-    Building {
-        /// Current batch ID.
-        batch_id: BatchId,
-        /// Progress percentage (0.0 - 1.0).
-        progress: f32,
-        /// Unix timestamp when building started.
-        started_at: i64,
-    },
-    /// Pipeline is ready.
-    Ready {
-        /// Tag statistics.
-        stats: TagStats,
-        /// Unix timestamp when extraction completed.
-        extracted_at: i64,
-    },
-    /// Pipeline failed to initialize.
-    Failed {
-        /// Error message.
-        error: String,
-        /// Unix timestamp when failure occurred.
-        failed_at: i64,
-    },
-}
+/// Type alias for tag pipeline state using common generic type.
+pub type TagPipelineState = PipelineState<TagStats>;
 
-/// Strict mode configuration for the tag pipeline.
-#[derive(Debug, Clone)]
-pub struct TagStrictModeConfig {
-    /// Initial build must complete before Ready.
-    pub init: bool,
-    /// Incremental updates must complete before Ready.
-    pub incremental: bool,
-}
-
-impl Default for TagStrictModeConfig {
-    fn default() -> Self {
-        Self {
-            init: true,
-            incremental: false,
-        }
-    }
-}
-
-/// Readiness status for RepoMap queries.
-#[derive(Debug, Clone)]
-pub enum TagReadiness {
-    /// Pipeline not initialized.
-    Uninitialized,
-    /// Pipeline is building.
-    Building {
-        /// Progress percentage.
-        progress: f32,
-        /// Current lag info.
-        lag_info: LagInfo,
-    },
-    /// Pipeline is ready.
-    Ready {
-        /// Tag statistics.
-        stats: TagStats,
-        /// Current lag info.
-        lag_info: LagInfo,
-    },
-    /// Pipeline is not ready (strict mode).
-    NotReady {
-        /// Reason for not being ready.
-        reason: String,
-        /// Current lag info.
-        lag_info: Option<LagInfo>,
-        /// Whether partial results are available.
-        is_partial_available: bool,
-    },
-    /// Pipeline failed.
-    Failed {
-        /// Error message.
-        error: String,
-    },
-}
+/// Type alias for tag pipeline readiness using common generic type.
+pub type TagReadiness = PipelineReadiness<TagStats>;
 
 /// Tag event processor that handles tag extraction.
 #[allow(dead_code)] // Fields will be used when extraction logic is fully implemented
@@ -199,44 +131,55 @@ impl EventProcessor for TagEventProcessor {
             "TagEventProcessor: processing file"
         );
 
-        match event.data {
-            TagEventKind::Created | TagEventKind::Modified => {
-                // Extract tags from file using tree-sitter
-                let mut extractor = TagExtractor::new();
-                match extractor.extract_file(path) {
-                    Ok(tags) => {
-                        let tag_count = tags.len();
-                        // Cache the tags
-                        self.cache.put_tags(&filepath, &tags).await?;
+        // Check file existence to determine action
+        // This is more robust than trusting event type (handles race conditions)
+        if path.exists() {
+            // Record mtime BEFORE extraction (for optimistic lock)
+            let mtime_before = RepoMapCache::file_mtime(&filepath);
 
+            // File exists - extract/update tags
+            let mut extractor = TagExtractor::new();
+            match extractor.extract_file(path) {
+                Ok(tags) => {
+                    let tag_count = tags.len();
+                    // Cache the tags with optimistic lock validation
+                    let written = self.cache.put_tags(&filepath, &tags, mtime_before).await?;
+
+                    if written {
                         tracing::debug!(
                             trace_id = %trace_id,
                             path = %path.display(),
                             tags = tag_count,
                             "Tags extracted and cached"
                         );
-                    }
-                    Err(e) => {
+                    } else {
                         tracing::debug!(
                             trace_id = %trace_id,
                             path = %path.display(),
-                            error = %e,
-                            "Failed to extract tags (may be unsupported language)"
+                            tags = tag_count,
+                            "Tags extracted but cache write skipped (newer version exists)"
                         );
-                        // Continue without error - unsupported languages are expected
                     }
                 }
+                Err(e) => {
+                    tracing::debug!(
+                        trace_id = %trace_id,
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to extract tags (may be unsupported language)"
+                    );
+                    // Continue without error - unsupported languages are expected
+                }
             }
-            TagEventKind::Deleted => {
-                // Remove tags for deleted file
-                self.cache.invalidate_tags(&filepath).await?;
+        } else {
+            // File doesn't exist - remove tags from cache
+            self.cache.invalidate_tags(&filepath).await?;
 
-                tracing::debug!(
-                    trace_id = %trace_id,
-                    path = %path.display(),
-                    "Tags removed from cache"
-                );
-            }
+            tracing::debug!(
+                trace_id = %trace_id,
+                path = %path.display(),
+                "Tags removed from cache"
+            );
         }
 
         Ok(())
@@ -255,7 +198,7 @@ pub struct TagPipeline {
     /// Current state of the pipeline.
     state: RwLock<TagPipelineState>,
     /// Event queue for file changes.
-    event_queue: Arc<crate::indexing::TagEventQueue>,
+    event_queue: Arc<TagEventQueue>,
     /// File-level locks.
     file_locks: Arc<FileIndexLocks>,
     /// Batch tracker for SessionStart completion.
@@ -295,7 +238,6 @@ impl TagPipeline {
         let worker_config = WorkerPoolConfig {
             worker_count,
             requeue_delay_ms: 10,
-            use_file_locks: true,
         };
 
         Self {
@@ -351,11 +293,10 @@ impl TagPipeline {
 
     /// Mark the pipeline as building.
     pub async fn mark_building(&self, batch_id: BatchId) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = TagPipelineState::Building {
             batch_id,
             progress: 0.0,
-            started_at: now,
+            started_at: now_timestamp(),
         };
     }
 
@@ -377,26 +318,31 @@ impl TagPipeline {
     }
 
     /// Mark the pipeline as ready.
+    ///
+    /// Also triggers cleanup of file locks to prevent memory leaks from
+    /// any locks that might have been missed during per-file cleanup.
     pub async fn mark_ready(&self, stats: TagStats) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = TagPipelineState::Ready {
             stats,
-            extracted_at: now,
+            completed_at: now_timestamp(),
         };
         self.init_complete.store(true, Ordering::Release);
+
+        // Cleanup any remaining file locks to prevent memory leaks
+        self.file_locks.cleanup_all().await;
+        tracing::debug!("Cleaned up file locks after tag pipeline completion");
     }
 
     /// Mark the pipeline as failed.
     pub async fn mark_failed(&self, error: String) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = TagPipelineState::Failed {
             error,
-            failed_at: now,
+            failed_at: now_timestamp(),
         };
     }
 
     /// Get the event queue for pushing events.
-    pub fn event_queue(&self) -> Arc<crate::indexing::TagEventQueue> {
+    pub fn event_queue(&self) -> Arc<TagEventQueue> {
         Arc::clone(&self.event_queue)
     }
 
@@ -453,47 +399,12 @@ impl TagPipeline {
     pub async fn readiness(&self) -> TagReadiness {
         let state = self.state.read().await.clone();
         let lag_info = self.lag_tracker.lag_info().await;
-
-        match state {
-            TagPipelineState::Uninitialized => TagReadiness::Uninitialized,
-
-            TagPipelineState::Building { progress, .. } => {
-                TagReadiness::Building { progress, lag_info }
-            }
-
-            TagPipelineState::Ready { stats, .. } => {
-                if lag_info.lag > 0 {
-                    // There are pending events
-                    let is_strict = if !self.init_complete.load(Ordering::Acquire) {
-                        self.strict_config.init
-                    } else {
-                        self.strict_config.incremental
-                    };
-
-                    if is_strict {
-                        TagReadiness::NotReady {
-                            reason: format!(
-                                "{} mode: {} events pending",
-                                if self.init_complete.load(Ordering::Acquire) {
-                                    "Incremental"
-                                } else {
-                                    "Init"
-                                },
-                                lag_info.lag
-                            ),
-                            lag_info: Some(lag_info),
-                            is_partial_available: true,
-                        }
-                    } else {
-                        TagReadiness::Ready { stats, lag_info }
-                    }
-                } else {
-                    TagReadiness::Ready { stats, lag_info }
-                }
-            }
-
-            TagPipelineState::Failed { error, .. } => TagReadiness::Failed { error },
-        }
+        compute_readiness(
+            &state,
+            lag_info,
+            self.is_init_complete(),
+            &self.strict_config,
+        )
     }
 
     /// Check if ready for RepoMap generation (quick check).
@@ -525,7 +436,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let db = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let cache = Arc::new(RepoMapCache::new(db, 3600));
+        let cache = Arc::new(RepoMapCache::new(db));
 
         let strict_config = TagStrictModeConfig::default();
 
@@ -629,7 +540,7 @@ mod tests {
         let (_dir, pipeline) = create_test_pipeline().await;
 
         let seq = pipeline.assign_seq();
-        let event = TrackedEvent::new(TagEventKind::Modified, None, seq, "test-trace".to_string());
+        let event = TrackedEvent::new(TagEventKind::Changed, None, seq, "test-trace".to_string());
 
         pipeline.push_event(PathBuf::from("test.rs"), event).await;
 

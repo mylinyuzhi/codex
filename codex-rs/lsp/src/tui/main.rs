@@ -37,6 +37,10 @@ struct Args {
     /// Initial file to open (optional)
     #[arg(short, long)]
     file: Option<PathBuf>,
+
+    /// Verbosity level (-v: info, -vv: debug, -vvv: trace)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
@@ -142,9 +146,21 @@ async fn main() -> Result<()> {
 
     let (non_blocking, _guard) = non_blocking(log_file);
 
-    // Use codex-utils logging infrastructure for timezone-aware timestamps
-    let logging_config = codex_utils::LoggingConfig::default();
-    let file_layer = codex_utils::configure_fmt_layer!(
+    // Determine log level from verbosity flag
+    let log_level = match args.verbose {
+        0 => "info",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+
+    // Use explicit module filter (not bare level) for per-layer filtering
+    let logging_config = codex_utils_common::LoggingConfig {
+        modules: vec![format!("codex_lsp={}", log_level)],
+        ..Default::default()
+    };
+
+    let file_layer = codex_utils_common::configure_fmt_layer!(
         tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             .with_ansi(false),
@@ -153,6 +169,9 @@ async fn main() -> Result<()> {
     );
 
     tracing_subscriber::registry().with(file_layer).init();
+
+    // Startup log to confirm logging is working
+    tracing::info!(workspace = %workspace.display(), "LSP TUI started");
 
     // Initialize LSP manager
     let diagnostics = Arc::new(DiagnosticsStore::new());

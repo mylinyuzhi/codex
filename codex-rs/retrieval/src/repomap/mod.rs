@@ -4,7 +4,7 @@
 //! - Tree-sitter tag extraction (definitions and references)
 //! - PageRank-based file/symbol importance ranking
 //! - Token-budgeted output generation
-//! - 3-level caching (SQLite, in-memory LRU, TTL)
+//! - SQLite-based tag caching
 //!
 //! Inspired by Aider's repo map feature.
 
@@ -14,17 +14,12 @@ pub mod graph;
 pub mod important_files;
 pub mod pagerank;
 pub mod renderer;
-pub mod tag_pipeline;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use sha2::Digest;
-use sha2::Sha256;
-
-use crate::config::RefreshMode;
 use crate::config::RepoMapConfig;
 use crate::error::Result;
 use crate::event_emitter;
@@ -33,20 +28,24 @@ use crate::events::RetrievalEvent;
 use crate::storage::SqliteStore;
 use crate::tags::extractor::CodeTag;
 
+// Internal imports (not re-exported)
+use graph::DependencyGraph;
+use graph::extract_terms;
+use pagerank::PageRanker;
+use renderer::TreeRenderer;
+
 pub use budget::TokenBudgeter;
 pub use cache::RepoMapCache;
-pub use graph::DependencyGraph;
-pub use graph::extract_terms;
-pub use pagerank::PageRanker;
-pub use renderer::TreeRenderer;
-pub use tag_pipeline::SharedTagPipeline;
-pub use tag_pipeline::TagEventProcessor;
-pub use tag_pipeline::TagPipeline;
-pub use tag_pipeline::TagPipelineState;
-pub use tag_pipeline::TagReadiness;
-pub use tag_pipeline::TagStats;
-pub use tag_pipeline::TagStrictModeConfig;
-pub use tag_pipeline::TagWorkerPool;
+
+// Re-export TagPipeline types from indexing (where they now live)
+pub use crate::indexing::SharedTagPipeline;
+pub use crate::indexing::TagEventProcessor;
+pub use crate::indexing::TagPipeline;
+pub use crate::indexing::TagPipelineState;
+pub use crate::indexing::TagReadiness;
+pub use crate::indexing::TagStats;
+pub use crate::indexing::TagStrictModeConfig;
+pub use crate::indexing::TagWorkerPool;
 
 /// Ranked file with PageRank score.
 #[derive(Debug, Clone)]
@@ -115,122 +114,68 @@ pub struct RepoMapResult {
     pub filter: Option<crate::indexing::FilterSummary>,
 }
 
-/// Main repo map service.
+/// RepoMap generator for PageRank-based context generation.
 ///
 /// Coordinates tag extraction, graph building, PageRank ranking,
 /// token budgeting, and tree rendering.
-pub struct RepoMapService {
+///
+/// **Lifecycle**: Per-request. Create via `new_with_shared()`, call
+/// `generate()`, then discard. Not a long-lived service.
+pub struct RepoMapGenerator {
     config: RepoMapConfig,
     cache: RepoMapCache,
-    graph: DependencyGraph,
-    ranker: PageRanker,
-    budgeter: TokenBudgeter,
-    renderer: TreeRenderer,
+    budgeter: Arc<TokenBudgeter>,
     workspace_root: PathBuf,
-    /// Last generated result (for Manual refresh mode)
-    last_result: Option<RepoMapResult>,
-    /// Last generation time in milliseconds (for Auto refresh mode)
-    last_generation_time_ms: i64,
 }
 
-impl RepoMapService {
-    /// Create a new repo map service.
+impl RepoMapGenerator {
+    /// Create with shared components (recommended for production).
+    ///
+    /// Uses pre-initialized SqliteStore and TokenBudgeter to avoid
+    /// repeated initialization overhead.
+    pub fn new_with_shared(
+        config: RepoMapConfig,
+        db: Arc<SqliteStore>,
+        budgeter: Arc<TokenBudgeter>,
+        workspace_root: PathBuf,
+    ) -> Result<Self> {
+        let cache = RepoMapCache::new(db);
+
+        Ok(Self {
+            config,
+            cache,
+            budgeter,
+            workspace_root,
+        })
+    }
+
+    /// Create a new repo map generator (convenience constructor).
+    ///
+    /// Uses the global TokenBudgeter singleton.
     pub fn new(
         config: RepoMapConfig,
         db: Arc<SqliteStore>,
         workspace_root: PathBuf,
     ) -> Result<Self> {
-        let cache = RepoMapCache::new(db, config.cache_ttl_secs);
-        let graph = DependencyGraph::new();
-        let ranker = PageRanker::new(
-            config.damping_factor,
-            config.max_iterations,
-            config.tolerance,
-        );
-        let budgeter = TokenBudgeter::new()?;
-        let renderer = TreeRenderer::new();
-
-        Ok(Self {
-            config,
-            cache,
-            graph,
-            ranker,
-            budgeter,
-            renderer,
-            workspace_root,
-            last_result: None,
-            last_generation_time_ms: 0,
-        })
-    }
-
-    /// Compute a deterministic hash for the request to use as cache key.
-    ///
-    /// Uses SHA256 instead of DefaultHasher to ensure hash consistency across
-    /// process restarts (DefaultHasher may vary between runs).
-    fn compute_request_hash(&self, request: &RepoMapRequest, include_mentions: bool) -> String {
-        let mut hasher = Sha256::new();
-
-        // Hash chat files (sorted for determinism)
-        let mut chat_files: Vec<_> = request
-            .chat_files
-            .iter()
-            .filter_map(|p| p.to_str())
-            .collect();
-        chat_files.sort();
-        for f in chat_files {
-            hasher.update(f.as_bytes());
-            hasher.update(b"\0"); // separator
-        }
-
-        // Hash other files (sorted for determinism)
-        let mut other_files: Vec<_> = request
-            .other_files
-            .iter()
-            .filter_map(|p| p.to_str())
-            .collect();
-        other_files.sort();
-        for f in other_files {
-            hasher.update(f.as_bytes());
-            hasher.update(b"\0");
-        }
-
-        // Hash max tokens
-        hasher.update(request.max_tokens.to_le_bytes());
-
-        // For Files mode, exclude mentions from hash
-        if include_mentions {
-            let mut fnames: Vec<_> = request.mentioned_fnames.iter().collect();
-            fnames.sort();
-            for f in fnames {
-                hasher.update(f.as_bytes());
-                hasher.update(b"\0");
-            }
-
-            let mut idents: Vec<_> = request.mentioned_idents.iter().collect();
-            idents.sort();
-            for i in idents {
-                hasher.update(i.as_bytes());
-                hasher.update(b"\0");
-            }
-        }
-
-        // Return first 16 hex chars of SHA256 (64 bits)
-        let result = hasher.finalize();
-        hex::encode(&result[..8])
+        Self::new_with_shared(config, db, TokenBudgeter::shared(), workspace_root)
     }
 
     /// Generate a repo map for the given request.
     ///
     /// # Arguments
     /// * `request` - The repo map request
-    /// * `force_refresh` - Force regeneration even if cached result exists
-    pub async fn generate(
-        &mut self,
-        request: &RepoMapRequest,
-        force_refresh: bool,
-    ) -> Result<RepoMapResult> {
+    pub async fn generate(&self, request: &RepoMapRequest) -> Result<RepoMapResult> {
         // Generate request_id for event tracking
         let request_id = format!("repomap-{}", chrono::Utc::now().timestamp_millis());
+
+        tracing::debug!(
+            request_id = %request_id,
+            max_tokens = request.max_tokens,
+            chat_files = request.chat_files.len(),
+            other_files = request.other_files.len(),
+            mentioned_idents = request.mentioned_idents.len(),
+            "RepoMap generation started"
+        );
 
         // Emit RepoMapStarted event
         event_emitter::emit(RetrievalEvent::RepoMapStarted {
@@ -239,61 +184,6 @@ impl RepoMapService {
             chat_files: request.chat_files.len() as i32,
             other_files: request.other_files.len() as i32,
         });
-
-        // Check refresh mode for early return
-        if !force_refresh {
-            match self.config.refresh_mode {
-                RefreshMode::Manual => {
-                    // Return cached result if available
-                    if let Some(ref cached) = self.last_result {
-                        event_emitter::emit(RetrievalEvent::RepoMapCacheHit {
-                            request_id: request_id.clone(),
-                            cache_key: "manual_last_result".to_string(),
-                        });
-                        return Ok(cached.clone());
-                    }
-                }
-                RefreshMode::Auto => {
-                    // Use L3 cache if last generation took > 1 second
-                    if self.last_generation_time_ms > 1000 {
-                        let hash = self.compute_request_hash(request, true);
-                        if let Some((content, tokens, files_included)) = self.cache.get_map(&hash) {
-                            event_emitter::emit(RetrievalEvent::RepoMapCacheHit {
-                                request_id: request_id.clone(),
-                                cache_key: hash,
-                            });
-                            return Ok(RepoMapResult {
-                                content,
-                                tokens,
-                                files_included,
-                                generation_time_ms: 0, // Cached result
-                                filter: None,          // Cache doesn't store filter
-                            });
-                        }
-                    }
-                }
-                RefreshMode::Files => {
-                    // Use L3 cache based on file set only (exclude mentions from hash)
-                    let hash = self.compute_request_hash(request, false);
-                    if let Some((content, tokens, files_included)) = self.cache.get_map(&hash) {
-                        event_emitter::emit(RetrievalEvent::RepoMapCacheHit {
-                            request_id: request_id.clone(),
-                            cache_key: hash,
-                        });
-                        return Ok(RepoMapResult {
-                            content,
-                            tokens,
-                            files_included,
-                            generation_time_ms: 0, // Cached result
-                            filter: None,          // Cache doesn't store filter
-                        });
-                    }
-                }
-                RefreshMode::Always => {
-                    // Never use cache, always regenerate
-                }
-            }
-        }
 
         let start = Instant::now();
 
@@ -309,12 +199,21 @@ impl RepoMapService {
             .collect();
 
         // Extract tags for all files (using cache where possible)
+        let tag_start = Instant::now();
         let file_tags = self.extract_tags_for_files(&all_files).await?;
+        let total_tags: usize = file_tags.values().map(|t| t.len()).sum();
+        tracing::debug!(
+            files = file_tags.len(),
+            total_tags = total_tags,
+            duration_ms = tag_start.elapsed().as_millis() as i64,
+            "Tags extracted"
+        );
 
-        // Build dependency graph
-        self.graph.clear();
+        // Build dependency graph (created per-request)
+        let graph_start = Instant::now();
+        let mut graph = DependencyGraph::new();
         for (filepath, tags) in &file_tags {
-            self.graph.add_file_tags(filepath, tags);
+            graph.add_file_tags(filepath, tags);
         }
 
         // Extract query terms from mentioned identifiers for fuzzy matching
@@ -325,7 +224,7 @@ impl RepoMapService {
             .collect();
 
         // Build weighted edges with personalization
-        self.graph.build_edges(
+        graph.build_edges(
             &chat_file_set,
             &request.mentioned_idents,
             &query_terms,
@@ -335,10 +234,20 @@ impl RepoMapService {
             self.config.naming_style_weight,
             self.config.term_match_weight,
         );
+        tracing::trace!(
+            edges = graph.edge_count(),
+            duration_ms = graph_start.elapsed().as_millis() as i64,
+            "Graph built"
+        );
 
-        // Run PageRank
-        let personalization = self.graph.build_personalization(&chat_file_set);
-        let file_ranks = self.ranker.rank(self.graph.graph(), &personalization)?;
+        // Run PageRank (created per-request)
+        let ranker = PageRanker::new(
+            self.config.damping_factor,
+            self.config.max_iterations,
+            self.config.tolerance,
+        );
+        let personalization = graph.build_personalization(&chat_file_set);
+        let file_ranks = ranker.rank(graph.graph(), &personalization)?;
 
         // Emit PageRankComputed event with top 10 files
         let mut sorted_ranks: Vec<_> = file_ranks.iter().collect();
@@ -365,14 +274,11 @@ impl RepoMapService {
         });
 
         // Compute file definition counts for proper rank distribution
-        let file_def_counts = self.graph.compute_file_definition_counts();
+        let file_def_counts = graph.compute_file_definition_counts();
 
         // Distribute ranks to symbols
-        let ranked_symbols = self.ranker.distribute_to_definitions(
-            &file_ranks,
-            self.graph.definitions(),
-            &file_def_counts,
-        );
+        let ranked_symbols =
+            ranker.distribute_to_definitions(&file_ranks, graph.definitions(), &file_def_counts);
 
         // Determine token budget
         let max_tokens = if request.chat_files.is_empty() {
@@ -381,17 +287,32 @@ impl RepoMapService {
             request.max_tokens
         };
 
-        // Find optimal tag count via binary search
+        // Find optimal tag count via binary search (renderer created per-request)
+        let renderer = TreeRenderer::new();
+        let budget_start = Instant::now();
         let optimal_count =
             self.budgeter
-                .find_optimal_count(&ranked_symbols, &self.renderer, max_tokens);
+                .find_optimal_count(&ranked_symbols, &renderer, max_tokens);
+        tracing::trace!(
+            max_tokens = max_tokens,
+            optimal_count = optimal_count,
+            duration_ms = budget_start.elapsed().as_millis() as i64,
+            "Budget calculated"
+        );
 
         // Render the tree
-        let (rendered_content, rendered_files) = self.renderer.render(
+        let render_start = Instant::now();
+        let (rendered_content, rendered_files) = renderer.render(
             &ranked_symbols,
             &chat_file_set,
             optimal_count,
             &self.workspace_root,
+        );
+        tracing::trace!(
+            rendered_files = rendered_files.len(),
+            content_len = rendered_content.len(),
+            duration_ms = render_start.elapsed().as_millis() as i64,
+            "Tree rendered"
         );
 
         // Prepend important files that aren't already rendered
@@ -428,35 +349,6 @@ impl RepoMapService {
             filter: None, // Will be set by caller
         };
 
-        // Save for caching (used by Manual and Auto refresh modes)
-        self.last_result = Some(result.clone());
-        self.last_generation_time_ms = generation_time_ms;
-
-        // Store in L3 cache for Auto and Files modes
-        match self.config.refresh_mode {
-            RefreshMode::Auto => {
-                let hash = self.compute_request_hash(request, true);
-                self.cache.put_map(
-                    &hash,
-                    result.content.clone(),
-                    result.tokens,
-                    result.files_included,
-                );
-            }
-            RefreshMode::Files => {
-                let hash = self.compute_request_hash(request, false);
-                self.cache.put_map(
-                    &hash,
-                    result.content.clone(),
-                    result.tokens,
-                    result.files_included,
-                );
-            }
-            RefreshMode::Manual | RefreshMode::Always => {
-                // Manual uses last_result, Always never caches
-            }
-        }
-
         // Emit RepoMapGenerated event
         event_emitter::emit(RetrievalEvent::RepoMapGenerated {
             request_id,
@@ -470,7 +362,7 @@ impl RepoMapService {
 
     /// Get ranked files without rendering (for search integration).
     pub async fn get_ranked_files(
-        &mut self,
+        &self,
         chat_files: &[PathBuf],
         other_files: &[PathBuf],
         mentioned_idents: &HashSet<String>,
@@ -485,9 +377,10 @@ impl RepoMapService {
 
         let file_tags = self.extract_tags_for_files(&all_files).await?;
 
-        self.graph.clear();
+        // Build dependency graph (created per-request)
+        let mut graph = DependencyGraph::new();
         for (filepath, tags) in &file_tags {
-            self.graph.add_file_tags(filepath, tags);
+            graph.add_file_tags(filepath, tags);
         }
 
         // Extract query terms for fuzzy matching
@@ -496,7 +389,7 @@ impl RepoMapService {
             .flat_map(|ident| extract_terms(ident))
             .collect();
 
-        self.graph.build_edges(
+        graph.build_edges(
             &chat_file_set,
             mentioned_idents,
             &query_terms,
@@ -507,8 +400,14 @@ impl RepoMapService {
             self.config.term_match_weight,
         );
 
-        let personalization = self.graph.build_personalization(&chat_file_set);
-        let file_ranks = self.ranker.rank(self.graph.graph(), &personalization)?;
+        // Run PageRank (created per-request)
+        let ranker = PageRanker::new(
+            self.config.damping_factor,
+            self.config.max_iterations,
+            self.config.tolerance,
+        );
+        let personalization = graph.build_personalization(&chat_file_set);
+        let file_ranks = ranker.rank(graph.graph(), &personalization)?;
 
         // Group by file
         let mut ranked_files: Vec<RankedFile> = file_ranks
@@ -602,12 +501,21 @@ impl RepoMapService {
                 continue;
             }
 
+            // Record mtime BEFORE extraction (for optimistic lock)
+            let mtime_before = RepoMapCache::file_mtime(&filepath);
+
             // Extract tags from file
             let mut extractor = crate::tags::extractor::TagExtractor::new();
             match extractor.extract_file(file) {
                 Ok(tags) => {
-                    // Cache the tags
-                    self.cache.put_tags(&filepath, &tags).await?;
+                    // Cache the tags with optimistic lock validation
+                    let written = self.cache.put_tags(&filepath, &tags, mtime_before).await?;
+                    if !written {
+                        tracing::debug!(
+                            file = %filepath,
+                            "Cache write skipped: newer version exists in DB"
+                        );
+                    }
                     result.insert(filepath, tags);
                 }
                 Err(e) => {

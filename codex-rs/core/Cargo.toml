@@ -35,7 +35,7 @@ codex-lsp = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-utils = { workspace = true }
+codex-utils-common = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
@@ -98,6 +98,9 @@ bytes = { workspace = true }
 codex-file-ignore = { workspace = true }
 codex-retrieval = { workspace = true }
 glob = { workspace = true }
+grep = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
 html2text = { workspace = true }
 ignore = { workspace = true }
 lru = { workspace = true }

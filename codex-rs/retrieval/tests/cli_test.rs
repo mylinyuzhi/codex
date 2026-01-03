@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use codex_retrieval::FacadeBuilder;
+use codex_retrieval::RetrievalFeatures;
 use codex_retrieval::SnippetStorage;
 use codex_retrieval::SymbolQuery;
 use codex_retrieval::config::RetrievalConfig;
 use codex_retrieval::indexing::IndexManager;
 use codex_retrieval::indexing::RebuildMode;
-use codex_retrieval::service::RetrievalFeatures;
-use codex_retrieval::service::RetrievalService;
 use codex_retrieval::storage::SqliteStore;
 
 // ==== Helper Function Tests ====
@@ -55,31 +55,26 @@ fn test_workspace_name_extraction() {
 /// Test RetrievalFeatures configurations.
 #[test]
 fn test_retrieval_features() {
-    // BM25-only features
-    let bm25_features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: true,
-        vector_search: false,
-    };
-    assert!(bm25_features.code_search);
-    assert!(bm25_features.query_rewrite);
-    assert!(!bm25_features.vector_search);
-    assert!(bm25_features.has_search());
+    // STANDARD features (BM25 + query rewrite)
+    assert!(RetrievalFeatures::STANDARD.code_search);
+    assert!(RetrievalFeatures::STANDARD.query_rewrite);
+    assert!(!RetrievalFeatures::STANDARD.vector_search);
+    assert!(RetrievalFeatures::STANDARD.has_search());
 
-    // Hybrid features
-    let hybrid_features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: true,
-        vector_search: true,
-    };
-    assert!(hybrid_features.code_search);
-    assert!(hybrid_features.query_rewrite);
-    assert!(hybrid_features.vector_search);
-    assert!(hybrid_features.has_search());
+    // FULL features (all enabled)
+    assert!(RetrievalFeatures::FULL.code_search);
+    assert!(RetrievalFeatures::FULL.query_rewrite);
+    assert!(RetrievalFeatures::FULL.vector_search);
+    assert!(RetrievalFeatures::FULL.has_search());
 
-    // No search features
-    let no_features = RetrievalFeatures::none();
-    assert!(!no_features.has_search());
+    // MINIMAL features (BM25 only)
+    assert!(RetrievalFeatures::MINIMAL.code_search);
+    assert!(!RetrievalFeatures::MINIMAL.query_rewrite);
+    assert!(!RetrievalFeatures::MINIMAL.vector_search);
+    assert!(RetrievalFeatures::MINIMAL.has_search());
+
+    // NONE features
+    assert!(!RetrievalFeatures::NONE.has_search());
 }
 
 // ==== Config Tests ====
@@ -252,94 +247,152 @@ async fn test_retrieval_service_creation() {
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: false,
-    };
-
-    let service = RetrievalService::new(config, features).await.unwrap();
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
     assert!(service.features().code_search);
     assert!(!service.features().vector_search);
 }
 
 #[tokio::test]
 async fn test_search_empty_index() {
+    use codex_retrieval::SearchRequest;
+
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: false,
-    };
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
 
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // Start index pipeline and wait for completion
+    service.start_pipeline().await.unwrap();
+    let result = service
+        .index_service()
+        .trigger_session_start()
+        .await
+        .unwrap();
+    // Wait for index to complete
+    if let Some(rx) = result.index_receiver {
+        let _ = rx.await;
+    }
 
     // Search on empty index should return empty results
     let results = service.search("test query").await.unwrap();
-    assert!(results.is_empty());
+    assert!(results.results.is_empty());
 }
 
 #[tokio::test]
 async fn test_search_with_limit() {
+    use codex_retrieval::SearchRequest;
+
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
     config.search.n_final = 100; // Set high default
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: false,
-    };
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
 
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // Start index pipeline and wait for completion
+    service.start_pipeline().await.unwrap();
+    let result = service
+        .index_service()
+        .trigger_session_start()
+        .await
+        .unwrap();
+    // Wait for index to complete
+    if let Some(rx) = result.index_receiver {
+        let _ = rx.await;
+    }
 
-    // Search with explicit limit
-    let results = service.search_with_limit("test", Some(5)).await.unwrap();
+    // Search with explicit limit using new SearchRequest API
+    let results = service
+        .search_service()
+        .execute(SearchRequest::new("test").limit(5))
+        .await
+        .unwrap();
     // Empty index, so results will be empty, but the limit parameter should be accepted
-    assert!(results.len() <= 5);
+    assert!(results.results.len() <= 5);
 }
 
 #[tokio::test]
 async fn test_bm25_search() {
+    use codex_retrieval::SearchRequest;
+
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: false,
-    };
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
 
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // Start index pipeline and wait for completion
+    service.start_pipeline().await.unwrap();
+    let result = service
+        .index_service()
+        .trigger_session_start()
+        .await
+        .unwrap();
+    // Wait for index to complete
+    if let Some(rx) = result.index_receiver {
+        let _ = rx.await;
+    }
 
-    // BM25 search on empty index
-    let results = service.search_bm25("function", 10).await.unwrap();
-    assert!(results.is_empty());
+    // BM25 search on empty index using new SearchRequest API
+    let results = service
+        .search_service()
+        .execute(SearchRequest::new("function").bm25().limit(10))
+        .await
+        .unwrap();
+    assert!(results.results.is_empty());
 }
 
 #[tokio::test]
 async fn test_vector_search_without_embeddings() {
+    use codex_retrieval::SearchRequest;
+
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: true, // Enable but no provider configured
-    };
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::FULL) // Enable vector but no provider configured
+        .build()
+        .await
+        .unwrap();
 
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // Start index pipeline and wait for completion
+    service.start_pipeline().await.unwrap();
+    let result = service
+        .index_service()
+        .trigger_session_start()
+        .await
+        .unwrap();
+    // Wait for index to complete
+    if let Some(rx) = result.index_receiver {
+        let _ = rx.await;
+    }
 
     // Vector search without embeddings configured should return empty
-    assert!(!service.has_vector_search());
-    let results = service.search_vector("semantic query", 10).await.unwrap();
-    assert!(results.is_empty());
+    assert!(!service.search_service().has_vector_search());
+    let results = service
+        .search_service()
+        .execute(SearchRequest::new("semantic query").vector().limit(10))
+        .await
+        .unwrap();
+    assert!(results.results.is_empty());
 }
 
 // ==== Snippet Search Tests ====
@@ -429,18 +482,34 @@ impl AppConfig {
     assert!(stats.file_count > 0, "Should have indexed the test file");
 
     // Step 2: Search
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        vector_search: false,
-    };
-    let service = RetrievalService::new(config, features).await.unwrap();
+    use codex_retrieval::SearchRequest;
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
 
-    // BM25 search for known content
-    let results = service.search_bm25("handle_request", 10).await.unwrap();
+    // Start index pipeline and wait for completion
+    service.start_pipeline().await.unwrap();
+    let result = service
+        .index_service()
+        .trigger_session_start()
+        .await
+        .unwrap();
+    // Wait for index to complete
+    if let Some(rx) = result.index_receiver {
+        let _ = rx.await;
+    }
+
+    // BM25 search for known content using new SearchRequest API
+    let results = service
+        .search_service()
+        .execute(SearchRequest::new("handle_request").bm25().limit(10))
+        .await
+        .unwrap();
     // Note: Results may be empty if FTS index not populated during this test
     // The important thing is that the search completes without error
-    assert!(results.len() <= 10);
+    assert!(results.results.len() <= 10);
 }
 
 // ==== Watch Debounce Tests ====

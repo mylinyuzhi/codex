@@ -88,7 +88,7 @@ fastembed = { version = "4", optional = true }
 
 # Internal
 codex-file-ignore = { workspace = true }
-codex-utils = { workspace = true }
+codex-utils-common = { workspace = true }
 codex-utils-cache = { path = "../utils/cache" }
 dirs = { workspace = true }
 

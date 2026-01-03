@@ -2,7 +2,7 @@
 
 Rust SDK for the Anthropic Claude API.
 
-Reference: [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python/)
+Reference: [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python/) @ `2eb941512885bdea844cb46e3f93b60ffa51973b`
 
 ## Features
 

@@ -30,7 +30,9 @@ pub mod index_pipeline;
 pub mod lag_tracker;
 pub mod lock;
 pub mod manager;
+pub mod pipeline_common;
 pub mod progress;
+pub mod tags;
 pub mod unified_coordinator;
 pub mod walker;
 pub mod watcher;
@@ -85,14 +87,19 @@ pub use batch_tracker::SharedBatchTracker;
 pub use index_pipeline::IndexEventProcessor;
 pub use index_pipeline::IndexPipeline;
 pub use index_pipeline::IndexWorkerPool;
-pub use index_pipeline::PipelineState;
 pub use index_pipeline::Readiness;
 pub use index_pipeline::SharedIndexPipeline;
-pub use index_pipeline::StrictModeConfig;
+
+// Common pipeline types (shared between IndexPipeline and TagPipeline)
 pub use lag_tracker::LagInfo;
 pub use lag_tracker::LagTimeoutError;
 pub use lag_tracker::LagTracker;
 pub use lag_tracker::SharedLagTracker;
+pub use pipeline_common::PipelineReadiness;
+pub use pipeline_common::PipelineState;
+pub use pipeline_common::StrictModeConfig;
+pub use pipeline_common::compute_readiness;
+pub use pipeline_common::now_timestamp;
 pub use unified_coordinator::FeatureFlags;
 pub use unified_coordinator::SessionStartResult;
 pub use unified_coordinator::SharedUnifiedCoordinator;
@@ -102,3 +109,13 @@ pub use worker_pool::EventProcessor;
 pub use worker_pool::SharedWorkerPool;
 pub use worker_pool::WorkerPool;
 pub use worker_pool::WorkerPoolConfig;
+
+// Tag pipeline exports (for RepoMap)
+pub use tags::SharedTagPipeline;
+pub use tags::TagEventProcessor;
+pub use tags::TagPipeline;
+pub use tags::TagPipelineState;
+pub use tags::TagReadiness;
+pub use tags::TagStats;
+pub use tags::TagStrictModeConfig;
+pub use tags::TagWorkerPool;

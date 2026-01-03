@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::RetrievalConfig;
 use crate::event_emitter;
 use crate::events::RetrievalEvent;
-use crate::service::RetrievalService;
+use crate::facade::RetrievalFacade;
 
 use super::app_event::AppEvent;
 use super::app_event::ViewMode;
@@ -51,7 +51,7 @@ pub struct App {
     pub config: RetrievalConfig,
 
     /// Retrieval service (lazy initialized).
-    pub service: Option<Arc<RetrievalService>>,
+    pub service: Option<Arc<RetrievalFacade>>,
 
     /// Event log widget state.
     pub event_log: EventLogState,
@@ -110,9 +110,9 @@ impl App {
     ///
     /// # Arguments
     /// * `config` - Retrieval configuration
-    /// * `service` - Optional RetrievalService for performing operations.
+    /// * `service` - Optional RetrievalFacade for performing operations.
     ///   If None, the TUI will be display-only.
-    pub fn new(config: RetrievalConfig, service: Option<Arc<RetrievalService>>) -> Self {
+    pub fn new(config: RetrievalConfig, service: Option<Arc<RetrievalFacade>>) -> Self {
         let (event_tx, event_rx) = mpsc::channel(256);
 
         // Initialize search state with focus on input

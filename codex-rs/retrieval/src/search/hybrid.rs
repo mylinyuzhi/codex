@@ -103,6 +103,11 @@ impl HybridSearcher {
         self.bm25_searcher.is_some()
     }
 
+    /// Get the BM25 searcher (for warmup/pre-loading).
+    pub fn bm25_searcher(&self) -> Option<&Arc<Bm25Searcher>> {
+        self.bm25_searcher.as_ref()
+    }
+
     /// Set workspace root for hydrating content from files.
     ///
     /// When set, `search_hydrated` will read fresh content from files
@@ -220,9 +225,23 @@ impl HybridSearcher {
         // Generate query_id for event correlation
         let query_id = format!("hybrid-{}", chrono::Utc::now().timestamp_millis());
 
+        tracing::debug!(
+            query = %query,
+            limit = limit,
+            recent_count = recent_results.len(),
+            query_id = %query_id,
+            "Hybrid search started"
+        );
+
         // Detect query type once to avoid repeated parsing
         let is_symbol = has_symbol_syntax(query);
         let is_identifier = !is_symbol && is_identifier_query(query);
+
+        tracing::trace!(
+            is_symbol = is_symbol,
+            is_identifier = is_identifier,
+            "Query type detected"
+        );
 
         // Adjust config based on query type
         let config = if is_symbol {
@@ -248,6 +267,13 @@ impl HybridSearcher {
         // Vector and snippet failures are non-fatal, fall back to empty
         let vector_results = vector_results.unwrap_or_default();
         let snippet_results = snippet_results.unwrap_or_default();
+
+        tracing::debug!(
+            bm25_count = bm25_results.len(),
+            vector_count = vector_results.len(),
+            snippet_count = snippet_results.len(),
+            "Parallel searches completed"
+        );
 
         // If only BM25 results are available (no vector, no snippet), return directly
         // This preserves ScoreType::Bm25 for fallback scenarios
@@ -284,9 +310,22 @@ impl HybridSearcher {
         });
 
         // Deduplicate overlapping chunks
+        let fused_count = fused.len();
         let deduped = deduplicate_results(fused);
+        tracing::trace!(
+            before_dedup = fused_count,
+            after_dedup = deduped.len(),
+            "Deduplication applied"
+        );
+
         // Apply per-file limit for diversity
         let limited = self.apply_per_file_limit(deduped);
+        tracing::trace!(
+            after_limit = limited.len(),
+            max_per_file = self.max_chunks_per_file,
+            "Per-file limit applied"
+        );
+
         // Apply reranking if enabled
         self.apply_reranking_with_events(&query_id, query, limited)
             .await
@@ -342,11 +381,21 @@ impl HybridSearcher {
         results: Vec<SearchResult>,
         workspace_root: &Path,
     ) -> Result<Vec<SearchResult>> {
+        tracing::debug!(
+            results_count = results.len(),
+            workspace = %workspace_root.display(),
+            "Hydrating search results"
+        );
+
         let mut hydrated = Vec::with_capacity(results.len());
+        let mut stale_count = 0_usize;
 
         for result in results {
             match self.hydrate_chunk(&result.chunk, workspace_root) {
                 Ok((chunk, is_stale)) => {
+                    if is_stale {
+                        stale_count += 1;
+                    }
                     hydrated.push(SearchResult {
                         chunk,
                         score: result.score,
@@ -355,6 +404,7 @@ impl HybridSearcher {
                     });
                 }
                 Err(e) => {
+                    stale_count += 1;
                     // Hydration failed (file moved/deleted) - fall back to indexed content
                     tracing::warn!(
                         filepath = %result.chunk.filepath,
@@ -370,6 +420,12 @@ impl HybridSearcher {
                 }
             }
         }
+
+        tracing::debug!(
+            hydrated_count = hydrated.len(),
+            stale_count = stale_count,
+            "Hydration completed"
+        );
 
         Ok(hydrated)
     }
@@ -732,7 +788,7 @@ impl HybridSearcher {
     /// # Arguments
     /// * `query` - Search query
     /// * `limit` - Maximum results to return
-    /// * `file_ranks` - PageRank scores from `RepoMapService::get_ranked_files()`
+    /// * `file_ranks` - PageRank scores from `RepoMapGenerator::get_ranked_files()`
     /// * `boost_factor` - Maximum boost (default 1.5 = 50% boost for top-ranked files)
     pub async fn search_with_pagerank(
         &self,

@@ -2,10 +2,10 @@
 //!
 //! Tests for Chinese query detection and translation.
 
+use codex_retrieval::FacadeBuilder;
 use codex_retrieval::Result;
 use codex_retrieval::RetrievalConfig;
 use codex_retrieval::RetrievalFeatures;
-use codex_retrieval::RetrievalService;
 use codex_retrieval::query::LlmRewriter;
 use codex_retrieval::query::QueryRewriter;
 use codex_retrieval::query::RewrittenQuery;
@@ -205,16 +205,18 @@ async fn test_service_with_query_rewrite() {
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: true,
-        ..Default::default()
-    };
-
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // STANDARD has query_rewrite enabled
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::STANDARD)
+        .build()
+        .await
+        .unwrap();
 
     // Verify rewrite is available
-    let result = service.rewrite_query("test function").await;
+    let result = service
+        .search_service()
+        .rewrite_query("test function")
+        .await;
     assert!(result.is_some());
 }
 
@@ -224,16 +226,18 @@ async fn test_service_without_query_rewrite() {
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let features = RetrievalFeatures {
-        code_search: true,
-        query_rewrite: false,
-        ..Default::default()
-    };
-
-    let service = RetrievalService::new(config, features).await.unwrap();
+    // MINIMAL has query_rewrite disabled
+    let service = FacadeBuilder::new(config)
+        .features(RetrievalFeatures::MINIMAL)
+        .build()
+        .await
+        .unwrap();
 
     // Rewrite should be disabled
-    let result = service.rewrite_query("test function").await;
+    let result = service
+        .search_service()
+        .rewrite_query("test function")
+        .await;
     assert!(result.is_none());
 }
 

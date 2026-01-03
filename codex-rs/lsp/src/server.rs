@@ -51,7 +51,10 @@ struct ServerInfo {
 
 /// LSP server manager - manages multiple server instances
 pub struct LspServerManager {
-    config: LspServersConfig,
+    /// Configuration (RwLock for runtime reload support)
+    config: tokio::sync::RwLock<LspServersConfig>,
+    /// Project root for config reload
+    project_root: Option<PathBuf>,
     diagnostics: Arc<DiagnosticsStore>,
     /// Cached clients by (server_id, root_path)
     clients: Arc<Mutex<HashMap<ServerKey, Arc<LspClient>>>>,
@@ -63,9 +66,14 @@ pub struct LspServerManager {
 
 impl LspServerManager {
     /// Create a new server manager with explicit config
-    pub fn new(config: LspServersConfig, diagnostics: Arc<DiagnosticsStore>) -> Self {
+    pub fn new(
+        config: LspServersConfig,
+        project_root: Option<PathBuf>,
+        diagnostics: Arc<DiagnosticsStore>,
+    ) -> Self {
         Self {
-            config,
+            config: tokio::sync::RwLock::new(config),
+            project_root,
             diagnostics,
             clients: Arc::new(Mutex::new(HashMap::new())),
             lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -79,7 +87,17 @@ impl LspServerManager {
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
         let config = LspServersConfig::load(project_root);
-        Self::new(config, diagnostics)
+        Self::new(config, project_root.map(|p| p.to_path_buf()), diagnostics)
+    }
+
+    /// Reload configuration from disk
+    ///
+    /// This updates the in-memory config to reflect changes made to config files.
+    pub async fn reload_config(&self) {
+        let new_config = LspServersConfig::load(self.project_root.as_deref());
+        let mut config = self.config.write().await;
+        *config = new_config;
+        debug!("LSP configuration reloaded");
     }
 
     /// Get or create a client for a file
@@ -309,13 +327,14 @@ impl LspServerManager {
     /// Builtin templates are used to complete missing config fields.
     async fn find_server_for_extension(&self, ext: &str) -> Result<ServerInfo> {
         // Only check configured servers (no auto-matching of builtins)
-        for (id, config) in &self.config.servers {
-            if config.disabled {
+        let config = self.config.read().await;
+        for (id, server_config) in &config.servers {
+            if server_config.disabled {
                 continue;
             }
 
             // Build server info with template completion
-            let server_info = self.build_server_info(id, config).await?;
+            let server_info = self.build_server_info(id, server_config).await?;
 
             // Check if this server handles the extension
             if server_info.extensions.iter().any(|e| e == ext) {
@@ -609,17 +628,18 @@ impl LspServerManager {
     /// Extensions are resolved from:
     /// - Builtin template (if server ID matches a builtin)
     /// - User config's file_extensions field
-    pub fn all_supported_extensions(&self) -> Vec<String> {
+    pub async fn all_supported_extensions(&self) -> Vec<String> {
         let mut exts: Vec<String> = Vec::new();
 
-        for (id, config) in &self.config.servers {
-            if config.disabled {
+        let config = self.config.read().await;
+        for (id, server_config) in &config.servers {
+            if server_config.disabled {
                 continue;
             }
 
             // Get extensions from user config or builtin template
-            let extensions = if !config.file_extensions.is_empty() {
-                config.file_extensions.clone()
+            let extensions = if !server_config.file_extensions.is_empty() {
+                server_config.file_extensions.clone()
             } else if let Some(builtin) = BuiltinServer::find_by_id(id) {
                 builtin.extensions.iter().map(|s| s.to_string()).collect()
             } else {
@@ -694,7 +714,7 @@ impl LspServerManager {
     ///
     /// # Example
     /// ```ignore
-    /// let manager = LspServerManager::new(config, diagnostics);
+    /// let manager = LspServerManager::new(config, None, diagnostics);
     /// let warmed = manager.prewarm(&[".rs", ".go"], project_root).await;
     /// ```
     pub async fn prewarm(&self, extensions: &[&str], project_root: &Path) -> Vec<String> {
@@ -764,12 +784,13 @@ impl LspServerManager {
         let mut statuses = Vec::new();
 
         // Only iterate over configured servers (opt-in design)
-        for (id, config) in &self.config.servers {
+        let config = self.config.read().await;
+        for (id, server_config) in &config.servers {
             // Try to find builtin template
             let template = BuiltinServer::find_by_id(id);
 
             // Resolve command: user config > template
-            let command = config
+            let command = server_config
                 .command
                 .clone()
                 .or_else(|| {
@@ -784,8 +805,8 @@ impl LspServerManager {
                 .unwrap_or_default();
 
             // Resolve extensions: user config > template
-            let extensions = if !config.file_extensions.is_empty() {
-                config.file_extensions.clone()
+            let extensions = if !server_config.file_extensions.is_empty() {
+                server_config.file_extensions.clone()
             } else if let Some(tmpl) = template {
                 tmpl.extensions.iter().map(|s| s.to_string()).collect()
             } else {
@@ -801,7 +822,7 @@ impl LspServerManager {
             let program = command.split_whitespace().next().unwrap_or("");
             let installed = Self::command_exists(program).await;
 
-            let status = if config.disabled {
+            let status = if server_config.disabled {
                 ServerStatus::Disabled
             } else if command.is_empty() {
                 ServerStatus::NotInstalled // Missing command
@@ -845,6 +866,7 @@ impl LspServerManager {
     /// the InstallServer UI to show all available servers for installation.
     pub async fn get_all_builtin_servers_status(&self) -> Vec<ServerStatusInfo> {
         let mut statuses = Vec::new();
+        let config = self.config.read().await;
 
         for builtin in BUILTIN_SERVERS {
             // Check if command exists
@@ -856,8 +878,7 @@ impl LspServerManager {
             let installed = Self::command_exists(command).await;
 
             // Check if already configured (and possibly running)
-            let is_disabled = self
-                .config
+            let is_disabled = config
                 .servers
                 .get(builtin.id)
                 .map(|c| c.disabled)
@@ -926,6 +947,7 @@ impl LspServerManager {
         project_config_dir: &Path,
     ) -> Vec<ServerConfigInfo> {
         let mut servers = HashMap::new();
+        let config = self.config.read().await;
 
         // 1. Add all builtin servers
         for builtin in BUILTIN_SERVERS {
@@ -944,8 +966,7 @@ impl LspServerManager {
             );
 
             // Check if disabled in config
-            let is_disabled = self
-                .config
+            let is_disabled = config
                 .servers
                 .get(builtin.id)
                 .map(|c| c.disabled)
@@ -990,13 +1011,13 @@ impl LspServerManager {
         }
 
         // 2. Add custom servers from config (not in builtins)
-        for (id, config) in &self.config.servers {
+        for (id, server_config) in &config.servers {
             if servers.contains_key(id) {
                 continue; // Already added from builtins
             }
 
             // Get command
-            let command = config.command.clone().unwrap_or_default();
+            let command = server_config.command.clone().unwrap_or_default();
             let program = command.split_whitespace().next().unwrap_or("");
             let installed = !command.is_empty() && Self::command_exists(program).await;
 
@@ -1005,7 +1026,7 @@ impl LspServerManager {
                 LspServersConfig::detect_config_level(id, user_config_dir, project_config_dir);
 
             // Determine status
-            let status = if config.disabled {
+            let status = if server_config.disabled {
                 ServerStatus::Disabled
             } else if !installed {
                 ServerStatus::NotInstalled
@@ -1033,7 +1054,7 @@ impl LspServerManager {
                 id.clone(),
                 ServerConfigInfo {
                     id: id.clone(),
-                    extensions: config.file_extensions.clone(),
+                    extensions: server_config.file_extensions.clone(),
                     binary_installed: installed,
                     config_level,
                     status,
@@ -1128,7 +1149,7 @@ mod tests {
         // With no config, no servers should be available (opt-in design)
         let empty_config = LspServersConfig::default();
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(empty_config, diagnostics);
+        let manager = LspServerManager::new(empty_config, None, diagnostics);
 
         // No config = no servers
         assert!(manager.find_server_for_extension(".rs").await.is_err());
@@ -1147,7 +1168,7 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         assert!(manager.find_server_for_extension(".rs").await.is_ok());
         assert!(manager.find_server_for_extension(".go").await.is_ok());
@@ -1171,7 +1192,7 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         // rust-analyzer is disabled
         assert!(manager.find_server_for_extension(".rs").await.is_err());
@@ -1183,7 +1204,7 @@ mod tests {
     fn test_find_project_root() {
         let config = LspServersConfig::default();
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         // For non-existent paths, should return parent directory
         let root = manager.find_project_root(Path::new("/some/path/file.rs"));
@@ -1207,7 +1228,7 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         // Custom server should be found first
         let server_info = manager.find_server_for_extension(".rs").await.unwrap();
@@ -1232,7 +1253,7 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         // Custom extension should be found
         let server_info = manager.find_server_for_extension(".ts").await.unwrap();
@@ -1242,8 +1263,8 @@ mod tests {
         assert_eq!(server_info.id, "typescript-lsp");
     }
 
-    #[test]
-    fn test_all_supported_extensions() {
+    #[tokio::test]
+    async fn test_all_supported_extensions() {
         let mut config = LspServersConfig::default();
 
         // Add builtin reference (uses template for extensions)
@@ -1264,9 +1285,9 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
-        let exts = manager.all_supported_extensions();
+        let exts = manager.all_supported_extensions().await;
         // Only configured servers should be included
         assert!(exts.contains(&".rs".to_string())); // From rust-analyzer builtin template
         assert!(exts.contains(&".ts".to_string())); // From custom typescript-lsp
@@ -1290,7 +1311,7 @@ mod tests {
         );
 
         let diagnostics = Arc::new(DiagnosticsStore::new());
-        let manager = LspServerManager::new(config, diagnostics);
+        let manager = LspServerManager::new(config, None, diagnostics);
 
         let server_info = manager.find_server_for_extension(".rs").await.unwrap();
         assert_eq!(server_info.lifecycle_config.max_restarts, 5);

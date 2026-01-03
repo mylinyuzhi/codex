@@ -138,19 +138,33 @@ static INSTANCES: Lazy<BlockingLruCache<PathBuf, Arc<RetrievalService>>> = ...;
 ```
 
 ### Service API (Facade Pattern)
-`RetrievalService` is the single entry point for all retrieval operations:
+`RetrievalFacade` is the single entry point for all retrieval operations:
 
 ```rust
-// Search API
-service.search_with_limit(&query, Some(limit)).await?;
-service.search_bm25(&query, limit).await?;
-service.search_vector(&query, limit).await?;
+// Search API (unified via SearchRequest)
+use codex_retrieval::SearchRequest;
+
+// Simple search (hybrid mode, default limit)
+facade.search("query").await?;
+
+// Advanced: use SearchRequest builder
+facade.search_service().execute(
+    SearchRequest::new("query")
+        .bm25()      // or .vector(), .hybrid(), .snippet()
+        .limit(10)
+).await?;
 
 // Operations API
-service.build_index(mode, cancel_token).await?;  // Returns Receiver<IndexProgress>
-service.get_index_status().await?;               // Returns IndexStats
-service.start_watch(cancel_token).await?;        // Returns Receiver<WatchEvent>
-service.generate_repomap(request).await?;        // Returns RepoMapResult
+facade.build_index(mode, cancel_token).await?;  // Returns Receiver<IndexProgress>
+facade.generate_repomap(request).await?;        // Returns RepoMapResult
+```
+
+### Feature Presets
+```rust
+RetrievalFeatures::NONE      // All disabled
+RetrievalFeatures::MINIMAL   // BM25 only (for testing)
+RetrievalFeatures::STANDARD  // BM25 + query rewrite
+RetrievalFeatures::FULL      // All features enabled
 ```
 
 CLI and TUI both use this service API - no direct access to `IndexManager`, `SqliteStore`, or `FileWatcher`.

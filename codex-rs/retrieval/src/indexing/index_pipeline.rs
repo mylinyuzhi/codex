@@ -53,92 +53,22 @@ use super::WatchEventKind;
 use super::WorkerPool;
 use super::WorkerPoolConfig;
 use super::new_watch_event_queue;
+use super::pipeline_common::PipelineReadiness;
+use super::pipeline_common::PipelineState;
+use super::pipeline_common::compute_readiness;
+use super::pipeline_common::now_timestamp;
+
+// Re-export StrictModeConfig for backward compatibility
+pub use super::pipeline_common::StrictModeConfig;
 use crate::config::RetrievalConfig;
 use crate::error::Result;
 use crate::storage::SqliteStore;
 
-/// Index state for the pipeline.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PipelineState {
-    /// Pipeline has not been initialized yet.
-    Uninitialized,
-    /// Pipeline is building the initial index.
-    Building {
-        /// Current batch ID.
-        batch_id: BatchId,
-        /// Progress percentage (0.0 - 1.0).
-        progress: f32,
-        /// Unix timestamp when building started.
-        started_at: i64,
-    },
-    /// Pipeline is ready for search.
-    Ready {
-        /// Index statistics.
-        stats: IndexStats,
-        /// Unix timestamp when indexing completed.
-        indexed_at: i64,
-    },
-    /// Pipeline failed to initialize.
-    Failed {
-        /// Error message.
-        error: String,
-        /// Unix timestamp when failure occurred.
-        failed_at: i64,
-    },
-}
+/// Type alias for index pipeline state using common generic type.
+pub type IndexPipelineState = PipelineState<IndexStats>;
 
-/// Strict mode configuration for the pipeline.
-#[derive(Debug, Clone)]
-pub struct StrictModeConfig {
-    /// Initial build must complete before Ready.
-    pub init: bool,
-    /// Incremental updates must complete before Ready.
-    pub incremental: bool,
-}
-
-impl Default for StrictModeConfig {
-    fn default() -> Self {
-        Self {
-            init: true,
-            incremental: false,
-        }
-    }
-}
-
-/// Readiness status for queries.
-#[derive(Debug, Clone)]
-pub enum Readiness {
-    /// Pipeline not initialized.
-    Uninitialized,
-    /// Pipeline is building.
-    Building {
-        /// Progress percentage.
-        progress: f32,
-        /// Current lag info.
-        lag_info: LagInfo,
-    },
-    /// Pipeline is ready.
-    Ready {
-        /// Index statistics.
-        stats: IndexStats,
-        /// Current lag info.
-        lag_info: LagInfo,
-    },
-    /// Pipeline is not ready (strict mode).
-    NotReady {
-        /// Reason for not being ready.
-        reason: String,
-        /// Current lag info.
-        lag_info: Option<LagInfo>,
-        /// Whether partial results are available.
-        is_partial_available: bool,
-    },
-    /// Pipeline failed.
-    Failed {
-        /// Error message.
-        error: String,
-    },
-}
+/// Type alias for index pipeline readiness using common generic type.
+pub type Readiness = PipelineReadiness<IndexStats>;
 
 /// Index event processor that handles file indexing.
 #[allow(dead_code)] // Fields will be used when indexing logic is implemented
@@ -184,28 +114,32 @@ impl EventProcessor for IndexEventProcessor {
             "IndexEventProcessor: processing file"
         );
 
-        match event.data {
-            WatchEventKind::Created | WatchEventKind::Modified => {
-                // TODO: Implement full indexing logic
-                // 1. Read file content
-                // 2. Parse with tree-sitter
-                // 3. Split into chunks
-                // 4. Generate embeddings (if vector search enabled)
-                // 5. Store in SQLite (metadata, BM25) and LanceDB (vectors)
-                tracing::debug!(
-                    trace_id = %trace_id,
-                    path = %path.display(),
-                    "Would index file (not implemented yet)"
-                );
-            }
-            WatchEventKind::Deleted => {
-                // TODO: Remove file from index
-                tracing::debug!(
-                    trace_id = %trace_id,
-                    path = %path.display(),
-                    "Would remove file from index (not implemented yet)"
-                );
-            }
+        // Check file existence to determine action
+        // This is more robust than trusting event type (handles race conditions)
+        if path.exists() {
+            // File exists - index/update it
+            // TODO: Implement full indexing logic
+            // 1. Read file content
+            // 2. Parse with tree-sitter
+            // 3. Split into chunks
+            // 4. Generate embeddings (if vector search enabled)
+            // 5. Store in SQLite (metadata, BM25) and LanceDB (vectors)
+            tracing::debug!(
+                trace_id = %trace_id,
+                path = %path.display(),
+                "Would index file (not implemented yet)"
+            );
+        } else {
+            // File doesn't exist - remove from index
+            // TODO: Implement removal logic
+            // 1. Delete from LanceDB
+            // 2. Delete from BM25 index
+            // 3. Remove from catalog
+            tracing::debug!(
+                trace_id = %trace_id,
+                path = %path.display(),
+                "Would remove file from index (not implemented yet)"
+            );
         }
 
         Ok(())
@@ -222,7 +156,7 @@ pub type IndexWorkerPool = WorkerPool<PathBuf, WatchEventKind, IndexEventProcess
 /// Index pipeline for search functionality.
 pub struct IndexPipeline {
     /// Current state of the pipeline.
-    state: RwLock<PipelineState>,
+    state: RwLock<IndexPipelineState>,
     /// Event queue for file changes.
     event_queue: Arc<super::WatchEventQueue>,
     /// File-level locks.
@@ -264,7 +198,6 @@ impl IndexPipeline {
         let worker_config = WorkerPoolConfig {
             worker_count: config.indexing.worker_count,
             requeue_delay_ms: 10,
-            use_file_locks: true,
         };
 
         Self {
@@ -314,17 +247,16 @@ impl IndexPipeline {
     }
 
     /// Get the current state.
-    pub async fn state(&self) -> PipelineState {
+    pub async fn state(&self) -> IndexPipelineState {
         self.state.read().await.clone()
     }
 
     /// Mark the pipeline as building.
     pub async fn mark_building(&self, batch_id: BatchId) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = PipelineState::Building {
             batch_id,
             progress: 0.0,
-            started_at: now,
+            started_at: now_timestamp(),
         };
     }
 
@@ -346,21 +278,26 @@ impl IndexPipeline {
     }
 
     /// Mark the pipeline as ready.
+    ///
+    /// Also triggers cleanup of file locks to prevent memory leaks from
+    /// any locks that might have been missed during per-file cleanup.
     pub async fn mark_ready(&self, stats: IndexStats) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = PipelineState::Ready {
             stats,
-            indexed_at: now,
+            completed_at: now_timestamp(),
         };
         self.init_complete.store(true, Ordering::Release);
+
+        // Cleanup any remaining file locks to prevent memory leaks
+        self.file_locks.cleanup_all().await;
+        tracing::debug!("Cleaned up file locks after index pipeline completion");
     }
 
     /// Mark the pipeline as failed.
     pub async fn mark_failed(&self, error: String) {
-        let now = chrono::Utc::now().timestamp();
         *self.state.write().await = PipelineState::Failed {
             error,
-            failed_at: now,
+            failed_at: now_timestamp(),
         };
     }
 
@@ -422,45 +359,12 @@ impl IndexPipeline {
     pub async fn readiness(&self) -> Readiness {
         let state = self.state.read().await.clone();
         let lag_info = self.lag_tracker.lag_info().await;
-
-        match state {
-            PipelineState::Uninitialized => Readiness::Uninitialized,
-
-            PipelineState::Building { progress, .. } => Readiness::Building { progress, lag_info },
-
-            PipelineState::Ready { stats, .. } => {
-                if lag_info.lag > 0 {
-                    // There are pending events
-                    let is_strict = if !self.init_complete.load(Ordering::Acquire) {
-                        self.strict_config.init
-                    } else {
-                        self.strict_config.incremental
-                    };
-
-                    if is_strict {
-                        Readiness::NotReady {
-                            reason: format!(
-                                "{} mode: {} events pending",
-                                if self.init_complete.load(Ordering::Acquire) {
-                                    "Incremental"
-                                } else {
-                                    "Init"
-                                },
-                                lag_info.lag
-                            ),
-                            lag_info: Some(lag_info),
-                            is_partial_available: true,
-                        }
-                    } else {
-                        Readiness::Ready { stats, lag_info }
-                    }
-                } else {
-                    Readiness::Ready { stats, lag_info }
-                }
-            }
-
-            PipelineState::Failed { error, .. } => Readiness::Failed { error },
-        }
+        compute_readiness(
+            &state,
+            lag_info,
+            self.is_init_complete(),
+            &self.strict_config,
+        )
     }
 
     /// Check if ready for search (quick check).
@@ -589,12 +493,7 @@ mod tests {
         let (_dir, pipeline) = create_test_pipeline().await;
 
         let seq = pipeline.assign_seq();
-        let event = TrackedEvent::new(
-            WatchEventKind::Modified,
-            None,
-            seq,
-            "test-trace".to_string(),
-        );
+        let event = TrackedEvent::new(WatchEventKind::Changed, None, seq, "test-trace".to_string());
 
         pipeline.push_event(PathBuf::from("test.rs"), event).await;
 

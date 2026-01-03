@@ -9,6 +9,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use tokio_util::sync::CancellationToken;
 
+use crate::services::SearchRequest;
 use crate::tui::app::App;
 use crate::tui::app_event::AppEvent;
 use crate::tui::constants::SEARCH_DEBOUNCE_MS;
@@ -197,15 +198,9 @@ impl App {
 
         // Spawn search task with timeout
         tokio::spawn(async move {
-            let search_future = async {
-                match mode {
-                    crate::events::SearchMode::Hybrid | crate::events::SearchMode::Snippet => {
-                        service.search_with_limit(&query, Some(limit)).await
-                    }
-                    crate::events::SearchMode::Bm25 => service.search_bm25(&query, limit).await,
-                    crate::events::SearchMode::Vector => service.search_vector(&query, limit).await,
-                }
-            };
+            let search_svc = service.search_service();
+            let request = SearchRequest::new(&query).mode(mode).limit(limit);
+            let search_future = search_svc.execute(request);
 
             tokio::select! {
                 _ = cancel_token.cancelled() => {

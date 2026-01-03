@@ -36,7 +36,7 @@ pub(crate) const EXT_FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::CodeSearch,
+        id: Feature::Retrieval,
         key: "code_search",
         stage: Stage::Experimental,
         default_enabled: false,

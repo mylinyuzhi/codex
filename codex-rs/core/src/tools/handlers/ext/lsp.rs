@@ -32,7 +32,7 @@ async fn get_lsp_manager() -> Arc<LspServerManager> {
         .get_or_init(|| async {
             let config = LspServersConfig::default();
             let diagnostics = Arc::new(DiagnosticsStore::new());
-            Arc::new(LspServerManager::new(config, diagnostics))
+            Arc::new(LspServerManager::new(config, None, diagnostics))
         })
         .await
         .clone()

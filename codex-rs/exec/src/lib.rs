@@ -211,7 +211,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
 
     // Build fmt layer with config-driven settings (timezone, log levels, etc.)
-    let fmt_layer = codex_utils::configure_fmt_layer!(
+    let fmt_layer = codex_utils_common::configure_fmt_layer!(
         tracing_subscriber::fmt::layer()
             .with_ansi(stderr_with_ansi)
             .with_writer(std::io::stderr),
@@ -276,6 +276,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_sandbox_policy = config.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
+
+    // Initialize retrieval service early (background task)
+    // This starts indexing immediately when cwd is known, rather than waiting
+    // for the first code_search or repomap tool invocation.
+    codex_core::spawn_retrieval_init(
+        &default_cwd,
+        config
+            .features
+            .enabled(codex_core::features::Feature::Retrieval),
+    );
 
     if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");

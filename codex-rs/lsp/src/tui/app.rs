@@ -783,7 +783,8 @@ impl App {
                 self.mode = Mode::Menu;
             }
             KeyCode::Char('r') => {
-                // Refresh server list
+                // Refresh server list (reload config from disk first)
+                self.manager.reload_config().await;
                 let user_dir = dirs::home_dir()
                     .map(|h| h.join(".codex"))
                     .unwrap_or_else(|| PathBuf::from(".codex"));
@@ -840,7 +841,8 @@ impl App {
                                         server.id, state
                                     ));
                                     self.config_changed = true;
-                                    // Refresh list
+                                    // Reload config and refresh list
+                                    self.manager.reload_config().await;
                                     let user_dir = dirs::home_dir()
                                         .map(|h| h.join(".codex"))
                                         .unwrap_or_else(|| PathBuf::from(".codex"));
@@ -882,7 +884,8 @@ impl App {
                                         server.id
                                     ));
                                     self.config_changed = true;
-                                    // Refresh list
+                                    // Reload config and refresh list
+                                    self.manager.reload_config().await;
                                     let user_dir = dirs::home_dir()
                                         .map(|h| h.join(".codex"))
                                         .unwrap_or_else(|| PathBuf::from(".codex"));
@@ -967,7 +970,8 @@ impl App {
                 if let Some(server_id) = self.pending_install_server.take() {
                     self.add_server_to_config(&server_id)?;
                     self.config_changed = true;
-                    // Refresh config servers list
+                    // Reload config and refresh list
+                    self.manager.reload_config().await;
                     let user_dir = dirs::home_dir()
                         .map(|h| h.join(".codex"))
                         .unwrap_or_else(|| PathBuf::from(".codex"));

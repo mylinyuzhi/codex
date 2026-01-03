@@ -85,8 +85,6 @@ pub struct WorkerPoolConfig {
     pub worker_count: i32,
     /// Delay before retrying a requeued event (lock conflict).
     pub requeue_delay_ms: i64,
-    /// Whether to use file locks (disable for testing).
-    pub use_file_locks: bool,
 }
 
 impl Default for WorkerPoolConfig {
@@ -94,7 +92,6 @@ impl Default for WorkerPoolConfig {
         Self {
             worker_count: 4,
             requeue_delay_ms: 10,
-            use_file_locks: true,
         }
     }
 }
@@ -269,7 +266,7 @@ where
 
             let start_time = Instant::now();
             let trace_id = &event.trace_id;
-            let batch_id = event.batch_id.clone();
+            let batch_ids = event.batch_ids.clone();
             let seq = event.seq;
 
             tracing::debug!(
@@ -280,17 +277,20 @@ where
                 "Processing event"
             );
 
-            // Try to acquire file lock if enabled
-            let should_process = if self.config.use_file_locks {
-                self.file_locks.try_lock(&path).await.is_some()
-            } else {
-                true
-            };
+            // Try to acquire file lock
+            // IMPORTANT: Keep the guard alive during processing to prevent
+            // concurrent processing of the same file
+            let lock_guard = self.file_locks.try_lock(&path).await;
 
-            if should_process {
-                // Process the event
+            if lock_guard.is_some() {
+                // Process the event (lock is held via lock_guard)
                 let result = self.processor.process(&path, &event).await;
                 let duration = start_time.elapsed();
+
+                // Complete any merged sequence numbers first
+                for merged_seq in &event.merged_seqs {
+                    self.lag_tracker.complete_event(*merged_seq).await;
+                }
 
                 match result {
                     Ok(()) => {
@@ -306,8 +306,8 @@ where
                         // Mark complete in lag tracker
                         self.lag_tracker.complete_event(seq).await;
 
-                        // Mark complete in batch tracker if applicable
-                        if let Some(ref bid) = batch_id {
+                        // Mark complete in batch tracker for ALL batch_ids
+                        for bid in &batch_ids {
                             self.batch_tracker.mark_complete(bid, true).await;
                         }
                     }
@@ -325,17 +325,18 @@ where
                         // Mark failed in lag tracker (doesn't block watermark)
                         self.lag_tracker.fail_event(seq, &e.to_string()).await;
 
-                        // Mark failed in batch tracker if applicable
-                        if let Some(ref bid) = batch_id {
+                        // Mark failed in batch tracker for ALL batch_ids
+                        for bid in &batch_ids {
                             self.batch_tracker.mark_complete(bid, false).await;
                         }
                     }
                 }
 
-                // Clean up file lock
-                if self.config.use_file_locks {
-                    self.file_locks.cleanup(&path).await;
-                }
+                // Explicitly drop lock guard before cleanup
+                drop(lock_guard);
+
+                // Clean up file lock entry from tracking map
+                self.file_locks.cleanup(&path).await;
             } else {
                 // Lock contention, requeue the event
                 tracing::trace!(
@@ -472,7 +473,6 @@ mod tests {
         let config = WorkerPoolConfig {
             worker_count: 2,
             requeue_delay_ms: 1,
-            use_file_locks: false, // Disable for testing
         };
 
         let pool = Arc::new(WorkerPool::new(
@@ -499,8 +499,7 @@ mod tests {
         // Push some events with seq numbers
         for i in 0..5 {
             let seq = lag_tracker.assign_seq();
-            let event =
-                TrackedEvent::new(WatchEventKind::Modified, None, seq, format!("trace-{i}"));
+            let event = TrackedEvent::new(WatchEventKind::Changed, None, seq, format!("trace-{i}"));
             queue
                 .push(PathBuf::from(format!("file{i}.rs")), event)
                 .await;
@@ -530,7 +529,7 @@ mod tests {
         for i in 0..3 {
             let seq = lag_tracker.assign_seq();
             let event = TrackedEvent::new(
-                WatchEventKind::Created,
+                WatchEventKind::Changed,
                 Some(batch_id.clone()),
                 seq,
                 format!("batch-trace-{i}"),
@@ -566,7 +565,7 @@ mod tests {
         for (i, path) in paths.iter().enumerate() {
             let seq = lag_tracker.assign_seq();
             let event = TrackedEvent::new(
-                WatchEventKind::Modified,
+                WatchEventKind::Changed,
                 Some(batch_id.clone()),
                 seq,
                 format!("trace-{i}"),
@@ -622,7 +621,7 @@ mod tests {
         // Push events
         for (i, seq) in seqs.iter().enumerate() {
             let event =
-                TrackedEvent::new(WatchEventKind::Modified, None, *seq, format!("trace-{i}"));
+                TrackedEvent::new(WatchEventKind::Changed, None, *seq, format!("trace-{i}"));
             queue
                 .push(PathBuf::from(format!("file{i}.rs")), event)
                 .await;

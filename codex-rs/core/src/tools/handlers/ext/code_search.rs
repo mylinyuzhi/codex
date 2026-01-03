@@ -86,8 +86,8 @@ impl ToolHandler for CodeSearchHandler {
         // 2. Get working directory from invocation context
         let cwd = invocation.turn.cwd.clone();
 
-        // 3. Try to get RetrievalService (loads config from retrieval.toml)
-        let service = match codex_retrieval::RetrievalService::for_workdir(&cwd).await {
+        // 3. Try to get RetrievalFacade (loads config from retrieval.toml)
+        let service = match codex_retrieval::RetrievalFacade::for_workdir(&cwd).await {
             Ok(s) => s,
             Err(codex_retrieval::RetrievalErr::NotEnabled) => {
                 return Ok(ToolOutput::Function {
@@ -110,7 +110,7 @@ impl ToolHandler for CodeSearchHandler {
             }
         };
 
-        // 4. Perform search
+        // 4. Perform search (using facade's simple API)
         let search_output = service
             .search(&args.query)
             .await

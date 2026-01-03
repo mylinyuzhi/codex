@@ -25,11 +25,13 @@
 
 // Core modules
 pub mod config;
+pub mod context;
 pub mod error;
 pub mod event_emitter;
 pub mod events;
+pub mod facade;
 pub mod metrics;
-pub mod service;
+pub mod services;
 pub mod traits;
 pub mod types;
 
@@ -49,6 +51,7 @@ pub mod tui;
 // Re-exports
 pub use config::RerankerConfig;
 pub use config::RetrievalConfig;
+pub use context::RetrievalFeatures;
 pub use error::Result;
 pub use error::RetrievalErr;
 pub use metrics::CodeMetrics;
@@ -60,8 +63,17 @@ pub use search::HybridSearcher;
 pub use search::RecentFilesCache;
 pub use search::SnippetSearcher;
 pub use search::has_symbol_syntax;
-pub use service::RetrievalFeatures;
-pub use service::RetrievalService;
+
+// Facade and builder (primary entry points)
+pub use facade::FacadeBuilder;
+pub use facade::RetrievalFacade;
+
+// Services
+pub use context::RetrievalContext;
+pub use services::IndexService;
+pub use services::RecentFilesService;
+pub use services::SearchRequest;
+pub use services::SearchService;
 pub use storage::SnippetStorage;
 pub use storage::SqliteStore;
 pub use storage::StoredSnippet;
@@ -91,9 +103,9 @@ pub use indexing::WatchEventKind;
 // Repo map exports
 pub use repomap::RankedFile;
 pub use repomap::RankedSymbol;
+pub use repomap::RepoMapGenerator;
 pub use repomap::RepoMapRequest;
 pub use repomap::RepoMapResult;
-pub use repomap::RepoMapService;
 
 // Event system exports
 pub use event_emitter::EventEmitter;

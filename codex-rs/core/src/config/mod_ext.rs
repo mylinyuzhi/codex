@@ -19,7 +19,7 @@ pub struct ConfigExt {
     pub web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig,
 
     /// Logging configuration for tracing subscriber (location, timezone, levels).
-    pub logging: codex_utils::logging::LoggingConfig,
+    pub logging: codex_utils_common::logging::LoggingConfig,
 
     /// Compact V2 configuration (thresholds, micro-compact, context restoration).
     pub compact: crate::compact_v2::CompactConfig,
@@ -38,7 +38,7 @@ impl Default for ConfigExt {
             model_parameters: None,
             web_search_config: codex_protocol::config_types_ext::WebSearchConfig::default(),
             web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig::default(),
-            logging: codex_utils::logging::LoggingConfig::default(),
+            logging: codex_utils_common::logging::LoggingConfig::default(),
             compact: crate::compact_v2::CompactConfig::default(),
             tool_filter: None,
             system_reminder: crate::config::SystemReminderConfig::default(),
@@ -59,7 +59,7 @@ pub struct ConfigTomlExt {
 
     /// Logging configuration for tracing subscriber.
     #[serde(default)]
-    pub logging: Option<codex_utils::logging::LoggingConfig>,
+    pub logging: Option<codex_utils_common::logging::LoggingConfig>,
 
     /// Compact V2 configuration (thresholds, micro-compact, context restoration).
     #[serde(default)]

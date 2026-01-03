@@ -58,13 +58,15 @@ use super::index_pipeline::Readiness as IndexReadiness;
 use super::index_pipeline::StrictModeConfig as IndexStrictModeConfig;
 use crate::config::RetrievalConfig;
 use crate::error::Result;
-use crate::indexing::TagEventKind;
 use crate::repomap::RepoMapCache;
-use crate::repomap::TagPipeline;
-use crate::repomap::TagReadiness;
-use crate::repomap::TagStats;
-use crate::repomap::TagStrictModeConfig;
 use crate::storage::SqliteStore;
+
+// Import from local tags module (now in indexing/)
+use super::TagEventKind;
+use super::tags::TagPipeline;
+use super::tags::TagReadiness;
+use super::tags::TagStats;
+use super::tags::TagStrictModeConfig;
 
 /// Feature flags for the unified coordinator.
 #[derive(Debug, Clone)]
@@ -163,13 +165,7 @@ impl UnifiedCoordinator {
         };
 
         let tag_pipeline = if features.repomap_enabled {
-            // Get cache TTL from repo_map config, or use default
-            let cache_ttl = config
-                .repo_map
-                .as_ref()
-                .map(|c| c.cache_ttl_secs)
-                .unwrap_or(3600);
-            let cache = Arc::new(RepoMapCache::new(Arc::clone(&db), cache_ttl));
+            let cache = Arc::new(RepoMapCache::new(Arc::clone(&db)));
             // Use default strict mode config
             let strict_config = TagStrictModeConfig::default();
             Some(Arc::new(TagPipeline::new(
@@ -280,13 +276,51 @@ impl UnifiedCoordinator {
             "SessionStart: scanned files"
         );
 
+        // Handle empty workspace - immediately mark as ready
+        if file_count == 0 {
+            tracing::info!(
+                batch_id = %batch_id,
+                "SessionStart: no files to index, marking as ready"
+            );
+
+            // Mark pipelines as ready with empty stats
+            if let Some(ref pipeline) = self.index_pipeline {
+                pipeline.mark_ready(IndexStats::default()).await;
+            }
+            if let Some(ref pipeline) = self.tag_pipeline {
+                pipeline.mark_ready(TagStats::default()).await;
+            }
+
+            // Update unified state to ready
+            *self.state.write().await = UnifiedState::Ready;
+
+            // Return receivers that complete immediately (batch tracker handles this)
+            let index_receiver = if let Some(ref pipeline) = self.index_pipeline {
+                Some(pipeline.start_batch(batch_id.clone(), 0).await)
+            } else {
+                None
+            };
+            let tag_receiver = if let Some(ref pipeline) = self.tag_pipeline {
+                Some(pipeline.start_batch(batch_id.clone(), 0).await)
+            } else {
+                None
+            };
+
+            return Ok(SessionStartResult {
+                batch_id,
+                file_count,
+                index_receiver,
+                tag_receiver,
+            });
+        }
+
         // Update state to building
         *self.state.write().await = UnifiedState::Building {
             search_building: self.features.search_enabled,
             repomap_building: self.features.repomap_enabled,
         };
 
-        // Dispatch to index pipeline
+        // Dispatch to index pipeline (all events are Changed, processor checks existence)
         let index_receiver = if let Some(ref pipeline) = self.index_pipeline {
             pipeline.mark_building(batch_id.clone()).await;
             let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
@@ -294,7 +328,7 @@ impl UnifiedCoordinator {
             for file in &files {
                 let seq = pipeline.assign_seq();
                 let event = TrackedEvent::new(
-                    WatchEventKind::Created,
+                    WatchEventKind::Changed,
                     Some(batch_id.clone()),
                     seq,
                     generate_trace_id(TriggerSource::SessionStart, epoch),
@@ -307,7 +341,7 @@ impl UnifiedCoordinator {
             None
         };
 
-        // Dispatch to tag pipeline
+        // Dispatch to tag pipeline (all events are Changed, processor checks existence)
         let tag_receiver = if let Some(ref pipeline) = self.tag_pipeline {
             pipeline.mark_building(batch_id.clone()).await;
             let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
@@ -315,7 +349,7 @@ impl UnifiedCoordinator {
             for file in &files {
                 let seq = pipeline.assign_seq();
                 let event = TrackedEvent::new(
-                    TagEventKind::Created,
+                    TagEventKind::Changed,
                     Some(batch_id.clone()),
                     seq,
                     generate_trace_id(TriggerSource::SessionStart, epoch),
@@ -355,16 +389,11 @@ impl UnifiedCoordinator {
                 pipeline.push_event(path.clone(), event).await;
             }
 
-            // Dispatch to tag pipeline
+            // Dispatch to tag pipeline (all events are Changed, processor checks existence)
             if let Some(ref pipeline) = self.tag_pipeline {
                 let seq = pipeline.assign_seq();
-                let kind = match change {
-                    CoordinatorFileChange::Added(_) => TagEventKind::Created,
-                    CoordinatorFileChange::Modified(_) => TagEventKind::Modified,
-                    CoordinatorFileChange::Deleted(_) => TagEventKind::Deleted,
-                };
                 let event = TrackedEvent::new(
-                    kind,
+                    TagEventKind::Changed,
                     None,
                     seq,
                     generate_trace_id(TriggerSource::Watcher, epoch),

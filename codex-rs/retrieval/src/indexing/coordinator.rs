@@ -97,31 +97,26 @@ pub enum FreshnessResult {
 }
 
 /// File change detected by the coordinator.
+///
+/// Simplified to a single variant - the processor checks file existence
+/// to determine the actual action (update if exists, delete if not).
 #[derive(Debug, Clone)]
-pub enum CoordinatorFileChange {
-    /// File was added.
-    Added(PathBuf),
-    /// File was modified.
-    Modified(PathBuf),
-    /// File was deleted.
-    Deleted(PathBuf),
-}
+pub struct CoordinatorFileChange(pub PathBuf);
 
 impl CoordinatorFileChange {
+    /// Create a new file change event.
+    pub fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
     /// Get the path of the changed file.
     pub fn path(&self) -> &Path {
-        match self {
-            Self::Added(p) | Self::Modified(p) | Self::Deleted(p) => p,
-        }
+        &self.0
     }
 
     /// Convert to WatchEventKind.
     pub fn to_event_kind(&self) -> WatchEventKind {
-        match self {
-            Self::Added(_) => WatchEventKind::Created,
-            Self::Modified(_) => WatchEventKind::Modified,
-            Self::Deleted(_) => WatchEventKind::Deleted,
-        }
+        WatchEventKind::Changed
     }
 }
 
@@ -347,6 +342,12 @@ impl IndexCoordinator {
         use super::change_detector::CatalogEntry;
         use super::walker::FileWalker;
 
+        tracing::trace!(
+            workspace = %self.workspace,
+            workdir = %self.workdir.display(),
+            "Checking index freshness"
+        );
+
         // Record epoch at start
         let epoch = self.epoch.load(Ordering::Acquire);
 
@@ -428,20 +429,22 @@ impl IndexCoordinator {
             match indexed_map.get(&rel_path) {
                 Some(&indexed_mtime) => {
                     if current_mtime > indexed_mtime {
-                        changes.push(CoordinatorFileChange::Modified(path.clone()));
+                        // File modified - processor will check existence
+                        changes.push(CoordinatorFileChange::new(path.clone()));
                     }
                 }
                 None => {
-                    changes.push(CoordinatorFileChange::Added(path.clone()));
+                    // File added - processor will check existence
+                    changes.push(CoordinatorFileChange::new(path.clone()));
                 }
             }
         }
 
-        // Check for deleted files
+        // Check for deleted files - processor will check existence
         for (rel_path, _) in &indexed_map {
             if !current_paths.contains(rel_path) {
                 let full_path = self.workdir.join(rel_path);
-                changes.push(CoordinatorFileChange::Deleted(full_path));
+                changes.push(CoordinatorFileChange::new(full_path));
             }
         }
 
@@ -596,22 +599,20 @@ impl IndexCoordinator {
     }
 
     /// Process a single file event.
-    async fn process_file_event(&self, path: &Path, kind: WatchEventKind) {
-        tracing::debug!(path = %path.display(), kind = ?kind, "Processing file event");
+    async fn process_file_event(&self, path: &Path, _kind: WatchEventKind) {
+        tracing::debug!(path = %path.display(), "Processing file event");
 
         // Increment epoch
         self.epoch.fetch_add(1, Ordering::AcqRel);
 
-        match kind {
-            WatchEventKind::Created | WatchEventKind::Modified => {
-                // TODO: Index single file via IndexManager
-                // For now, just log
-                tracing::debug!(path = %path.display(), "Would index file");
-            }
-            WatchEventKind::Deleted => {
-                // TODO: Remove file from index via IndexManager
-                tracing::debug!(path = %path.display(), "Would remove file from index");
-            }
+        // Check file existence to determine action
+        // This is more robust than trusting event type (handles race conditions)
+        if path.exists() {
+            // TODO: Index single file via IndexManager
+            tracing::debug!(path = %path.display(), "Would index file");
+        } else {
+            // TODO: Remove file from index via IndexManager
+            tracing::debug!(path = %path.display(), "Would remove file from index");
         }
     }
 
@@ -773,12 +774,8 @@ mod tests {
         match result {
             FreshnessResult::Stale { changes } => {
                 assert!(!changes.is_empty());
-                // The file should be detected as added
-                assert!(
-                    changes
-                        .iter()
-                        .any(|c| matches!(c, CoordinatorFileChange::Added(_)))
-                );
+                // The file should be detected as changed
+                assert!(changes.iter().any(|c| c.path().ends_with("test.rs")));
             }
             _ => panic!("Expected Stale result"),
         }
@@ -790,7 +787,7 @@ mod tests {
 
         let queue = coord.event_queue();
         queue
-            .push_simple(PathBuf::from("test.rs"), WatchEventKind::Modified)
+            .push_simple(PathBuf::from("test.rs"), WatchEventKind::Changed)
             .await;
 
         assert_eq!(queue.len().await, 1);

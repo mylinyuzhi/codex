@@ -211,7 +211,7 @@ use std::path::Path;
 // Create manager with default config
 let diagnostics = Arc::new(DiagnosticsStore::new());
 let config = LspServersConfig::default();
-let manager = LspServerManager::new(config, diagnostics);
+let manager = LspServerManager::new(config, None, diagnostics);
 
 // Or load config from standard locations
 let manager = LspServerManager::with_auto_config(Some(project_root), diagnostics);

@@ -46,6 +46,8 @@ pub struct Bm25Searcher {
     config: Bm25Config,
     /// Whether the index has been loaded from storage
     loaded: AtomicBool,
+    /// Whether loading is currently in progress (prevents double-load race)
+    loading: AtomicBool,
     /// Number of failed load attempts (for exponential backoff)
     load_attempts: AtomicU32,
     /// Last load attempt time (for exponential backoff)
@@ -61,6 +63,7 @@ impl Bm25Searcher {
             chunk_cache: Arc::new(RwLock::new(HashMap::new())),
             config: Bm25Config::default(),
             loaded: AtomicBool::new(false),
+            loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
             last_load_attempt: Mutex::new(None),
         }
@@ -74,6 +77,7 @@ impl Bm25Searcher {
             chunk_cache: Arc::new(RwLock::new(HashMap::new())),
             config: Bm25Config::from_search_config(config),
             loaded: AtomicBool::new(false),
+            loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
             last_load_attempt: Mutex::new(None),
         }
@@ -91,6 +95,7 @@ impl Bm25Searcher {
             chunk_cache,
             config: Bm25Config::default(),
             loaded: AtomicBool::new(true), // Already loaded
+            loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
             last_load_attempt: Mutex::new(None),
         }
@@ -134,14 +139,61 @@ impl Bm25Searcher {
     /// Ensure the index is loaded from storage (lazy loading with exponential backoff).
     ///
     /// Called automatically before search if the index hasn't been loaded yet.
+    /// Uses atomic CAS to prevent double-load race condition where multiple
+    /// concurrent searchers could all load from storage simultaneously.
     /// Uses exponential backoff to avoid hammering storage on repeated failures.
     /// After max retries (10), falls back to empty index.
     async fn ensure_loaded(&self) -> Result<()> {
         // Fast path: already loaded
-        if self.loaded.load(Ordering::SeqCst) {
+        if self.loaded.load(Ordering::Acquire) {
             return Ok(());
         }
 
+        // Try to claim loading responsibility using atomic CAS
+        // This prevents multiple concurrent searchers from all loading simultaneously
+        if self
+            .loading
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            // We claimed loading responsibility
+            let result = self.do_load().await;
+
+            // Release loading flag regardless of outcome
+            self.loading.store(false, Ordering::Release);
+
+            result
+        } else {
+            // Another task is loading, wait for completion
+            let mut wait_count = 0;
+            const MAX_WAIT_ITERATIONS: u32 = 1000; // 10 seconds max
+
+            while self.loading.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                wait_count += 1;
+
+                if wait_count >= MAX_WAIT_ITERATIONS {
+                    return Err(RetrievalErr::NotReady {
+                        workspace: "bm25".to_string(),
+                        reason: "Timeout waiting for BM25 index load".to_string(),
+                    });
+                }
+            }
+
+            // Check if loading succeeded
+            if self.loaded.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(RetrievalErr::NotReady {
+                    workspace: "bm25".to_string(),
+                    reason: "BM25 index load failed by another task".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Internal loading logic with retry and backoff.
+    async fn do_load(&self) -> Result<()> {
         let attempts = self.load_attempts.load(Ordering::SeqCst);
         const MAX_RETRIES: u32 = 10;
 
@@ -170,7 +222,7 @@ impl Bm25Searcher {
                 "Max BM25 load retries reached, using empty index. \
                 Search will use LanceDB FTS fallback which may have lower quality."
             );
-            self.loaded.store(true, Ordering::SeqCst);
+            self.loaded.store(true, Ordering::Release);
             return Ok(());
         }
 
@@ -179,6 +231,7 @@ impl Bm25Searcher {
             Ok(()) => {
                 // Reset retry state on success
                 self.load_attempts.store(0, Ordering::SeqCst);
+                self.loaded.store(true, Ordering::Release);
                 tracing::debug!("BM25 index loaded from storage");
                 Ok(())
             }
@@ -210,6 +263,15 @@ impl Bm25Searcher {
         let metadata = index.metadata();
         self.store.save_bm25_metadata(&metadata).await?;
         Ok(())
+    }
+
+    /// Pre-load the BM25 index from storage to avoid first-search latency spike.
+    ///
+    /// This is optional - the index will be loaded lazily on first search if
+    /// warmup is not called. However, calling warmup during service initialization
+    /// can improve the user experience by eliminating the cold-start delay.
+    pub async fn warmup(&self) -> Result<()> {
+        self.ensure_loaded().await
     }
 
     /// Get a reference to the index.
@@ -299,11 +361,18 @@ impl Bm25Searcher {
     ///
     /// On first call, lazily loads the index from storage if available.
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        tracing::trace!(
+            query = %query.text,
+            limit = query.limit,
+            "BM25 search started"
+        );
+
         // Ensure index is loaded from storage (lazy loading)
         self.ensure_loaded().await?;
 
         let index = self.index.read().await;
         let results = index.search(&query.text, query.limit);
+        tracing::trace!(raw_results = results.len(), "BM25 index search completed");
 
         if results.is_empty() {
             // Fall back to LanceDB FTS if no results from custom index
@@ -325,9 +394,14 @@ impl Bm25Searcher {
                     score_type: ScoreType::Bm25,
                     is_stale: None,
                 });
+            } else {
+                // Log warning for stale index detection - chunk in BM25 but not in cache
+                tracing::warn!(
+                    chunk_id = %chunk_id,
+                    score = score,
+                    "Chunk in BM25 index but missing from cache - stale index detected"
+                );
             }
-            // Note: If chunk not in cache, skip it. The chunk cache should be
-            // populated during indexing. Missing chunks indicate stale index.
         }
 
         Ok(search_results)

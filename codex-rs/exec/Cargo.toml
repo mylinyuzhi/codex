@@ -27,7 +27,7 @@ codex-common = { workspace = true, features = [
 ] }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
-codex-utils = { workspace = true }
+codex-utils-common = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 mcp-types = { workspace = true }
 owo-colors = { workspace = true }

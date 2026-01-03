@@ -53,7 +53,7 @@ pub use terminal::restore as restore_terminal;
 use std::sync::Arc;
 
 use crate::config::RetrievalConfig;
-use crate::service::RetrievalService;
+use crate::facade::RetrievalFacade;
 
 /// Run the TUI application with the given configuration.
 ///
@@ -61,11 +61,11 @@ use crate::service::RetrievalService;
 ///
 /// # Arguments
 /// * `config` - Retrieval configuration
-/// * `service` - Optional pre-initialized RetrievalService. If None, the TUI
+/// * `service` - Optional pre-initialized RetrievalFacade. If None, the TUI
 ///   will be display-only and cannot perform operations.
 pub async fn run_tui(
     config: RetrievalConfig,
-    service: Option<Arc<RetrievalService>>,
+    service: Option<Arc<RetrievalFacade>>,
 ) -> anyhow::Result<()> {
     // Initialize terminal
     let mut terminal = init_terminal()?;

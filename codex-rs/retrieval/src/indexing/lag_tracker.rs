@@ -35,7 +35,7 @@ use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 
 /// Detailed lag information for monitoring and debugging.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LagInfo {
     /// Total number of sequences assigned.
     pub total_assigned: i64,
@@ -134,15 +134,32 @@ impl LagTracker {
         self.update_watermark(&pending);
     }
 
+    /// Maximum failed events before auto-cleanup is triggered.
+    const MAX_FAILED_BEFORE_CLEANUP: usize = 10000;
+
+    /// Number of recent failed events to keep after cleanup.
+    const KEEP_AFTER_CLEANUP: usize = 1000;
+
     /// Mark an event as failed (skip it).
     ///
     /// Failed events are removed from pending and added to the failed set.
     /// They don't block watermark advancement.
+    ///
+    /// Auto-cleanup is triggered when failed count exceeds threshold to prevent
+    /// memory leaks in long-running sessions.
     pub async fn fail_event(&self, seq: i64, error: &str) {
         let mut pending = self.pending.write().await;
         pending.remove(&seq);
 
-        self.failed.write().await.insert(seq);
+        {
+            let mut failed = self.failed.write().await;
+            failed.insert(seq);
+
+            // Auto-cleanup to prevent memory leak in long-running sessions
+            if failed.len() > Self::MAX_FAILED_BEFORE_CLEANUP {
+                Self::cleanup_failed_internal(&mut failed, Self::KEEP_AFTER_CLEANUP);
+            }
+        }
 
         tracing::warn!(
             seq = seq,
@@ -151,6 +168,19 @@ impl LagTracker {
         );
 
         self.update_watermark(&pending);
+    }
+
+    /// Internal helper to cleanup old failed events.
+    ///
+    /// Keeps only the most recent `keep_count` failed events based on sequence number.
+    fn cleanup_failed_internal(failed: &mut HashSet<i64>, keep_count: usize) {
+        let mut sorted: Vec<_> = failed.drain().collect();
+        sorted.sort_unstable();
+        *failed = sorted.into_iter().rev().take(keep_count).collect();
+        tracing::debug!(
+            kept = keep_count,
+            "Auto-cleaned old failed events to prevent memory leak"
+        );
     }
 
     /// Update watermark based on current pending set.
@@ -286,13 +316,50 @@ impl LagTracker {
     /// Reset the tracker to initial state.
     ///
     /// Use with caution - only when restarting a new session.
+    ///
+    /// This method acquires locks before updating atomics to prevent race
+    /// conditions with concurrent `complete_event` calls.
     pub async fn reset(&self) {
+        // Acquire locks FIRST to prevent race with complete_event
+        let mut pending = self.pending.write().await;
+        let mut failed = self.failed.write().await;
+
+        // Clear collections while holding locks
+        pending.clear();
+        failed.clear();
+
+        // Now safe to reset atomics - no concurrent complete_event can
+        // see inconsistent state because we hold both locks
         self.next_seq.store(1, Ordering::SeqCst);
         self.watermark.store(0, Ordering::SeqCst);
-        self.pending.write().await.clear();
-        self.failed.write().await.clear();
 
         tracing::info!("Lag tracker reset");
+    }
+
+    /// Get count of failed events.
+    ///
+    /// This is a quick check that doesn't require waiting for the lock.
+    pub async fn failed_count(&self) -> usize {
+        self.failed.read().await.len()
+    }
+
+    /// Clean up old failed events to prevent memory leak.
+    ///
+    /// Keeps the most recent `keep_count` failed events based on sequence number.
+    /// Call this periodically for long-running systems with many failures.
+    ///
+    /// # Arguments
+    /// * `keep_count` - Number of recent failed events to keep
+    pub async fn cleanup_failed(&self, keep_count: usize) {
+        let mut failed = self.failed.write().await;
+        if failed.len() > keep_count {
+            // Sort by seq and keep only the most recent ones
+            let mut sorted: Vec<_> = failed.drain().collect();
+            sorted.sort_unstable();
+            *failed = sorted.into_iter().rev().take(keep_count).collect();
+
+            tracing::debug!(kept = keep_count, "Cleaned up old failed events");
+        }
     }
 }
 
@@ -495,5 +562,39 @@ mod tests {
         // Should receive notification
         let lag = rx.recv().await.unwrap();
         assert_eq!(lag, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_failed() {
+        let tracker = LagTracker::new();
+
+        // Create 10 failed events
+        for _ in 0..10 {
+            let seq = tracker.assign_seq();
+            tracker.start_event(seq).await;
+            tracker.fail_event(seq, "test error").await;
+        }
+
+        assert_eq!(tracker.failed_count().await, 10);
+
+        // Cleanup keeping only 3
+        tracker.cleanup_failed(3).await;
+        assert_eq!(tracker.failed_count().await, 3);
+
+        // Cleanup when under threshold should be no-op
+        tracker.cleanup_failed(5).await;
+        assert_eq!(tracker.failed_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_failed_count() {
+        let tracker = LagTracker::new();
+        assert_eq!(tracker.failed_count().await, 0);
+
+        let seq = tracker.assign_seq();
+        tracker.start_event(seq).await;
+        tracker.fail_event(seq, "test").await;
+
+        assert_eq!(tracker.failed_count().await, 1);
     }
 }

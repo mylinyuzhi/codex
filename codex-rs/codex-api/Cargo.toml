@@ -12,6 +12,8 @@ bytes = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
 google-genai = { workspace = true }
+volcengine-ark-sdk = { workspace = true }
+z-ai-sdk = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true }
 http = { workspace = true }
@@ -28,6 +30,7 @@ tokio-util = { workspace = true, features = ["codec"] }
 [dev-dependencies]
 anyhow = { workspace = true }
 assert_matches = { workspace = true }
+dotenvy = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }

@@ -64,7 +64,7 @@ impl App {
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            match service.start_watch(cancel_token).await {
+            match service.index_service().start_watch(cancel_token).await {
                 Ok(mut rx) => {
                     // Watch events and incremental reindexing are handled by the service
                     // Events are emitted via event_emitter and received by TUI's handle_retrieval_event()

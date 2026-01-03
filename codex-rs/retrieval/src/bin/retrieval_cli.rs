@@ -35,16 +35,16 @@ use clap::Subcommand;
 use tracing_appender::non_blocking::WorkerGuard;
 
 use codex_retrieval::EventConsumer;
+use codex_retrieval::FacadeBuilder;
 use codex_retrieval::JsonLinesConsumer;
 use codex_retrieval::LoggingConsumer;
 use codex_retrieval::RebuildMode;
 use codex_retrieval::RepoMapRequest;
 use codex_retrieval::RetrievalConfig;
-use codex_retrieval::RetrievalService;
+use codex_retrieval::RetrievalFacade;
 use codex_retrieval::SnippetStorage;
 use codex_retrieval::SqliteStore;
 use codex_retrieval::SymbolQuery;
-use codex_retrieval::WatchEventKind;
 use codex_retrieval::event_emitter;
 use codex_retrieval::events::LogLevel;
 use codex_retrieval::indexing::IndexStatus;
@@ -60,20 +60,12 @@ fn workspace_name(workdir: &Path) -> &str {
 
 /// Create default features for BM25-only search.
 fn bm25_features() -> codex_retrieval::RetrievalFeatures {
-    codex_retrieval::RetrievalFeatures {
-        code_search: true,
-        query_rewrite: true,
-        vector_search: false,
-    }
+    codex_retrieval::RetrievalFeatures::STANDARD
 }
 
 /// Create features for hybrid search (BM25 + vector if available).
 fn hybrid_features() -> codex_retrieval::RetrievalFeatures {
-    codex_retrieval::RetrievalFeatures {
-        code_search: true,
-        query_rewrite: true,
-        vector_search: true,
-    }
+    codex_retrieval::RetrievalFeatures::FULL
 }
 
 #[derive(Parser)]
@@ -251,7 +243,11 @@ async fn main() -> anyhow::Result<()> {
 
         // Create service if retrieval is enabled - use with_workspace for operations
         let (service, not_enabled_reason) = if config.enabled {
-            match RetrievalService::with_workspace(config, hybrid_features(), workdir.clone()).await
+            match FacadeBuilder::new(config)
+                .features(hybrid_features())
+                .workspace(workdir.clone())
+                .build()
+                .await
             {
                 Ok(svc) => (Some(Arc::new(svc)), None),
                 Err(e) => {
@@ -307,7 +303,10 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
 /// 2. CLI -v flags (if verbose > 0, overrides config)
 /// 3. config.logging.level (from retrieval.toml)
 /// 4. fallback "codex_retrieval=info" (lowest)
-fn init_tracing(config_logging: &codex_utils::LoggingConfig, verbose: u8) -> Option<WorkerGuard> {
+fn init_tracing(
+    config_logging: &codex_utils_common::LoggingConfig,
+    verbose: u8,
+) -> Option<WorkerGuard> {
     use tracing_appender::non_blocking;
     use tracing_subscriber::prelude::*;
 
@@ -350,13 +349,13 @@ fn init_tracing(config_logging: &codex_utils::LoggingConfig, verbose: u8) -> Opt
             2 => "debug",
             _ => "trace",
         };
-        codex_utils::LoggingConfig::with_level(level)
+        codex_utils_common::LoggingConfig::with_level(level)
     } else {
         config_logging.clone()
     };
 
     // Use codex-utils logging infrastructure for timezone-aware timestamps
-    let file_layer = codex_utils::configure_fmt_layer!(
+    let file_layer = codex_utils_common::configure_fmt_layer!(
         tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             .with_ansi(false),
@@ -371,7 +370,7 @@ fn init_tracing(config_logging: &codex_utils::LoggingConfig, verbose: u8) -> Opt
 
 /// Fallback: stderr-only logging when file logging fails.
 fn init_tracing_stderr(
-    config_logging: &codex_utils::LoggingConfig,
+    config_logging: &codex_utils_common::LoggingConfig,
     verbose: u8,
 ) -> Option<WorkerGuard> {
     use tracing_subscriber::prelude::*;
@@ -383,13 +382,13 @@ fn init_tracing_stderr(
             2 => "debug",
             _ => "trace",
         };
-        codex_utils::LoggingConfig::with_level(level)
+        codex_utils_common::LoggingConfig::with_level(level)
     } else {
         config_logging.clone()
     };
 
     // Use codex-utils logging infrastructure for consistent formatting
-    let stderr_layer = codex_utils::configure_fmt_layer!(
+    let stderr_layer = codex_utils_common::configure_fmt_layer!(
         tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(true),
@@ -458,12 +457,11 @@ async fn run_command(
     let service = match &cmd {
         Command::Status | Command::Build { .. } | Command::Watch | Command::Repomap { .. } => {
             Some(Arc::new(
-                RetrievalService::with_workspace(
-                    service_config.clone(),
-                    hybrid_features(),
-                    workdir.clone(),
-                )
-                .await?,
+                FacadeBuilder::new(service_config.clone())
+                    .features(hybrid_features())
+                    .workspace(workdir.clone())
+                    .build()
+                    .await?,
             ))
         }
         _ => None,
@@ -510,7 +508,10 @@ async fn run_repl(
     let mut service_config = config.clone();
     service_config.workdir = Some(workdir.clone());
     let service = Arc::new(
-        RetrievalService::with_workspace(service_config, hybrid_features(), workdir.clone())
+        FacadeBuilder::new(service_config)
+            .features(hybrid_features())
+            .workspace(workdir.clone())
+            .build()
             .await?,
     );
 
@@ -607,8 +608,8 @@ async fn run_repl(
     Ok(())
 }
 
-async fn cmd_status(service: Arc<RetrievalService>) -> anyhow::Result<()> {
-    let stats = service.get_index_status().await?;
+async fn cmd_status(service: Arc<RetrievalFacade>) -> anyhow::Result<()> {
+    let stats = service.index_service().get_status().await?;
 
     if stats.file_count == 0 && stats.last_indexed.is_none() {
         println!("Index not found. Run 'build' to create it.");
@@ -629,7 +630,7 @@ async fn cmd_status(service: Arc<RetrievalService>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_build(service: Arc<RetrievalService>, clean: bool) -> anyhow::Result<()> {
+async fn cmd_build(service: Arc<RetrievalFacade>, clean: bool) -> anyhow::Result<()> {
     let mode = if clean {
         println!("[Clean] Deleting old index...");
         RebuildMode::Clean
@@ -664,7 +665,7 @@ async fn cmd_build(service: Arc<RetrievalService>, clean: bool) -> anyhow::Resul
     Ok(())
 }
 
-async fn cmd_watch(service: Arc<RetrievalService>) -> anyhow::Result<()> {
+async fn cmd_watch(service: Arc<RetrievalFacade>) -> anyhow::Result<()> {
     println!("[Watch] Watching for changes (Ctrl+C to stop)...");
 
     let cancel = CancellationToken::new();
@@ -677,14 +678,15 @@ async fn cmd_watch(service: Arc<RetrievalService>) -> anyhow::Result<()> {
         }
     });
 
-    let mut rx = service.start_watch(cancel.clone()).await?;
+    let mut rx = service.index_service().start_watch(cancel.clone()).await?;
 
     // Process watch events from service
     while let Some(event) = rx.recv().await {
-        let kind = match event.kind {
-            WatchEventKind::Created => "created",
-            WatchEventKind::Modified => "modified",
-            WatchEventKind::Deleted => "deleted",
+        // Check file existence to determine actual change type
+        let kind = if event.path.exists() {
+            "changed"
+        } else {
+            "deleted"
         };
         println!("[Change] {} {}", event.path.display(), kind);
     }
@@ -694,8 +696,14 @@ async fn cmd_watch(service: Arc<RetrievalService>) -> anyhow::Result<()> {
 }
 
 async fn cmd_search(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::Result<()> {
-    let service = RetrievalService::new(config.clone(), hybrid_features()).await?;
-    let output = service.search_with_limit(query, Some(limit)).await?;
+    use codex_retrieval::SearchRequest;
+
+    let service = FacadeBuilder::new(config.clone())
+        .features(hybrid_features())
+        .build()
+        .await?;
+    let request = SearchRequest::new(query).hybrid().limit(limit);
+    let output = service.search_service().execute(request).await?;
 
     // Display filter info if configured
     if let Some(filter) = &output.filter {
@@ -726,8 +734,14 @@ async fn cmd_search(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow
 }
 
 async fn cmd_bm25(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::Result<()> {
-    let service = RetrievalService::new(config.clone(), bm25_features()).await?;
-    let output = service.search_bm25(query, limit).await?;
+    use codex_retrieval::SearchRequest;
+
+    let service = FacadeBuilder::new(config.clone())
+        .features(bm25_features())
+        .build()
+        .await?;
+    let request = SearchRequest::new(query).bm25().limit(limit);
+    let output = service.search_service().execute(request).await?;
 
     // Display filter info if configured
     if let Some(filter) = &output.filter {
@@ -756,14 +770,20 @@ async fn cmd_bm25(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::
 }
 
 async fn cmd_vector(config: &RetrievalConfig, query: &str, limit: i32) -> anyhow::Result<()> {
-    let service = RetrievalService::new(config.clone(), hybrid_features()).await?;
+    use codex_retrieval::SearchRequest;
 
-    if !service.has_vector_search() {
+    let service = FacadeBuilder::new(config.clone())
+        .features(hybrid_features())
+        .build()
+        .await?;
+
+    if !service.search_service().has_vector_search() {
         println!("[Vector] Vector search not available (embeddings not configured)");
         return Ok(());
     }
 
-    let output = service.search_vector(query, limit).await?;
+    let request = SearchRequest::new(query).vector().limit(limit);
+    let output = service.search_service().execute(request).await?;
 
     // Display filter info if configured
     if let Some(filter) = &output.filter {
@@ -837,7 +857,7 @@ async fn cmd_snippet(
 }
 
 async fn cmd_repomap(
-    service: Arc<RetrievalService>,
+    service: Arc<RetrievalFacade>,
     max_tokens: i32,
     focus_files: &[PathBuf],
 ) -> anyhow::Result<()> {

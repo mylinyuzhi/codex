@@ -65,7 +65,7 @@ impl ToolsConfig {
         let include_rich_grep = features.enabled(Feature::RichGrep);
         let include_enhanced_list_dir = features.enabled(Feature::EnhancedListDir);
         let include_web_fetch = features.enabled(Feature::WebFetch);
-        let include_code_search = features.enabled(Feature::CodeSearch);
+        let include_code_search = features.enabled(Feature::Retrieval);
         let include_lsp = features.enabled(Feature::Lsp);
         let include_mcp_resource_tools = features.enabled(Feature::McpResourceTools);
         let include_subagent = features.enabled(Feature::Subagent);

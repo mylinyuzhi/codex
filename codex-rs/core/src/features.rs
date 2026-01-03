@@ -103,8 +103,8 @@ pub enum Feature {
     EnhancedListDir,
     /// Enable the web_fetch tool for fetching URL content.
     WebFetch,
-    /// Enable code_search tool (experimental, requires retrieval.toml configuration).
-    CodeSearch,
+    /// Enable retrieval tool (experimental, requires retrieval.toml configuration).
+    Retrieval,
     /// Enable LSP tool for code intelligence (requires pre-installed LSP servers).
     Lsp,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).

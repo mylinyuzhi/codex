@@ -1,7 +1,10 @@
 [workspace]
 members = [
-    "anthropic-sdk",
-    "codex-utils",
+    "provider-sdks/anthropic",
+    "provider-sdks/volcengine-ark",
+    "provider-sdks/z-ai",
+    "provider-sdks/google-genai",
+    "utils/common",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -53,7 +56,6 @@ members = [
     "utils/string",
     "codex-client",
     "codex-api",
-    "google-genai",
 ]
 resolver = "2"
 
@@ -68,7 +70,9 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-anthropic-sdk = { path = "anthropic-sdk" }
+anthropic-sdk = { path = "provider-sdks/anthropic" }
+volcengine-ark-sdk = { path = "provider-sdks/volcengine-ark" }
+z-ai-sdk = { path = "provider-sdks/z-ai" }
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -114,11 +118,11 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
-codex-utils = { path = "codex-utils" }
+codex-utils-common = { path = "utils/common" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
-google-genai = { path = "google-genai" }
+google-genai = { path = "provider-sdks/google-genai" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -161,6 +165,9 @@ http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
+grep = "0.4.1"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.16"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"

@@ -359,8 +359,6 @@ impl<'a> EventLog<'a> {
                     tokens, files, duration_ms
                 ),
             ),
-            RetrievalEvent::RepoMapCacheHit { .. } => ("DEBUG", "RepoMap: cache hit".to_string()),
-
             // Session events
             RetrievalEvent::SessionStarted { session_id, .. } => {
                 ("INFO", format!("Session started: {}", session_id))

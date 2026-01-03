@@ -19,6 +19,8 @@
 
 pub mod anthropic;
 pub mod genai;
+pub mod volcengine_ark;
+pub mod zai;
 
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
@@ -142,6 +144,8 @@ static ADAPTER_REGISTRY: LazyLock<AdapterRegistry> = LazyLock::new(|| {
     // Register built-in adapters
     registry.register(Arc::new(genai::GeminiAdapter::new()));
     registry.register(Arc::new(anthropic::AnthropicAdapter::new()));
+    registry.register(Arc::new(volcengine_ark::VolcengineArkAdapter::new()));
+    registry.register(Arc::new(zai::ZaiAdapter::new()));
 
     registry
 });
@@ -218,6 +222,16 @@ mod tests {
         let adapter = get_adapter("anthropic");
         assert!(adapter.is_some());
         assert_eq!(adapter.unwrap().name(), "anthropic");
+
+        // VolcengineArkAdapter should be pre-registered
+        let adapter = get_adapter("volc_ark");
+        assert!(adapter.is_some());
+        assert_eq!(adapter.unwrap().name(), "volc_ark");
+
+        // ZaiAdapter should be pre-registered
+        let adapter = get_adapter("zai");
+        assert!(adapter.is_some());
+        assert_eq!(adapter.unwrap().name(), "zai");
     }
 
     #[test]
@@ -225,6 +239,8 @@ mod tests {
         let adapters = list_adapters();
         assert!(adapters.contains(&"genai".to_string()));
         assert!(adapters.contains(&"anthropic".to_string()));
+        assert!(adapters.contains(&"volc_ark".to_string()));
+        assert!(adapters.contains(&"zai".to_string()));
     }
 
     #[test]

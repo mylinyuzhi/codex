@@ -263,12 +263,6 @@ pub enum RetrievalEvent {
         duration_ms: i64,
     },
 
-    /// RepoMap cache hit.
-    RepoMapCacheHit {
-        request_id: String,
-        cache_key: String,
-    },
-
     // ========================================================================
     // Debug/Diagnostic Events
     // ========================================================================
@@ -315,7 +309,6 @@ impl RetrievalEvent {
             RetrievalEvent::RepoMapStarted { .. } => "repomap_started",
             RetrievalEvent::PageRankComputed { .. } => "pagerank_computed",
             RetrievalEvent::RepoMapGenerated { .. } => "repomap_generated",
-            RetrievalEvent::RepoMapCacheHit { .. } => "repomap_cache_hit",
             RetrievalEvent::DiagnosticLog { .. } => "diagnostic_log",
         }
     }
@@ -1000,10 +993,6 @@ impl LoggingConsumer {
                     "RepoMap: generated"
                 );
             }
-            RetrievalEvent::RepoMapCacheHit { cache_key, .. } => {
-                tracing::debug!(cache_key = %cache_key, "RepoMap: cache hit");
-            }
-
             // ================================================================
             // Diagnostic Events
             // ================================================================

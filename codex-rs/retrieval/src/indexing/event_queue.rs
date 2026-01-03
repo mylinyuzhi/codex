@@ -40,10 +40,15 @@ use super::WatchEventKind;
 pub struct TrackedEvent<T: Clone> {
     /// The actual event data.
     pub data: T,
-    /// Batch ID for SessionStart events (None for Timer/Watcher).
-    pub batch_id: Option<BatchId>,
+    /// Batch IDs for SessionStart events (empty for Timer/Watcher).
+    /// Multiple batch_ids can be present when events are merged.
+    pub batch_ids: Vec<BatchId>,
     /// Sequence number for lag tracking (assigned by LagTracker).
     pub seq: i64,
+    /// Sequence numbers from events that were merged into this one.
+    /// These must be completed when this event is processed to prevent
+    /// watermark from getting stuck.
+    pub merged_seqs: Vec<i64>,
     /// Trace ID for distributed tracing.
     pub trace_id: String,
     /// Timestamp when the event was created.
@@ -52,11 +57,14 @@ pub struct TrackedEvent<T: Clone> {
 
 impl<T: Clone> TrackedEvent<T> {
     /// Create a new tracked event.
+    ///
+    /// The batch_id is converted to a single-element Vec for backward compatibility.
     pub fn new(data: T, batch_id: Option<BatchId>, seq: i64, trace_id: String) -> Self {
         Self {
             data,
-            batch_id,
+            batch_ids: batch_id.into_iter().collect(),
             seq,
+            merged_seqs: Vec::new(),
             trace_id,
             timestamp: Instant::now(),
         }
@@ -66,8 +74,9 @@ impl<T: Clone> TrackedEvent<T> {
     pub fn simple(data: T) -> Self {
         Self {
             data,
-            batch_id: None,
+            batch_ids: Vec::new(),
             seq: 0,
+            merged_seqs: Vec::new(),
             trace_id: String::new(),
             timestamp: Instant::now(),
         }
@@ -121,7 +130,8 @@ where
     /// Add an event to the queue (automatically deduplicates/merges).
     ///
     /// If an event for the same key already exists, merges using the merge function.
-    /// The batch_id from the new event is preserved if present.
+    /// All batch_ids from both events are preserved to prevent batch completion hangs.
+    /// Sequence numbers from merged events are tracked to prevent watermark stall.
     pub async fn push(&self, key: K, event: TrackedEvent<V>) {
         let mut pending = self.pending.write().await;
 
@@ -129,14 +139,29 @@ where
             // Merge the data using the merge function
             let merged_data = (self.merge_fn)(&existing.data, &event.data);
 
-            // Preserve batch_id: prefer new event's batch_id if present
-            let batch_id = event.batch_id.or_else(|| existing.batch_id.clone());
+            // Merge all batch_ids from both events (dedup by string comparison)
+            let mut merged_batch_ids = existing.batch_ids.clone();
+            for bid in &event.batch_ids {
+                if !merged_batch_ids.iter().any(|b| b.as_str() == bid.as_str()) {
+                    merged_batch_ids.push(bid.clone());
+                }
+            }
+
+            // Collect all merged sequence numbers to prevent watermark stall.
+            // The existing event's seq and any previously merged seqs must be tracked.
+            let mut merged_seqs = existing.merged_seqs.clone();
+            if existing.seq > 0 {
+                merged_seqs.push(existing.seq);
+            }
+            // Also include any merged seqs from the new event (in case of multiple merges)
+            merged_seqs.extend(event.merged_seqs.iter().copied());
 
             // Use the newer seq and trace_id
             let merged = TrackedEvent {
                 data: merged_data,
-                batch_id,
+                batch_ids: merged_batch_ids,
                 seq: event.seq,
+                merged_seqs,
                 trace_id: event.trace_id,
                 timestamp: Instant::now(),
             };
@@ -212,19 +237,12 @@ where
 // Type aliases for specific event types
 // ============================================================================
 
-/// Default merge function for WatchEventKind.
+/// Merge function for WatchEventKind.
 ///
-/// Merge strategy:
-/// - Deleted has highest priority, overwrites any
-/// - Modified overwrites Created (file created then immediately modified)
-/// - Created kept (file doesn't exist -> create)
-pub fn watch_event_merge(existing: &WatchEventKind, new: &WatchEventKind) -> WatchEventKind {
-    match (existing, new) {
-        (_, WatchEventKind::Deleted) => WatchEventKind::Deleted,
-        (WatchEventKind::Deleted, _) => new.clone(), // Deleted then recreated
-        (WatchEventKind::Created, WatchEventKind::Modified) => WatchEventKind::Created,
-        _ => new.clone(),
-    }
+/// Since there's only one variant (Changed), just keep the latest.
+/// The processor will check file existence to determine the action.
+pub fn watch_event_merge(_existing: &WatchEventKind, new: &WatchEventKind) -> WatchEventKind {
+    *new
 }
 
 /// Watch event queue with filepath-based deduplication.
@@ -245,24 +263,21 @@ pub type SharedEventQueue = Arc<WatchEventQueue>;
 // ============================================================================
 
 /// Tag extraction event kind.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Simplified to a single variant - the processor checks file existence
+/// to determine the actual action (extract if exists, invalidate if not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TagEventKind {
-    /// Extract tags from newly created file.
-    Created,
-    /// Re-extract tags from modified file.
-    Modified,
-    /// Remove tags for deleted file.
-    Deleted,
+    /// File was changed (processor checks existence for actual action)
+    #[default]
+    Changed,
 }
 
-/// Default merge function for TagEventKind (same as WatchEventKind).
-pub fn tag_event_merge(existing: &TagEventKind, new: &TagEventKind) -> TagEventKind {
-    match (existing, new) {
-        (_, TagEventKind::Deleted) => TagEventKind::Deleted,
-        (TagEventKind::Deleted, _) => new.clone(),
-        (TagEventKind::Created, TagEventKind::Modified) => TagEventKind::Created,
-        _ => new.clone(),
-    }
+/// Merge function for TagEventKind (same as WatchEventKind).
+///
+/// Since there's only one variant (Changed), just keep the latest.
+pub fn tag_event_merge(_existing: &TagEventKind, new: &TagEventKind) -> TagEventKind {
+    *new
 }
 
 /// Tag event queue for RepoMap pipeline.
@@ -302,17 +317,17 @@ mod tests {
         let queue = new_watch_event_queue(16);
 
         queue
-            .push_simple(PathBuf::from("file1.rs"), WatchEventKind::Created)
+            .push_simple(PathBuf::from("file1.rs"), WatchEventKind::Changed)
             .await;
         queue
-            .push_simple(PathBuf::from("file2.rs"), WatchEventKind::Modified)
+            .push_simple(PathBuf::from("file2.rs"), WatchEventKind::Changed)
             .await;
 
         assert_eq!(queue.len().await, 2);
 
         let (path, event) = queue.pop().await.unwrap();
         assert!(path == PathBuf::from("file1.rs") || path == PathBuf::from("file2.rs"));
-        assert!(event.data == WatchEventKind::Created || event.data == WatchEventKind::Modified);
+        assert_eq!(event.data, WatchEventKind::Changed);
 
         assert_eq!(queue.len().await, 1);
     }
@@ -321,55 +336,20 @@ mod tests {
     async fn test_dedup_same_path() {
         let queue = new_watch_event_queue(16);
 
-        // Same path, multiple events
+        // Same path, multiple events - should deduplicate
         queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Created)
+            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Changed)
             .await;
         queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Modified)
+            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Changed)
             .await;
 
-        // Should only have one event (Created wins over Modified)
+        // Should only have one event (deduplicated by path)
         assert_eq!(queue.len().await, 1);
 
         let (path, event) = queue.pop().await.unwrap();
         assert_eq!(path, PathBuf::from("file.rs"));
-        assert_eq!(event.data, WatchEventKind::Created);
-    }
-
-    #[tokio::test]
-    async fn test_deleted_wins() {
-        let queue = new_watch_event_queue(16);
-
-        queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Created)
-            .await;
-        queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Deleted)
-            .await;
-
-        assert_eq!(queue.len().await, 1);
-
-        let (_, event) = queue.pop().await.unwrap();
-        assert_eq!(event.data, WatchEventKind::Deleted);
-    }
-
-    #[tokio::test]
-    async fn test_deleted_then_created() {
-        let queue = new_watch_event_queue(16);
-
-        queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Deleted)
-            .await;
-        queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Created)
-            .await;
-
-        assert_eq!(queue.len().await, 1);
-
-        let (_, event) = queue.pop().await.unwrap();
-        // Created overwrites Deleted (file was deleted then recreated)
-        assert_eq!(event.data, WatchEventKind::Created);
+        assert_eq!(event.data, WatchEventKind::Changed);
     }
 
     #[tokio::test]
@@ -378,7 +358,7 @@ mod tests {
         let batch_id = BatchId::new();
 
         let event = TrackedEvent::new(
-            WatchEventKind::Modified,
+            WatchEventKind::Changed,
             Some(batch_id.clone()),
             42,
             "trace-123".to_string(),
@@ -387,7 +367,8 @@ mod tests {
         queue.push(PathBuf::from("file.rs"), event).await;
 
         let (_, popped) = queue.pop().await.unwrap();
-        assert_eq!(popped.batch_id.unwrap().as_str(), batch_id.as_str());
+        assert_eq!(popped.batch_ids.len(), 1);
+        assert_eq!(popped.batch_ids[0].as_str(), batch_id.as_str());
         assert_eq!(popped.seq, 42);
         assert_eq!(popped.trace_id, "trace-123");
     }
@@ -399,12 +380,12 @@ mod tests {
 
         // First event without batch_id
         queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Created)
+            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Changed)
             .await;
 
         // Second event with batch_id
         let event = TrackedEvent::new(
-            WatchEventKind::Modified,
+            WatchEventKind::Changed,
             Some(batch_id.clone()),
             1,
             "trace".to_string(),
@@ -413,8 +394,49 @@ mod tests {
 
         let (_, popped) = queue.pop().await.unwrap();
         // batch_id should be preserved
-        assert!(popped.batch_id.is_some());
-        assert_eq!(popped.batch_id.unwrap().as_str(), batch_id.as_str());
+        assert_eq!(popped.batch_ids.len(), 1);
+        assert_eq!(popped.batch_ids[0].as_str(), batch_id.as_str());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_batch_ids_preserved_on_merge() {
+        let queue = new_watch_event_queue(16);
+        let batch_id_1 = BatchId::new();
+        let batch_id_2 = BatchId::new();
+
+        // First event with batch_id_1
+        let event1 = TrackedEvent::new(
+            WatchEventKind::Changed,
+            Some(batch_id_1.clone()),
+            1,
+            "trace-1".to_string(),
+        );
+        queue.push(PathBuf::from("file.rs"), event1).await;
+
+        // Second event with batch_id_2 for same file - should merge
+        let event2 = TrackedEvent::new(
+            WatchEventKind::Changed,
+            Some(batch_id_2.clone()),
+            2,
+            "trace-2".to_string(),
+        );
+        queue.push(PathBuf::from("file.rs"), event2).await;
+
+        // Both batch_ids should be preserved
+        let (_, popped) = queue.pop().await.unwrap();
+        assert_eq!(popped.batch_ids.len(), 2);
+        assert!(
+            popped
+                .batch_ids
+                .iter()
+                .any(|b| b.as_str() == batch_id_1.as_str())
+        );
+        assert!(
+            popped
+                .batch_ids
+                .iter()
+                .any(|b| b.as_str() == batch_id_2.as_str())
+        );
     }
 
     #[tokio::test]
@@ -422,7 +444,7 @@ mod tests {
         let queue = new_watch_event_queue(16);
 
         queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Modified)
+            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Changed)
             .await;
         let (path, event) = queue.pop().await.unwrap();
 
@@ -432,7 +454,7 @@ mod tests {
         assert_eq!(queue.len().await, 1);
         let (p, e) = queue.pop().await.unwrap();
         assert_eq!(p, path);
-        assert_eq!(e.data, WatchEventKind::Modified);
+        assert_eq!(e.data, WatchEventKind::Changed);
     }
 
     #[tokio::test]
@@ -449,7 +471,7 @@ mod tests {
 
         // Push should notify
         queue
-            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Created)
+            .push_simple(PathBuf::from("file.rs"), WatchEventKind::Changed)
             .await;
 
         // Should receive notification
@@ -461,15 +483,17 @@ mod tests {
     async fn test_tag_event_queue() {
         let queue = new_tag_event_queue(16);
 
+        // Multiple events for same file should deduplicate
         queue
-            .push_simple(PathBuf::from("file.rs"), TagEventKind::Created)
+            .push_simple(PathBuf::from("file.rs"), TagEventKind::Changed)
             .await;
         queue
-            .push_simple(PathBuf::from("file.rs"), TagEventKind::Deleted)
+            .push_simple(PathBuf::from("file.rs"), TagEventKind::Changed)
             .await;
 
+        assert_eq!(queue.len().await, 1);
         let (_, event) = queue.pop().await.unwrap();
-        assert_eq!(event.data, TagEventKind::Deleted);
+        assert_eq!(event.data, TagEventKind::Changed);
     }
 
     #[tokio::test]
@@ -477,15 +501,66 @@ mod tests {
         let queue = new_watch_event_queue(16);
 
         queue
-            .push_simple(PathBuf::from("a.rs"), WatchEventKind::Created)
+            .push_simple(PathBuf::from("a.rs"), WatchEventKind::Changed)
             .await;
         queue
-            .push_simple(PathBuf::from("b.rs"), WatchEventKind::Modified)
+            .push_simple(PathBuf::from("b.rs"), WatchEventKind::Changed)
             .await;
 
         let keys = queue.pending_keys().await;
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&PathBuf::from("a.rs")));
         assert!(keys.contains(&PathBuf::from("b.rs")));
+    }
+
+    #[tokio::test]
+    async fn test_merged_seqs_tracked() {
+        let queue = new_watch_event_queue(16);
+
+        // First event with seq=1
+        let event1 = TrackedEvent::new(WatchEventKind::Changed, None, 1, "trace-1".to_string());
+        queue.push(PathBuf::from("file.rs"), event1).await;
+
+        // Second event with seq=2 for same file - should merge
+        let event2 = TrackedEvent::new(WatchEventKind::Changed, None, 2, "trace-2".to_string());
+        queue.push(PathBuf::from("file.rs"), event2).await;
+
+        // Third event with seq=3 for same file - should merge again
+        let event3 = TrackedEvent::new(WatchEventKind::Changed, None, 3, "trace-3".to_string());
+        queue.push(PathBuf::from("file.rs"), event3).await;
+
+        // Should have only one event with seq=3 and merged_seqs=[1, 2]
+        assert_eq!(queue.len().await, 1);
+        let (_, popped) = queue.pop().await.unwrap();
+        assert_eq!(popped.seq, 3);
+        assert_eq!(popped.merged_seqs.len(), 2);
+        assert!(popped.merged_seqs.contains(&1));
+        assert!(popped.merged_seqs.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn test_merged_seqs_preserves_batch_id() {
+        let queue = new_watch_event_queue(16);
+        let batch_id = BatchId::new();
+
+        // First event with batch_id and seq=1
+        let event1 = TrackedEvent::new(
+            WatchEventKind::Changed,
+            Some(batch_id.clone()),
+            1,
+            "trace-1".to_string(),
+        );
+        queue.push(PathBuf::from("file.rs"), event1).await;
+
+        // Second event without batch_id but seq=2
+        let event2 = TrackedEvent::new(WatchEventKind::Changed, None, 2, "trace-2".to_string());
+        queue.push(PathBuf::from("file.rs"), event2).await;
+
+        // Should preserve batch_id from first event and track seq=1 as merged
+        let (_, popped) = queue.pop().await.unwrap();
+        assert_eq!(popped.seq, 2);
+        assert_eq!(popped.batch_ids.len(), 1);
+        assert_eq!(popped.batch_ids[0].as_str(), batch_id.as_str());
+        assert_eq!(popped.merged_seqs, vec![1]);
     }
 }
