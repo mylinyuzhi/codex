@@ -113,11 +113,11 @@ impl ProviderAdapter for VolcengineArkAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events
-        let (events, _usage) = convert::response_to_events(&response);
+        let (events, usage) = convert::response_to_events(&response);
 
         Ok(GenerateResult {
             events,
-            usage: None, // Usage is included in the Completed event
+            usage,
             response_id: Some(response.id),
         })
     }

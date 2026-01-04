@@ -29,6 +29,7 @@ mod log_sink;
 mod manager;
 pub mod merge;
 mod metadata;
+pub mod plan_fork;
 mod worktree;
 
 pub use command::SpawnCommand;

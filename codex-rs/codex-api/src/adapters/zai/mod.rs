@@ -111,7 +111,7 @@ impl ProviderAdapter for ZaiAdapter {
 
         Ok(GenerateResult {
             events,
-            usage: None, // Usage is included in the Completed event
+            usage: Some(convert::extract_usage(&completion.usage)),
             response_id: completion.id,
         })
     }
