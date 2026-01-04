@@ -136,6 +136,7 @@ mod tests {
             user_query: Some("Implement feature X".to_string()),
             iterations_completed: 5,
             iterations_failed: 0,
+            model_override: None,
             workflow_path: None,
             worktree_path: Some(PathBuf::from(
                 "/home/user/.codex/spawn-tasks/worktrees/task1",

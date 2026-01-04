@@ -47,6 +47,9 @@ pub struct SpawnTaskMetadata {
     /// Number of iterations that failed (continue-on-error).
     #[serde(default)]
     pub iterations_failed: i32,
+    /// Model override used for this task (e.g., "deepseek" or "deepseek/v3").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
 
     // === Workflow-specific fields (future) ===
     /// Workflow file path (Workflow only).
@@ -229,6 +232,7 @@ mod tests {
             user_query: Some("test query".to_string()),
             iterations_completed: 0,
             iterations_failed: 0,
+            model_override: None,
             workflow_path: None,
             worktree_path: None,
             branch_name: None,

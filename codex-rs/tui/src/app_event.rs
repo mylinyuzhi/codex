@@ -195,6 +195,40 @@ pub(crate) enum AppEvent {
 
     /// Toggle ultrathink mode on/off via keyboard shortcut (Tab).
     ToggleUltrathink,
+
+    /// Start a spawn task with the given arguments.
+    StartSpawnTask {
+        args: codex_core::spawn_task::SpawnCommandArgs,
+    },
+
+    /// Result of spawn task creation (success or error message).
+    SpawnTaskResult {
+        message: String,
+    },
+
+    /// Request to list all spawn tasks.
+    SpawnListRequest,
+
+    /// Request to get status of a spawn task.
+    SpawnStatusRequest {
+        task_id: String,
+    },
+
+    /// Request to kill a running spawn task.
+    SpawnKillRequest {
+        task_id: String,
+    },
+
+    /// Request to drop spawn task metadata.
+    SpawnDropRequest {
+        task_id: String,
+    },
+
+    /// Request to merge spawn task branches.
+    SpawnMergeRequest {
+        task_ids: Vec<String>,
+        prompt: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

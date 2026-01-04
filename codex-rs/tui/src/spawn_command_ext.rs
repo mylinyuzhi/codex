@@ -1,21 +1,37 @@
-//! Extension module for /spawn command handling.
+//! Extension module for /spawn command handling in TUI.
 //!
-//! Provides help text and task list formatting for the TUI /spawn command.
-//! Full spawn task management is done via the exec CLI (--iter/--time flags).
+//! Re-exports command parsing from core and provides TUI-specific formatting.
 
 use codex_core::spawn_task::SpawnTaskMetadata;
 use codex_core::spawn_task::SpawnTaskStatus;
 use std::path::Path;
 
+// Re-export from core for TUI usage
+pub use codex_core::spawn_task::parse_spawn_command;
+
 /// Format help message for /spawn command.
 pub fn format_spawn_help() -> String {
     r#"Spawn Task Management
 
-The /spawn command shows the status of background spawn tasks.
+Commands:
+  /spawn [options] --prompt <task>   Start a new spawn task
+  /spawn --list                      List all spawn tasks
+  /spawn --status <task-id>          Show task status
+  /spawn --kill <task-id>            Stop a running task
+  /spawn --drop <task-id>            Delete task metadata
+  /spawn --merge <task-id>...        Merge task branches
 
-To spawn a new task, use the exec CLI with --iter or --time:
-  just exec --iter 5 "implement feature X"
-  just exec --time 1h "fix bugs in the codebase"
+Start Options:
+  --name <id>        Task identifier (default: auto-generated)
+  --model <provider> Model provider name, or provider/model format
+  --iter <n>         Run for n iterations
+  --time <duration>  Run for duration (e.g., 1h, 30m)
+
+Examples:
+  /spawn --iter 5 --prompt implement user authentication
+  /spawn --name auth-task --model DeepSeek --iter 3 --prompt add login
+  /spawn --kill my-task
+  /spawn --merge task-1 task-2 --prompt review and merge
 
 Current Spawn Tasks:"#
         .to_string()
@@ -53,6 +69,58 @@ pub fn format_task_list(tasks: &[SpawnTaskMetadata]) -> String {
         if let Some(ref branch) = task.branch_name {
             output.push_str(&format!("\n      Branch: {branch}"));
         }
+    }
+
+    output
+}
+
+/// Format detailed task status output.
+pub fn format_task_status(task: &SpawnTaskMetadata) -> String {
+    let status_icon = match task.status {
+        SpawnTaskStatus::Running => "▶",
+        SpawnTaskStatus::Completed => "✓",
+        SpawnTaskStatus::Failed => "✗",
+        SpawnTaskStatus::Cancelled => "○",
+    };
+
+    let mut output = format!(
+        "Task: {} {}\nStatus: {}\nType: {}\nIterations: {} completed, {} failed",
+        status_icon,
+        task.task_id,
+        task.status,
+        task.task_type,
+        task.iterations_completed,
+        task.iterations_failed
+    );
+
+    if let Some(ref query) = task.user_query {
+        output.push_str(&format!("\nQuery: {query}"));
+    }
+
+    if let Some(ref model) = task.model_override {
+        output.push_str(&format!("\nModel: {model}"));
+    }
+
+    if let Some(ref branch) = task.branch_name {
+        output.push_str(&format!("\nBranch: {branch}"));
+    }
+
+    if let Some(ref base) = task.base_branch {
+        output.push_str(&format!("\nBase: {base}"));
+    }
+
+    if let Some(ref worktree) = task.worktree_path {
+        output.push_str(&format!("\nWorktree: {}", worktree.display()));
+    }
+
+    if let Some(ref error) = task.error_message {
+        output.push_str(&format!("\nError: {error}"));
+    }
+
+    output.push_str(&format!("\nCreated: {}", task.created_at.format("%Y-%m-%d %H:%M:%S")));
+
+    if let Some(ref completed) = task.completed_at {
+        output.push_str(&format!("\nCompleted: {}", completed.format("%Y-%m-%d %H:%M:%S")));
     }
 
     output
@@ -110,6 +178,7 @@ mod tests {
             user_query: Some("Implement feature X".to_string()),
             iterations_completed: 2,
             iterations_failed: 0,
+            model_override: None,
             workflow_path: None,
             worktree_path: None,
             branch_name: Some("spawn-task1".to_string()),
