@@ -1818,6 +1818,9 @@ impl ChatWidget {
                     self.add_info_message("Rollout path is not available yet.".to_string(), None);
                 }
             }
+            SlashCommand::Spawn => {
+                self.handle_spawn_command();
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;
@@ -2337,6 +2340,28 @@ impl ChatWidget {
             .map(|session| session.command_display.clone())
             .collect();
         self.add_to_history(history_cell::new_unified_exec_sessions_output(sessions));
+    }
+
+    fn handle_spawn_command(&mut self) {
+        use crate::spawn_command_ext::format_spawn_help;
+        use crate::spawn_command_ext::format_task_list;
+        use crate::spawn_command_ext::list_task_metadata_sync;
+
+        // Show help and current task list
+        let mut output = format_spawn_help();
+        output.push_str("\n\n");
+
+        match list_task_metadata_sync(&self.config.codex_home) {
+            Ok(tasks) => {
+                output.push_str(&format_task_list(&tasks));
+            }
+            Err(e) => {
+                output.push_str(&format!("Error listing tasks: {e}"));
+            }
+        }
+
+        self.add_info_message(output, None);
+        self.request_redraw();
     }
 
     fn stop_rate_limit_poller(&mut self) {

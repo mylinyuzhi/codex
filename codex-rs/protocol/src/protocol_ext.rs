@@ -45,6 +45,15 @@ pub enum ExtEventMsg {
 
     /// LLM requests to ask the user questions.
     UserQuestionRequest(UserQuestionRequestEvent),
+
+    /// Spawn task has started.
+    SpawnTaskStarted(SpawnTaskStartedEvent),
+
+    /// Spawn task progress update.
+    SpawnTaskProgress(SpawnTaskProgressEvent),
+
+    /// Spawn task has completed.
+    SpawnTaskComplete(SpawnTaskCompleteEvent),
 }
 
 // ============================================================================
@@ -234,4 +243,65 @@ pub struct QuestionOption {
     pub label: String,
     /// Explanation of what this option means.
     pub description: String,
+}
+
+// ============================================================================
+// Spawn Task Events
+// ============================================================================
+
+/// Event emitted when a spawn task starts.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpawnTaskStartedEvent {
+    /// Unique task identifier.
+    pub task_id: String,
+    /// Task type (agent, workflow, etc.).
+    pub task_type: String,
+    /// Loop condition description.
+    pub condition: String,
+    /// User query or task description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub query: Option<String>,
+    /// Working directory for the task.
+    pub cwd: String,
+    /// Git branch created for the task (if using worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_name: Option<String>,
+}
+
+/// Event emitted for spawn task progress updates.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpawnTaskProgressEvent {
+    /// Unique task identifier.
+    pub task_id: String,
+    /// Current iteration number (1-indexed).
+    pub iteration: i32,
+    /// Number of successful iterations so far.
+    pub iterations_succeeded: i32,
+    /// Number of failed iterations so far.
+    pub iterations_failed: i32,
+    /// Elapsed time in seconds.
+    #[ts(type = "number")]
+    pub elapsed_seconds: i64,
+}
+
+/// Event emitted when a spawn task completes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpawnTaskCompleteEvent {
+    /// Unique task identifier.
+    pub task_id: String,
+    /// Final status (completed, failed, cancelled).
+    pub status: String,
+    /// Total number of successful iterations.
+    pub iterations_succeeded: i32,
+    /// Total number of failed iterations.
+    pub iterations_failed: i32,
+    /// Total elapsed time in seconds.
+    #[ts(type = "number")]
+    pub elapsed_seconds: i64,
+    /// Error message if failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error_message: Option<String>,
 }

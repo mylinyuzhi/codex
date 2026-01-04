@@ -28,6 +28,8 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::loop_driver::LoopCondition;
+use codex_core::loop_driver::LoopPromptBuilder;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -45,6 +47,7 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::Instant;
 use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
@@ -96,7 +99,27 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        iter,
+        time,
     } = cli;
+
+    // Parse loop condition from --iter or --time
+    let loop_condition: Option<LoopCondition> = match (&iter, &time) {
+        (Some(count), None) => Some(LoopCondition::Iters { count: *count }),
+        (None, Some(duration_str)) => match LoopCondition::parse(duration_str) {
+            Ok(cond) => Some(cond),
+            Err(e) => {
+                eprintln!("Invalid --time value: {e}");
+                std::process::exit(1);
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            // This should be caught by clap conflicts_with, but just in case
+            eprintln!("Cannot specify both --iter and --time");
+            std::process::exit(1);
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -433,10 +456,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let task_id = conversation
                 .submit(Op::UserTurn {
                     items,
-                    cwd: default_cwd,
+                    cwd: default_cwd.clone(),
                     approval_policy: default_approval_policy,
                     sandbox_policy: default_sandbox_policy.clone(),
-                    model: default_model,
+                    model: default_model.clone(),
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
@@ -456,6 +479,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+
+    // Loop iteration tracking for --iter/--time modes
+    let loop_start_time = Instant::now();
+    let mut current_iteration: i32 = 0;
+    let mut iterations_succeeded: i32 = 0;
+    let mut iterations_failed: i32 = 0;
+    let original_prompt = prompt_summary.clone();
+
     while let Some(event) = rx.recv().await {
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
@@ -474,7 +505,66 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                conversation.submit(Op::Shutdown).await?;
+                // Check if we're in loop mode and should continue
+                let should_continue = match &loop_condition {
+                    Some(LoopCondition::Iters { count }) => current_iteration + 1 < *count,
+                    Some(LoopCondition::Duration { seconds }) => {
+                        loop_start_time.elapsed().as_secs() < (*seconds as u64)
+                    }
+                    None => false,
+                };
+
+                // Track iteration result
+                if error_seen {
+                    iterations_failed += 1;
+                } else {
+                    iterations_succeeded += 1;
+                }
+                current_iteration += 1;
+
+                if should_continue {
+                    // Build continuation prompt with git context
+                    let continuation_prompt =
+                        LoopPromptBuilder::build(&original_prompt, current_iteration);
+
+                    info!(
+                        iteration = current_iteration,
+                        succeeded = iterations_succeeded,
+                        failed = iterations_failed,
+                        "Starting next iteration"
+                    );
+
+                    // Reset error tracking for new iteration
+                    error_seen = false;
+
+                    // Submit new UserTurn for next iteration
+                    let items = vec![UserInput::Text {
+                        text: continuation_prompt,
+                    }];
+                    conversation
+                        .submit(Op::UserTurn {
+                            items,
+                            cwd: default_cwd.clone(),
+                            approval_policy: default_approval_policy,
+                            sandbox_policy: default_sandbox_policy.clone(),
+                            model: default_model.clone(),
+                            effort: default_effort,
+                            summary: default_summary,
+                            final_output_json_schema: None,
+                        })
+                        .await?;
+                } else {
+                    // No more iterations, proceed with shutdown
+                    if loop_condition.is_some() {
+                        info!(
+                            total_iterations = current_iteration,
+                            succeeded = iterations_succeeded,
+                            failed = iterations_failed,
+                            "Loop complete"
+                        );
+                    }
+                    conversation.submit(Op::Shutdown).await?;
+                }
             }
             CodexStatus::Shutdown => {
                 break;
@@ -482,7 +572,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     }
     event_processor.print_final_output();
-    if error_seen {
+    if error_seen || iterations_failed > 0 {
         std::process::exit(1);
     }
 

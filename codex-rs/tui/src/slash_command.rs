@@ -33,6 +33,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Spawn,
     TestApproval,
 }
 
@@ -60,6 +61,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
+            SlashCommand::Spawn => "spawn background tasks with --iter or --time",
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -89,6 +91,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Ps
+            | SlashCommand::Spawn
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit
