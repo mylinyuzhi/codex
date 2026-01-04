@@ -153,3 +153,9 @@ pub mod plan_mode;
 
 // Background shell module
 pub mod shell_background;
+
+// Loop driver module for iterative execution
+pub mod loop_driver;
+
+// SpawnTask framework for long-running tasks
+pub mod spawn_task;
