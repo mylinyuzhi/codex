@@ -24,12 +24,16 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 pub mod agent;
+pub mod command;
 mod log_sink;
 mod manager;
 pub mod merge;
 mod metadata;
 mod worktree;
 
+pub use command::SpawnCommand;
+pub use command::SpawnCommandArgs;
+pub use command::parse_spawn_command;
 pub use log_sink::LogFileSink;
 pub use manager::SpawnTaskManager;
 pub use merge::ConflictInfo;

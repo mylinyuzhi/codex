@@ -140,9 +140,15 @@ impl ModelsManager {
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
+        // 1. Explicit model override from config.model
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
+        // 2. Provider's model_name as fallback
+        if let Some(model_name) = &config.model_provider.ext.model_name {
+            return model_name.clone();
+        }
+        // 3. OpenAI defaults
         if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }

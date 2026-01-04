@@ -1961,6 +1961,44 @@ impl ChatWidget {
             return;
         }
 
+        // Special-case: "/spawn" commands (start, list, status, kill, drop, merge).
+        if text.trim() == "/spawn" || text.trim().starts_with("/spawn ") {
+            use crate::spawn_command_ext::parse_spawn_command;
+            use codex_core::spawn_task::SpawnCommand;
+            match parse_spawn_command(&text) {
+                Ok(cmd) => match cmd {
+                    SpawnCommand::Start(args) => {
+                        self.app_event_tx.send(AppEvent::StartSpawnTask { args });
+                    }
+                    SpawnCommand::Help => {
+                        // Handled by SlashCommand::Spawn path
+                        self.handle_spawn_command();
+                    }
+                    SpawnCommand::List => {
+                        self.app_event_tx.send(AppEvent::SpawnListRequest);
+                    }
+                    SpawnCommand::Status { task_id } => {
+                        self.app_event_tx.send(AppEvent::SpawnStatusRequest { task_id });
+                    }
+                    SpawnCommand::Kill { task_id } => {
+                        self.app_event_tx.send(AppEvent::SpawnKillRequest { task_id });
+                    }
+                    SpawnCommand::Drop { task_id } => {
+                        self.app_event_tx.send(AppEvent::SpawnDropRequest { task_id });
+                    }
+                    SpawnCommand::Merge { task_ids, prompt } => {
+                        self.app_event_tx
+                            .send(AppEvent::SpawnMergeRequest { task_ids, prompt });
+                    }
+                },
+                Err(e) => {
+                    self.add_info_message(format!("Spawn error: {e}"), None);
+                }
+            }
+            self.request_redraw();
+            return;
+        }
+
         if !text.is_empty() {
             items.push(UserInput::Text { text: text.clone() });
         }
@@ -3355,6 +3393,14 @@ impl ChatWidget {
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
+    }
+
+    /// Submit a text message programmatically (e.g., for merge prompts).
+    pub(crate) fn submit_text_message(&mut self, text: &str) {
+        self.queue_user_message(UserMessage {
+            text: text.to_string(),
+            image_paths: Vec::new(),
+        });
     }
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {

@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::auth::AuthManager;
 use crate::codex::Codex;
@@ -45,6 +46,8 @@ pub struct SpawnAgentParams {
     /// Approval mode for the spawned agent session.
     #[allow(dead_code)]
     pub approval_mode: ApprovalMode,
+    /// Model override in "provider" or "provider/model" format.
+    pub model_override: Option<String>,
 }
 
 /// Context needed to spawn a Codex session.
@@ -59,6 +62,52 @@ pub struct SpawnAgentContext {
     pub config: Config,
     /// Codex home directory.
     pub codex_home: PathBuf,
+}
+
+/// Apply model override from "provider_name" or "provider_name/model" format.
+///
+/// - Looks up provider by `name` field (not by HashMap key)
+/// - If only provider specified: uses provider's ext.model_name
+/// - If provider/model specified: uses explicit model
+/// - Provider's ultrathink_config and model_parameters are inherited automatically
+fn apply_model_override(config: &mut Config, model_str: &str) {
+    let parts: Vec<&str> = model_str.splitn(2, '/').collect();
+    let provider_name = parts[0];
+
+    // Find provider by name (not by HashMap key)
+    let found = config
+        .model_providers
+        .iter()
+        .find(|(_, info)| info.name == provider_name)
+        .map(|(id, info)| (id.clone(), info.clone()));
+
+    if let Some((provider_id, provider_info)) = found {
+        // Switch to new provider
+        config.model_provider_id = provider_id.clone();
+        config.model_provider = provider_info.clone();
+
+        // Determine model name
+        let model_name = if parts.len() > 1 {
+            // Explicit model: "provider/model"
+            Some(parts[1].to_string())
+        } else {
+            // Use provider's model_name from ext
+            provider_info.ext.model_name.clone()
+        };
+
+        if let Some(name) = model_name {
+            config.model = Some(name);
+        }
+
+        info!(
+            provider_name = %provider_name,
+            provider_id = %provider_id,
+            model = ?config.model,
+            "Applied model override for spawn task"
+        );
+    } else {
+        warn!(provider_name = %provider_name, "Model provider not found by name in config");
+    }
 }
 
 /// SpawnAgent - Full Codex agent with loop driver.
@@ -114,6 +163,7 @@ impl SpawnTask for SpawnAgent {
             user_query: Some(self.params.query.clone()),
             iterations_completed: 0,
             iterations_failed: 0,
+            model_override: self.params.model_override.clone(),
             workflow_path: None,
             worktree_path: None,
             branch_name: None,
@@ -151,6 +201,11 @@ impl SpawnTask for SpawnAgent {
             // Build config for spawned agent session
             let mut spawn_config = context.config.clone();
             spawn_config.cwd = cwd.clone();
+
+            // Apply model override if specified
+            if let Some(model_str) = &params.model_override {
+                apply_model_override(&mut spawn_config, model_str);
+            }
 
             // Spawn Codex session
             let CodexSpawnOk { codex, .. } = match Codex::spawn(

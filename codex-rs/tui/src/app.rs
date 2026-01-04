@@ -1139,6 +1139,27 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::StartSpawnTask { args } => {
+                self.handle_start_spawn_task(args);
+            }
+            AppEvent::SpawnTaskResult { message } => {
+                self.chat_widget.add_info_message(message, None);
+            }
+            AppEvent::SpawnListRequest => {
+                self.handle_spawn_list();
+            }
+            AppEvent::SpawnStatusRequest { task_id } => {
+                self.handle_spawn_status(&task_id).await;
+            }
+            AppEvent::SpawnKillRequest { task_id } => {
+                self.handle_spawn_kill(&task_id).await;
+            }
+            AppEvent::SpawnDropRequest { task_id } => {
+                self.handle_spawn_drop(&task_id).await;
+            }
+            AppEvent::SpawnMergeRequest { task_ids, prompt } => {
+                self.handle_spawn_merge(task_ids, prompt).await;
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();
@@ -1234,6 +1255,213 @@ impl App {
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
+    }
+
+    fn handle_start_spawn_task(&mut self, args: codex_core::spawn_task::SpawnCommandArgs) {
+        use codex_core::spawn_task::agent::SpawnAgent;
+        use codex_core::spawn_task::agent::SpawnAgentContext;
+        use codex_core::spawn_task::agent::SpawnAgentParams;
+        use codex_core::subagent::ApprovalMode;
+
+        let task_id = args
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("spawn-{}", chrono::Utc::now().timestamp_millis()));
+
+        let loop_condition = match args.loop_condition {
+            Some(cond) => cond,
+            None => {
+                self.chat_widget
+                    .add_info_message("Spawn error: missing --iter or --time".to_string(), None);
+                return;
+            }
+        };
+
+        let prompt = match args.prompt {
+            Some(p) => p,
+            None => {
+                self.chat_widget
+                    .add_info_message("Spawn error: missing --prompt".to_string(), None);
+                return;
+            }
+        };
+
+        let params = SpawnAgentParams {
+            task_id: task_id.clone(),
+            loop_condition: loop_condition.clone(),
+            query: prompt.clone(),
+            cwd: self.config.cwd.to_path_buf(),
+            custom_loop_prompt: None,
+            approval_mode: ApprovalMode::DontAsk,
+            model_override: args.model.clone(),
+        };
+
+        let context = SpawnAgentContext {
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            skills_manager: self.server.skills_manager(),
+            config: self.config.clone(),
+            codex_home: self.config.codex_home.clone(),
+        };
+
+        let agent = SpawnAgent::new(params, context);
+        let tx = self.app_event_tx.clone();
+
+        // Spawn async task to run the agent
+        tokio::spawn(async move {
+            use codex_core::spawn_task::SpawnTask;
+
+            // Save initial metadata
+            let metadata = agent.metadata();
+            if let Err(e) = codex_core::spawn_task::save_metadata(&metadata.cwd, &metadata).await {
+                tracing::warn!(error = %e, "Failed to save spawn task metadata");
+            }
+
+            // Start the agent
+            let handle = Box::new(agent).spawn();
+            let result = handle.await;
+
+            let message = match result {
+                Ok(task_result) => {
+                    format!(
+                        "Spawn task '{}' completed: {} iterations succeeded, {} failed",
+                        task_result.task_id,
+                        task_result.iterations_completed,
+                        task_result.iterations_failed
+                    )
+                }
+                Err(e) => {
+                    format!("Spawn task failed: {e}")
+                }
+            };
+
+            tx.send(AppEvent::SpawnTaskResult { message });
+        });
+
+        self.chat_widget.add_info_message(
+            format!(
+                "Started spawn task '{}' with {} - {}",
+                task_id,
+                loop_condition.display(),
+                prompt
+            ),
+            None,
+        );
+    }
+
+    fn handle_spawn_list(&mut self) {
+        use crate::spawn_command_ext::format_task_list;
+        use crate::spawn_command_ext::list_task_metadata_sync;
+
+        match list_task_metadata_sync(&self.config.codex_home) {
+            Ok(tasks) => {
+                let output = if tasks.is_empty() {
+                    "No spawn tasks found.".to_string()
+                } else {
+                    format!("Spawn Tasks:{}", format_task_list(&tasks))
+                };
+                self.chat_widget.add_info_message(output, None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to list tasks: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_status(&mut self, task_id: &str) {
+        use crate::spawn_command_ext::format_task_status;
+        use codex_core::spawn_task::load_metadata;
+
+        match load_metadata(&self.config.codex_home, task_id).await {
+            Ok(metadata) => {
+                let output = format_task_status(&metadata);
+                self.chat_widget.add_info_message(output, None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' not found: {e}", task_id), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_kill(&mut self, task_id: &str) {
+        use codex_core::spawn_task::SpawnTaskManager;
+
+        let manager = SpawnTaskManager::new(
+            self.config.codex_home.clone(),
+            self.config.cwd.to_path_buf(),
+        );
+
+        match manager.kill(task_id).await {
+            Ok(()) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' cancelled.", task_id), None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to kill task: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_drop(&mut self, task_id: &str) {
+        use codex_core::spawn_task::SpawnTaskManager;
+
+        let manager = SpawnTaskManager::new(
+            self.config.codex_home.clone(),
+            self.config.cwd.to_path_buf(),
+        );
+
+        match manager.drop(task_id).await {
+            Ok(()) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' dropped.", task_id), None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to drop task: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_merge(&mut self, task_ids: Vec<String>, prompt: Option<String>) {
+        use codex_core::spawn_task::build_merge_prompt;
+        use codex_core::spawn_task::load_metadata;
+        use codex_core::spawn_task::MergeRequest;
+
+        // Load metadata for all tasks
+        let mut tasks_metadata = Vec::new();
+        for task_id in &task_ids {
+            match load_metadata(&self.config.codex_home, task_id).await {
+                Ok(metadata) => tasks_metadata.push(metadata),
+                Err(e) => {
+                    self.chat_widget.add_info_message(
+                        format!("Task '{}' not found: {e}", task_id),
+                        None,
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Build merge request (prompt -> query for MergeRequest)
+        let request = MergeRequest {
+            task_ids: task_ids.clone(),
+            query: prompt,
+        };
+
+        // Build merge prompt
+        let prompt = build_merge_prompt(&request, &tasks_metadata, None);
+
+        // Send as user message to the agent
+        self.chat_widget.add_info_message(
+            format!("Merging {} task(s): {}", task_ids.len(), task_ids.join(", ")),
+            None,
+        );
+
+        // Submit merge prompt to agent via chat widget
+        self.chat_widget.submit_text_message(&prompt);
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
