@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+pub mod sdk_v2;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -48,7 +49,6 @@ use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
@@ -68,6 +68,11 @@ enum InitialOperation {
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    // Check SDK mode FIRST, before any other initialization
+    if sdk_v2::is_sdk_mode() {
+        return sdk_v2::run_sdk_mode(cli).await;
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -101,19 +106,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -218,6 +210,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
 
+    // Build fmt layer with config-driven settings (timezone, log levels, etc.)
+    let fmt_layer = codex_utils_common::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(stderr_with_ansi)
+            .with_writer(std::io::stderr),
+        &config.ext.logging,
+        "error"
+    );
+
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");
         std::process::exit(1);
@@ -275,6 +276,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_sandbox_policy = config.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
+
+    // Initialize retrieval service early (background task)
+    // This starts indexing immediately when cwd is known, rather than waiting
+    // for the first code_search or repomap tool invocation.
+    codex_core::spawn_retrieval_init(
+        &default_cwd,
+        config
+            .features
+            .enabled(codex_core::features::Feature::Retrieval),
+    );
 
     if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");

@@ -38,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::thinking::ThinkingState;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -293,6 +294,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) current_model: String,
+    pub(crate) current_output_style: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -321,6 +323,9 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Session-level thinking state for ultrathink toggle.
+    pub(crate) thinking_state: ThinkingState,
 }
 
 impl App {
@@ -424,6 +429,17 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Initialize retrieval service early (background task)
+        // This starts indexing immediately when cwd is known, rather than waiting
+        // for the first code_search or repomap tool invocation.
+        codex_core::spawn_retrieval_init(
+            &config.cwd,
+            config
+                .features
+                .enabled(codex_core::features::Feature::Retrieval),
+        );
+
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -434,6 +450,7 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -447,6 +464,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -802,6 +820,40 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
+            AppEvent::SetOutputStyle { style_name } => {
+                self.current_output_style = style_name.clone();
+                self.chat_widget.set_output_style(&style_name);
+                self.chat_widget
+                    .add_info_message(format!("Output style set to: {style_name}"), None);
+            }
+            AppEvent::TogglePlanMode => {
+                if self.chat_widget.is_plan_mode() {
+                    // Exit plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: false,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Exiting plan mode...".to_string(), None);
+                } else if self.chat_widget.conversation_id().is_some() {
+                    // Enter plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: true,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Entering plan mode...".to_string(), None);
+                }
+            }
+            AppEvent::ToggleUltrathink => {
+                let new_state = self.thinking_state.toggle();
+                let msg = if new_state {
+                    "Ultrathink: ON"
+                } else {
+                    "Ultrathink: OFF"
+                };
+                self.chat_widget.add_info_message(msg.to_string(), None);
+            }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
@@ -1122,6 +1174,36 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                     ));
                 }
+                ApprovalRequest::Plan {
+                    plan_content,
+                    plan_file_path,
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_plan_overlay_paragraph(
+                        &plan_content,
+                        &plan_file_path,
+                    );
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "P L A N".to_string(),
+                    ));
+                }
+                ApprovalRequest::EnterPlanMode => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_enter_plan_mode_paragraph();
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E N T E R   P L A N   M O D E".to_string(),
+                    ));
+                }
+                ApprovalRequest::UserQuestion { questions, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_user_question_paragraph(&questions);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "U S E R   Q U E S T I O N".to_string(),
+                    ));
+                }
             },
         }
         Ok(true)
@@ -1364,6 +1446,7 @@ mod tests {
             auth_manager,
             config,
             current_model,
+            current_output_style: String::from("default"),
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -1377,6 +1460,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         }
     }
 
@@ -1404,6 +1488,7 @@ mod tests {
                 auth_manager,
                 config,
                 current_model,
+                current_output_style: String::from("default"),
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
@@ -1417,6 +1502,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                thinking_state: ThinkingState::default(),
             },
             rx,
             op_rx,

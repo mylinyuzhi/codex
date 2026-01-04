@@ -184,6 +184,17 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+
+    /// Set the output style for Claude responses.
+    SetOutputStyle {
+        style_name: String,
+    },
+
+    /// Toggle plan mode on/off via keyboard shortcut (Shift+Tab).
+    TogglePlanMode,
+
+    /// Toggle ultrathink mode on/off via keyboard shortcut (Tab).
+    ToggleUltrathink,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
