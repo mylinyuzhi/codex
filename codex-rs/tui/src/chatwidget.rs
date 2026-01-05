@@ -1978,13 +1978,16 @@ impl ChatWidget {
                         self.app_event_tx.send(AppEvent::SpawnListRequest);
                     }
                     SpawnCommand::Status { task_id } => {
-                        self.app_event_tx.send(AppEvent::SpawnStatusRequest { task_id });
+                        self.app_event_tx
+                            .send(AppEvent::SpawnStatusRequest { task_id });
                     }
                     SpawnCommand::Kill { task_id } => {
-                        self.app_event_tx.send(AppEvent::SpawnKillRequest { task_id });
+                        self.app_event_tx
+                            .send(AppEvent::SpawnKillRequest { task_id });
                     }
                     SpawnCommand::Drop { task_id } => {
-                        self.app_event_tx.send(AppEvent::SpawnDropRequest { task_id });
+                        self.app_event_tx
+                            .send(AppEvent::SpawnDropRequest { task_id });
                     }
                     SpawnCommand::Merge { task_ids, prompt } => {
                         self.app_event_tx

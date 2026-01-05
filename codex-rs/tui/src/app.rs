@@ -1261,7 +1261,9 @@ impl App {
         use codex_core::spawn_task::agent::SpawnAgent;
         use codex_core::spawn_task::agent::SpawnAgentContext;
         use codex_core::spawn_task::agent::SpawnAgentParams;
+        use codex_core::spawn_task::plan_fork::read_plan_content;
         use codex_core::subagent::ApprovalMode;
+        use codex_core::subagent::get_or_create_stores;
 
         let task_id = args
             .name
@@ -1286,14 +1288,50 @@ impl App {
             }
         };
 
+        // Read parent plan content if:
+        // 1. --detach is NOT set
+        // 2. Parent has a plan file that exists and is non-empty
+        let forked_plan_content = if !args.detach {
+            self.chat_widget.conversation_id().and_then(|conv_id| {
+                let stores = get_or_create_stores(conv_id);
+                match stores.get_plan_file_path() {
+                    Some(plan_path) => {
+                        let content = read_plan_content(&plan_path);
+                        if let Some(ref c) = content {
+                            tracing::info!(
+                                task_id = %task_id,
+                                content_len = c.len(),
+                                "Forking parent plan to spawn task"
+                            );
+                        } else {
+                            tracing::debug!(
+                                task_id = %task_id,
+                                path = %plan_path.display(),
+                                "Parent plan file empty or unreadable, skipping fork"
+                            );
+                        }
+                        content
+                    }
+                    None => {
+                        tracing::debug!(task_id = %task_id, "No parent plan file, skipping fork");
+                        None
+                    }
+                }
+            })
+        } else {
+            tracing::debug!(task_id = %task_id, "Plan fork disabled (--detach)");
+            None
+        };
+
         let params = SpawnAgentParams {
             task_id: task_id.clone(),
             loop_condition: loop_condition.clone(),
-            query: prompt.clone(),
+            prompt: prompt.clone(),
             cwd: self.config.cwd.to_path_buf(),
             custom_loop_prompt: None,
             approval_mode: ApprovalMode::DontAsk,
             model_override: args.model.clone(),
+            forked_plan_content,
         };
 
         let context = SpawnAgentContext {
@@ -1426,9 +1464,9 @@ impl App {
     }
 
     async fn handle_spawn_merge(&mut self, task_ids: Vec<String>, prompt: Option<String>) {
+        use codex_core::spawn_task::MergeRequest;
         use codex_core::spawn_task::build_merge_prompt;
         use codex_core::spawn_task::load_metadata;
-        use codex_core::spawn_task::MergeRequest;
 
         // Load metadata for all tasks
         let mut tasks_metadata = Vec::new();
@@ -1436,10 +1474,8 @@ impl App {
             match load_metadata(&self.config.codex_home, task_id).await {
                 Ok(metadata) => tasks_metadata.push(metadata),
                 Err(e) => {
-                    self.chat_widget.add_info_message(
-                        format!("Task '{}' not found: {e}", task_id),
-                        None,
-                    );
+                    self.chat_widget
+                        .add_info_message(format!("Task '{}' not found: {e}", task_id), None);
                     return;
                 }
             }
@@ -1456,7 +1492,11 @@ impl App {
 
         // Send as user message to the agent
         self.chat_widget.add_info_message(
-            format!("Merging {} task(s): {}", task_ids.len(), task_ids.join(", ")),
+            format!(
+                "Merging {} task(s): {}",
+                task_ids.len(),
+                task_ids.join(", ")
+            ),
             None,
         );
 

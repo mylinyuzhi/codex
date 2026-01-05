@@ -117,10 +117,16 @@ pub fn format_task_status(task: &SpawnTaskMetadata) -> String {
         output.push_str(&format!("\nError: {error}"));
     }
 
-    output.push_str(&format!("\nCreated: {}", task.created_at.format("%Y-%m-%d %H:%M:%S")));
+    output.push_str(&format!(
+        "\nCreated: {}",
+        task.created_at.format("%Y-%m-%d %H:%M:%S")
+    ));
 
     if let Some(ref completed) = task.completed_at {
-        output.push_str(&format!("\nCompleted: {}", completed.format("%Y-%m-%d %H:%M:%S")));
+        output.push_str(&format!(
+            "\nCompleted: {}",
+            completed.format("%Y-%m-%d %H:%M:%S")
+        ));
     }
 
     output

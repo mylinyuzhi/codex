@@ -35,7 +35,6 @@ pub fn adapter_config(cfg: &TestConfig) -> AdapterConfig {
 /// Usage:
 /// ```ignore
 /// #[tokio::test]
-/// #[ignore]
 /// async fn test_genai_text_generation() -> anyhow::Result<()> {
 ///     let cfg = require_provider!("genai");
 ///     // Test code...

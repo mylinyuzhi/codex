@@ -90,9 +90,28 @@ The same setting can be persisted in `~/.codex/config.toml` via the top-level `s
 
 ## Code Organization
 
-This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
+This folder is a Cargo workspace with 59+ crates. Key subsystems:
 
-- [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this to be a library crate that is generally useful for building other Rust/native applications that use Codex.
-- [`exec/`](./exec) "headless" CLI for use in automation.
-- [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
-- [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+**Core (`core/`):**
+- Business logic, conversation, tools, adapters
+- Key modules: subagent, system_reminder, compact_v2, thinking, plan_mode, shell_background
+
+**CLI & UI:**
+- [`cli/`](./cli) - CLI multitool (entry point)
+- [`tui/`](./tui) - Fullscreen TUI ([Ratatui](https://ratatui.rs/))
+- [`tui2/`](./tui2) - Next-gen TUI with advanced features
+- [`exec/`](./exec) - Headless/automation mode
+
+**Multi-Provider API:**
+- [`codex-api/`](./codex-api) - Unified LLM API (Anthropic, Gemini, OpenAI, etc.)
+- [`provider-sdks/`](./provider-sdks) - Provider-specific SDKs
+
+**Code Intelligence:**
+- [`retrieval/`](./retrieval) - Code search (BM25 + vector + AST)
+- [`lsp/`](./lsp) - AI-friendly LSP client
+
+**Infrastructure:**
+- [`mcp-server/`](./mcp-server) - MCP server
+- [`cloud-tasks/`](./cloud-tasks) - Task scheduling
+
+See [`CLAUDE.md`](../CLAUDE.md) for development guide.

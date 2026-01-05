@@ -37,8 +37,8 @@ pub struct SpawnAgentParams {
     pub task_id: String,
     /// Loop condition.
     pub loop_condition: LoopCondition,
-    /// User query.
-    pub query: String,
+    /// User prompt (task description).
+    pub prompt: String,
     /// Working directory.
     pub cwd: PathBuf,
     /// Custom loop prompt (optional).
@@ -48,6 +48,8 @@ pub struct SpawnAgentParams {
     pub approval_mode: ApprovalMode,
     /// Model override in "provider" or "provider/model" format.
     pub model_override: Option<String>,
+    /// Forked plan content from parent agent (snapshot).
+    pub forked_plan_content: Option<String>,
 }
 
 /// Context needed to spawn a Codex session.
@@ -160,7 +162,7 @@ impl SpawnTask for SpawnAgent {
             cwd: self.cwd.clone(),
             error_message: None,
             loop_condition: Some(self.params.loop_condition.clone()),
-            user_query: Some(self.params.query.clone()),
+            user_query: Some(self.params.prompt.clone()),
             iterations_completed: 0,
             iterations_failed: 0,
             model_override: self.params.model_override.clone(),
@@ -254,9 +256,28 @@ impl SpawnTask for SpawnAgent {
                 });
             }
 
+            // Prepare prompt with forked plan context if available
+            let enhanced_prompt = if let Some(plan_content) = &params.forked_plan_content {
+                info!(
+                    task_id = %params.task_id,
+                    plan_content_len = plan_content.len(),
+                    "Injecting forked plan context into prompt"
+                );
+                format!(
+                    "<forked_plan_context>\n\
+                    The following is the plan from the parent agent. Use it as context:\n\n\
+                    {}\n\
+                    </forked_plan_context>\n\n\
+                    {}",
+                    plan_content, params.prompt
+                )
+            } else {
+                params.prompt.clone()
+            };
+
             // Run the loop with actual Codex integration
             let result = driver
-                .run_with_loop(&codex, &params.query, sink.as_ref())
+                .run_with_loop(&codex, &enhanced_prompt, sink.as_ref())
                 .await;
 
             // Determine final status

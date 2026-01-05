@@ -293,7 +293,7 @@ pub fn completion_to_events(completion: &Completion) -> Vec<ResponseEvent> {
 }
 
 /// Extract token usage from Z.AI CompletionUsage.
-fn extract_usage(usage: &CompletionUsage) -> TokenUsage {
+pub fn extract_usage(usage: &CompletionUsage) -> TokenUsage {
     let reasoning_tokens = usage
         .completion_tokens_details
         .as_ref()

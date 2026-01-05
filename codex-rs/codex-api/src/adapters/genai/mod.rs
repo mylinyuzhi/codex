@@ -89,7 +89,7 @@ impl ProviderAdapter for GeminiAdapter {
 
         Ok(GenerateResult {
             events,
-            usage: None, // Usage is now included in the Completed event
+            usage: convert::extract_usage(&response),
             response_id: Some(response_id),
         })
     }
@@ -116,7 +116,19 @@ fn build_generation_config(prompt: &Prompt, config: &AdapterConfig) -> GenerateC
         let function_declarations: Vec<FunctionDeclaration> = prompt
             .tools
             .iter()
-            .filter_map(|tool| convert::tool_json_to_declaration(tool))
+            .filter_map(|tool| {
+                let result = convert::tool_json_to_declaration(tool);
+                if result.is_none() {
+                    let tool_type = tool.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+                    let tool_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("unnamed");
+                    tracing::warn!(
+                        tool_type,
+                        tool_name,
+                        "Filtering out tool for Genai adapter (unsupported type or conversion failed)"
+                    );
+                }
+                result
+            })
             .collect();
 
         if !function_declarations.is_empty() {

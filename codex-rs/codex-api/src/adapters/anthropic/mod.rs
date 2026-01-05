@@ -108,11 +108,11 @@ impl ProviderAdapter for AnthropicAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events
-        let (events, _usage) = convert::message_to_events(&message);
+        let (events, usage) = convert::message_to_events(&message);
 
         Ok(GenerateResult {
             events,
-            usage: None, // Usage is included in the Completed event
+            usage,
             response_id: Some(message.id),
         })
     }

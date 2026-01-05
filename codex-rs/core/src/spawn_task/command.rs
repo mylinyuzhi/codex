@@ -38,6 +38,8 @@ pub struct SpawnCommandArgs {
     pub loop_condition: Option<LoopCondition>,
     /// Task prompt (everything after --prompt).
     pub prompt: Option<String>,
+    /// Skip inheriting parent's plan context (run standalone).
+    pub detach: bool,
 }
 
 /// Parse spawn command.
@@ -188,6 +190,9 @@ fn parse_start_command(tokens: &[&str]) -> Result<SpawnCommandArgs, String> {
                 args.prompt = Some(prompt);
                 break; // --prompt consumes the rest
             }
+            "--detach" => {
+                args.detach = true;
+            }
             other => {
                 return Err(format!("Unknown option: {other}"));
             }
@@ -283,8 +288,7 @@ mod tests {
 
     #[test]
     fn parse_spawn_merge_with_prompt() {
-        let result =
-            parse_spawn_command("/spawn --merge task-1 --prompt merge with care").unwrap();
+        let result = parse_spawn_command("/spawn --merge task-1 --prompt merge with care").unwrap();
         match result {
             SpawnCommand::Merge { task_ids, prompt } => {
                 assert_eq!(task_ids, vec!["task-1"]);
@@ -298,10 +302,7 @@ mod tests {
     fn parse_spawn_with_iter() {
         let result = parse_spawn_command("/spawn --iter 5 --prompt implement feature").unwrap();
         let args = expect_start(result);
-        assert_eq!(
-            args.loop_condition,
-            Some(LoopCondition::Iters { count: 5 })
-        );
+        assert_eq!(args.loop_condition, Some(LoopCondition::Iters { count: 5 }));
         assert_eq!(args.prompt, Some("implement feature".to_string()));
         assert!(args.name.is_none());
         assert!(args.model.is_none());
@@ -316,10 +317,7 @@ mod tests {
         let args = expect_start(result);
         assert_eq!(args.name, Some("my-task".to_string()));
         assert_eq!(args.model, Some("DeepSeek".to_string()));
-        assert_eq!(
-            args.loop_condition,
-            Some(LoopCondition::Iters { count: 3 })
-        );
+        assert_eq!(args.loop_condition, Some(LoopCondition::Iters { count: 3 }));
         assert_eq!(args.prompt, Some("fix all bugs".to_string()));
     }
 
@@ -362,10 +360,7 @@ mod tests {
     fn parse_without_slash_spawn_prefix() {
         let result = parse_spawn_command("--iter 3 --prompt test task").unwrap();
         let args = expect_start(result);
-        assert_eq!(
-            args.loop_condition,
-            Some(LoopCondition::Iters { count: 3 })
-        );
+        assert_eq!(args.loop_condition, Some(LoopCondition::Iters { count: 3 }));
         assert_eq!(args.prompt, Some("test task".to_string()));
     }
 
@@ -381,5 +376,36 @@ mod tests {
         let result = parse_spawn_command("/spawn --merge");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("task ID"));
+    }
+
+    #[test]
+    fn parse_spawn_with_detach() {
+        let result =
+            parse_spawn_command("/spawn --detach --iter 3 --prompt implement feature").unwrap();
+        let args = expect_start(result);
+        assert!(args.detach);
+        assert_eq!(args.loop_condition, Some(LoopCondition::Iters { count: 3 }));
+        assert_eq!(args.prompt, Some("implement feature".to_string()));
+    }
+
+    #[test]
+    fn parse_spawn_without_detach() {
+        let result = parse_spawn_command("/spawn --iter 3 --prompt test task").unwrap();
+        let args = expect_start(result);
+        assert!(!args.detach);
+    }
+
+    #[test]
+    fn parse_spawn_detach_with_all_options() {
+        let result = parse_spawn_command(
+            "/spawn --name my-task --model DeepSeek --detach --iter 5 --prompt do work",
+        )
+        .unwrap();
+        let args = expect_start(result);
+        assert_eq!(args.name, Some("my-task".to_string()));
+        assert_eq!(args.model, Some("DeepSeek".to_string()));
+        assert!(args.detach);
+        assert_eq!(args.loop_condition, Some(LoopCondition::Iters { count: 5 }));
+        assert_eq!(args.prompt, Some("do work".to_string()));
     }
 }
