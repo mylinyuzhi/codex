@@ -3,7 +3,7 @@
 //! # Running Tests
 //!
 //! ```bash
-//! cargo test -p codex-api --ignored live::zai -- --test-threads=1
+//! cargo test -p codex-api --test live zai -- --test-threads=1
 //! ```
 
 use anyhow::Result;
@@ -20,7 +20,6 @@ use crate::common::{self};
 use crate::require_provider;
 
 #[tokio::test]
-#[ignore]
 async fn test_text_generation() -> Result<()> {
     let cfg = require_provider!("zai");
     let adapter = common::get_adapter("zai").expect("zai adapter not found");
@@ -39,7 +38,6 @@ async fn test_text_generation() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_tool_calling() -> Result<()> {
     let cfg = require_provider!("zai");
     let adapter = common::get_adapter("zai").expect("zai adapter not found");
@@ -59,7 +57,6 @@ async fn test_tool_calling() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_tool_call_complete_flow() -> Result<()> {
     let cfg = require_provider!("zai");
     let adapter = common::get_adapter("zai").expect("zai adapter not found");

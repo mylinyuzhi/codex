@@ -3,7 +3,7 @@
 //! # Running Tests
 //!
 //! ```bash
-//! cargo test -p codex-api --ignored live::openai -- --test-threads=1
+//! cargo test -p codex-api --test live openai -- --test-threads=1
 //! ```
 
 use anyhow::Result;
@@ -20,7 +20,6 @@ use crate::common::{self};
 use crate::require_provider;
 
 #[tokio::test]
-#[ignore]
 async fn test_text_generation() -> Result<()> {
     let cfg = require_provider!("openai");
 
@@ -47,7 +46,6 @@ async fn test_text_generation() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_tool_calling() -> Result<()> {
     let cfg = require_provider!("openai");
 
@@ -73,7 +71,6 @@ async fn test_tool_calling() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_image_understanding() -> Result<()> {
     let cfg = require_provider!("openai");
 

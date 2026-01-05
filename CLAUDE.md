@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-**Codex** - OpenAI's coding agent CLI. Rust workspace with 42+ crates in `codex-rs/`.
+**Codex** - OpenAI's coding agent CLI. Rust workspace with 59+ crates in `codex-rs/`.
 
 ```
 codex/
 ├── codex-rs/      → Main Rust workspace (ALL development here)
+├── sdk2/          → Python Agent SDK (see sdk2/CLAUDE.md)
 ├── docs/          → User documentation
 └── AGENTS.md      → Rust/codex-rs specific rules (READ THIS)
 ```
@@ -122,7 +123,7 @@ core/src/tools/spec.rs           # Minimal integration call (1-2 lines)
 
 ## Architecture Quick Reference
 
-### Core Crates (42+ total)
+### Core Crates (59+ total)
 
 ```
 codex-rs/
@@ -130,27 +131,65 @@ codex-rs/
 ├─ protocol/       → Message types, shared structs (anyhow)
 ├─ cli/            → Binary entry, arg parsing (CodexErr)
 ├─ tui/            → Ratatui interface (CodexErr, see tui/styles.md)
+├─ tui2/           → Next-gen TUI with advanced features
 ├─ exec/           → Headless mode (CodexErr)
 ├─ app-server/     → HTTP server for IDE (CodexErr)
 ├─ mcp-server/     → MCP server (anyhow)
 ├─ utils/          → git, cache, pty, tokenizer (anyhow)
-└─ common/         → Config, model presets (anyhow)
+├─ common/         → Config, model presets (anyhow)
+├─ codex-api/      → Multi-provider LLM API (Anthropic, Gemini, OpenAI, etc.)
+├─ retrieval/      → Code search (BM25 + vector + AST)
+├─ lsp/            → AI-friendly LSP client
+├─ sdk-protocol/   → Cross-language SDK types
+├─ cloud-tasks/    → Task scheduling and execution
+└─ provider-sdks/  → Anthropic, Google GenAI, Volcengine, Z.AI
 ```
+
+### Core Agent Modules (in core/src/)
+
+| Module | Purpose | Key Types |
+|--------|---------|-----------|
+| `subagent/` | Child agent spawning (Task tool) | `AgentDefinition`, `TaskArgs`, `BackgroundTask` |
+| `system_reminder/` | Contextual XML injection | `SystemReminderOrchestrator`, `AttachmentGenerator` |
+| `compact_v2/` | Two-tier compaction (micro + full) | `CompactResult`, `CompactConfig` |
+| `thinking/` | Extended thinking/ultrathink | `ThinkingState`, `EffortResult` |
+| `plan_mode/` | Structured planning workflow | `PlanModeState`, slug generation |
+| `shell_background/` | Background shell execution | `BackgroundShellStore`, `ShellStatus` |
+| `spawn_task/` | Spawn task framework | `SpawnTask` trait, `SpawnTaskManager` |
+| `loop_driver/` | Iterative execution | `LoopDriver`, `LoopCondition` |
 
 ### Key Files for Navigation
 
 ```
+# Core
 core/src/error.rs                  → CodexErr definition
 core/src/codex_conversation.rs     → Main conversation flow
 core/src/tools/spec.rs             → Tool registration
 core/src/config/mod.rs             → Config schema
 protocol/src/protocol.rs           → SQ/EQ message types
-tui/styles.md                      → TUI styling guide
+
+# Adapters
 core/src/adapters/mod.rs           → ProviderAdapter trait, AdapterContext
 core/src/adapters/registry.rs      → Global adapter registry
 core/src/adapters/http.rs          → HTTP transport with streaming
-core/src/adapters/gpt_openapi/     → Built-in adapters (GptAdapter, GeminiAdapter)
 core/src/client_ext.rs             → Adapter integration entry point
+
+# Core Agent Modules
+core/src/subagent/mod.rs           → Subagent orchestrator
+core/src/system_reminder/mod.rs    → System reminder injection
+core/src/compact_v2/mod.rs         → Two-tier compaction
+core/src/thinking/                 → Extended thinking
+core/src/plan_mode/mod.rs          → Plan mode workflow
+core/src/shell_background/         → Background shell
+core/src/spawn_task/mod.rs         → Spawn task framework
+core/src/loop_driver/mod.rs        → Loop driver
+
+# New Crates
+codex-api/src/lib.rs               → Multi-provider API
+retrieval/src/lib.rs               → Code retrieval
+sdk-protocol/src/lib.rs            → SDK protocol types
+provider-sdks/*/                   → Provider SDKs
+tui/styles.md                      → TUI styling guide
 ```
 
 ## Development Workflow
@@ -306,6 +345,50 @@ trait ProviderAdapter: Send + Sync + Debug {
 - `insufficient_quota` → `CodexErr::QuotaExceeded`
 - `previous_response_not_found` → `CodexErr::PreviousResponseNotFound`
 
+## Multi-Provider API (codex-api)
+
+Unified LLM API abstraction supporting multiple providers.
+
+**Supported Providers:** Anthropic, Google Gemini, OpenAI, Volcengine Ark, Z.AI
+
+**Key Files:**
+- `codex-api/src/lib.rs` → Main API
+- `codex-api/src/adapters/` → Provider adapters
+- `codex-api/src/interceptors/` → Request interceptors
+
+**Architecture:** Adapter pattern with interceptors for provider-specific transformations.
+
+## Code Retrieval System (retrieval)
+
+Intelligent code search with multiple search backends.
+
+**Features:**
+- BM25 full-text search
+- Vector semantic search (fastembed)
+- AST-aware chunking (Go, Rust, Python, Java)
+- LanceDB vector storage + SQLite metadata
+
+**Key Files:**
+- `retrieval/src/lib.rs` → Main entry
+- `retrieval/src/indexer/` → Indexing pipeline
+- `retrieval/src/search/` → Search engines
+
+## Spawn Task Framework
+
+Long-running agent task execution with persistence.
+
+**Components:**
+- `SpawnTask` trait for task types (Agent, future Workflow)
+- `LoopDriver` for iterative execution
+- Git worktree support for isolation
+- Plan fork capability
+- Task persistence (`~/.codex/spawn-tasks/`)
+
+**Key Files:**
+- `core/src/spawn_task/mod.rs` → Framework traits
+- `core/src/spawn_task/manager.rs` → Task lifecycle
+- `core/src/loop_driver/` → Iteration control
+
 ## Testing Patterns
 
 ### Integration Tests (core)
@@ -375,7 +458,7 @@ cargo build before commit
 ## Quality Check Levels
 
 1. **Iteration:** `cargo check -p <crate>` - fast feedback
-2. **Pre-commit:** `cargo build` - **MANDATORY** (catches all 42+ crates)
+2. **Pre-commit:** `cargo build` - **MANDATORY** (catches all 59+ crates)
 3. **Core changes:** `cargo test --all-features` - ask user first
 
 ## Documentation

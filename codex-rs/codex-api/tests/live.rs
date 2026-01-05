@@ -7,18 +7,18 @@
 //!
 //! ```bash
 //! # Run all integration tests (all configured providers)
-//! cargo test -p codex-api --test live --ignored -- --test-threads=1
+//! cargo test -p codex-api --test live -- --test-threads=1
 //!
 //! # Run tests for a specific provider
-//! cargo test -p codex-api --test live --ignored genai -- --test-threads=1
-//! cargo test -p codex-api --test live --ignored anthropic -- --test-threads=1
-//! cargo test -p codex-api --test live --ignored openai -- --test-threads=1
-//! cargo test -p codex-api --test live --ignored volc_ark -- --test-threads=1
-//! cargo test -p codex-api --test live --ignored zai -- --test-threads=1
+//! cargo test -p codex-api --test live genai -- --test-threads=1
+//! cargo test -p codex-api --test live anthropic -- --test-threads=1
+//! cargo test -p codex-api --test live openai -- --test-threads=1
+//! cargo test -p codex-api --test live volc_ark -- --test-threads=1
+//! cargo test -p codex-api --test live zai -- --test-threads=1
 //!
 //! # Run a specific test category within a provider
-//! cargo test -p codex-api --test live --ignored genai::test_tool -- --test-threads=1
-//! cargo test -p codex-api --test live --ignored anthropic::test_text -- --test-threads=1
+//! cargo test -p codex-api --test live genai::test_tool -- --test-threads=1
+//! cargo test -p codex-api --test live anthropic::test_text -- --test-threads=1
 //! ```
 //!
 //! # Configuration

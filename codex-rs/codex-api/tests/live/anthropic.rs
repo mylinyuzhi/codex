@@ -3,7 +3,7 @@
 //! # Running Tests
 //!
 //! ```bash
-//! cargo test -p codex-api --ignored live::anthropic -- --test-threads=1
+//! cargo test -p codex-api --test live anthropic -- --test-threads=1
 //! ```
 
 use anyhow::Result;
@@ -25,7 +25,6 @@ use crate::common::{self};
 use crate::require_provider;
 
 #[tokio::test]
-#[ignore]
 async fn test_text_generation() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -44,7 +43,6 @@ async fn test_text_generation() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_tool_calling() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -64,7 +62,6 @@ async fn test_tool_calling() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_image_understanding() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -86,7 +83,6 @@ async fn test_image_understanding() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_reasoning_mode() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -113,7 +109,6 @@ async fn test_reasoning_mode() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_token_usage() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -131,7 +126,6 @@ async fn test_token_usage() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_multi_turn_conversation() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
@@ -155,7 +149,6 @@ async fn test_multi_turn_conversation() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_tool_call_complete_flow() -> Result<()> {
     let cfg = require_provider!("anthropic");
     let adapter = common::get_adapter("anthropic").expect("anthropic adapter not found");
