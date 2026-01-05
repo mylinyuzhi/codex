@@ -302,8 +302,8 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
 pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEvent>, String) {
     let mut events = Vec::new();
 
-    // Generate a response_id for this response (Gemini doesn't provide one)
-    let response_id = generate_uuid();
+    // Use server-provided response_id if available, otherwise generate one
+    let response_id = response.response_id.clone().unwrap_or_else(generate_uuid);
 
     // Get parts from first candidate
     let Some(parts) = response.parts() else {

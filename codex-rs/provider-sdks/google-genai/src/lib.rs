@@ -147,4 +147,5 @@ pub use types::GenerateContentResponse;
 pub use types::Part;
 pub use types::RequestExtensions;
 pub use types::Schema;
+pub use types::SdkHttpResponse;
 pub use types::Tool;
