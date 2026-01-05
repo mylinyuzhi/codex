@@ -1652,10 +1652,7 @@ impl Candidate {
             .as_ref()
             .and_then(|c| c.parts.as_ref())
             .map(|parts| {
-                let summaries: Vec<String> = parts
-                    .iter()
-                    .map(|p| Self::part_summary(p))
-                    .collect();
+                let summaries: Vec<String> = parts.iter().map(|p| Self::part_summary(p)).collect();
                 summaries.join(", ")
             })
             .unwrap_or_else(|| "no parts".to_string());
@@ -1789,8 +1786,7 @@ impl GenerateContentResponse {
     pub fn parts(&self) -> Option<&Vec<Part>> {
         let candidates = self.candidates.as_ref()?;
         if candidates.len() > 1 {
-            let all_summaries: Vec<String> =
-                candidates.iter().map(|c| c.debug_summary()).collect();
+            let all_summaries: Vec<String> = candidates.iter().map(|c| c.debug_summary()).collect();
             warn!(
                 candidate_count = candidates.len(),
                 candidates_detail = %all_summaries.join("\n  "),
@@ -1799,12 +1795,7 @@ impl GenerateContentResponse {
                 candidates.len() - 1
             );
         }
-        candidates
-            .first()?
-            .content
-            .as_ref()?
-            .parts
-            .as_ref()
+        candidates.first()?.content.as_ref()?.parts.as_ref()
     }
 
     /// Get thought/reasoning text from the first candidate (for debugging).

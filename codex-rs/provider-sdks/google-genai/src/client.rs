@@ -16,10 +16,10 @@ use crate::types::RequestExtensions;
 use crate::types::SdkHttpResponse;
 use crate::types::Tool;
 use reqwest::header::CONTENT_TYPE;
-use std::collections::HashMap;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
 use tracing::debug;
@@ -375,8 +375,9 @@ impl Client {
         }
 
         // Parse response and attach HTTP metadata
-        let mut result: GenerateContentResponse = serde_json::from_str(&body)
-            .map_err(|e| GenAiError::Parse(format!("Failed to parse response: {e}\nBody: {body}")))?;
+        let mut result: GenerateContentResponse = serde_json::from_str(&body).map_err(|e| {
+            GenAiError::Parse(format!("Failed to parse response: {e}\nBody: {body}"))
+        })?;
 
         result.sdk_http_response = Some(SdkHttpResponse::new(status_code, response_headers, body));
 

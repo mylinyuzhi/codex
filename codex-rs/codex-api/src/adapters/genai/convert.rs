@@ -60,10 +60,11 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
     let mut current_parts: Vec<Part> = Vec::new();
     let mut current_role: Option<String> = None;
 
-    // ========== Pass 1: Collect call_signatures from all Reasoning items ==========
-    // This ensures signatures are available when processing FunctionCalls,
-    // regardless of item order in the input array.
-    let mut collected_call_signatures: HashMap<String, String> = HashMap::new();
+    // Track part signatures for position-based application
+    let mut part_signatures: Vec<Option<String>> = Vec::new();
+    let mut part_index: usize = 0;
+
+    // Pre-collect part_signatures from Reasoning items
     for item in &prompt.input {
         if let ResponseItem::Reasoning {
             encrypted_content: Some(enc),
@@ -71,19 +72,23 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
         } = item
         {
             if let Ok(sig_data) = serde_json::from_str::<serde_json::Value>(enc) {
-                if let Some(call_sigs) = sig_data.get("call_signatures").and_then(|v| v.as_object())
-                {
-                    for (call_id, sig_val) in call_sigs {
-                        if let Some(sig) = sig_val.as_str().filter(|s| !s.is_empty()) {
-                            collected_call_signatures.insert(call_id.clone(), sig.to_string());
-                        }
+                if let Some(sigs) = sig_data.get("part_signatures").and_then(|v| v.as_array()) {
+                    for sig_val in sigs {
+                        let sig = sig_val.as_str().map(|s| s.to_string());
+                        part_signatures.push(sig);
                     }
                 }
             }
         }
     }
 
-    // ========== Pass 2: Build Contents ==========
+    // Helper to get and apply signature by position
+    let get_sig_at = |index: usize, sigs: &[Option<String>]| -> Option<Vec<u8>> {
+        sigs.get(index)
+            .and_then(|s| s.as_ref())
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+    };
+
     // Helper to flush accumulated parts into a Content
     let flush = |contents: &mut Vec<Content>, parts: &mut Vec<Part>, role: &Option<String>| {
         if !parts.is_empty() {
@@ -110,26 +115,44 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                 }
 
                 // Convert content items to parts
+                // Only apply signatures for model role (signatures are from model response)
+                let is_model = gemini_role == "model";
                 for content_item in content {
                     match content_item {
                         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                            current_parts.push(Part::text(text));
+                            let mut part = Part::text(text);
+                            // Apply signature by position (only for model role)
+                            if is_model {
+                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
+                                    part.thought_signature = Some(sig_bytes);
+                                }
+                                part_index += 1;
+                            }
+                            current_parts.push(part);
                         }
                         ContentItem::InputImage { image_url } => {
                             // Handle data URLs or regular URLs
-                            if let Some(data_url) = parse_data_url(image_url) {
+                            let mut part = if let Some(data_url) = parse_data_url(image_url) {
                                 // Use inline_data with the base64 string directly
-                                current_parts.push(Part {
+                                Part {
                                     inline_data: Some(google_genai::types::Blob::new(
                                         &data_url.base64_data,
                                         &data_url.mime_type,
                                     )),
                                     ..Default::default()
-                                });
+                                }
                             } else {
                                 // Regular URL - use file_data
-                                current_parts.push(Part::from_uri(image_url, "image/*"));
+                                Part::from_uri(image_url, "image/*")
+                            };
+                            // Apply signature by position (only for model role)
+                            if is_model {
+                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
+                                    part.thought_signature = Some(sig_bytes);
+                                }
+                                part_index += 1;
                             }
+                            current_parts.push(part);
                         }
                     }
                 }
@@ -162,15 +185,11 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                     ..Default::default()
                 };
 
-                // Apply per-call signature if available (from Pass 1)
-                // Signatures are base64 encoded in encrypted_content JSON
-                if let Some(sig_base64) = collected_call_signatures.get(call_id) {
-                    if let Ok(sig_bytes) =
-                        base64::engine::general_purpose::STANDARD.decode(sig_base64)
-                    {
-                        part.thought_signature = Some(sig_bytes);
-                    }
+                // Apply signature by position
+                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
+                    part.thought_signature = Some(sig_bytes);
                 }
+                part_index += 1;
 
                 current_parts.push(part);
             }
@@ -224,7 +243,7 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
             ResponseItem::Reasoning {
                 summary: _,
                 content,
-                encrypted_content,
+                encrypted_content: _,
                 ..
             } => {
                 // Reasoning belongs to model role
@@ -233,41 +252,25 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                     current_role = Some("model".to_string());
                 }
 
-                // Extract signatures from encrypted_content JSON
-                // Format: {"message_signature": "base64...", "call_signatures": {"call_id": "base64..."}}
-                if let Some(encrypted) = encrypted_content {
-                    if let Ok(sig_data) = serde_json::from_str::<serde_json::Value>(encrypted) {
-                        // Extract message-level signature (base64 encoded)
-                        if let Some(msg_sig_base64) = sig_data
-                            .get("message_signature")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                        {
-                            if let Ok(sig_bytes) =
-                                base64::engine::general_purpose::STANDARD.decode(msg_sig_base64)
-                            {
-                                current_parts.push(Part::with_thought_signature(sig_bytes));
-                            }
-                        }
-                        // Note: call_signatures are handled per-FunctionCall, not here
-                    } else {
-                        // Fallback: use whole string as signature (legacy format - raw bytes)
-                        current_parts
-                            .push(Part::with_thought_signature(encrypted.as_bytes().to_vec()));
-                    }
-                }
-
-                // Convert reasoning content to thought text
+                // Convert reasoning content to thought parts with position-based signatures
                 if let Some(content_items) = content {
                     for item in content_items {
                         match item {
                             ReasoningItemContent::ReasoningText { text }
                             | ReasoningItemContent::Text { text } => {
-                                current_parts.push(Part {
+                                let mut part = Part {
                                     text: Some(text.clone()),
                                     thought: Some(true),
                                     ..Default::default()
-                                });
+                                };
+
+                                // Apply signature by position
+                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
+                                    part.thought_signature = Some(sig_bytes);
+                                }
+                                part_index += 1;
+
+                                current_parts.push(part);
                             }
                         }
                     }
@@ -322,24 +325,22 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
     // Collect parts by type
     let mut text_parts: Vec<String> = Vec::new();
     let mut reasoning_texts: Vec<String> = Vec::new();
-    let mut message_signature: Option<String> = None;
-    let mut call_signatures: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut part_signatures: Vec<Option<String>> = Vec::new();
     let mut function_calls: Vec<ResponseItem> = Vec::new();
 
     for part in parts {
+        // Collect signature for every part (in order, None if absent)
+        let sig = part
+            .thought_signature
+            .as_ref()
+            .map(|s| base64::engine::general_purpose::STANDARD.encode(s));
+        part_signatures.push(sig);
+
         // Handle thought/reasoning parts
         if part.thought == Some(true) {
             if let Some(text) = &part.text {
                 reasoning_texts.push(text.clone());
             }
-            if let Some(sig) = &part.thought_signature {
-                // Store as message_signature (first one wins)
-                // Use base64 encoding to preserve binary data without loss
-                if message_signature.is_none() {
-                    message_signature = Some(base64::engine::general_purpose::STANDARD.encode(sig));
-                }
-            }
-            continue;
         }
 
         // Handle function calls
@@ -352,18 +353,12 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
                 .map(|a| serde_json::to_string(a).unwrap_or_default())
                 .unwrap_or_default();
 
-            // Extract per-call signature if present in part
-            if let Some(sig) = &part.thought_signature {
-                call_signatures.insert(call_id.clone(), sig.clone());
-            }
-
             function_calls.push(ResponseItem::FunctionCall {
                 id: Some(response_id.clone()), // Use response_id as message_id
                 name,
                 arguments,
                 call_id,
             });
-            continue;
         }
 
         // Handle text parts
@@ -374,24 +369,24 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
 
     // Emit message item first (if we have text content)
     if !text_parts.is_empty() {
-        let combined_text = text_parts.join("");
         events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
             id: Some(response_id.clone()),
             role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: combined_text,
-            }],
+            content: text_parts
+                .iter()
+                .map(|t| ContentItem::OutputText { text: t.clone() })
+                .collect(),
         }));
     }
 
+    // Check if any part has a signature
+    let has_signatures = part_signatures.iter().any(|s| s.is_some());
+
     // Emit reasoning item (if we have reasoning content or signatures)
-    if !reasoning_texts.is_empty() || message_signature.is_some() || !call_signatures.is_empty() {
+    if !reasoning_texts.is_empty() || has_signatures {
         let summary: Vec<ReasoningItemReasoningSummary> = reasoning_texts
             .iter()
-            .take(1)
-            .map(|t| ReasoningItemReasoningSummary::SummaryText {
-                text: t.clone(), // Don't truncate - preserve full text
-            })
+            .map(|t| ReasoningItemReasoningSummary::SummaryText { text: t.clone() })
             .collect();
 
         let content: Option<Vec<ReasoningItemContent>> = if !reasoning_texts.is_empty() {
@@ -405,25 +400,17 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
             None
         };
 
-        // Build encrypted_content with proper structure for round-trip
-        // Use base64 encoding to preserve binary signatures without data loss
-        let call_signatures_strings: HashMap<String, String> = call_signatures
-            .into_iter()
-            .map(|(k, v)| (k, base64::engine::general_purpose::STANDARD.encode(&v)))
-            .collect();
-
-        let encrypted_content =
-            if message_signature.is_some() || !call_signatures_strings.is_empty() {
-                Some(
-                    serde_json::json!({
-                        "message_signature": message_signature,
-                        "call_signatures": call_signatures_strings
-                    })
-                    .to_string(),
-                )
-            } else {
-                None
-            };
+        // Build encrypted_content with part_signatures for round-trip
+        let encrypted_content = if has_signatures {
+            Some(
+                serde_json::json!({
+                    "part_signatures": part_signatures
+                })
+                .to_string(),
+            )
+        } else {
+            None
+        };
 
         events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
             id: response_id.clone(), // Use same response_id for consistency
@@ -822,6 +809,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         let usage = extract_usage(&response).unwrap();
@@ -881,27 +869,22 @@ mod tests {
     fn test_round_trip_multiple_function_calls_with_signatures() {
         use base64::Engine;
 
-        // Create Reasoning with encrypted_content containing call_signatures (base64 encoded)
-        // Create FunctionCall items with call_ids "call_1" and "call_2"
-        let sig_msg_b64 = base64::engine::general_purpose::STANDARD.encode(b"sig_msg");
+        // Create Reasoning with encrypted_content containing part_signatures (position-based)
+        // Signatures are applied by position: index 0 -> first part, index 1 -> second part
         let sig_1_b64 = base64::engine::general_purpose::STANDARD.encode(b"sig_1");
         let sig_2_b64 = base64::engine::general_purpose::STANDARD.encode(b"sig_2");
 
         let prompt = Prompt {
             instructions: String::new(),
             input: vec![
-                // Reasoning comes BEFORE FunctionCalls (tests two-pass approach)
+                // Reasoning with part_signatures for position-based application
                 ResponseItem::Reasoning {
                     id: "resp-1".to_string(),
                     summary: vec![],
                     content: None,
                     encrypted_content: Some(
                         serde_json::json!({
-                            "message_signature": sig_msg_b64,
-                            "call_signatures": {
-                                "call_1": sig_1_b64,
-                                "call_2": sig_2_b64
-                            }
+                            "part_signatures": [sig_1_b64, sig_2_b64]
                         })
                         .to_string(),
                     ),
@@ -927,7 +910,7 @@ mod tests {
 
         let contents = prompt_to_contents(&prompt);
 
-        // Should have model content with reasoning + function calls
+        // Should have model content with function calls
         assert!(!contents.is_empty());
         let model_content = contents
             .iter()
@@ -936,42 +919,22 @@ mod tests {
 
         let parts = model_content.unwrap().parts.as_ref().unwrap();
 
-        // Find function call parts and verify signatures
+        // Find function call parts and verify signatures by position
         let fc_parts: Vec<_> = parts.iter().filter(|p| p.function_call.is_some()).collect();
         assert_eq!(fc_parts.len(), 2);
 
-        // Verify call_1 has signature "sig_1"
-        let call_1_part = fc_parts
-            .iter()
-            .find(|p| {
-                p.function_call
-                    .as_ref()
-                    .and_then(|fc| fc.id.as_ref())
-                    .map(|id| id == "call_1")
-                    .unwrap_or(false)
-            })
-            .unwrap();
+        // First function call (position 0) gets sig_1
         assert_eq!(
-            call_1_part.thought_signature,
+            fc_parts[0].thought_signature,
             Some(b"sig_1".to_vec()),
-            "call_1 should have signature sig_1"
+            "First function call should have signature sig_1"
         );
 
-        // Verify call_2 has signature "sig_2"
-        let call_2_part = fc_parts
-            .iter()
-            .find(|p| {
-                p.function_call
-                    .as_ref()
-                    .and_then(|fc| fc.id.as_ref())
-                    .map(|id| id == "call_2")
-                    .unwrap_or(false)
-            })
-            .unwrap();
+        // Second function call (position 1) gets sig_2
         assert_eq!(
-            call_2_part.thought_signature,
+            fc_parts[1].thought_signature,
             Some(b"sig_2".to_vec()),
-            "call_2 should have signature sig_2"
+            "Second function call should have signature sig_2"
         );
     }
 
@@ -1010,6 +973,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         // Convert via response_to_events
@@ -1048,7 +1012,7 @@ mod tests {
         // Turn 2: FunctionCallOutput(temp=20) → continue conversation
 
         // Base64 encode signatures for proper roundtrip
-        let sig_msg_1_b64 = base64::engine::general_purpose::STANDARD.encode(b"sig_msg_1");
+        // Position 0: text part from Message, Position 1: function_call part
         let sig_weather_b64 = base64::engine::general_purpose::STANDARD.encode(b"sig_weather");
 
         let prompt = Prompt {
@@ -1070,15 +1034,15 @@ mod tests {
                         text: "Let me check the weather for you.".to_string(),
                     }],
                 },
-                // Reasoning with signatures (base64 encoded)
+                // Reasoning with part_signatures (position-based)
+                // Position 0: text part (no sig), Position 1: function_call part (sig_weather)
                 ResponseItem::Reasoning {
                     id: "resp-1".to_string(),
                     summary: vec![],
                     content: None,
                     encrypted_content: Some(
                         serde_json::json!({
-                            "message_signature": sig_msg_1_b64,
-                            "call_signatures": {"call_weather": sig_weather_b64}
+                            "part_signatures": [null, sig_weather_b64]
                         })
                         .to_string(),
                     ),
@@ -1111,7 +1075,7 @@ mod tests {
 
         // Verify structure:
         // 1. User content with question
-        // 2. Model content with text + reasoning signature + function call with signature
+        // 2. Model content with text + function call with signature
         // 3. User content with function response
 
         // Should have at least 3 contents (user, model, user for function response)
@@ -1130,7 +1094,7 @@ mod tests {
         let fc_part = model_parts.iter().find(|p| p.function_call.is_some());
         assert!(fc_part.is_some(), "Model should have function call");
 
-        // Verify function call has signature from encrypted_content
+        // Verify function call has signature from part_signatures (position 1)
         let fc_part = fc_part.unwrap();
         assert_eq!(
             fc_part.thought_signature,
@@ -1237,23 +1201,31 @@ mod tests {
     // ========== Python SDK Alignment Tests ==========
 
     #[test]
-    fn test_reasoning_roundtrip_with_call_signatures() {
+    fn test_reasoning_roundtrip_with_part_signatures() {
         use google_genai::types::Candidate;
 
-        // Simulate Gemini response with thought parts and function calls with signatures
+        // Simulate Gemini response with parts ordered to match emission order:
+        // Emission order: Message (text), Reasoning (thought), FunctionCall
+        // So parts should be: [text, thought, function_call]
+        // This ensures position-based signature matching works in roundtrip
         let gemini_response = GenerateContentResponse {
             candidates: Some(vec![Candidate {
                 content: Some(Content {
                     role: Some("model".to_string()),
                     parts: Some(vec![
-                        // Thought part with signature (message-level)
+                        // Text output (position 0, no signature)
+                        Part {
+                            text: Some("Here's what I found.".to_string()),
+                            ..Default::default()
+                        },
+                        // Thought part with signature (position 1)
                         Part {
                             thought: Some(true),
-                            thought_signature: Some(b"msg_sig_123".to_vec()),
+                            thought_signature: Some(b"thought_sig".to_vec()),
                             text: Some("I'm reasoning about this...".to_string()),
                             ..Default::default()
                         },
-                        // Function call part with its own signature
+                        // Function call part with its own signature (position 2)
                         Part {
                             function_call: Some(FunctionCall {
                                 id: Some("call_1".to_string()),
@@ -1262,12 +1234,7 @@ mod tests {
                                 partial_args: None,
                                 will_continue: None,
                             }),
-                            thought_signature: Some(b"call_1_sig_456".to_vec()),
-                            ..Default::default()
-                        },
-                        // Text output
-                        Part {
-                            text: Some("Here's what I found.".to_string()),
+                            thought_signature: Some(b"fc_sig".to_vec()),
                             ..Default::default()
                         },
                     ]),
@@ -1279,6 +1246,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         // Convert Gemini response -> codex-api events
@@ -1303,7 +1271,7 @@ mod tests {
             items.len()
         );
 
-        // Find Reasoning item and verify encrypted_content has signatures
+        // Find Reasoning item and verify encrypted_content has part_signatures
         let reasoning = items
             .iter()
             .find(|item| matches!(item, ResponseItem::Reasoning { .. }));
@@ -1317,15 +1285,24 @@ mod tests {
             let enc = encrypted_content.as_ref().unwrap();
             let sig_data: serde_json::Value = serde_json::from_str(enc).expect("valid JSON");
 
-            // Verify message_signature is present
-            assert!(
-                sig_data.get("message_signature").is_some(),
-                "Should have message_signature"
-            );
+            // Verify part_signatures is present as array
+            let part_sigs = sig_data.get("part_signatures").and_then(|v| v.as_array());
+            assert!(part_sigs.is_some(), "Should have part_signatures array");
 
-            // Verify call_signatures contains call_1
-            let call_sigs = sig_data.get("call_signatures").and_then(|v| v.as_object());
-            assert!(call_sigs.is_some(), "Should have call_signatures");
+            // Should have 3 entries (for 3 parts)
+            let part_sigs = part_sigs.unwrap();
+            assert_eq!(part_sigs.len(), 3, "Should have 3 part signatures");
+
+            // Position 0 (text) should be null, positions 1 and 2 should have signatures
+            assert!(part_sigs[0].is_null(), "Position 0 (text) should be null");
+            assert!(
+                part_sigs[1].is_string(),
+                "Position 1 (thought) should have signature"
+            );
+            assert!(
+                part_sigs[2].is_string(),
+                "Position 2 (fc) should have signature"
+            );
         }
 
         // Now convert back: codex-api items -> Gemini Contents
@@ -1357,9 +1334,10 @@ mod tests {
 
         let fc_part = fc_part.unwrap();
         // The signature should be preserved in the roundtrip
-        // Note: signature is stored as bytes, convert from the call_signatures
-        assert!(
-            fc_part.thought_signature.is_some(),
+        // Position 2 in part_signatures has fc_sig
+        assert_eq!(
+            fc_part.thought_signature,
+            Some(b"fc_sig".to_vec()),
             "Function call should preserve its signature in roundtrip"
         );
     }
@@ -1403,6 +1381,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         let (events, _) = response_to_events(&gemini_response);
@@ -1466,6 +1445,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         let (events, _) = response_to_events(&gemini_response);
@@ -1500,19 +1480,20 @@ mod tests {
         let binary_sig = vec![0x00, 0x01, 0xFF, 0xFE, 0x80, 0x90, 0xAB, 0xCD];
 
         // Create Gemini response with binary signature
+        // Parts order: [thought, function_call] -> part_signatures: [sig, sig]
         let gemini_response = GenerateContentResponse {
             candidates: Some(vec![Candidate {
                 content: Some(Content {
                     role: Some("model".to_string()),
                     parts: Some(vec![
-                        // Thought part with binary signature
+                        // Thought part with binary signature (position 0)
                         Part {
                             thought: Some(true),
                             thought_signature: Some(binary_sig.clone()),
                             text: Some("Thinking...".to_string()),
                             ..Default::default()
                         },
-                        // Function call with binary signature
+                        // Function call with binary signature (position 1)
                         Part {
                             function_call: Some(FunctionCall {
                                 id: Some("call_binary".to_string()),
@@ -1533,6 +1514,7 @@ mod tests {
             model_version: None,
             response_id: None,
             create_time: None,
+            sdk_http_response: None,
         };
 
         // Convert to codex-api events
@@ -1547,7 +1529,7 @@ mod tests {
             })
             .collect();
 
-        // Find Reasoning item and verify encrypted_content has base64-encoded signature
+        // Find Reasoning item and verify encrypted_content has base64-encoded signatures
         let reasoning = items
             .iter()
             .find(|item| matches!(item, ResponseItem::Reasoning { .. }));
@@ -1565,37 +1547,40 @@ mod tests {
         assert!(encrypted_content.is_some(), "Should have encrypted_content");
         let enc = encrypted_content.unwrap();
 
-        // Verify it's valid JSON with base64-encoded signatures
+        // Verify it's valid JSON with part_signatures array
         let sig_data: serde_json::Value = serde_json::from_str(&enc).expect("valid JSON");
-        let msg_sig_base64 = sig_data
-            .get("message_signature")
-            .and_then(|v| v.as_str())
-            .unwrap();
-        let call_sigs = sig_data
-            .get("call_signatures")
-            .and_then(|v| v.as_object())
-            .unwrap();
-        let call_sig_base64 = call_sigs
-            .get("call_binary")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let part_sigs = sig_data
+            .get("part_signatures")
+            .and_then(|v| v.as_array())
+            .expect("Should have part_signatures array");
+
+        // Should have 2 entries (for 2 parts)
+        assert_eq!(part_sigs.len(), 2, "Should have 2 part signatures");
+
+        // Both should have signatures
+        let sig0_base64 = part_sigs[0]
+            .as_str()
+            .expect("Position 0 should have signature");
+        let sig1_base64 = part_sigs[1]
+            .as_str()
+            .expect("Position 1 should have signature");
 
         // Verify base64 can be decoded back to original bytes
         use base64::Engine;
-        let decoded_msg_sig = base64::engine::general_purpose::STANDARD
-            .decode(msg_sig_base64)
-            .expect("decode message sig");
-        let decoded_call_sig = base64::engine::general_purpose::STANDARD
-            .decode(call_sig_base64)
-            .expect("decode call sig");
+        let decoded_sig0 = base64::engine::general_purpose::STANDARD
+            .decode(sig0_base64)
+            .expect("decode sig0");
+        let decoded_sig1 = base64::engine::general_purpose::STANDARD
+            .decode(sig1_base64)
+            .expect("decode sig1");
 
         assert_eq!(
-            decoded_msg_sig, binary_sig,
-            "Message signature should roundtrip correctly"
+            decoded_sig0, binary_sig,
+            "Position 0 signature should roundtrip correctly"
         );
         assert_eq!(
-            decoded_call_sig, binary_sig,
-            "Call signature should roundtrip correctly"
+            decoded_sig1, binary_sig,
+            "Position 1 signature should roundtrip correctly"
         );
 
         // Now test the full roundtrip: convert back to Contents
