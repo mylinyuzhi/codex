@@ -400,7 +400,7 @@ pub(crate) fn find_family_for_model(slug: &str) -> ModelFamily {
     }
 }
 
-fn derive_default_model_family(model: &str) -> ModelFamily {
+pub(crate) fn derive_default_model_family(model: &str) -> ModelFamily {
     tracing::warn!("Unknown model {model} is used. This will degrade the performance of Codex.");
     ModelFamily {
         slug: model.to_string(),
