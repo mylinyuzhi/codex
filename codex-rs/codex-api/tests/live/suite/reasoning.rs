@@ -3,9 +3,11 @@
 //! Tests extended thinking capabilities for providers that support it.
 
 use anyhow::Result;
-use codex_api::{AdapterConfig, ProviderAdapter};
+use codex_api::AdapterConfig;
+use codex_api::ProviderAdapter;
 
-use crate::common::{extract_text, text_prompt};
+use crate::common::extract_text;
+use crate::common::text_prompt;
 
 /// Test reasoning mode.
 ///

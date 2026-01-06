@@ -50,21 +50,73 @@ use std::collections::HashMap;
 
 /// Convert a Prompt to a list of Gemini Contents.
 ///
-/// **Alignment with chat.rs**: The output format must match what `google-genai/src/chat.rs`
-/// produces when building `curated_history`. Specifically:
+/// This is a complex function that handles multiple concerns:
+///
+/// ## Alignment with chat.rs
+/// The output format must match what `google-genai/src/chat.rs` produces when building
+/// `curated_history`. Specifically:
 /// - FunctionCall → Content(role="model", Part::function_call with id)
 /// - FunctionCallOutput → Content(role="user", Part::function_response with id)
 /// - Signatures are attached via `Part::thought_signature` for round-trip preservation
+///
+/// ## Merging Strategy
+/// Parts are merged into Contents based on:
+/// 1. **Role**: Parts with the same role are grouped together
+/// 2. **response_id**: Model parts from the same response_id are grouped together
+///
+/// ## Signature Application
+/// Signatures stored in `Reasoning.encrypted_content` are applied to parts:
+/// - If `parts_order` is present: Use type-based lookup (new approach)
+/// - Otherwise: Use position-based lookup (backwards compatibility)
+///
+/// ## FunctionCall/FunctionCallOutput Pairing
+/// - **Server-provided call_ids**: Preserved as-is for FunctionResponse.id
+/// - **Client-generated call_ids** (prefix `call_genai_@cligen_`): Stripped (set to None)
+///   because Gemini API doesn't recognize them. Matching is by order in this case.
+///
+/// ## Order Tracking
+/// For client-generated call_ids, we track the order of FunctionCalls and verify that
+/// FunctionCallOutputs arrive in the same order for correct pairing.
 pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
     let mut contents: Vec<Content> = Vec::new();
     let mut current_parts: Vec<Part> = Vec::new();
     let mut current_role: Option<String> = None;
+    // Track response_id to merge parts from the same model response
+    let mut current_response_id: Option<String> = None;
 
-    // Track part signatures for position-based application
+    // ========== Pre-scan: Build FunctionCall order map for client-generated IDs ==========
+    // When server doesn't provide FunctionCall.id, we generate client-side IDs with prefix
+    // `call_genai_@cligen_`. These must be stripped when creating FunctionResponse because
+    // Gemini API doesn't recognize them. Instead, we rely on order-based matching.
+    let mut client_call_id_order: HashMap<String, usize> = HashMap::new();
+    let mut client_call_index: usize = 0;
+
+    for item in &prompt.input {
+        if let ResponseItem::FunctionCall { call_id, .. } = item {
+            if is_client_generated_call_id(call_id) {
+                client_call_id_order.insert(call_id.clone(), client_call_index);
+                client_call_index += 1;
+            }
+        }
+    }
+
+    // Track which client-generated FunctionCallOutput we're processing (for order verification)
+    let mut client_output_index: usize = 0;
+
+    // ========== Pre-scan: Collect signatures and parts_order ==========
+    // Track part signatures and order for type-based application
     let mut part_signatures: Vec<Option<String>> = Vec::new();
+    let mut parts_order: Vec<String> = Vec::new();
+
+    // Track occurrence counts per part type for signature lookup (new type-based approach)
+    let mut text_occurrence: usize = 0;
+    let mut thought_occurrence: usize = 0;
+    let mut function_call_occurrence: usize = 0;
+
+    // Track global part index for fallback position-based lookup (backwards compatibility)
     let mut part_index: usize = 0;
 
-    // Pre-collect part_signatures from Reasoning items
+    // Pre-collect parts_order and part_signatures from Reasoning items
     for item in &prompt.input {
         if let ResponseItem::Reasoning {
             encrypted_content: Some(enc),
@@ -72,6 +124,13 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
         } = item
         {
             if let Ok(sig_data) = serde_json::from_str::<serde_json::Value>(enc) {
+                // Extract parts_order for type-based signature lookup
+                if let Some(order) = sig_data.get("parts_order").and_then(|v| v.as_array()) {
+                    for o in order {
+                        parts_order.push(o.as_str().unwrap_or("").to_string());
+                    }
+                }
+                // Extract part_signatures
                 if let Some(sigs) = sig_data.get("part_signatures").and_then(|v| v.as_array()) {
                     for sig_val in sigs {
                         let sig = sig_val.as_str().map(|s| s.to_string());
@@ -82,7 +141,32 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
         }
     }
 
-    // Helper to get and apply signature by position
+    // Check if we have parts_order for type-based lookup, otherwise fall back to position-based
+    let use_type_based_lookup = !parts_order.is_empty();
+
+    // Helper to get signature by part type and occurrence index (new type-based approach)
+    // This finds the nth occurrence of part_type in parts_order and returns its signature
+    let get_sig_for_part = |part_type: &str,
+                            occurrence: usize,
+                            order: &[String],
+                            sigs: &[Option<String>]|
+     -> Option<Vec<u8>> {
+        let mut count = 0;
+        for (i, pt) in order.iter().enumerate() {
+            if pt == part_type {
+                if count == occurrence {
+                    return sigs
+                        .get(i)
+                        .and_then(|s| s.as_ref())
+                        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok());
+                }
+                count += 1;
+            }
+        }
+        None
+    };
+
+    // Helper to get signature by position (backwards compatibility fallback)
     let get_sig_at = |index: usize, sigs: &[Option<String>]| -> Option<Vec<u8>> {
         sigs.get(index)
             .and_then(|s| s.as_ref())
@@ -99,40 +183,66 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
         }
     };
 
+    // ========== Main processing loop ==========
     for item in &prompt.input {
         match item {
-            ResponseItem::Message { role, content, .. } => {
+            ResponseItem::Message {
+                id: item_id,
+                role,
+                content,
+            } => {
                 let gemini_role = if role == "assistant" {
                     "model".to_string()
                 } else {
                     role.clone()
                 };
+                let is_model = gemini_role == "model";
 
-                // Flush if role changes
-                if current_role.as_ref() != Some(&gemini_role) {
+                // Flush if role changes OR if response_id changes (for model role)
+                // This ensures parts from the same model response are grouped together
+                let should_flush = current_role.as_ref() != Some(&gemini_role)
+                    || (is_model
+                        && item_id.is_some()
+                        && current_response_id.as_ref() != item_id.as_ref());
+
+                if should_flush {
                     flush(&mut contents, &mut current_parts, &current_role);
                     current_role = Some(gemini_role.clone());
+                    if is_model {
+                        current_response_id = item_id.clone();
+                    }
                 }
 
                 // Convert content items to parts
                 // Only apply signatures for model role (signatures are from model response)
-                let is_model = gemini_role == "model";
                 for content_item in content {
                     match content_item {
                         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                             let mut part = Part::text(text);
-                            // Apply signature by position (only for model role)
+                            // Apply signature (only for model role)
                             if is_model {
-                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
-                                    part.thought_signature = Some(sig_bytes);
+                                let sig_bytes = if use_type_based_lookup {
+                                    get_sig_for_part(
+                                        "text",
+                                        text_occurrence,
+                                        &parts_order,
+                                        &part_signatures,
+                                    )
+                                } else {
+                                    // Fallback to position-based lookup for backwards compatibility
+                                    get_sig_at(part_index, &part_signatures)
+                                };
+                                if let Some(sig) = sig_bytes {
+                                    part.thought_signature = Some(sig);
                                 }
+                                text_occurrence += 1;
                                 part_index += 1;
                             }
                             current_parts.push(part);
                         }
                         ContentItem::InputImage { image_url } => {
                             // Handle data URLs or regular URLs
-                            let mut part = if let Some(data_url) = parse_data_url(image_url) {
+                            let part = if let Some(data_url) = parse_data_url(image_url) {
                                 // Use inline_data with the base64 string directly
                                 Part {
                                     inline_data: Some(google_genai::types::Blob::new(
@@ -145,13 +255,7 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                                 // Regular URL - use file_data
                                 Part::from_uri(image_url, "image/*")
                             };
-                            // Apply signature by position (only for model role)
-                            if is_model {
-                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
-                                    part.thought_signature = Some(sig_bytes);
-                                }
-                                part_index += 1;
-                            }
+                            // Note: Images don't have signatures in parts_order tracking
                             current_parts.push(part);
                         }
                     }
@@ -159,15 +263,21 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
             }
 
             ResponseItem::FunctionCall {
+                id: item_id,
                 name,
                 arguments,
                 call_id,
-                ..
             } => {
                 // Function calls belong to model role
-                if current_role.as_ref() != Some(&"model".to_string()) {
+                // Flush if role changes OR if response_id changes
+                let should_flush = current_role.as_ref() != Some(&"model".to_string())
+                    || (item_id.is_some()
+                        && current_response_id.as_ref() != item_id.as_ref());
+
+                if should_flush {
                     flush(&mut contents, &mut current_parts, &current_role);
                     current_role = Some("model".to_string());
+                    current_response_id = item_id.clone();
                 }
 
                 // Parse arguments as JSON
@@ -185,19 +295,32 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                     ..Default::default()
                 };
 
-                // Apply signature by position
-                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
-                    part.thought_signature = Some(sig_bytes);
+                // Apply signature
+                let sig_bytes = if use_type_based_lookup {
+                    get_sig_for_part(
+                        "function_call",
+                        function_call_occurrence,
+                        &parts_order,
+                        &part_signatures,
+                    )
+                } else {
+                    // Fallback to position-based lookup for backwards compatibility
+                    get_sig_at(part_index, &part_signatures)
+                };
+                if let Some(sig) = sig_bytes {
+                    part.thought_signature = Some(sig);
                 }
+                function_call_occurrence += 1;
                 part_index += 1;
 
                 current_parts.push(part);
             }
 
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                // Function outputs are user role
+                // Function outputs are user role - flush current model parts first
                 flush(&mut contents, &mut current_parts, &current_role);
                 current_role = Some("user".to_string());
+                current_response_id = None; // Reset response_id for user role
 
                 // Convert output to response value, preferring content_items for multimodal
                 let response_value = if let Some(items) = &output.content_items {
@@ -223,9 +346,34 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                         .unwrap_or_else(|_| serde_json::json!({ "result": output.content.clone() }))
                 };
 
+                // Determine the FunctionResponse.id to use:
+                // - Server-provided call_ids: Keep as-is for proper pairing
+                // - Client-generated call_ids (prefix `call_genai_@cligen_`): Strip (use None)
+                //   because Gemini API doesn't recognize them. Matching is by order instead.
+                let response_id = if is_client_generated_call_id(call_id) {
+                    // Verify order matches expected position (for debugging/validation)
+                    // FunctionCallOutputs should arrive in same order as FunctionCalls
+                    if let Some(&expected_idx) = client_call_id_order.get(call_id) {
+                        if expected_idx != client_output_index {
+                            // Order mismatch warning - this shouldn't happen in normal usage
+                            // but we continue anyway as order-based matching is best effort
+                            tracing::warn!(
+                                "FunctionCallOutput order mismatch: expected index {}, got {} for call_id {}",
+                                expected_idx,
+                                client_output_index,
+                                call_id
+                            );
+                        }
+                    }
+                    client_output_index += 1;
+                    None // Strip client-generated ID - Gemini will match by order
+                } else {
+                    Some(call_id.clone()) // Keep server-provided ID for exact matching
+                };
+
                 current_parts.push(Part {
                     function_response: Some(FunctionResponse {
-                        id: Some(call_id.clone()),
+                        id: response_id,
                         name: None, // Name is optional in response
                         response: Some(response_value),
                         will_continue: None,
@@ -241,18 +389,23 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
             }
 
             ResponseItem::Reasoning {
+                id: item_id,
                 summary: _,
                 content,
                 encrypted_content: _,
-                ..
             } => {
                 // Reasoning belongs to model role
-                if current_role.as_ref() != Some(&"model".to_string()) {
+                // Flush if role changes OR if response_id changes
+                let should_flush = current_role.as_ref() != Some(&"model".to_string())
+                    || current_response_id.as_ref() != Some(item_id);
+
+                if should_flush {
                     flush(&mut contents, &mut current_parts, &current_role);
                     current_role = Some("model".to_string());
+                    current_response_id = Some(item_id.clone());
                 }
 
-                // Convert reasoning content to thought parts with position-based signatures
+                // Convert reasoning content to thought parts
                 if let Some(content_items) = content {
                     for item in content_items {
                         match item {
@@ -264,10 +417,22 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
                                     ..Default::default()
                                 };
 
-                                // Apply signature by position
-                                if let Some(sig_bytes) = get_sig_at(part_index, &part_signatures) {
-                                    part.thought_signature = Some(sig_bytes);
+                                // Apply signature
+                                let sig_bytes = if use_type_based_lookup {
+                                    get_sig_for_part(
+                                        "thought",
+                                        thought_occurrence,
+                                        &parts_order,
+                                        &part_signatures,
+                                    )
+                                } else {
+                                    // Fallback to position-based lookup for backwards compatibility
+                                    get_sig_at(part_index, &part_signatures)
+                                };
+                                if let Some(sig) = sig_bytes {
+                                    part.thought_signature = Some(sig);
                                 }
+                                thought_occurrence += 1;
                                 part_index += 1;
 
                                 current_parts.push(part);
@@ -326,6 +491,7 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
     let mut text_parts: Vec<String> = Vec::new();
     let mut reasoning_texts: Vec<String> = Vec::new();
     let mut part_signatures: Vec<Option<String>> = Vec::new();
+    let mut parts_order: Vec<String> = Vec::new(); // Track part types in original order
     let mut function_calls: Vec<ResponseItem> = Vec::new();
 
     for part in parts {
@@ -336,15 +502,16 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
             .map(|s| base64::engine::general_purpose::STANDARD.encode(s));
         part_signatures.push(sig);
 
-        // Handle thought/reasoning parts
+        // Track part type in original order for signature roundtrip
+        // Priority: thought > function_call > text (mutually exclusive tracking)
         if part.thought == Some(true) {
+            parts_order.push("thought".to_string());
             if let Some(text) = &part.text {
                 reasoning_texts.push(text.clone());
             }
-        }
-
-        // Handle function calls
-        if let Some(fc) = &part.function_call {
+        } else if part.function_call.is_some() {
+            parts_order.push("function_call".to_string());
+            let fc = part.function_call.as_ref().unwrap();
             let call_id = fc.id.clone().unwrap_or_else(generate_call_id);
             let name = fc.name.clone().unwrap_or_default();
             let arguments = fc
@@ -359,11 +526,9 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
                 arguments,
                 call_id,
             });
-        }
-
-        // Handle text parts
-        if let Some(text) = &part.text {
-            text_parts.push(text.clone());
+        } else if part.text.is_some() {
+            parts_order.push("text".to_string());
+            text_parts.push(part.text.as_ref().unwrap().clone());
         }
     }
 
@@ -400,10 +565,12 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
             None
         };
 
-        // Build encrypted_content with part_signatures for round-trip
-        let encrypted_content = if has_signatures {
+        // Build encrypted_content with parts_order and part_signatures for round-trip
+        // parts_order tracks the original part types in order for signature alignment
+        let encrypted_content = if has_signatures || !parts_order.is_empty() {
             Some(
                 serde_json::json!({
+                    "parts_order": parts_order,
                     "part_signatures": part_signatures
                 })
                 .to_string(),
@@ -1610,6 +1777,488 @@ mod tests {
             fc_part.unwrap().thought_signature,
             Some(binary_sig),
             "Binary signature should be preserved through full roundtrip"
+        );
+    }
+
+    #[test]
+    fn test_signature_roundtrip_thought_first_order() {
+        use google_genai::types::Candidate;
+
+        // This test verifies that signatures are correctly preserved when the original
+        // Gemini part order differs from the emission order.
+        //
+        // Original order: [thought(sig_A), text(no_sig), function_call(sig_B)]
+        // Emission order: [Message(text), Reasoning(thought), FunctionCall]
+        //
+        // With the old position-based signature lookup, this would fail because:
+        // - Message (first emitted) would incorrectly get sig_A
+        // - Reasoning (second emitted) would incorrectly get null
+        //
+        // With the new type-based signature lookup, signatures are correctly matched.
+        let gemini_response = GenerateContentResponse {
+            candidates: Some(vec![Candidate {
+                content: Some(Content {
+                    role: Some("model".to_string()),
+                    parts: Some(vec![
+                        // THOUGHT FIRST (position 0) - has signature
+                        Part {
+                            thought: Some(true),
+                            thought_signature: Some(b"sig_A_thought".to_vec()),
+                            text: Some("I'm thinking about this problem...".to_string()),
+                            ..Default::default()
+                        },
+                        // TEXT SECOND (position 1) - no signature
+                        Part {
+                            text: Some("Here's my answer.".to_string()),
+                            ..Default::default()
+                        },
+                        // FUNCTION CALL THIRD (position 2) - has signature
+                        Part {
+                            function_call: Some(FunctionCall {
+                                id: Some("call_xyz".to_string()),
+                                name: Some("search".to_string()),
+                                args: Some(serde_json::json!({"query": "test"})),
+                                partial_args: None,
+                                will_continue: None,
+                            }),
+                            thought_signature: Some(b"sig_B_function".to_vec()),
+                            ..Default::default()
+                        },
+                    ]),
+                }),
+                ..Default::default()
+            }]),
+            prompt_feedback: None,
+            usage_metadata: None,
+            model_version: None,
+            response_id: None,
+            create_time: None,
+            sdk_http_response: None,
+        };
+
+        // Convert Gemini response -> codex-api events
+        let (events, _response_id) = response_to_events(&gemini_response);
+
+        // Extract ResponseItems from events
+        let items: Vec<ResponseItem> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResponseEvent::OutputItemDone(item) => Some(item.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // Verify Reasoning item has parts_order stored
+        let reasoning = items
+            .iter()
+            .find(|item| matches!(item, ResponseItem::Reasoning { .. }));
+        assert!(reasoning.is_some(), "Should have Reasoning item");
+
+        if let Some(ResponseItem::Reasoning {
+            encrypted_content, ..
+        }) = reasoning
+        {
+            let enc = encrypted_content
+                .as_ref()
+                .expect("Should have encrypted_content");
+            let sig_data: serde_json::Value = serde_json::from_str(enc).expect("valid JSON");
+
+            // Verify parts_order is stored
+            let parts_order = sig_data.get("parts_order").and_then(|v| v.as_array());
+            assert!(parts_order.is_some(), "Should have parts_order array");
+            let parts_order = parts_order.unwrap();
+            assert_eq!(parts_order.len(), 3, "Should have 3 parts");
+            assert_eq!(parts_order[0], "thought", "First part should be thought");
+            assert_eq!(parts_order[1], "text", "Second part should be text");
+            assert_eq!(
+                parts_order[2], "function_call",
+                "Third part should be function_call"
+            );
+
+            // Verify part_signatures
+            let part_sigs = sig_data
+                .get("part_signatures")
+                .and_then(|v| v.as_array())
+                .unwrap();
+            assert!(
+                part_sigs[0].is_string(),
+                "Position 0 (thought) should have signature"
+            );
+            assert!(part_sigs[1].is_null(), "Position 1 (text) should be null");
+            assert!(
+                part_sigs[2].is_string(),
+                "Position 2 (function_call) should have signature"
+            );
+        }
+
+        // Now convert back: codex-api items -> Gemini Contents
+        let prompt = Prompt {
+            instructions: String::new(),
+            input: items,
+            tools: vec![],
+            parallel_tool_calls: false,
+            output_schema: None,
+            previous_response_id: None,
+        };
+
+        let contents = prompt_to_contents(&prompt);
+
+        // Find model content
+        let model_content = contents
+            .iter()
+            .find(|c| c.role == Some("model".to_string()));
+        assert!(model_content.is_some(), "Should have model content");
+
+        let parts = model_content.unwrap().parts.as_ref().unwrap();
+
+        // Find thought part and verify it has the CORRECT signature (sig_A_thought)
+        let thought_part = parts.iter().find(|p| p.thought == Some(true));
+        assert!(thought_part.is_some(), "Should have thought part");
+        assert_eq!(
+            thought_part.unwrap().thought_signature,
+            Some(b"sig_A_thought".to_vec()),
+            "Thought part should have its original signature"
+        );
+
+        // Find text part and verify it has NO signature
+        let text_part = parts
+            .iter()
+            .find(|p| p.text.is_some() && p.thought != Some(true) && p.function_call.is_none());
+        assert!(text_part.is_some(), "Should have text part");
+        assert_eq!(
+            text_part.unwrap().thought_signature,
+            None,
+            "Text part should have no signature"
+        );
+
+        // Find function call part and verify it has the CORRECT signature (sig_B_function)
+        let fc_part = parts.iter().find(|p| p.function_call.is_some());
+        assert!(fc_part.is_some(), "Should have function call part");
+        assert_eq!(
+            fc_part.unwrap().thought_signature,
+            Some(b"sig_B_function".to_vec()),
+            "Function call part should have its original signature"
+        );
+    }
+
+    // ========== FunctionResponse ID Handling Tests ==========
+
+    #[test]
+    fn test_function_response_server_id_preserved() {
+        // When call_id is server-provided (no @cligen prefix), FunctionResponse.id should keep it
+        let prompt = Prompt {
+            instructions: String::new(),
+            input: vec![
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "get_weather".to_string(),
+                    arguments: r#"{"location":"Tokyo"}"#.to_string(),
+                    call_id: "server_call_abc123".to_string(), // Server-provided ID
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "server_call_abc123".to_string(), // Same server-provided ID
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"temp": 20}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+            ],
+            tools: vec![],
+            parallel_tool_calls: false,
+            output_schema: None,
+            previous_response_id: None,
+        };
+
+        let contents = prompt_to_contents(&prompt);
+
+        // Find the user content with function_response
+        let user_content = contents.iter().find(|c| {
+            c.role == Some("user".to_string())
+                && c.parts.as_ref().map_or(false, |p| {
+                    p.iter().any(|part| part.function_response.is_some())
+                })
+        });
+        assert!(
+            user_content.is_some(),
+            "Should have user content with function_response"
+        );
+
+        let fr_part = user_content
+            .unwrap()
+            .parts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|p| p.function_response.is_some())
+            .unwrap();
+        let fr = fr_part.function_response.as_ref().unwrap();
+
+        // Server-provided ID should be preserved
+        assert_eq!(
+            fr.id,
+            Some("server_call_abc123".to_string()),
+            "FunctionResponse.id should preserve server-provided call_id"
+        );
+    }
+
+    #[test]
+    fn test_function_response_client_id_stripped() {
+        // When call_id is client-generated (@cligen prefix), FunctionResponse.id should be None
+        let client_call_id = format!("{}test_uuid_12345", CLIENT_GENERATED_CALL_ID_PREFIX);
+        assert!(
+            is_client_generated_call_id(&client_call_id),
+            "Test setup: should be client-generated ID"
+        );
+
+        let prompt = Prompt {
+            instructions: String::new(),
+            input: vec![
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "get_weather".to_string(),
+                    arguments: r#"{"location":"Tokyo"}"#.to_string(),
+                    call_id: client_call_id.clone(), // Client-generated ID
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: client_call_id, // Same client-generated ID
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"temp": 20}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+            ],
+            tools: vec![],
+            parallel_tool_calls: false,
+            output_schema: None,
+            previous_response_id: None,
+        };
+
+        let contents = prompt_to_contents(&prompt);
+
+        // Find the user content with function_response
+        let user_content = contents.iter().find(|c| {
+            c.role == Some("user".to_string())
+                && c.parts.as_ref().map_or(false, |p| {
+                    p.iter().any(|part| part.function_response.is_some())
+                })
+        });
+        assert!(
+            user_content.is_some(),
+            "Should have user content with function_response"
+        );
+
+        let fr_part = user_content
+            .unwrap()
+            .parts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|p| p.function_response.is_some())
+            .unwrap();
+        let fr = fr_part.function_response.as_ref().unwrap();
+
+        // Client-generated ID should be stripped (set to None)
+        assert_eq!(
+            fr.id, None,
+            "FunctionResponse.id should be None for client-generated call_id"
+        );
+    }
+
+    #[test]
+    fn test_function_response_order_matching() {
+        // When multiple FunctionCalls have client-generated IDs, FunctionResponses
+        // should be in the same order for correct matching by position
+        let call_id_1 = format!("{}uuid_first", CLIENT_GENERATED_CALL_ID_PREFIX);
+        let call_id_2 = format!("{}uuid_second", CLIENT_GENERATED_CALL_ID_PREFIX);
+        let call_id_3 = format!("{}uuid_third", CLIENT_GENERATED_CALL_ID_PREFIX);
+
+        let prompt = Prompt {
+            instructions: String::new(),
+            input: vec![
+                // Three FunctionCalls with client-generated IDs
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "tool_a".to_string(),
+                    arguments: r#"{"arg": "first"}"#.to_string(),
+                    call_id: call_id_1.clone(),
+                },
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "tool_b".to_string(),
+                    arguments: r#"{"arg": "second"}"#.to_string(),
+                    call_id: call_id_2.clone(),
+                },
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "tool_c".to_string(),
+                    arguments: r#"{"arg": "third"}"#.to_string(),
+                    call_id: call_id_3.clone(),
+                },
+                // Three FunctionCallOutputs in the same order
+                ResponseItem::FunctionCallOutput {
+                    call_id: call_id_1,
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"result": "output_1"}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: call_id_2,
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"result": "output_2"}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: call_id_3,
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"result": "output_3"}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+            ],
+            tools: vec![],
+            parallel_tool_calls: false,
+            output_schema: None,
+            previous_response_id: None,
+        };
+
+        let contents = prompt_to_contents(&prompt);
+
+        // Collect all function_response parts
+        let fr_parts: Vec<_> = contents
+            .iter()
+            .filter_map(|c| c.parts.as_ref())
+            .flat_map(|parts| parts.iter())
+            .filter(|p| p.function_response.is_some())
+            .collect();
+
+        assert_eq!(fr_parts.len(), 3, "Should have 3 FunctionResponse parts");
+
+        // All should have id=None (client-generated IDs stripped)
+        for (i, fr_part) in fr_parts.iter().enumerate() {
+            let fr = fr_part.function_response.as_ref().unwrap();
+            assert_eq!(
+                fr.id, None,
+                "FunctionResponse {} should have id=None for client-generated call_id",
+                i + 1
+            );
+        }
+
+        // Verify responses are in correct order by checking their content
+        let responses: Vec<serde_json::Value> = fr_parts
+            .iter()
+            .map(|p| {
+                p.function_response
+                    .as_ref()
+                    .unwrap()
+                    .response
+                    .clone()
+                    .unwrap()
+            })
+            .collect();
+
+        assert_eq!(responses[0]["result"], "output_1", "First response");
+        assert_eq!(responses[1]["result"], "output_2", "Second response");
+        assert_eq!(responses[2]["result"], "output_3", "Third response");
+    }
+
+    #[test]
+    fn test_function_response_mixed_ids() {
+        // Mix of server-provided and client-generated IDs
+        let server_call_id = "server_call_xyz".to_string();
+        let client_call_id = format!("{}uuid_client", CLIENT_GENERATED_CALL_ID_PREFIX);
+
+        let prompt = Prompt {
+            instructions: String::new(),
+            input: vec![
+                // Server-provided ID
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "tool_server".to_string(),
+                    arguments: "{}".to_string(),
+                    call_id: server_call_id.clone(),
+                },
+                // Client-generated ID
+                ResponseItem::FunctionCall {
+                    id: Some("resp-1".to_string()),
+                    name: "tool_client".to_string(),
+                    arguments: "{}".to_string(),
+                    call_id: client_call_id.clone(),
+                },
+                // Outputs in same order
+                ResponseItem::FunctionCallOutput {
+                    call_id: server_call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"from": "server"}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: client_call_id,
+                    output: FunctionCallOutputPayload {
+                        content: r#"{"from": "client"}"#.to_string(),
+                        content_items: None,
+                        success: Some(true),
+                    },
+                },
+            ],
+            tools: vec![],
+            parallel_tool_calls: false,
+            output_schema: None,
+            previous_response_id: None,
+        };
+
+        let contents = prompt_to_contents(&prompt);
+
+        // Collect all function_response parts
+        let fr_parts: Vec<_> = contents
+            .iter()
+            .filter_map(|c| c.parts.as_ref())
+            .flat_map(|parts| parts.iter())
+            .filter(|p| p.function_response.is_some())
+            .collect();
+
+        assert_eq!(fr_parts.len(), 2, "Should have 2 FunctionResponse parts");
+
+        // Find the server response (should have id preserved)
+        let server_fr = fr_parts.iter().find(|p| {
+            let fr = p.function_response.as_ref().unwrap();
+            fr.response.as_ref().map_or(false, |r| r["from"] == "server")
+        });
+        assert!(server_fr.is_some(), "Should find server function response");
+        assert_eq!(
+            server_fr
+                .unwrap()
+                .function_response
+                .as_ref()
+                .unwrap()
+                .id,
+            Some(server_call_id),
+            "Server-provided ID should be preserved"
+        );
+
+        // Find the client response (should have id=None)
+        let client_fr = fr_parts.iter().find(|p| {
+            let fr = p.function_response.as_ref().unwrap();
+            fr.response.as_ref().map_or(false, |r| r["from"] == "client")
+        });
+        assert!(client_fr.is_some(), "Should find client function response");
+        assert_eq!(
+            client_fr
+                .unwrap()
+                .function_response
+                .as_ref()
+                .unwrap()
+                .id,
+            None,
+            "Client-generated ID should be stripped"
         );
     }
 }

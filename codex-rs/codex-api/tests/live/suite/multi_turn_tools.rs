@@ -17,11 +17,19 @@
 //! 6. LLM -> Final response with recommendation
 
 use anyhow::Result;
-use codex_api::{AdapterConfig, ProviderAdapter, ResponseEvent};
-use codex_protocol::models::{ContentItem, FunctionCallOutputPayload, ResponseItem};
-use serde_json::{Value as JsonValue, json};
+use codex_api::AdapterConfig;
+use codex_api::ProviderAdapter;
+use codex_api::ResponseEvent;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 
-use crate::common::{extract_function_calls, extract_text, multi_turn_prompt, tool_prompt};
+use crate::common::extract_function_calls;
+use crate::common::extract_text;
+use crate::common::multi_turn_prompt;
+use crate::common::tool_prompt;
 
 /// Travel-related tool definitions.
 fn travel_tools() -> Vec<JsonValue> {
@@ -237,7 +245,8 @@ pub async fn run_message_assembly(
     adapter: &dyn ProviderAdapter,
     config: &AdapterConfig,
 ) -> Result<()> {
-    use crate::common::{tool_output_prompt, weather_tool};
+    use crate::common::tool_output_prompt;
+    use crate::common::weather_tool;
 
     let tools = vec![weather_tool()];
 

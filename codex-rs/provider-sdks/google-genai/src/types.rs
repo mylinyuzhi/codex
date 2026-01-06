@@ -148,6 +148,7 @@ pub enum ThinkingLevel {
     #[default]
     ThinkingLevelUnspecified,
     Low,
+    Medium,
     High,
 }
 

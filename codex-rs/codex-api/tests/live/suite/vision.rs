@@ -3,9 +3,12 @@
 //! Tests multi-modal image understanding capabilities.
 
 use anyhow::Result;
-use codex_api::{AdapterConfig, ProviderAdapter};
+use codex_api::AdapterConfig;
+use codex_api::ProviderAdapter;
 
-use crate::common::{TEST_RED_SQUARE_BASE64, extract_text, image_prompt};
+use crate::common::TEST_RED_SQUARE_BASE64;
+use crate::common::extract_text;
+use crate::common::image_prompt;
 
 /// Test image understanding.
 ///

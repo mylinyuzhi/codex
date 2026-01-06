@@ -3,12 +3,15 @@
 //! Tests tool/function calling capabilities including single-turn and complete flow.
 
 use anyhow::Result;
-use codex_api::{AdapterConfig, ProviderAdapter};
+use codex_api::AdapterConfig;
+use codex_api::ProviderAdapter;
 
-use crate::common::{
-    extract_function_calls, extract_text, has_function_call, tool_output_prompt, tool_prompt,
-    weather_tool,
-};
+use crate::common::extract_function_calls;
+use crate::common::extract_text;
+use crate::common::has_function_call;
+use crate::common::tool_output_prompt;
+use crate::common::tool_prompt;
+use crate::common::weather_tool;
 
 /// Test basic tool calling.
 ///

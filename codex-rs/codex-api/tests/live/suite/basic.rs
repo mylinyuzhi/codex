@@ -3,9 +3,11 @@
 //! Tests simple text completion and token usage reporting.
 
 use anyhow::Result;
-use codex_api::{AdapterConfig, ProviderAdapter};
+use codex_api::AdapterConfig;
+use codex_api::ProviderAdapter;
 
-use crate::common::{extract_text, text_prompt};
+use crate::common::extract_text;
+use crate::common::text_prompt;
 
 /// Test basic text generation.
 ///
@@ -42,7 +44,9 @@ pub async fn run_token_usage(adapter: &dyn ProviderAdapter, config: &AdapterConf
 ///
 /// Verifies that the adapter preserves context across conversation turns.
 pub async fn run_multi_turn(adapter: &dyn ProviderAdapter, config: &AdapterConfig) -> Result<()> {
-    use crate::common::{assistant_message, multi_turn_prompt, user_message};
+    use crate::common::assistant_message;
+    use crate::common::multi_turn_prompt;
+    use crate::common::user_message;
 
     let history = vec![
         user_message("My name is TestUser. Please remember it."),
