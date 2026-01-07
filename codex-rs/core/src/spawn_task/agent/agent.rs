@@ -8,6 +8,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::agent::AgentControl;
 use crate::auth::AuthManager;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
@@ -222,6 +223,7 @@ impl SpawnTask for SpawnAgent {
                 context.skills_manager,
                 InitialHistory::New,
                 SessionSource::SpawnAgent,
+                AgentControl::default(),
             )
             .await
             {

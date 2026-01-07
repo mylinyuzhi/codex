@@ -179,7 +179,7 @@ fn tool_name(tool: &ToolSpec) -> &str {
     match tool {
         ToolSpec::Function(t) => &t.name,
         ToolSpec::LocalShell {} => "local_shell",
-        ToolSpec::WebSearch {} => "web_search",
+        ToolSpec::WebSearch { .. } => "web_search",
         ToolSpec::Freeform(t) => &t.name,
     }
 }
@@ -203,7 +203,7 @@ fn tool_variant(tool: &ToolSpec) -> Option<&'static str> {
             }
         }
         ToolSpec::LocalShell {} => Some("API"),
-        ToolSpec::WebSearch {} => Some("API"),
+        ToolSpec::WebSearch { .. } => Some("API"),
         ToolSpec::Freeform(_) => Some("freeform"),
     }
 }

@@ -474,7 +474,13 @@ impl LoopDriver {
             );
 
             // 2. Submit via Codex API
-            if let Err(e) = codex.submit(Op::UserInput { items: input }).await {
+            if let Err(e) = codex
+                .submit(Op::UserInput {
+                    items: input,
+                    final_output_json_schema: None,
+                })
+                .await
+            {
                 warn!(
                     iteration = self.iteration,
                     error = %e,

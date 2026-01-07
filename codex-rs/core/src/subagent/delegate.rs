@@ -84,7 +84,10 @@ pub(crate) async fn run_subagent_delegate(
         text: prompt.clone(),
     }];
     codex
-        .submit(Op::UserInput { items: input })
+        .submit(Op::UserInput {
+            items: input,
+            final_output_json_schema: None,
+        })
         .await
         .map_err(|e| CodexErr::Fatal(format!("Failed to submit prompt: {e}")))?;
 
