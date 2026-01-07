@@ -22,7 +22,6 @@ lazy_static! {
 
 fn beta_tooltips() -> Vec<&'static str> {
     all_features()
-        .iter()
         .filter_map(|spec| spec.stage.beta_announcement())
         .collect()
 }

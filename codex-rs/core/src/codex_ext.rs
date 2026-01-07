@@ -54,7 +54,7 @@ pub fn cleanup_session_resources(conversation_id: &ConversationId) {
 /// Filter priority:
 /// 1. Plan Mode filter (if active) - restricts to read-only tools + plan file
 /// 2. Subagent filter (if configured) - overrides plan mode filter
-pub fn apply_tool_filter(
+pub(crate) fn apply_tool_filter(
     tools_config: &mut ToolsConfig,
     ext_tool_filter: Option<&ToolFilter>,
     conversation_id: ConversationId,

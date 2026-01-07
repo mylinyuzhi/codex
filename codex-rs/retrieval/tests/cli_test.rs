@@ -258,8 +258,6 @@ async fn test_retrieval_service_creation() {
 
 #[tokio::test]
 async fn test_search_empty_index() {
-    use codex_retrieval::SearchRequest;
-
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();

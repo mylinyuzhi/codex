@@ -1429,6 +1429,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1452,6 +1453,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
+            web_search_config: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
