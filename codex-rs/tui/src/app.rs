@@ -38,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::thinking::ThinkingState;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -293,6 +294,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) current_model: String,
+    pub(crate) current_output_style: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -321,6 +323,9 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Session-level thinking state for ultrathink toggle.
+    pub(crate) thinking_state: ThinkingState,
 }
 
 impl App {
@@ -424,6 +429,17 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Initialize retrieval service early (background task)
+        // This starts indexing immediately when cwd is known, rather than waiting
+        // for the first code_search or repomap tool invocation.
+        codex_core::spawn_retrieval_init(
+            &config.cwd,
+            config
+                .features
+                .enabled(codex_core::features::Feature::Retrieval),
+        );
+
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -434,6 +450,7 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -447,6 +464,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -802,6 +820,40 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
+            AppEvent::SetOutputStyle { style_name } => {
+                self.current_output_style = style_name.clone();
+                self.chat_widget.set_output_style(&style_name);
+                self.chat_widget
+                    .add_info_message(format!("Output style set to: {style_name}"), None);
+            }
+            AppEvent::TogglePlanMode => {
+                if self.chat_widget.is_plan_mode() {
+                    // Exit plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: false,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Exiting plan mode...".to_string(), None);
+                } else if self.chat_widget.conversation_id().is_some() {
+                    // Enter plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: true,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Entering plan mode...".to_string(), None);
+                }
+            }
+            AppEvent::ToggleUltrathink => {
+                let new_state = self.thinking_state.toggle();
+                let msg = if new_state {
+                    "Ultrathink: ON"
+                } else {
+                    "Ultrathink: OFF"
+                };
+                self.chat_widget.add_info_message(msg.to_string(), None);
+            }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
@@ -1087,6 +1139,27 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::StartSpawnTask { args } => {
+                self.handle_start_spawn_task(args);
+            }
+            AppEvent::SpawnTaskResult { message } => {
+                self.chat_widget.add_info_message(message, None);
+            }
+            AppEvent::SpawnListRequest => {
+                self.handle_spawn_list();
+            }
+            AppEvent::SpawnStatusRequest { task_id } => {
+                self.handle_spawn_status(&task_id).await;
+            }
+            AppEvent::SpawnKillRequest { task_id } => {
+                self.handle_spawn_kill(&task_id).await;
+            }
+            AppEvent::SpawnDropRequest { task_id } => {
+                self.handle_spawn_drop(&task_id).await;
+            }
+            AppEvent::SpawnMergeRequest { task_ids, prompt } => {
+                self.handle_spawn_merge(task_ids, prompt).await;
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();
@@ -1122,6 +1195,36 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                     ));
                 }
+                ApprovalRequest::Plan {
+                    plan_content,
+                    plan_file_path,
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_plan_overlay_paragraph(
+                        &plan_content,
+                        &plan_file_path,
+                    );
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "P L A N".to_string(),
+                    ));
+                }
+                ApprovalRequest::EnterPlanMode => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_enter_plan_mode_paragraph();
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E N T E R   P L A N   M O D E".to_string(),
+                    ));
+                }
+                ApprovalRequest::UserQuestion { questions, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = crate::app_ext::build_user_question_paragraph(&questions);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "U S E R   Q U E S T I O N".to_string(),
+                    ));
+                }
             },
         }
         Ok(true)
@@ -1152,6 +1255,253 @@ impl App {
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
+    }
+
+    fn handle_start_spawn_task(&mut self, args: codex_core::spawn_task::SpawnCommandArgs) {
+        use codex_core::spawn_task::agent::SpawnAgent;
+        use codex_core::spawn_task::agent::SpawnAgentContext;
+        use codex_core::spawn_task::agent::SpawnAgentParams;
+        use codex_core::spawn_task::plan_fork::read_plan_content;
+        use codex_core::subagent::ApprovalMode;
+        use codex_core::subagent::get_or_create_stores;
+
+        let task_id = args
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("spawn-{}", chrono::Utc::now().timestamp_millis()));
+
+        let loop_condition = match args.loop_condition {
+            Some(cond) => cond,
+            None => {
+                self.chat_widget
+                    .add_info_message("Spawn error: missing --iter or --time".to_string(), None);
+                return;
+            }
+        };
+
+        let prompt = match args.prompt {
+            Some(p) => p,
+            None => {
+                self.chat_widget
+                    .add_info_message("Spawn error: missing --prompt".to_string(), None);
+                return;
+            }
+        };
+
+        // Read parent plan content if:
+        // 1. --detach is NOT set
+        // 2. Parent has a plan file that exists and is non-empty
+        let forked_plan_content = if !args.detach {
+            self.chat_widget.conversation_id().and_then(|conv_id| {
+                let stores = get_or_create_stores(conv_id);
+                match stores.get_plan_file_path() {
+                    Some(plan_path) => {
+                        let content = read_plan_content(&plan_path);
+                        if let Some(ref c) = content {
+                            tracing::info!(
+                                task_id = %task_id,
+                                content_len = c.len(),
+                                "Forking parent plan to spawn task"
+                            );
+                        } else {
+                            tracing::debug!(
+                                task_id = %task_id,
+                                path = %plan_path.display(),
+                                "Parent plan file empty or unreadable, skipping fork"
+                            );
+                        }
+                        content
+                    }
+                    None => {
+                        tracing::debug!(task_id = %task_id, "No parent plan file, skipping fork");
+                        None
+                    }
+                }
+            })
+        } else {
+            tracing::debug!(task_id = %task_id, "Plan fork disabled (--detach)");
+            None
+        };
+
+        let params = SpawnAgentParams {
+            task_id: task_id.clone(),
+            loop_condition: loop_condition.clone(),
+            prompt: prompt.clone(),
+            cwd: self.config.cwd.to_path_buf(),
+            custom_loop_prompt: None,
+            approval_mode: ApprovalMode::DontAsk,
+            model_override: args.model.clone(),
+            forked_plan_content,
+        };
+
+        let context = SpawnAgentContext {
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            skills_manager: self.server.skills_manager(),
+            config: self.config.clone(),
+            codex_home: self.config.codex_home.clone(),
+        };
+
+        let agent = SpawnAgent::new(params, context);
+        let tx = self.app_event_tx.clone();
+
+        // Spawn async task to run the agent
+        tokio::spawn(async move {
+            use codex_core::spawn_task::SpawnTask;
+
+            // Save initial metadata
+            let metadata = agent.metadata();
+            if let Err(e) = codex_core::spawn_task::save_metadata(&metadata.cwd, &metadata).await {
+                tracing::warn!(error = %e, "Failed to save spawn task metadata");
+            }
+
+            // Start the agent
+            let handle = Box::new(agent).spawn();
+            let result = handle.await;
+
+            let message = match result {
+                Ok(task_result) => {
+                    format!(
+                        "Spawn task '{}' completed: {} iterations succeeded, {} failed",
+                        task_result.task_id,
+                        task_result.iterations_completed,
+                        task_result.iterations_failed
+                    )
+                }
+                Err(e) => {
+                    format!("Spawn task failed: {e}")
+                }
+            };
+
+            tx.send(AppEvent::SpawnTaskResult { message });
+        });
+
+        self.chat_widget.add_info_message(
+            format!(
+                "Started spawn task '{}' with {} - {}",
+                task_id,
+                loop_condition.display(),
+                prompt
+            ),
+            None,
+        );
+    }
+
+    fn handle_spawn_list(&mut self) {
+        use crate::spawn_command_ext::format_task_list;
+        use crate::spawn_command_ext::list_task_metadata_sync;
+
+        match list_task_metadata_sync(&self.config.codex_home) {
+            Ok(tasks) => {
+                let output = if tasks.is_empty() {
+                    "No spawn tasks found.".to_string()
+                } else {
+                    format!("Spawn Tasks:{}", format_task_list(&tasks))
+                };
+                self.chat_widget.add_info_message(output, None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to list tasks: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_status(&mut self, task_id: &str) {
+        use crate::spawn_command_ext::format_task_status;
+        use codex_core::spawn_task::load_metadata;
+
+        match load_metadata(&self.config.codex_home, task_id).await {
+            Ok(metadata) => {
+                let output = format_task_status(&metadata);
+                self.chat_widget.add_info_message(output, None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' not found: {e}", task_id), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_kill(&mut self, task_id: &str) {
+        use codex_core::spawn_task::SpawnTaskManager;
+
+        let manager = SpawnTaskManager::new(
+            self.config.codex_home.clone(),
+            self.config.cwd.to_path_buf(),
+        );
+
+        match manager.kill(task_id).await {
+            Ok(()) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' cancelled.", task_id), None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to kill task: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_drop(&mut self, task_id: &str) {
+        use codex_core::spawn_task::SpawnTaskManager;
+
+        let manager = SpawnTaskManager::new(
+            self.config.codex_home.clone(),
+            self.config.cwd.to_path_buf(),
+        );
+
+        match manager.drop(task_id).await {
+            Ok(()) => {
+                self.chat_widget
+                    .add_info_message(format!("Task '{}' dropped.", task_id), None);
+            }
+            Err(e) => {
+                self.chat_widget
+                    .add_info_message(format!("Failed to drop task: {e}"), None);
+            }
+        }
+    }
+
+    async fn handle_spawn_merge(&mut self, task_ids: Vec<String>, prompt: Option<String>) {
+        use codex_core::spawn_task::MergeRequest;
+        use codex_core::spawn_task::build_merge_prompt;
+        use codex_core::spawn_task::load_metadata;
+
+        // Load metadata for all tasks
+        let mut tasks_metadata = Vec::new();
+        for task_id in &task_ids {
+            match load_metadata(&self.config.codex_home, task_id).await {
+                Ok(metadata) => tasks_metadata.push(metadata),
+                Err(e) => {
+                    self.chat_widget
+                        .add_info_message(format!("Task '{}' not found: {e}", task_id), None);
+                    return;
+                }
+            }
+        }
+
+        // Build merge request (prompt -> query for MergeRequest)
+        let request = MergeRequest {
+            task_ids: task_ids.clone(),
+            query: prompt,
+        };
+
+        // Build merge prompt
+        let prompt = build_merge_prompt(&request, &tasks_metadata, None);
+
+        // Send as user message to the agent
+        self.chat_widget.add_info_message(
+            format!(
+                "Merging {} task(s): {}",
+                task_ids.len(),
+                task_ids.join(", ")
+            ),
+            None,
+        );
+
+        // Submit merge prompt to agent via chat widget
+        self.chat_widget.submit_text_message(&prompt);
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -1367,6 +1717,7 @@ mod tests {
             auth_manager,
             config,
             current_model,
+            current_output_style: String::from("default"),
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -1380,6 +1731,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         }
     }
 
@@ -1407,6 +1759,7 @@ mod tests {
                 auth_manager,
                 config,
                 current_model,
+                current_output_style: String::from("default"),
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
@@ -1420,6 +1773,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                thinking_state: ThinkingState::default(),
             },
             rx,
             op_rx,

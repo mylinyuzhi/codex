@@ -1,4 +1,4 @@
-use codex_core::features::FEATURES;
+use codex_core::features::all_features;
 use lazy_static::lazy_static;
 use rand::Rng;
 
@@ -21,7 +21,7 @@ lazy_static! {
 }
 
 fn beta_tooltips() -> Vec<&'static str> {
-    FEATURES
+    all_features()
         .iter()
         .filter_map(|spec| spec.stage.beta_announcement())
         .collect()

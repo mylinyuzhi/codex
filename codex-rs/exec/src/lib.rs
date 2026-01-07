@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+pub mod sdk_v2;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -27,6 +28,8 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::loop_driver::LoopCondition;
+use codex_core::loop_driver::LoopPromptBuilder;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -44,11 +47,11 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::Instant;
 use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
@@ -68,6 +71,11 @@ enum InitialOperation {
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    // Check SDK mode FIRST, before any other initialization
+    if sdk_v2::is_sdk_mode() {
+        return sdk_v2::run_sdk_mode(cli).await;
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -91,7 +99,27 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        iter,
+        time,
     } = cli;
+
+    // Parse loop condition from --iter or --time
+    let loop_condition: Option<LoopCondition> = match (&iter, &time) {
+        (Some(count), None) => Some(LoopCondition::Iters { count: *count }),
+        (None, Some(duration_str)) => match LoopCondition::parse(duration_str) {
+            Ok(cond) => Some(cond),
+            Err(e) => {
+                eprintln!("Invalid --time value: {e}");
+                std::process::exit(1);
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            // This should be caught by clap conflicts_with, but just in case
+            eprintln!("Cannot specify both --iter and --time");
+            std::process::exit(1);
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -101,19 +129,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -218,6 +233,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
 
+    // Build fmt layer with config-driven settings (timezone, log levels, etc.)
+    let fmt_layer = codex_utils_common::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(stderr_with_ansi)
+            .with_writer(std::io::stderr),
+        &config.ext.logging,
+        "error"
+    );
+
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");
         std::process::exit(1);
@@ -275,6 +299,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_sandbox_policy = config.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
+
+    // Initialize retrieval service early (background task)
+    // This starts indexing immediately when cwd is known, rather than waiting
+    // for the first code_search or repomap tool invocation.
+    codex_core::spawn_retrieval_init(
+        &default_cwd,
+        config
+            .features
+            .enabled(codex_core::features::Feature::Retrieval),
+    );
 
     if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
@@ -423,10 +457,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let task_id = conversation
                 .submit(Op::UserTurn {
                     items,
-                    cwd: default_cwd,
+                    cwd: default_cwd.clone(),
                     approval_policy: default_approval_policy,
                     sandbox_policy: default_sandbox_policy.clone(),
-                    model: default_model,
+                    model: default_model.clone(),
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
@@ -446,6 +480,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+
+    // Loop iteration tracking for --iter/--time modes
+    let loop_start_time = Instant::now();
+    let mut current_iteration: i32 = 0;
+    let mut iterations_succeeded: i32 = 0;
+    let mut iterations_failed: i32 = 0;
+    let original_prompt = prompt_summary.clone();
+
     while let Some(event) = rx.recv().await {
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
@@ -464,7 +506,66 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                conversation.submit(Op::Shutdown).await?;
+                // Check if we're in loop mode and should continue
+                let should_continue = match &loop_condition {
+                    Some(LoopCondition::Iters { count }) => current_iteration + 1 < *count,
+                    Some(LoopCondition::Duration { seconds }) => {
+                        loop_start_time.elapsed().as_secs() < (*seconds as u64)
+                    }
+                    None => false,
+                };
+
+                // Track iteration result
+                if error_seen {
+                    iterations_failed += 1;
+                } else {
+                    iterations_succeeded += 1;
+                }
+                current_iteration += 1;
+
+                if should_continue {
+                    // Build continuation prompt with git context
+                    let continuation_prompt =
+                        LoopPromptBuilder::build(&original_prompt, current_iteration);
+
+                    info!(
+                        iteration = current_iteration,
+                        succeeded = iterations_succeeded,
+                        failed = iterations_failed,
+                        "Starting next iteration"
+                    );
+
+                    // Reset error tracking for new iteration
+                    error_seen = false;
+
+                    // Submit new UserTurn for next iteration
+                    let items = vec![UserInput::Text {
+                        text: continuation_prompt,
+                    }];
+                    conversation
+                        .submit(Op::UserTurn {
+                            items,
+                            cwd: default_cwd.clone(),
+                            approval_policy: default_approval_policy,
+                            sandbox_policy: default_sandbox_policy.clone(),
+                            model: default_model.clone(),
+                            effort: default_effort,
+                            summary: default_summary,
+                            final_output_json_schema: None,
+                        })
+                        .await?;
+                } else {
+                    // No more iterations, proceed with shutdown
+                    if loop_condition.is_some() {
+                        info!(
+                            total_iterations = current_iteration,
+                            succeeded = iterations_succeeded,
+                            failed = iterations_failed,
+                            "Loop complete"
+                        );
+                    }
+                    conversation.submit(Op::Shutdown).await?;
+                }
             }
             CodexStatus::Shutdown => {
                 break;
@@ -472,7 +573,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     }
     event_processor.print_final_output();
-    if error_seen {
+    if error_seen || iterations_failed > 0 {
         std::process::exit(1);
     }
 

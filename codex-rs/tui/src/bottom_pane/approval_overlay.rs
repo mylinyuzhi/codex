@@ -1,6 +1,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::approval_overlay_ext;
+pub use super::approval_overlay_ext::MultiQuestionState;
+pub use super::approval_overlay_ext::MultiSelectState;
+use super::approval_overlay_ext::UserQuestionFlowAction;
+use super::approval_overlay_ext::build_approval_footer_hint;
+use super::approval_overlay_ext::build_enter_plan_mode_header;
+use super::approval_overlay_ext::build_next_question_view;
+use super::approval_overlay_ext::build_plan_request_header;
+use super::approval_overlay_ext::build_selection_items;
+use super::approval_overlay_ext::build_user_question_header;
+use super::approval_overlay_ext::get_selected_labels;
+use super::approval_overlay_ext::init_user_question_state;
+use super::approval_overlay_ext::process_user_question_answer;
+use super::approval_overlay_ext::process_user_question_confirm;
+use super::approval_overlay_ext::toggle_checkbox_label;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -23,6 +39,8 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::protocol_ext::PlanExitPermissionMode;
+use codex_protocol::protocol_ext::UserQuestion;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -56,6 +74,18 @@ pub(crate) enum ApprovalRequest {
         request_id: RequestId,
         message: String,
     },
+    /// Plan Mode approval request - user approves or rejects the plan.
+    Plan {
+        plan_content: String,
+        plan_file_path: String,
+    },
+    /// Plan Mode entry request - LLM requests to enter plan mode.
+    EnterPlanMode,
+    /// User question request - LLM asks the user questions.
+    UserQuestion {
+        tool_call_id: String,
+        questions: Vec<UserQuestion>,
+    },
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
@@ -69,6 +99,10 @@ pub(crate) struct ApprovalOverlay {
     current_complete: bool,
     done: bool,
     features: Features,
+    /// State for multi-question flow (answering questions one at a time)
+    multi_question_state: Option<MultiQuestionState>,
+    /// State for multiSelect toggle (checkbox-style selection)
+    multi_select_state: Option<MultiSelectState>,
 }
 
 impl ApprovalOverlay {
@@ -83,6 +117,8 @@ impl ApprovalOverlay {
             current_complete: false,
             done: false,
             features,
+            multi_question_state: None,
+            multi_select_state: None,
         };
         view.set_current(request);
         view
@@ -94,10 +130,26 @@ impl ApprovalOverlay {
 
     fn set_current(&mut self, request: ApprovalRequest) {
         self.current_request = Some(request.clone());
-        let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
+        let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request.clone());
         self.current_variant = Some(variant.clone());
         self.current_complete = false;
-        let (options, params) = Self::build_options(variant, header, &self.features);
+
+        // Initialize states using ext helper
+        if let ApprovalRequest::UserQuestion {
+            tool_call_id,
+            questions,
+        } = request
+        {
+            let (mq, ms) = init_user_question_state(&tool_call_id, &questions);
+            self.multi_question_state = mq;
+            self.multi_select_state = ms;
+        } else {
+            self.multi_question_state = None;
+            self.multi_select_state = None;
+        }
+
+        let (options, params) =
+            Self::build_options(variant, header, &self.features, &self.multi_question_state);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
@@ -106,6 +158,7 @@ impl ApprovalOverlay {
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
         features: &Features,
+        multi_question_state: &Option<MultiQuestionState>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
@@ -123,6 +176,47 @@ impl ApprovalOverlay {
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
             ),
+            ApprovalVariant::Plan => (
+                approval_overlay_ext::plan_options(),
+                "Would you like to approve this plan?".to_string(),
+            ),
+            ApprovalVariant::EnterPlanMode => (
+                approval_overlay_ext::enter_plan_mode_options(),
+                "Allow the LLM to enter plan mode?".to_string(),
+            ),
+            ApprovalVariant::UserQuestion {
+                tool_call_id,
+                questions,
+            } => {
+                // For multi-question, show current question only
+                if let Some(mq_state) = multi_question_state {
+                    let current_q = &mq_state.questions[mq_state.current_index];
+                    let total = mq_state.questions.len();
+                    let current_num = mq_state.current_index + 1;
+                    (
+                        approval_overlay_ext::single_question_options(
+                            tool_call_id.clone(),
+                            current_q.clone(),
+                            current_q.multi_select,
+                        ),
+                        format!(
+                            "[{}/{}] {}: {}",
+                            current_num, total, current_q.header, current_q.question
+                        ),
+                    )
+                } else {
+                    // Single question: show directly
+                    let q = &questions[0];
+                    (
+                        approval_overlay_ext::single_question_options(
+                            tool_call_id.clone(),
+                            q.clone(),
+                            q.multi_select,
+                        ),
+                        format!("{}: {}", q.header, q.question),
+                    )
+                }
+            }
         };
 
         let header = Box::new(ColumnRenderable::with([
@@ -163,16 +257,20 @@ impl ApprovalOverlay {
         if self.current_complete {
             return;
         }
-        let Some(option) = self.options.get(actual_idx) else {
+        let Some(option) = self.options.get(actual_idx).cloned() else {
             return;
         };
-        if let Some(variant) = self.current_variant.as_ref() {
-            match (variant, &option.decision) {
+        if let Some(variant) = self.current_variant.clone() {
+            match (&variant, &option.decision) {
                 (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_exec_decision(id, command, decision.clone());
+                    self.current_complete = true;
+                    self.advance_queue();
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
+                    self.current_complete = true;
+                    self.advance_queue();
                 }
                 (
                     ApprovalVariant::McpElicitation {
@@ -182,13 +280,165 @@ impl ApprovalOverlay {
                     ApprovalDecision::McpElicitation(decision),
                 ) => {
                     self.handle_elicitation_decision(server_name, request_id, *decision);
+                    self.current_complete = true;
+                    self.advance_queue();
+                }
+                (
+                    ApprovalVariant::Plan,
+                    ApprovalDecision::PlanApproval {
+                        approved,
+                        permission_mode,
+                    },
+                ) => {
+                    self.handle_plan_decision(*approved, permission_mode.clone());
+                    self.current_complete = true;
+                    self.advance_queue();
+                }
+                (
+                    ApprovalVariant::EnterPlanMode,
+                    ApprovalDecision::EnterPlanModeApproval { approved },
+                ) => {
+                    self.handle_enter_plan_mode_decision(*approved);
+                    self.current_complete = true;
+                    self.advance_queue();
+                }
+                (
+                    ApprovalVariant::UserQuestion { tool_call_id, .. },
+                    ApprovalDecision::UserQuestionAnswer { answers, .. },
+                ) => {
+                    let action = process_user_question_answer(
+                        &mut self.multi_question_state,
+                        &self.multi_select_state,
+                        answers,
+                        actual_idx,
+                        self.options.len(),
+                    );
+                    match action {
+                        UserQuestionFlowAction::ToggleOption(idx) => {
+                            self.toggle_multi_select_option(idx);
+                            return;
+                        }
+                        UserQuestionFlowAction::AdvanceQuestion => {
+                            self.advance_to_next_question();
+                            return;
+                        }
+                        UserQuestionFlowAction::Complete {
+                            tool_call_id: tid,
+                            answers: ans,
+                        } => {
+                            let final_id = if tid.is_empty() {
+                                tool_call_id.clone()
+                            } else {
+                                tid
+                            };
+                            self.multi_question_state = None;
+                            self.multi_select_state = None;
+                            self.handle_user_question_answer(&final_id, ans);
+                            self.current_complete = true;
+                            self.advance_queue();
+                        }
+                    }
+                }
+                (
+                    ApprovalVariant::UserQuestion { tool_call_id, .. },
+                    ApprovalDecision::UserQuestionConfirm { header, .. },
+                ) => {
+                    let selected_labels = self.get_multi_select_labels();
+                    let action = process_user_question_confirm(
+                        &mut self.multi_question_state,
+                        selected_labels,
+                        header,
+                    );
+                    self.multi_select_state = None;
+                    match action {
+                        UserQuestionFlowAction::AdvanceQuestion => {
+                            self.advance_to_next_question();
+                            return;
+                        }
+                        UserQuestionFlowAction::Complete {
+                            tool_call_id: tid,
+                            answers,
+                        } => {
+                            let final_id = if tid.is_empty() {
+                                tool_call_id.clone()
+                            } else {
+                                tid
+                            };
+                            self.multi_question_state = None;
+                            self.handle_user_question_answer(&final_id, answers);
+                            self.current_complete = true;
+                            self.advance_queue();
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
         }
+    }
 
-        self.current_complete = true;
-        self.advance_queue();
+    /// Toggle a multi-select option and update the display.
+    fn toggle_multi_select_option(&mut self, option_index: usize) {
+        let Some(ref mut ms_state) = self.multi_select_state else {
+            return;
+        };
+
+        // Toggle the selection
+        if ms_state.selected_indices.contains(&option_index) {
+            ms_state.selected_indices.remove(&option_index);
+        } else {
+            ms_state.selected_indices.insert(option_index);
+        }
+
+        // Update the option label to show [x] or [ ] using ext helper
+        if let Some(option) = self.options.get_mut(option_index) {
+            let is_selected = ms_state.selected_indices.contains(&option_index);
+            option.label = toggle_checkbox_label(&option.label, is_selected);
+        }
+
+        // Rebuild the list items with updated labels
+        self.rebuild_list_items();
+    }
+
+    /// Get the labels of all selected options in multi-select mode.
+    fn get_multi_select_labels(&self) -> Vec<String> {
+        let Some(ref ms_state) = self.multi_select_state else {
+            return Vec::new();
+        };
+        get_selected_labels(&ms_state.selected_indices, &self.options)
+    }
+
+    /// Rebuild list items after option labels change (for multi-select toggle).
+    fn rebuild_list_items(&mut self) {
+        self.list.update_items(build_selection_items(&self.options));
+    }
+
+    /// Advance to the next question in multi-question flow.
+    fn advance_to_next_question(&mut self) {
+        let Some(ref mq_state) = self.multi_question_state else {
+            return;
+        };
+
+        // Set up multi-select state if needed
+        let current_q = &mq_state.questions[mq_state.current_index];
+        if current_q.multi_select {
+            self.multi_select_state = Some(MultiSelectState::default());
+        } else {
+            self.multi_select_state = None;
+        }
+
+        // Build view components using ext
+        let (options, header) = build_next_question_view(mq_state);
+
+        let params = SelectionViewParams {
+            footer_hint: Some(build_approval_footer_hint()),
+            items: build_selection_items(&options),
+            header: Box::new(header),
+            ..Default::default()
+        };
+
+        self.options = options;
+        self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
@@ -218,6 +468,31 @@ impl ApprovalOverlay {
                 server_name: server_name.to_string(),
                 request_id: request_id.clone(),
                 decision,
+            }));
+    }
+
+    fn handle_plan_decision(
+        &self,
+        approved: bool,
+        permission_mode: Option<PlanExitPermissionMode>,
+    ) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::PlanModeApproval {
+                approved,
+                permission_mode,
+            }));
+    }
+
+    fn handle_enter_plan_mode_decision(&self, approved: bool) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::EnterPlanModeApproval { approved }));
+    }
+
+    fn handle_user_question_answer(&self, tool_call_id: &str, answers: HashMap<String, String>) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::UserQuestionAnswer {
+                tool_call_id: tool_call_id.to_string(),
+                answers,
             }));
     }
 
@@ -295,6 +570,16 @@ impl BottomPaneView for ApprovalOverlay {
                         request_id,
                         ElicitationAction::Cancel,
                     );
+                }
+                ApprovalVariant::Plan => {
+                    self.handle_plan_decision(false, None);
+                }
+                ApprovalVariant::EnterPlanMode => {
+                    self.handle_enter_plan_mode_decision(false);
+                }
+                ApprovalVariant::UserQuestion { tool_call_id, .. } => {
+                    // On cancel, send empty answers
+                    self.handle_user_question_answer(tool_call_id, HashMap::new());
                 }
             }
         }
@@ -405,6 +690,37 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(header),
                 }
             }
+            ApprovalRequest::Plan {
+                plan_content,
+                plan_file_path,
+            } => {
+                let header = build_plan_request_header(&plan_content, &plan_file_path);
+                Self {
+                    variant: ApprovalVariant::Plan,
+                    header: Box::new(header),
+                }
+            }
+            ApprovalRequest::EnterPlanMode => {
+                let header = build_enter_plan_mode_header();
+                Self {
+                    variant: ApprovalVariant::EnterPlanMode,
+                    header: Box::new(header),
+                }
+            }
+            ApprovalRequest::UserQuestion {
+                tool_call_id,
+                questions,
+            } => {
+                // Build header using ext helper
+                let header = build_user_question_header(&questions);
+                Self {
+                    variant: ApprovalVariant::UserQuestion {
+                        tool_call_id,
+                        questions,
+                    },
+                    header: Box::new(header),
+                }
+            }
         }
     }
 }
@@ -423,20 +739,46 @@ enum ApprovalVariant {
         server_name: String,
         request_id: RequestId,
     },
+    Plan,
+    EnterPlanMode,
+    UserQuestion {
+        tool_call_id: String,
+        questions: Vec<UserQuestion>,
+    },
 }
 
 #[derive(Clone)]
-enum ApprovalDecision {
+#[allow(dead_code)]
+pub(super) enum ApprovalDecision {
     Review(ReviewDecision),
     McpElicitation(ElicitationAction),
+    /// Plan Mode approval decision.
+    PlanApproval {
+        approved: bool,
+        permission_mode: Option<PlanExitPermissionMode>,
+    },
+    /// Enter Plan Mode approval decision.
+    EnterPlanModeApproval {
+        approved: bool,
+    },
+    /// User Question answer decision (single-select or option toggle for multi-select).
+    UserQuestionAnswer {
+        tool_call_id: String,
+        answers: HashMap<String, String>,
+    },
+    /// User Question multi-select confirm (sends all toggled selections).
+    UserQuestionConfirm {
+        tool_call_id: String,
+        header: String,
+    },
 }
 
 #[derive(Clone)]
-struct ApprovalOption {
-    label: String,
-    decision: ApprovalDecision,
-    display_shortcut: Option<KeyBinding>,
-    additional_shortcuts: Vec<KeyBinding>,
+pub(super) struct ApprovalOption {
+    pub label: String,
+    pub decision: ApprovalDecision,
+    pub display_shortcut: Option<KeyBinding>,
+    pub additional_shortcuts: Vec<KeyBinding>,
 }
 
 impl ApprovalOption {
@@ -529,6 +871,8 @@ fn elicitation_options() -> Vec<ApprovalOption> {
         },
     ]
 }
+
+// plan_options(), enter_plan_mode_options(), single_question_options() are in approval_overlay_ext
 
 #[cfg(test)]
 mod tests {
