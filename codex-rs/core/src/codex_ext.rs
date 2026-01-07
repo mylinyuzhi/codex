@@ -20,6 +20,8 @@ use crate::system_reminder::generator::BackgroundTaskType;
 use crate::system_reminder_inject::build_generator_context;
 use crate::system_reminder_inject::inject_system_reminders;
 use crate::tools::handlers::ext::lsp::get_lsp_diagnostics_store;
+use crate::tools::spec::ToolsConfig;
+use crate::tools::spec_ext::ToolFilter;
 
 /// Clean up session-scoped resources when conversation ends.
 ///
@@ -43,6 +45,40 @@ pub fn cleanup_session_resources(conversation_id: &ConversationId) {
     // Also clean up old shells from other conversations (time-based fallback)
     // This ensures shells are cleaned even if cleanup_by_conversation missed any
     store.cleanup_old(std::time::Duration::from_secs(3600)); // 1 hour
+}
+
+/// Apply plan mode and subagent tool filters, then log loaded tools.
+///
+/// Called from `make_turn_context()` in `codex.rs` to minimize upstream changes.
+///
+/// Filter priority:
+/// 1. Plan Mode filter (if active) - restricts to read-only tools + plan file
+/// 2. Subagent filter (if configured) - overrides plan mode filter
+pub fn apply_tool_filter(
+    tools_config: &mut ToolsConfig,
+    ext_tool_filter: Option<&ToolFilter>,
+    conversation_id: ConversationId,
+    model: &str,
+) {
+    // Apply Plan Mode tool filter if active (read-only tools + plan file write)
+    let stores = get_or_create_stores(conversation_id);
+    if stores.is_plan_mode_active().unwrap_or(false) {
+        if let Ok(plan_state) = stores.get_plan_mode_state() {
+            tools_config.tool_filter = Some(ToolFilter::for_plan_mode(
+                plan_state.plan_file_path.as_deref(),
+            ));
+        }
+    }
+
+    // Apply tool filter if configured (for subagent sessions)
+    // Note: subagent filter overrides plan mode filter if both are set
+    if let Some(filter) = ext_tool_filter {
+        tools_config.tool_filter = Some(filter.clone());
+    }
+
+    // Log loaded tools
+    let (tools, _) = crate::tools::spec::build_specs(tools_config, None).build();
+    crate::tools::log_loaded_tools(&tools, model);
 }
 
 /// Inject system reminders into conversation history.
@@ -267,10 +303,47 @@ pub async fn maybe_inject_system_reminders(
 use async_channel::Sender;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol_ext::ExtEventMsg;
 use codex_protocol::protocol_ext::PlanExitPermissionMode;
 use codex_protocol::protocol_ext::PlanModeEnteredEvent;
 use codex_protocol::protocol_ext::PlanModeExitedEvent;
+
+/// Unified handler for all extension Ops.
+///
+/// Dispatch happens here to minimize changes to codex.rs.
+/// When adding new extension ops, add them to the match pattern in codex.rs
+/// (single line) and add the handler logic here.
+pub async fn handle_ext_op(
+    conversation_id: ConversationId,
+    tx_event: &Sender<Event>,
+    op: Op,
+) {
+    match op {
+        Op::SetPlanMode {
+            active,
+            plan_file_path,
+        } => {
+            handle_set_plan_mode(conversation_id, tx_event, active, plan_file_path.as_deref()).await;
+        }
+        Op::PlanModeApproval {
+            approved,
+            permission_mode,
+        } => {
+            handle_plan_mode_approval(conversation_id, tx_event, approved, permission_mode).await;
+        }
+        Op::EnterPlanModeApproval { approved } => {
+            handle_enter_plan_mode_approval(conversation_id, tx_event, approved).await;
+        }
+        Op::UserQuestionAnswer {
+            tool_call_id,
+            answers,
+        } => {
+            handle_user_question_answer(conversation_id, tx_event, tool_call_id, answers).await;
+        }
+        _ => {} // Non-ext ops handled in codex.rs
+    }
+}
 
 /// Handle Op::SetPlanMode - enter or configure plan mode.
 ///

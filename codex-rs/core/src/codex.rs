@@ -534,25 +534,13 @@ impl Session {
             web_search_config: Some(per_turn_config.ext.web_search_config.clone()),
         });
 
-        // Apply Plan Mode tool filter if active (read-only tools + plan file write)
-        let stores = crate::subagent::get_or_create_stores(conversation_id);
-        if stores.is_plan_mode_active().unwrap_or(false) {
-            if let Ok(plan_state) = stores.get_plan_mode_state() {
-                tools_config.tool_filter = Some(crate::tools::spec_ext::ToolFilter::for_plan_mode(
-                    plan_state.plan_file_path.as_deref(),
-                ));
-            }
-        }
-
-        // Apply tool filter if configured (for subagent sessions)
-        // Note: subagent filter overrides plan mode filter if both are set
-        if let Some(filter) = &per_turn_config.ext.tool_filter {
-            tools_config.tool_filter = Some(filter.clone());
-        }
-
-        // Log loaded tools
-        let (tools, _) = crate::tools::spec::build_specs(&tools_config, None).build();
-        crate::tools::log_loaded_tools(&tools, &session_configuration.model);
+        // Apply tool filters and log loaded tools (extracted to codex_ext.rs)
+        crate::codex_ext::apply_tool_filter(
+            &mut tools_config,
+            per_turn_config.ext.tool_filter.as_ref(),
+            conversation_id,
+            &session_configuration.model,
+        );
 
         TurnContext {
             sub_id,
@@ -1761,47 +1749,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
-            Op::SetPlanMode {
-                active,
-                plan_file_path,
-            } => {
-                crate::codex_ext::handle_set_plan_mode(
+            // Extension ops - dispatch to codex_ext.rs for detailed handling
+            Op::SetPlanMode { .. }
+            | Op::PlanModeApproval { .. }
+            | Op::EnterPlanModeApproval { .. }
+            | Op::UserQuestionAnswer { .. } => {
+                crate::codex_ext::handle_ext_op(
                     sess.conversation_id,
                     &sess.tx_event,
-                    active,
-                    plan_file_path.as_deref(),
-                )
-                .await;
-            }
-            Op::PlanModeApproval {
-                approved,
-                permission_mode,
-            } => {
-                crate::codex_ext::handle_plan_mode_approval(
-                    sess.conversation_id,
-                    &sess.tx_event,
-                    approved,
-                    permission_mode,
-                )
-                .await;
-            }
-            Op::EnterPlanModeApproval { approved } => {
-                crate::codex_ext::handle_enter_plan_mode_approval(
-                    sess.conversation_id,
-                    &sess.tx_event,
-                    approved,
-                )
-                .await;
-            }
-            Op::UserQuestionAnswer {
-                tool_call_id,
-                answers,
-            } => {
-                crate::codex_ext::handle_user_question_answer(
-                    sess.conversation_id,
-                    &sess.tx_event,
-                    tool_call_id,
-                    answers,
+                    sub.op.clone(),
                 )
                 .await;
             }
