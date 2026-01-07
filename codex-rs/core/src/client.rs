@@ -14,7 +14,6 @@ use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
-use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_app_server_protocol::AuthMode;
@@ -41,11 +40,12 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_ultrathink_ext::build_reasoning_for_request;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::features::FEATURES;
+use crate::features::all_features;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -204,18 +204,18 @@ impl ModelClient {
         let instructions = prompt.get_full_instructions(&model_family).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
-        let reasoning = if model_family.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.effort.or(model_family.default_reasoning_effort),
-                summary: if self.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.summary)
-                },
-            })
-        } else {
-            None
-        };
+        // Build reasoning with ultrathink keyword detection (encapsulated in ext).
+        let reasoning_result = build_reasoning_for_request(
+            &prompt.input,
+            self.effort,
+            self.config.model_reasoning_effort,
+            &model_family,
+            self.provider.ext.ultrathink_config.as_ref(),
+            self.summary,
+        );
+        let reasoning = reasoning_result.reasoning;
+        // budget_tokens available for adapter-specific handling (Claude/Gemini).
+        let _budget_tokens = reasoning_result.budget_tokens;
 
         let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -395,12 +395,12 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+        previous_response_id: prompt.previous_response_id.clone(),
     }
 }
 
 fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
-    let enabled = FEATURES
-        .iter()
+    let enabled = all_features()
         .filter_map(|spec| {
             if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
                 Some(spec.key)
