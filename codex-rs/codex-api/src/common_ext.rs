@@ -399,6 +399,67 @@ fn classify_error(error: &Value) -> ApiError {
 }
 
 // =============================================================================
+// Enhanced Call ID Utilities
+// =============================================================================
+
+/// Prefix for client-generated call IDs (when server doesn't provide one).
+pub const CLIENT_GEN_PREFIX: &str = "cligen@";
+/// Prefix for server-generated (enhanced) call IDs.
+pub const SERVER_GEN_PREFIX: &str = "srvgen@";
+
+/// Generate a client-side call_id with embedded function name.
+///
+/// Format: `cligen@<function_name>@<uuid>`
+///
+/// Use when the server doesn't provide a call_id for function calls.
+pub fn generate_client_call_id(function_name: &str) -> String {
+    format!(
+        "{}{}@{}",
+        CLIENT_GEN_PREFIX,
+        function_name,
+        uuid::Uuid::new_v4()
+    )
+}
+
+/// Enhance a server-provided call_id with embedded function name.
+///
+/// Format: `srvgen@<function_name>@<original_call_id>`
+///
+/// Preserves the original call_id for later extraction when sending back to server.
+pub fn enhance_server_call_id(original_id: &str, function_name: &str) -> String {
+    format!("{}{}@{}", SERVER_GEN_PREFIX, function_name, original_id)
+}
+
+/// Check if a call_id was generated/enhanced by us (has cligen@ or srvgen@ prefix).
+pub fn is_enhanced_call_id(call_id: &str) -> bool {
+    call_id.starts_with(CLIENT_GEN_PREFIX) || call_id.starts_with(SERVER_GEN_PREFIX)
+}
+
+/// Check if a call_id is client-generated (cligen@ prefix).
+pub fn is_client_generated_call_id(call_id: &str) -> bool {
+    call_id.starts_with(CLIENT_GEN_PREFIX)
+}
+
+/// Parse function name from enhanced call_id (works for both cligen@ and srvgen@).
+///
+/// Returns `None` for non-enhanced IDs.
+pub fn parse_function_name_from_call_id(call_id: &str) -> Option<&str> {
+    let rest = call_id
+        .strip_prefix(CLIENT_GEN_PREFIX)
+        .or_else(|| call_id.strip_prefix(SERVER_GEN_PREFIX))?;
+    rest.split('@').next()
+}
+
+/// Extract original call_id from server-enhanced format.
+///
+/// Returns `None` for client-generated format.
+pub fn extract_original_call_id(call_id: &str) -> Option<&str> {
+    let rest = call_id.strip_prefix(SERVER_GEN_PREFIX)?;
+    // Format: <function_name>@<original_id>
+    rest.split('@').nth(1)
+}
+
+// =============================================================================
 // ResponseItem Debug Logging
 // =============================================================================
 
@@ -756,5 +817,49 @@ mod tests {
             }
             _ => panic!("Expected Reasoning"),
         }
+    }
+
+    // =============================================================================
+    // Enhanced Call ID tests
+    // =============================================================================
+
+    #[test]
+    fn test_generate_client_call_id() {
+        let call_id = generate_client_call_id("get_weather");
+        assert!(call_id.starts_with("cligen@get_weather@"));
+        assert!(is_enhanced_call_id(&call_id));
+        assert!(is_client_generated_call_id(&call_id));
+        assert_eq!(parse_function_name_from_call_id(&call_id), Some("get_weather"));
+        assert_eq!(extract_original_call_id(&call_id), None);
+    }
+
+    #[test]
+    fn test_enhance_server_call_id() {
+        let call_id = enhance_server_call_id("call_abc123", "search_files");
+        assert_eq!(call_id, "srvgen@search_files@call_abc123");
+        assert!(is_enhanced_call_id(&call_id));
+        assert!(!is_client_generated_call_id(&call_id));
+        assert_eq!(parse_function_name_from_call_id(&call_id), Some("search_files"));
+        assert_eq!(extract_original_call_id(&call_id), Some("call_abc123"));
+    }
+
+    #[test]
+    fn test_non_enhanced_call_id() {
+        let call_id = "some_random_call_id";
+        assert!(!is_enhanced_call_id(call_id));
+        assert!(!is_client_generated_call_id(call_id));
+        assert_eq!(parse_function_name_from_call_id(call_id), None);
+        assert_eq!(extract_original_call_id(call_id), None);
+    }
+
+    #[test]
+    fn test_function_name_with_underscores() {
+        // Function names with underscores should work correctly
+        let client_id = generate_client_call_id("read_file_contents");
+        assert_eq!(parse_function_name_from_call_id(&client_id), Some("read_file_contents"));
+
+        let server_id = enhance_server_call_id("srv_123", "write_to_database");
+        assert_eq!(parse_function_name_from_call_id(&server_id), Some("write_to_database"));
+        assert_eq!(extract_original_call_id(&server_id), Some("srv_123"));
     }
 }
