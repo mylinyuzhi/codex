@@ -322,3 +322,102 @@ pub fn user_message(text: &str) -> ResponseItem {
         }],
     }
 }
+
+// ============================================================================
+// Travel Tools for Multi-Turn Testing
+// ============================================================================
+
+/// Get weather tool definition for travel scenario.
+pub fn get_weather_tool() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name"
+                    }
+                },
+                "required": ["city"]
+            }
+        }
+    })
+}
+
+/// Get rain forecast tool definition for travel scenario.
+pub fn get_rain_forecast_tool() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "get_rain_forecast",
+            "description": "Get rain forecast for a city on a specific date",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name"
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date like 'today', 'tomorrow', or YYYY-MM-DD"
+                    }
+                },
+                "required": ["city", "date"]
+            }
+        }
+    })
+}
+
+/// Get all travel-related tools.
+pub fn travel_tools() -> Vec<Value> {
+    vec![get_weather_tool(), get_rain_forecast_tool()]
+}
+
+/// Mock tool executor for travel scenario.
+///
+/// Returns predefined responses for testing purposes.
+pub fn execute_travel_tool(name: &str, _args: &str) -> Value {
+    match name {
+        "get_weather" => json!({
+            "temperature": 25,
+            "condition": "cloudy",
+            "humidity": 70,
+            "wind_speed": "10 km/h"
+        }),
+        "get_rain_forecast" => json!({
+            "probability": 80,
+            "expected_mm": 15,
+            "description": "Heavy rain expected in the afternoon"
+        }),
+        _ => json!({"error": "Unknown tool"}),
+    }
+}
+
+/// Create assistant function call ResponseItem.
+pub fn assistant_function_call(name: &str, arguments: &str, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        arguments: arguments.to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+/// Create tool result ResponseItem.
+pub fn tool_result(call_id: &str, output: Value) -> ResponseItem {
+    use codex_protocol::models::FunctionCallOutputPayload;
+
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            content: serde_json::to_string(&output).unwrap(),
+            content_items: None,
+            success: Some(true),
+        },
+    }
+}

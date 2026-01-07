@@ -9,6 +9,7 @@ use crate::system_reminder::BackgroundTaskInfo;
 use crate::system_reminder::FileTracker;
 use crate::system_reminder::GeneratorContext;
 use crate::system_reminder::PlanState;
+use crate::system_reminder::RestoredPlanInfo;
 use crate::system_reminder::SystemReminder;
 use crate::system_reminder::SystemReminderOrchestrator;
 use crate::user_instructions::UserInstructions;
@@ -97,6 +98,7 @@ pub fn build_generator_context<'a>(
     lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity,
     output_style: Option<&'a OutputStyle>,
     approved_plan: Option<ApprovedPlanInfo>,
+    restored_plan: Option<RestoredPlanInfo>,
 ) -> GeneratorContext<'a> {
     GeneratorContext {
         turn_number,
@@ -116,6 +118,7 @@ pub fn build_generator_context<'a>(
         lsp_diagnostics_min_severity,
         output_style,
         approved_plan,
+        restored_plan,
     }
 }
 
@@ -230,6 +233,7 @@ mod tests {
             LspDiagnosticsMinSeverity::default(),
             None, // output_style
             None, // approved_plan
+            None, // restored_plan
         );
 
         inject_system_reminders(&mut history, &orchestrator, &ctx).await;

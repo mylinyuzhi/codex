@@ -205,6 +205,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         }
     }
 

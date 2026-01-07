@@ -175,6 +175,7 @@ pub async fn run_system_reminder_injection(
         LspDiagnosticsMinSeverity::default(), // Use default severity filtering (errors only)
         None,                                 // output_style - TODO: load from config
         approved_plan,                        // approved plan for one-time injection
+        None, // restored_plan - TODO: integrate with compaction flow for plan file restoration
     );
 
     inject_system_reminders(history, orchestrator, &ctx).await;

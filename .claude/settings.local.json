@@ -51,7 +51,17 @@
       "Bash(brew install:*)",
       "Bash(ollama pull:*)",
       "Bash(timeout 5 cargo run:*)",
-      "Bash(RUST_LOG=codex_retrieval=debug cargo run:*)"
+      "Bash(RUST_LOG=codex_retrieval=debug cargo run:*)",
+      "Bash(codex-rs/core/src/system_reminder/attachments/plan_tool_reminder.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/critical_instruction.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/nested_memory.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/changed_files.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/agent_task.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/shell_task.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/at_mentioned_files.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/agent_mentions.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/plan_mode.rs )",
+      "Bash(codex-rs/core/src/system_reminder/attachments/output_style.rs)"
     ],
     "deny": [],
     "ask": []

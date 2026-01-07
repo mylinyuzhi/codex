@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -7,10 +9,24 @@ use tracing::info;
 use tracing::warn;
 
 use super::condition::LoopCondition;
+use super::context::IterationRecord;
+use super::context::LoopContext;
+use super::git_ops;
+use super::prompt;
 use super::prompt::LoopPromptBuilder;
+use super::summarizer;
+use crate::auth::AuthManager;
+use crate::client::ModelClient;
 use crate::codex::Codex;
+use crate::config::Config;
 use crate::spawn_task::LogFileSink;
+use codex_protocol::ConversationId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 
@@ -56,6 +72,20 @@ pub enum LoopStopReason {
     TaskAborted,
 }
 
+/// Context for lazy ModelClient creation in summarization.
+///
+/// Passed to LoopDriver to enable LLM-based iteration summarization.
+/// The ModelClient is created lazily on first use.
+#[derive(Clone)]
+pub struct SummarizerContext {
+    /// Auth manager for API authentication.
+    pub auth_manager: Arc<AuthManager>,
+    /// Config with model provider settings.
+    pub config: Arc<Config>,
+    /// Conversation ID for telemetry.
+    pub conversation_id: ConversationId,
+}
+
 /// Driver for loop-based agent execution.
 ///
 /// Wraps the standard run_task() with loop/time-based execution control.
@@ -85,6 +115,18 @@ pub struct LoopDriver {
     custom_loop_prompt: Option<String>,
     /// Optional progress callback for real-time updates.
     progress_callback: Option<Box<dyn Fn(LoopProgress) + Send + Sync>>,
+
+    // === Context passing fields ===
+    /// Loop context (optional, enabled via with_context_passing).
+    context: Option<LoopContext>,
+    /// Working directory for git operations.
+    cwd: Option<PathBuf>,
+    /// ModelClient for summary/commit message generation (direct).
+    model_client: Option<Arc<ModelClient>>,
+    /// Summarizer context for lazy ModelClient creation.
+    summarizer_ctx: Option<SummarizerContext>,
+    /// Cached ModelClient created from summarizer_ctx.
+    cached_summarization_client: Option<Arc<ModelClient>>,
 }
 
 impl LoopDriver {
@@ -103,6 +145,11 @@ impl LoopDriver {
             cancellation_token: token,
             custom_loop_prompt: None,
             progress_callback: None,
+            context: None,
+            cwd: None,
+            model_client: None,
+            summarizer_ctx: None,
+            cached_summarization_client: None,
         }
     }
 
@@ -132,6 +179,79 @@ impl LoopDriver {
     {
         self.progress_callback = Some(Box::new(callback));
         self
+    }
+
+    /// Enable context passing with full LLM-based summarization.
+    ///
+    /// When enabled, each iteration will:
+    /// 1. Collect changed files
+    /// 2. Generate iteration summary (LLM-based via lazy client creation)
+    /// 3. Execute git commit (LLM-generated message)
+    /// 4. Inject history into next iteration's prompt
+    pub fn with_context_passing(
+        mut self,
+        base_commit: String,
+        initial_prompt: String,
+        plan_content: Option<String>,
+        cwd: PathBuf,
+        summarizer_ctx: SummarizerContext,
+    ) -> Self {
+        let total = match &self.condition {
+            LoopCondition::Iters { count } => *count,
+            LoopCondition::Duration { .. } => -1, // Unknown for duration mode
+        };
+
+        self.context = Some(LoopContext::new(
+            base_commit,
+            initial_prompt,
+            plan_content,
+            total,
+        ));
+        self.cwd = Some(cwd);
+        self.summarizer_ctx = Some(summarizer_ctx);
+        self
+    }
+
+    /// Enable basic context passing without LLM features.
+    ///
+    /// When enabled, each iteration will:
+    /// 1. Collect changed files
+    /// 2. Generate file-based summary (no LLM)
+    /// 3. Execute git commit (fallback message)
+    /// 4. Inject history into next iteration's prompt
+    ///
+    /// Use this when ModelClient is not available.
+    pub fn with_basic_context_passing(
+        mut self,
+        base_commit: String,
+        initial_prompt: String,
+        plan_content: Option<String>,
+        cwd: PathBuf,
+    ) -> Self {
+        let total = match &self.condition {
+            LoopCondition::Iters { count } => *count,
+            LoopCondition::Duration { .. } => -1, // Unknown for duration mode
+        };
+
+        self.context = Some(LoopContext::new(
+            base_commit,
+            initial_prompt,
+            plan_content,
+            total,
+        ));
+        self.cwd = Some(cwd);
+        // model_client remains None - will use fallback summary/commit message
+        self
+    }
+
+    /// Check if context passing is enabled.
+    pub fn context_enabled(&self) -> bool {
+        self.context.is_some()
+    }
+
+    /// Get current context (if enabled).
+    pub fn get_context(&self) -> Option<&LoopContext> {
+        self.context.as_ref()
     }
 
     /// Current iteration number (0-indexed).
@@ -181,6 +301,73 @@ impl LoopDriver {
             original,
             self.iteration,
             self.custom_loop_prompt.as_deref(),
+        )
+    }
+
+    /// Build prompt with context injection (if enabled).
+    fn build_prompt_with_context(&self, original: &str) -> String {
+        match &self.context {
+            Some(ctx) if self.iteration > 0 => {
+                prompt::build_enhanced_prompt(original, self.iteration, ctx)
+            }
+            _ => self.build_query(original),
+        }
+    }
+
+    /// Generate a simple file-based summary for an iteration (static version).
+    ///
+    /// This is a fallback when conversation history is not available.
+    /// It generates a summary based on the changed files and success status.
+    fn generate_file_based_summary_static(
+        _iteration: i32,
+        changed_files: &[String],
+        success: bool,
+    ) -> String {
+        let status = if success { "succeeded" } else { "failed" };
+
+        if changed_files.is_empty() {
+            return format!("Iteration {status} with no file changes.");
+        }
+
+        // Group files by extension
+        let mut by_ext: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for file in changed_files {
+            let ext = std::path::Path::new(file)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("other");
+            by_ext.entry(ext).or_default().push(file);
+        }
+
+        // Build summary
+        let file_count = changed_files.len();
+        let ext_summary: Vec<String> = by_ext
+            .iter()
+            .map(|(ext, files)| format!("{} .{ext} file(s)", files.len()))
+            .collect();
+
+        format!(
+            "Iteration {status}. Modified {file_count} file(s): {}.",
+            ext_summary.join(", ")
+        )
+    }
+
+    /// Generate a fallback commit message when LLM is not available (static version).
+    fn generate_fallback_commit_message_static(iteration: i32, changed_files: &[String]) -> String {
+        let file_count = changed_files.len();
+        let files_display = if file_count <= 5 {
+            changed_files.join(", ")
+        } else {
+            format!(
+                "{}, ... ({} more)",
+                changed_files[..5].join(", "),
+                file_count - 5
+            )
+        };
+
+        format!(
+            "[iter-{iteration}] Iteration {iteration} changes\n\nModified files: {files_display}"
         )
     }
 
@@ -267,11 +454,13 @@ impl LoopDriver {
     ) -> LoopResult {
         info!(
             condition = %self.condition.display(),
+            context_enabled = self.context.is_some(),
             "Starting loop execution"
         );
 
         while self.should_continue() {
-            let query = self.build_query(original_query);
+            // 1. Build prompt (use context if enabled)
+            let query = self.build_prompt_with_context(original_query);
             let input = vec![UserInput::Text { text: query }];
 
             if let Some(s) = sink {
@@ -284,7 +473,7 @@ impl LoopDriver {
                 "Starting iteration"
             );
 
-            // Submit via Codex API
+            // 2. Submit via Codex API
             if let Err(e) = codex.submit(Op::UserInput { items: input }).await {
                 warn!(
                     iteration = self.iteration,
@@ -302,9 +491,16 @@ impl LoopDriver {
                 continue; // Continue-on-error
             }
 
-            // Wait for task completion
-            let success = self.wait_for_task_complete(codex, sink).await;
+            // 3. Wait for task completion, collecting events for summarization
+            let (success, collected_items) = self.wait_for_task_complete(codex, sink).await;
 
+            // 4. Process iteration context if enabled (with collected items for LLM summary)
+            if self.context.is_some() {
+                self.process_iteration_context(collected_items, success, sink)
+                    .await;
+            }
+
+            // 5. Update counters
             if success {
                 info!(
                     iteration = self.iteration,
@@ -321,7 +517,7 @@ impl LoopDriver {
 
             self.iteration += 1;
 
-            // Trigger progress callback
+            // 6. Trigger progress callback
             if let Some(ref callback) = self.progress_callback {
                 callback(LoopProgress {
                     iteration: self.iteration,
@@ -352,35 +548,191 @@ impl LoopDriver {
         result
     }
 
-    /// Wait for TaskComplete or TurnAborted event.
+    /// Process iteration context (collect changes, generate summary, commit).
     ///
-    /// Returns true if TaskComplete was received, false if aborted or error.
-    async fn wait_for_task_complete(&self, codex: &Codex, sink: Option<&LogFileSink>) -> bool {
+    /// Uses LLM-based summarization when model_client is available and
+    /// collected_items is not empty. Falls back to file-based summary otherwise.
+    async fn process_iteration_context(
+        &mut self,
+        collected_items: Vec<ResponseItem>,
+        success: bool,
+        sink: Option<&LogFileSink>,
+    ) {
+        // Lazy client creation from summarizer_ctx if needed
+        if self.model_client.is_none() && self.cached_summarization_client.is_none() {
+            if let Some(ref ctx) = self.summarizer_ctx {
+                info!("Creating summarization client lazily");
+                self.cached_summarization_client =
+                    Some(Arc::new(summarizer::create_summarization_client(ctx)));
+            }
+        }
+
+        // Extract needed data from context first to avoid borrow conflicts
+        let (initial_prompt, cwd, model_client) = {
+            let ctx = match self.context.as_ref() {
+                Some(c) => c,
+                None => return,
+            };
+            let cwd = match &self.cwd {
+                Some(c) => c.clone(),
+                None => return,
+            };
+            // Use model_client if set, otherwise use cached client from summarizer_ctx
+            let client = self
+                .model_client
+                .clone()
+                .or_else(|| self.cached_summarization_client.clone());
+            (ctx.initial_prompt.clone(), cwd, client)
+        };
+
+        // 4a. Get changed files
+        let changed_files = git_ops::get_uncommitted_changes(&cwd)
+            .await
+            .unwrap_or_default();
+
+        // 4b. Generate summary - use LLM if items available, otherwise file-based
+        let summary = if let Some(client) = &model_client {
+            if !collected_items.is_empty() {
+                // Use LLM-based summarization with collected conversation items
+                match summarizer::summarize_iteration(&collected_items, client.clone()).await {
+                    Ok(llm_summary) => {
+                        info!(
+                            iteration = self.iteration,
+                            "Generated LLM summary for iteration"
+                        );
+                        llm_summary
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "LLM summary failed, using file-based fallback");
+                        Self::generate_file_based_summary_static(
+                            self.iteration,
+                            &changed_files,
+                            success,
+                        )
+                    }
+                }
+            } else {
+                // No collected items, use file-based summary
+                Self::generate_file_based_summary_static(self.iteration, &changed_files, success)
+            }
+        } else {
+            // No model client, use file-based summary
+            Self::generate_file_based_summary_static(self.iteration, &changed_files, success)
+        };
+
+        if let Some(s) = sink {
+            s.log(&format!(
+                "Iteration {} summary: {}",
+                self.iteration, &summary
+            ));
+        }
+
+        // 4c. Commit if there are changes
+        let commit_id = if !changed_files.is_empty() {
+            // Generate commit message
+            let commit_msg = if let Some(client) = &model_client {
+                // Try LLM-based commit message
+                match summarizer::generate_commit_message(
+                    self.iteration,
+                    &initial_prompt,
+                    &changed_files,
+                    &summary,
+                    client.clone(),
+                )
+                .await
+                {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to generate commit message, using fallback");
+                        Self::generate_fallback_commit_message_static(
+                            self.iteration,
+                            &changed_files,
+                        )
+                    }
+                }
+            } else {
+                // Use fallback commit message
+                Self::generate_fallback_commit_message_static(self.iteration, &changed_files)
+            };
+
+            // Execute commit
+            match git_ops::commit_if_needed(&cwd, &commit_msg).await {
+                Ok(id) => {
+                    if let Some(s) = sink {
+                        if let Some(ref commit) = id {
+                            let short_id = if commit.len() >= 7 {
+                                &commit[..7]
+                            } else {
+                                commit.as_str()
+                            };
+                            s.log(&format!("Committed: {short_id}"));
+                        }
+                    }
+                    id
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to commit");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 4d. Record this iteration
+        if let Some(ctx) = self.context.as_mut() {
+            ctx.add_iteration(IterationRecord::new(
+                self.iteration,
+                commit_id,
+                changed_files,
+                summary,
+                success,
+            ));
+        }
+    }
+
+    /// Wait for TaskComplete or TurnAborted event, collecting response items.
+    ///
+    /// Returns (success, collected_items) where:
+    /// - success is true if TaskComplete was received, false if aborted or error
+    /// - collected_items contains ResponseItems for LLM summarization
+    async fn wait_for_task_complete(
+        &self,
+        codex: &Codex,
+        sink: Option<&LogFileSink>,
+    ) -> (bool, Vec<ResponseItem>) {
+        let mut collected_items: Vec<ResponseItem> = Vec::new();
+
         loop {
             // Check cancellation
             if self.cancellation_token.is_cancelled() {
                 if let Some(s) = sink {
                     s.log("Cancelled by user");
                 }
-                return false;
+                return (false, collected_items);
             }
 
             // Get next event from Codex
             match codex.next_event().await {
                 Ok(event) => {
-                    // Log event to sink if provided (only key events, not all)
+                    // Collect relevant events for summarization
+                    if let Some(item) = event_to_response_item(&event.msg) {
+                        collected_items.push(item);
+                    }
+
+                    // Check for completion events
                     match &event.msg {
                         EventMsg::TaskComplete(_) => {
                             if let Some(s) = sink {
                                 s.log("TaskComplete received");
                             }
-                            return true;
+                            return (true, collected_items);
                         }
                         EventMsg::TurnAborted(aborted) => {
                             if let Some(s) = sink {
                                 s.log(&format!("TurnAborted: {:?}", aborted.reason));
                             }
-                            return false;
+                            return (false, collected_items);
                         }
                         // Continue processing other events
                         _ => continue,
@@ -391,7 +743,7 @@ impl LoopDriver {
                         s.log(&format!("Error receiving event: {e}"));
                     }
                     warn!(error = %e, "Error receiving event");
-                    return false;
+                    return (false, collected_items);
                 }
             }
         }
@@ -430,6 +782,44 @@ impl std::fmt::Debug for LoopDriver {
             .field("iterations_failed", &self.iterations_failed)
             .field("elapsed_secs", &self.start_time.elapsed().as_secs())
             .finish()
+    }
+}
+
+/// Convert EventMsg to ResponseItem for summarization.
+///
+/// Only converts events that are useful for iteration summary:
+/// - AgentMessage → assistant message
+/// - ExecCommandBegin → function call
+/// - ExecCommandEnd → function call output
+fn event_to_response_item(msg: &EventMsg) -> Option<ResponseItem> {
+    match msg {
+        EventMsg::AgentMessage(AgentMessageEvent { message }) => Some(ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: message.clone(),
+            }],
+        }),
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id, command, ..
+        }) => Some(ResponseItem::FunctionCall {
+            id: None,
+            call_id: call_id.clone(),
+            name: "shell".to_string(),
+            arguments: serde_json::to_string(command).unwrap_or_default(),
+        }),
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id,
+            aggregated_output,
+            ..
+        }) => Some(ResponseItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: codex_protocol::models::FunctionCallOutputPayload {
+                content: aggregated_output.clone(),
+                ..Default::default()
+            },
+        }),
+        _ => None,
     }
 }
 

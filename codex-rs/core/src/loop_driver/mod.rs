@@ -43,12 +43,19 @@
 //! ```
 
 mod condition;
+mod context;
 mod driver;
+pub mod git_ops;
 mod prompt;
+pub mod summarizer;
 
 pub use condition::LoopCondition;
+pub use context::IterationRecord;
+pub use context::LoopContext;
 pub use driver::LoopDriver;
 pub use driver::LoopProgress;
 pub use driver::LoopResult;
 pub use driver::LoopStopReason;
+pub use driver::SummarizerContext;
 pub use prompt::LoopPromptBuilder;
+pub use prompt::build_enhanced_prompt;

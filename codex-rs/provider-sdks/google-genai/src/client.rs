@@ -13,11 +13,13 @@ use crate::types::GenerateContentRequest;
 use crate::types::GenerateContentResponse;
 use crate::types::GenerationConfig;
 use crate::types::RequestExtensions;
+use crate::types::SdkHttpResponse;
 use crate::types::Tool;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
 use tracing::debug;
@@ -340,6 +342,15 @@ impl Client {
             .map_err(|e| GenAiError::Network(e.to_string()))?;
 
         let status = response.status();
+        let status_code = status.as_u16() as i32;
+
+        // Capture response headers for sdk_http_response
+        let response_headers: HashMap<String, String> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+
         let body = response
             .text()
             .await
@@ -357,14 +368,20 @@ impl Client {
                 });
             }
             return Err(GenAiError::Api {
-                code: status.as_u16() as i32,
+                code: status_code,
                 message: body,
                 status: status.to_string(),
             });
         }
 
-        serde_json::from_str(&body)
-            .map_err(|e| GenAiError::Parse(format!("Failed to parse response: {e}\nBody: {body}")))
+        // Parse response and attach HTTP metadata
+        let mut result: GenerateContentResponse = serde_json::from_str(&body).map_err(|e| {
+            GenAiError::Parse(format!("Failed to parse response: {e}\nBody: {body}"))
+        })?;
+
+        result.sdk_http_response = Some(SdkHttpResponse::new(status_code, response_headers, body));
+
+        Ok(result)
     }
 
     /// Generate content with a simple text prompt.

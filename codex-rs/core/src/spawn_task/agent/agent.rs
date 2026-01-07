@@ -15,6 +15,8 @@ use crate::config::Config;
 use crate::loop_driver::LoopCondition;
 use crate::loop_driver::LoopDriver;
 use crate::loop_driver::LoopStopReason;
+use crate::loop_driver::SummarizerContext;
+use crate::loop_driver::git_ops;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::spawn_task::SpawnTask;
@@ -210,9 +212,12 @@ impl SpawnTask for SpawnAgent {
             }
 
             // Spawn Codex session
-            let CodexSpawnOk { codex, .. } = match Codex::spawn(
-                spawn_config,
-                context.auth_manager,
+            let CodexSpawnOk {
+                codex,
+                conversation_id,
+            } = match Codex::spawn(
+                spawn_config.clone(),
+                context.auth_manager.clone(),
                 context.models_manager,
                 context.skills_manager,
                 InitialHistory::New,
@@ -255,6 +260,35 @@ impl SpawnTask for SpawnAgent {
                     );
                 });
             }
+
+            // Enable context passing for cross-iteration state
+            // Get base commit ID for context
+            let base_commit = git_ops::get_head_commit(&cwd).await.unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to get HEAD commit for context passing");
+                "unknown".to_string()
+            });
+
+            // Determine plan content: use forked_plan_content or read from file
+            let plan_content = params
+                .forked_plan_content
+                .clone()
+                .or_else(|| git_ops::read_plan_file_if_exists(&cwd));
+
+            // Create summarizer context for LLM-based summarization
+            let summarizer_ctx = SummarizerContext {
+                auth_manager: context.auth_manager.clone(),
+                config: Arc::new(spawn_config.clone()),
+                conversation_id,
+            };
+
+            // Enable full context passing with LLM summarization
+            driver = driver.with_context_passing(
+                base_commit,
+                params.prompt.clone(),
+                plan_content.clone(),
+                cwd.clone(),
+                summarizer_ctx,
+            );
 
             // Prepare prompt with forked plan context if available
             let enhanced_prompt = if let Some(plan_content) = &params.forked_plan_content {

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::models_manager::model_family::ModelFamily;
-use crate::models_manager::model_family::find_family_for_model;
+use crate::models_manager::resolve_model_family;
 use crate::thinking::UltrathinkConfig;
 
 /// Serializable representation of a provider definition.
@@ -63,7 +63,25 @@ pub struct ModelProviderInfoExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_timeout_ms: Option<u64>,
 
-    /// Model family for this provider, derived from model_name.
+    /// Explicit model family ID for metadata resolution.
+    ///
+    /// When set, this ID is used to look up the model family from
+    /// `~/.codex/model_families.toml` or code-defined families.
+    ///
+    /// Use this when the API model name (`model_name`) differs from the
+    /// logical model family. For example, Volcengine Ark endpoints use
+    /// `ep-xxx` as model_name but belong to the `deepseek-r1` family.
+    ///
+    /// Example config:
+    /// ```toml
+    /// [model_providers.volcengine_ark.ext]
+    /// model_name = "ep-20250109-xxxxx"  # Sent to API
+    /// model_family_id = "deepseek-r1"   # Used for metadata lookup
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_family_id: Option<String>,
+
+    /// Model family for this provider (derived at runtime, not serialized).
     /// Used by providers to get proper system instructions fallback.
     #[serde(skip)]
     pub model_family: Option<ModelFamily>,
@@ -83,20 +101,34 @@ impl Default for ModelProviderInfoExt {
             model_parameters: None,
             ultrathink_config: None,
             request_timeout_ms: None,
+            model_family_id: None,
             model_family: None,
         }
     }
 }
 
 impl ModelProviderInfoExt {
-    /// Derive model_family from model_name (if set).
+    /// Derive model_family from model_family_id or model_name.
     ///
     /// Should be called after config loading to populate the model_family field.
-    /// Uses the model_name to find a matching ModelFamily or derive a default one.
+    ///
+    /// Resolution priority:
+    /// 1. `model_family_id` - explicit family ID (looked up in model_families.toml or code)
+    /// 2. `model_name` - derived from the model name
+    ///
+    /// This allows the API model (`model_name`) to differ from the logical family
+    /// (`model_family_id`). For example, Volcengine Ark uses `ep-xxx` as the API
+    /// model but belongs to the `deepseek-r1` family.
     pub fn derive_model_family(&mut self) {
+        // Priority 1: Explicit model_family_id
+        if let Some(family_id) = &self.model_family_id {
+            self.model_family = Some(resolve_model_family(family_id));
+            return;
+        }
+
+        // Priority 2: Derive from model_name
         if let Some(model_name) = &self.model_name {
-            // find_family_for_model returns ModelFamily directly (handles unknown models internally)
-            self.model_family = Some(find_family_for_model(model_name));
+            self.model_family = Some(resolve_model_family(model_name));
         }
     }
 }

@@ -168,6 +168,7 @@ fn build_generation_config(prompt: &Prompt, config: &AdapterConfig) -> GenerateC
             use google_genai::types::ThinkingLevel;
             let level = match thinking_level {
                 "LOW" => ThinkingLevel::Low,
+                "MEDIUM" => ThinkingLevel::Medium,
                 "HIGH" => ThinkingLevel::High,
                 _ => ThinkingLevel::ThinkingLevelUnspecified,
             };

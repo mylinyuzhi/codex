@@ -1093,6 +1093,12 @@ impl Config {
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
 
+        // Initialize model family registry with user-defined families.
+        // This must happen before derive_model_family() is called.
+        if let Err(e) = crate::models_manager::init_registry(&codex_home) {
+            tracing::warn!("Failed to load model_families.toml: {e}");
+        }
+
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,

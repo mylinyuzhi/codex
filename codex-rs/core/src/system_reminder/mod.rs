@@ -25,6 +25,7 @@ pub use generator::BackgroundTaskType;
 pub use generator::GeneratorContext;
 pub use generator::PlanState;
 pub use generator::PlanStep;
+pub use generator::RestoredPlanInfo;
 pub use throttle::ThrottleConfig;
 pub use throttle::ThrottleManager;
 pub use types::AttachmentType;
@@ -46,6 +47,7 @@ use attachments::LspDiagnosticsGenerator;
 use attachments::NestedMemoryGenerator;
 use attachments::OutputStyleGenerator;
 use attachments::PlanApprovedGenerator;
+use attachments::PlanFileReferenceGenerator;
 use attachments::PlanModeGenerator;
 use attachments::PlanToolReminderGenerator;
 use attachments::ShellTaskGenerator;
@@ -79,6 +81,7 @@ impl SystemReminderOrchestrator {
             // Core tier
             Arc::new(CriticalInstructionGenerator::new()),
             Arc::new(PlanApprovedGenerator::new()),
+            Arc::new(PlanFileReferenceGenerator::new()),
             Arc::new(PlanModeGenerator::new()),
             Arc::new(PlanToolReminderGenerator::new()),
             Arc::new(ChangedFilesGenerator::new()),
@@ -293,6 +296,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -323,6 +327,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -359,6 +364,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -411,6 +417,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders = orchestrator.generate_all(&ctx).await;
@@ -443,7 +450,7 @@ mod tests {
     fn test_orchestrator_default() {
         let orchestrator = SystemReminderOrchestrator::default();
         assert!(orchestrator.config.enabled);
-        assert_eq!(orchestrator.generators.len(), 12);
+        assert_eq!(orchestrator.generators.len(), 13);
     }
 
     #[tokio::test]
@@ -485,6 +492,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders1 = orchestrator.generate_all(&ctx1).await;
@@ -515,6 +523,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders2 = orchestrator.generate_all(&ctx2).await;
@@ -545,6 +554,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders3 = orchestrator.generate_all(&ctx3).await;
@@ -595,6 +605,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders1 = orchestrator.generate_all(&ctx1).await;
@@ -625,6 +636,7 @@ mod tests {
             lsp_diagnostics_min_severity: LspDiagnosticsMinSeverity::default(),
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let reminders2 = orchestrator.generate_all(&ctx2).await;

@@ -92,11 +92,24 @@ pub struct GeneratorContext<'a> {
     pub output_style: Option<&'a OutputStyle>,
     /// Approved plan content for post-ExitPlanMode injection (one-time).
     pub approved_plan: Option<ApprovedPlanInfo>,
+    /// Plan restored after compaction (for PlanFileReferenceGenerator).
+    pub restored_plan: Option<RestoredPlanInfo>,
 }
 
-/// Approved plan info for one-time injection.
+/// Approved plan info for one-time injection after ExitPlanMode approval.
 #[derive(Debug, Clone)]
 pub struct ApprovedPlanInfo {
+    /// Full plan content
+    pub content: String,
+    /// Path to the plan file
+    pub file_path: String,
+}
+
+/// Restored plan info for injection after compaction.
+///
+/// Matches Claude Code's "plan_file_reference" attachment data.
+#[derive(Debug, Clone)]
+pub struct RestoredPlanInfo {
     /// Full plan content
     pub content: String,
     /// Path to the plan file

@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde::Serializer;
 use serde::de::Error as DeError;
 use std::collections::HashMap;
+use tracing::warn;
 
 // ============================================================================
 // Base64 Serde Helpers (for bytes fields like thought_signature)
@@ -147,6 +148,7 @@ pub enum ThinkingLevel {
     #[default]
     ThinkingLevelUnspecified,
     Low,
+    Medium,
     High,
 }
 
@@ -1636,6 +1638,69 @@ pub struct Candidate {
     pub logprobs_result: Option<LogprobsResult>,
 }
 
+impl Candidate {
+    /// Format a debug summary of this candidate for logging.
+    ///
+    /// Returns a string with: index, finish_reason, part types, and text preview.
+    pub fn debug_summary(&self) -> String {
+        let index = self.index.map_or("?".to_string(), |i| i.to_string());
+        let finish = self
+            .finish_reason
+            .map_or("none".to_string(), |r| format!("{r:?}"));
+
+        let parts_info = self
+            .content
+            .as_ref()
+            .and_then(|c| c.parts.as_ref())
+            .map(|parts| {
+                let summaries: Vec<String> = parts.iter().map(|p| Self::part_summary(p)).collect();
+                summaries.join(", ")
+            })
+            .unwrap_or_else(|| "no parts".to_string());
+
+        format!("[candidate {index}] finish={finish}, parts=[{parts_info}]")
+    }
+
+    /// Format a single part for logging.
+    fn part_summary(part: &Part) -> String {
+        if let Some(text) = &part.text {
+            let preview = if text.len() > 100 {
+                format!("{}...", &text[..100])
+            } else {
+                text.clone()
+            };
+            let thought_marker = if part.thought == Some(true) {
+                "(thought) "
+            } else {
+                ""
+            };
+            format!("{thought_marker}text({} chars): {:?}", text.len(), preview)
+        } else if let Some(fc) = &part.function_call {
+            format!(
+                "function_call({:?}, id={:?})",
+                fc.name.as_deref().unwrap_or("?"),
+                fc.id.as_deref().unwrap_or("?")
+            )
+        } else if let Some(fr) = &part.function_response {
+            format!(
+                "function_response({:?}, id={:?})",
+                fr.name.as_deref().unwrap_or("?"),
+                fr.id.as_deref().unwrap_or("?")
+            )
+        } else if part.inline_data.is_some() {
+            "inline_data".to_string()
+        } else if part.file_data.is_some() {
+            "file_data".to_string()
+        } else if part.executable_code.is_some() {
+            "executable_code".to_string()
+        } else if part.code_execution_result.is_some() {
+            "code_execution_result".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+}
+
 /// Response from generateContent API.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1663,6 +1728,11 @@ pub struct GenerateContentResponse {
     /// Timestamp when the response was created (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_time: Option<String>,
+
+    /// HTTP response metadata (not serialized, populated by client).
+    /// Used to retain the full HTTP response for debugging/inspection.
+    #[serde(skip)]
+    pub sdk_http_response: Option<SdkHttpResponse>,
 }
 
 impl GenerateContentResponse {
@@ -1711,14 +1781,22 @@ impl GenerateContentResponse {
     }
 
     /// Get the parts from the first candidate.
+    ///
+    /// Warns if there are multiple candidates, as only the first is returned
+    /// and content from other candidates would be lost.
     pub fn parts(&self) -> Option<&Vec<Part>> {
-        self.candidates
-            .as_ref()?
-            .first()?
-            .content
-            .as_ref()?
-            .parts
-            .as_ref()
+        let candidates = self.candidates.as_ref()?;
+        if candidates.len() > 1 {
+            let all_summaries: Vec<String> = candidates.iter().map(|c| c.debug_summary()).collect();
+            warn!(
+                candidate_count = candidates.len(),
+                candidates_detail = %all_summaries.join("\n  "),
+                "Response has multiple candidates, only returning parts from the first. \
+                 Content from {} additional candidate(s) will be ignored.",
+                candidates.len() - 1
+            );
+        }
+        candidates.first()?.content.as_ref()?.parts.as_ref()
     }
 
     /// Get thought/reasoning text from the first candidate (for debugging).
@@ -1768,6 +1846,46 @@ impl GenerateContentResponse {
             .and_then(|c| c.parts.as_ref())
             .map(|parts| parts.iter().any(|p| p.thought == Some(true)))
             .unwrap_or(false)
+    }
+}
+
+// ============================================================================
+// SDK HTTP Response (runtime metadata)
+// ============================================================================
+
+/// HTTP response metadata for debugging and inspection.
+///
+/// This struct captures the raw HTTP response information that is not part of
+/// the API response body. It's populated by the client after receiving a response.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SdkHttpResponse {
+    /// HTTP status code.
+    pub status_code: Option<i32>,
+
+    /// Response headers.
+    pub headers: Option<HashMap<String, String>>,
+
+    /// Raw response body (for debugging).
+    pub body: Option<String>,
+}
+
+impl SdkHttpResponse {
+    /// Create a new SdkHttpResponse with all fields.
+    pub fn new(status_code: i32, headers: HashMap<String, String>, body: String) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: Some(headers),
+            body: Some(body),
+        }
+    }
+
+    /// Create from status code and body only.
+    pub fn from_status_and_body(status_code: i32, body: String) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: None,
+            body: Some(body),
+        }
     }
 }
 

@@ -120,6 +120,10 @@ pub enum AttachmentType {
     /// Output style instructions (e.g., Explanatory, Learning).
     OutputStyle,
 
+    /// Plan file reference restored after compaction.
+    /// Matches Claude Code's "plan_file_reference" attachment type.
+    PlanFileReference,
+
     // === Phase 2 (Future) ===
     /// Tool call result metadata.
     ToolResult,
@@ -184,6 +188,7 @@ impl fmt::Display for AttachmentType {
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
             AttachmentType::OutputStyle => "output_style",
+            AttachmentType::PlanFileReference => "plan_file_reference",
         };
         write!(f, "{name}")
     }

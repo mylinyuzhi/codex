@@ -837,6 +837,7 @@ globs: ["*.test.ts", "*.spec.ts"]
                 crate::config::system_reminder::LspDiagnosticsMinSeverity::Error,
             output_style: None,
             approved_plan: None,
+            restored_plan: None,
         };
 
         let generator = NestedMemoryGenerator::default();
