@@ -398,6 +398,67 @@ fn classify_error(error: &Value) -> ApiError {
     }
 }
 
+// =============================================================================
+// ResponseItem Debug Logging
+// =============================================================================
+
+/// Log unexpected ResponseItem variant for debugging.
+///
+/// Use this in adapter `prompt_to_contents` catch-all branches to track
+/// unexpected item types that don't match expected patterns.
+///
+/// # Arguments
+/// * `item` - The ResponseItem that didn't match expected patterns
+/// * `adapter_name` - Name of the adapter (e.g., "genai", "anthropic")
+/// * `context` - Context where this occurred (e.g., "prompt_to_contents")
+pub fn log_unexpected_response_item(item: &ResponseItem, adapter_name: &str, context: &str) {
+    let (item_type, details) = match item {
+        ResponseItem::Message { id, role, .. } => (
+            "Message",
+            format!("role={}, has_id={}", role, id.is_some()),
+        ),
+        ResponseItem::FunctionCall {
+            id,
+            name,
+            call_id,
+            ..
+        } => (
+            "FunctionCall",
+            format!("name={}, call_id={}, has_id={}", name, call_id, id.is_some()),
+        ),
+        ResponseItem::FunctionCallOutput { call_id, .. } => {
+            ("FunctionCallOutput", format!("call_id={}", call_id))
+        }
+        ResponseItem::Reasoning {
+            id,
+            encrypted_content,
+            ..
+        } => (
+            "Reasoning",
+            format!(
+                "id={}, has_encrypted_content={}",
+                id,
+                encrypted_content.is_some()
+            ),
+        ),
+        ResponseItem::LocalShellCall { .. } => ("LocalShellCall", String::new()),
+        ResponseItem::CustomToolCall { .. } => ("CustomToolCall", String::new()),
+        ResponseItem::CustomToolCallOutput { .. } => ("CustomToolCallOutput", String::new()),
+        ResponseItem::WebSearchCall { .. } => ("WebSearchCall", String::new()),
+        ResponseItem::GhostSnapshot { .. } => ("GhostSnapshot", String::new()),
+        ResponseItem::Compaction { .. } => ("Compaction", String::new()),
+        ResponseItem::Other => ("Other", String::new()),
+    };
+
+    tracing::warn!(
+        adapter = adapter_name,
+        context = context,
+        item_type = item_type,
+        details = details,
+        "Unexpected ResponseItem variant"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
