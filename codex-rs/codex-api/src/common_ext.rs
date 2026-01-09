@@ -13,6 +13,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -474,18 +475,19 @@ pub fn extract_original_call_id(call_id: &str) -> Option<&str> {
 /// * `context` - Context where this occurred (e.g., "prompt_to_contents")
 pub fn log_unexpected_response_item(item: &ResponseItem, adapter_name: &str, context: &str) {
     let (item_type, details) = match item {
-        ResponseItem::Message { id, role, .. } => (
-            "Message",
-            format!("role={}, has_id={}", role, id.is_some()),
-        ),
+        ResponseItem::Message { id, role, .. } => {
+            ("Message", format!("role={}, has_id={}", role, id.is_some()))
+        }
         ResponseItem::FunctionCall {
-            id,
-            name,
-            call_id,
-            ..
+            id, name, call_id, ..
         } => (
             "FunctionCall",
-            format!("name={}, call_id={}, has_id={}", name, call_id, id.is_some()),
+            format!(
+                "name={}, call_id={}, has_id={}",
+                name,
+                call_id,
+                id.is_some()
+            ),
         ),
         ResponseItem::FunctionCallOutput { call_id, .. } => {
             ("FunctionCallOutput", format!("call_id={}", call_id))
@@ -518,6 +520,79 @@ pub fn log_unexpected_response_item(item: &ResponseItem, adapter_name: &str, con
         details = details,
         "Unexpected ResponseItem variant"
     );
+}
+
+// =============================================================================
+// Encrypted Content Storage Format
+// =============================================================================
+
+/// Provider SDK identifier for Google Generative AI.
+pub const PROVIDER_SDK_GENAI: &str = "genai";
+/// Provider SDK identifier for Volcengine Ark.
+pub const PROVIDER_SDK_VOLCENGINE_ARK: &str = "volcengine-ark";
+/// Provider SDK identifier for Anthropic.
+pub const PROVIDER_SDK_ANTHROPIC: &str = "anthropic";
+/// Provider SDK identifier for Z.AI.
+pub const PROVIDER_SDK_ZAI: &str = "zai";
+
+/// Unified encrypted_content storage format.
+///
+/// Used by adapters to store full response body for round-trip preservation.
+/// This struct provides type-safe access and extensibility.
+///
+/// JSON format:
+/// ```json
+/// {
+///   "_full_response_body": <raw_json>,
+///   "_provider_sdk": "genai" | "volcengine-ark",
+///   "_ext": {}
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedContent {
+    /// Full response body from provider SDK (raw JSON).
+    #[serde(rename = "_full_response_body")]
+    pub full_response_body: Value,
+
+    /// Provider SDK identifier (e.g., "genai", "volcengine-ark").
+    #[serde(rename = "_provider_sdk")]
+    pub provider_sdk: String,
+
+    /// Extension data for future use.
+    #[serde(rename = "_ext", default)]
+    pub ext: Value,
+}
+
+impl EncryptedContent {
+    /// Create new EncryptedContent with given body and provider.
+    pub fn new(full_response_body: Value, provider_sdk: impl Into<String>) -> Self {
+        Self {
+            full_response_body,
+            provider_sdk: provider_sdk.into(),
+            ext: Value::Object(Default::default()),
+        }
+    }
+
+    /// Create from raw body string (parses JSON).
+    pub fn from_body_str(body: &str, provider_sdk: impl Into<String>) -> Option<Self> {
+        let full_response_body: Value = serde_json::from_str(body).ok()?;
+        Some(Self::new(full_response_body, provider_sdk))
+    }
+
+    /// Serialize to JSON string for storage in encrypted_content field.
+    pub fn to_json_string(&self) -> Option<String> {
+        serde_json::to_string(self).ok()
+    }
+
+    /// Deserialize from JSON string.
+    pub fn from_json_string(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+
+    /// Extract full_response_body as specific type.
+    pub fn parse_body<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
+        serde_json::from_value(self.full_response_body.clone()).ok()
+    }
 }
 
 #[cfg(test)]
@@ -829,7 +904,10 @@ mod tests {
         assert!(call_id.starts_with("cligen@get_weather@"));
         assert!(is_enhanced_call_id(&call_id));
         assert!(is_client_generated_call_id(&call_id));
-        assert_eq!(parse_function_name_from_call_id(&call_id), Some("get_weather"));
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id),
+            Some("get_weather")
+        );
         assert_eq!(extract_original_call_id(&call_id), None);
     }
 
@@ -839,7 +917,10 @@ mod tests {
         assert_eq!(call_id, "srvgen@search_files@call_abc123");
         assert!(is_enhanced_call_id(&call_id));
         assert!(!is_client_generated_call_id(&call_id));
-        assert_eq!(parse_function_name_from_call_id(&call_id), Some("search_files"));
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id),
+            Some("search_files")
+        );
         assert_eq!(extract_original_call_id(&call_id), Some("call_abc123"));
     }
 
@@ -856,10 +937,88 @@ mod tests {
     fn test_function_name_with_underscores() {
         // Function names with underscores should work correctly
         let client_id = generate_client_call_id("read_file_contents");
-        assert_eq!(parse_function_name_from_call_id(&client_id), Some("read_file_contents"));
+        assert_eq!(
+            parse_function_name_from_call_id(&client_id),
+            Some("read_file_contents")
+        );
 
         let server_id = enhance_server_call_id("srv_123", "write_to_database");
-        assert_eq!(parse_function_name_from_call_id(&server_id), Some("write_to_database"));
+        assert_eq!(
+            parse_function_name_from_call_id(&server_id),
+            Some("write_to_database")
+        );
         assert_eq!(extract_original_call_id(&server_id), Some("srv_123"));
+    }
+
+    // =============================================================================
+    // EncryptedContent tests
+    // =============================================================================
+
+    #[test]
+    fn test_encrypted_content_new() {
+        let body = serde_json::json!({"key": "value"});
+        let ec = EncryptedContent::new(body.clone(), PROVIDER_SDK_GENAI);
+
+        assert_eq!(ec.full_response_body, body);
+        assert_eq!(ec.provider_sdk, "genai");
+        assert!(ec.ext.is_object());
+    }
+
+    #[test]
+    fn test_encrypted_content_from_body_str() {
+        let body_str = r#"{"key": "value"}"#;
+        let ec = EncryptedContent::from_body_str(body_str, PROVIDER_SDK_GENAI).unwrap();
+
+        assert_eq!(
+            ec.full_response_body.get("key").unwrap().as_str().unwrap(),
+            "value"
+        );
+        assert_eq!(ec.provider_sdk, "genai");
+    }
+
+    #[test]
+    fn test_encrypted_content_roundtrip() {
+        let body = serde_json::json!({"test": 123});
+        let ec = EncryptedContent::new(body, PROVIDER_SDK_VOLCENGINE_ARK);
+
+        let json_str = ec.to_json_string().unwrap();
+        let ec2 = EncryptedContent::from_json_string(&json_str).unwrap();
+
+        assert_eq!(
+            ec2.full_response_body
+                .get("test")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            123
+        );
+        assert_eq!(ec2.provider_sdk, "volcengine-ark");
+    }
+
+    #[test]
+    fn test_encrypted_content_parse_body() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct TestBody {
+            key: String,
+        }
+
+        let body = serde_json::json!({"key": "hello"});
+        let ec = EncryptedContent::new(body, PROVIDER_SDK_GENAI);
+
+        let parsed: TestBody = ec.parse_body().unwrap();
+        assert_eq!(parsed.key, "hello");
+    }
+
+    #[test]
+    fn test_encrypted_content_json_format() {
+        let body = serde_json::json!({"data": 42});
+        let ec = EncryptedContent::new(body, PROVIDER_SDK_GENAI);
+        let json_str = ec.to_json_string().unwrap();
+
+        // Verify the JSON contains the expected keys with underscore prefix
+        let parsed: Value = serde_json::from_str(&json_str).unwrap();
+        assert!(parsed.get("_full_response_body").is_some());
+        assert!(parsed.get("_provider_sdk").is_some());
+        assert!(parsed.get("_ext").is_some());
     }
 }

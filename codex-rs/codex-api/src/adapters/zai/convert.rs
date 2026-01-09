@@ -1,4 +1,10 @@
 //! Conversion functions between codex-api and Z.AI SDK types.
+//!
+//! This module stores the full `Completion` response in `Reasoning.encrypted_content`
+//! for round-trip preservation. On sendback, we extract the Content directly
+//! from the stored response.
+
+use std::collections::HashSet;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
@@ -10,10 +16,13 @@ use z_ai_sdk::Completion;
 use z_ai_sdk::CompletionUsage;
 use z_ai_sdk::ContentBlock;
 use z_ai_sdk::MessageParam;
+use z_ai_sdk::Role;
 use z_ai_sdk::Tool;
 
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
+use crate::common_ext::EncryptedContent;
+use crate::common_ext::PROVIDER_SDK_ZAI;
 
 // ============================================================================
 // Request conversion: Prompt -> Z.AI messages
@@ -22,18 +31,60 @@ use crate::common::ResponseEvent;
 /// Convert a codex-api Prompt to Z.AI MessageParams and optional system message.
 ///
 /// This function handles the conversion of:
+/// - Reasoning with encrypted_content -> Extract Content directly from stored response
 /// - User messages -> MessageParam with role="user"
-/// - Assistant messages -> MessageParam with role="assistant"
-/// - FunctionCall -> Converted to assistant message with tool_calls
+/// - Assistant messages -> MessageParam with role="assistant" (skipped if already processed)
+/// - FunctionCall -> Skipped if already processed, otherwise converted to assistant message
 /// - FunctionCallOutput -> MessageParam with role="tool"
-/// - Reasoning -> Skip (handled by ThinkingConfig)
 pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<String>) {
     let mut messages: Vec<MessageParam> = Vec::new();
     let mut pending_function_calls: Vec<(String, String, String)> = Vec::new(); // (call_id, name, arguments)
     let mut pending_assistant_text: Option<String> = None;
+    let mut processed_response_ids: HashSet<String> = HashSet::new();
 
     for item in &prompt.input {
         match item {
+            // Handle Reasoning with stored full response first
+            ResponseItem::Reasoning {
+                id: resp_id,
+                encrypted_content: Some(enc),
+                ..
+            } => {
+                if processed_response_ids.contains(resp_id) {
+                    continue;
+                }
+                // Flush any pending assistant content first
+                flush_pending_assistant(
+                    &mut messages,
+                    &mut pending_assistant_text,
+                    &mut pending_function_calls,
+                );
+
+                if let Some(assistant_msg) = extract_full_response_message(enc) {
+                    messages.push(assistant_msg);
+                    processed_response_ids.insert(resp_id.clone());
+                }
+            }
+
+            // Reasoning without encrypted_content - skip (handled by ThinkingConfig)
+            ResponseItem::Reasoning { .. } => {}
+
+            // Skip assistant messages if already processed via Reasoning
+            ResponseItem::Message {
+                id: Some(resp_id),
+                role,
+                ..
+            } if role == "assistant" && processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
+            // Skip FunctionCall if already processed via Reasoning
+            ResponseItem::FunctionCall {
+                id: Some(resp_id), ..
+            } if processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
             ResponseItem::Message { role, content, .. } => {
                 if role == "assistant" {
                     // Flush any pending assistant content
@@ -95,10 +146,6 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<String>
                 messages.push(MessageParam::tool_result(call_id, &output.content));
             }
 
-            ResponseItem::Reasoning { .. } => {
-                // Reasoning is handled by ThinkingConfig, skip in messages
-            }
-
             _ => {}
         }
     }
@@ -118,6 +165,36 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<String>
     };
 
     (messages, system)
+}
+
+/// Extract MessageParam from stored Z.AI Completion body.
+fn extract_full_response_message(encrypted_content: &str) -> Option<MessageParam> {
+    let ec = EncryptedContent::from_json_string(encrypted_content)?;
+    let completion: Completion = ec.parse_body()?;
+
+    let choice = completion.choices.first()?;
+    let message = &choice.message;
+
+    // Build content from message fields
+    let mut content: Vec<ContentBlock> = Vec::new();
+
+    // Add text content
+    if let Some(text) = &message.content {
+        if !text.is_empty() {
+            content.push(ContentBlock::text(text));
+        }
+    }
+
+    if content.is_empty() {
+        None
+    } else {
+        Some(MessageParam {
+            role: Role::Assistant,
+            content,
+            tool_call_id: None,
+            name: None,
+        })
+    }
 }
 
 /// Flush pending assistant text and function calls to a single message.
@@ -234,6 +311,16 @@ pub fn completion_to_events(completion: &Completion) -> Vec<ResponseEvent> {
     // Add Created event
     events.push(ResponseEvent::Created);
 
+    // Get raw response body from sdk_http_response for storage
+    let full_response_json = completion
+        .sdk_http_response
+        .as_ref()
+        .and_then(|r| r.body.clone())
+        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_ZAI))
+        .and_then(|ec| ec.to_json_string());
+
+    let mut has_reasoning = false;
+
     // Process choices
     for choice in &completion.choices {
         let message = &choice.message;
@@ -249,8 +336,9 @@ pub fn completion_to_events(completion: &Completion) -> Vec<ResponseEvent> {
                     content: Some(vec![ReasoningItemContent::ReasoningText {
                         text: reasoning.clone(),
                     }]),
-                    encrypted_content: None,
+                    encrypted_content: full_response_json.clone(),
                 }));
+                has_reasoning = true;
             }
         }
 
@@ -278,6 +366,16 @@ pub fn completion_to_events(completion: &Completion) -> Vec<ResponseEvent> {
                 }));
             }
         }
+    }
+
+    // If no reasoning block, create one to store full response for round-trip
+    if !has_reasoning && full_response_json.is_some() {
+        events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+            id: uuid::Uuid::new_v4().to_string(),
+            summary: vec![],
+            content: None,
+            encrypted_content: full_response_json,
+        }));
     }
 
     // Extract token usage

@@ -1,4 +1,10 @@
 //! Conversion functions between codex-api and Anthropic SDK types.
+//!
+//! This module stores the full `Message` response in `Reasoning.encrypted_content`
+//! for round-trip preservation. On sendback, we extract the Content directly
+//! from the stored response.
+
+use std::collections::HashSet;
 
 use anthropic_sdk::ContentBlock;
 use anthropic_sdk::ContentBlockParam;
@@ -18,6 +24,8 @@ use serde_json::Value;
 
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
+use crate::common_ext::EncryptedContent;
+use crate::common_ext::PROVIDER_SDK_ANTHROPIC;
 
 // ============================================================================
 // Request conversion: Prompt -> Anthropic messages
@@ -26,17 +34,55 @@ use crate::common::ResponseEvent;
 /// Convert a codex-api Prompt to Anthropic MessageParams and optional SystemPrompt.
 ///
 /// This function handles the conversion of:
+/// - Reasoning with encrypted_content -> Extract Content directly from stored response
 /// - User messages -> MessageParam with role="user"
-/// - Assistant messages -> MessageParam with role="assistant"
-/// - FunctionCall -> Appended as ToolUse to the current assistant message
+/// - Assistant messages -> MessageParam with role="assistant" (skipped if already processed)
+/// - FunctionCall -> Skipped if already processed, otherwise appended as ToolUse
 /// - FunctionCallOutput -> MessageParam with ToolResult content
-/// - Reasoning -> Preserved in encrypted_content (not sent to API)
 pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemPrompt>) {
     let mut messages: Vec<MessageParam> = Vec::new();
     let mut current_assistant_content: Vec<ContentBlockParam> = Vec::new();
+    let mut processed_response_ids: HashSet<String> = HashSet::new();
 
     for item in &prompt.input {
         match item {
+            // Handle Reasoning with stored full response first
+            ResponseItem::Reasoning {
+                id: resp_id,
+                encrypted_content: Some(enc),
+                ..
+            } => {
+                if processed_response_ids.contains(resp_id) {
+                    continue;
+                }
+                // Flush any pending assistant content first
+                flush_assistant_message(&mut messages, &mut current_assistant_content);
+
+                if let Some(assistant_msg) = extract_full_response_message(enc) {
+                    messages.push(assistant_msg);
+                    processed_response_ids.insert(resp_id.clone());
+                }
+            }
+
+            // Reasoning without encrypted_content - skip (handled by ThinkingConfig)
+            ResponseItem::Reasoning { .. } => {}
+
+            // Skip assistant messages if already processed via Reasoning
+            ResponseItem::Message {
+                id: Some(resp_id),
+                role,
+                ..
+            } if role == "assistant" && processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
+            // Skip FunctionCall if already processed via Reasoning
+            ResponseItem::FunctionCall {
+                id: Some(resp_id), ..
+            } if processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
             ResponseItem::Message { role, content, .. } => {
                 if role == "assistant" {
                     // Continue or start assistant message
@@ -83,11 +129,6 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemP
                 messages.push(MessageParam::user_with_content(vec![content]));
             }
 
-            ResponseItem::Reasoning { .. } => {
-                // Reasoning is handled by ThinkingConfig, skip in messages
-                // The encrypted_content is preserved for round-trip but not sent
-            }
-
             // Skip types not applicable to Anthropic API:
             // LocalShellCall, CustomToolCall, WebSearchCall, GhostSnapshot, Compaction
             // These are handled by other parts of the system
@@ -106,6 +147,34 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemP
     };
 
     (messages, system_prompt)
+}
+
+/// Extract MessageParam from stored Anthropic Message body.
+fn extract_full_response_message(encrypted_content: &str) -> Option<MessageParam> {
+    let ec = EncryptedContent::from_json_string(encrypted_content)?;
+    let message: Message = ec.parse_body()?;
+
+    // Convert ContentBlock -> ContentBlockParam
+    let content: Vec<ContentBlockParam> = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(ContentBlockParam::text(text)),
+            ContentBlock::ToolUse { id, name, input } => Some(ContentBlockParam::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            }),
+            // Skip thinking blocks - they are handled by ThinkingConfig
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
+        })
+        .collect();
+
+    if content.is_empty() {
+        None
+    } else {
+        Some(MessageParam::assistant_with_content(content))
+    }
 }
 
 /// Flush the current assistant message content to the messages list.
@@ -284,8 +353,17 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
     // Add Created event
     events.push(ResponseEvent::Created);
 
+    // Get raw response body from sdk_http_response for storage
+    let full_response_json = message
+        .sdk_http_response
+        .as_ref()
+        .and_then(|r| r.body.clone())
+        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_ANTHROPIC))
+        .and_then(|ec| ec.to_json_string());
+
     // Collect text content for a single Message event
     let mut text_parts: Vec<String> = Vec::new();
+    let mut has_reasoning = false;
 
     for block in &message.content {
         match block {
@@ -315,10 +393,7 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
                 }));
             }
 
-            ContentBlock::Thinking {
-                thinking,
-                signature,
-            } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 // Flush accumulated text first
                 if !text_parts.is_empty() {
                     events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
@@ -331,7 +406,7 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
                     text_parts.clear();
                 }
 
-                // Add reasoning event (no truncation for summary to match Gemini behavior)
+                // Add reasoning event with full response stored in encrypted_content
                 events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
                     id: uuid::Uuid::new_v4().to_string(),
                     summary: vec![ReasoningItemReasoningSummary::SummaryText {
@@ -340,11 +415,12 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
                     content: Some(vec![ReasoningItemContent::ReasoningText {
                         text: thinking.clone(),
                     }]),
-                    encrypted_content: Some(signature.clone()),
+                    encrypted_content: full_response_json.clone(),
                 }));
+                has_reasoning = true;
             }
 
-            ContentBlock::RedactedThinking { data } => {
+            ContentBlock::RedactedThinking { .. } => {
                 // Flush accumulated text first
                 if !text_parts.is_empty() {
                     events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
@@ -357,13 +433,14 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
                     text_parts.clear();
                 }
 
-                // Add redacted reasoning event
+                // Add redacted reasoning event with full response stored
                 events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
                     id: uuid::Uuid::new_v4().to_string(),
                     summary: vec![],
                     content: None,
-                    encrypted_content: Some(data.clone()),
+                    encrypted_content: full_response_json.clone(),
                 }));
+                has_reasoning = true;
             }
         }
     }
@@ -376,6 +453,16 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
             content: vec![ContentItem::OutputText {
                 text: text_parts.join(""),
             }],
+        }));
+    }
+
+    // If no reasoning block, create one to store full response for round-trip
+    if !has_reasoning && full_response_json.is_some() {
+        events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+            id: uuid::Uuid::new_v4().to_string(),
+            summary: vec![],
+            content: None,
+            encrypted_content: full_response_json,
         }));
     }
 

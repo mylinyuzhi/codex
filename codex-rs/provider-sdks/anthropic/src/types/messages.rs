@@ -5,6 +5,7 @@ use super::ContentBlock;
 use super::ContentBlockParam;
 use super::Metadata;
 use super::Role;
+use super::SdkHttpResponse;
 use super::StopReason;
 use super::SystemPrompt;
 use super::Tool;
@@ -296,6 +297,10 @@ pub struct Message {
 
     /// Token usage information.
     pub usage: Usage,
+
+    /// HTTP response metadata (populated by SDK, not from API).
+    #[serde(skip)]
+    pub sdk_http_response: Option<SdkHttpResponse>,
 }
 
 impl Message {

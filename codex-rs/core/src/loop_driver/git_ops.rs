@@ -49,9 +49,9 @@ pub async fn commit_if_needed(cwd: &Path, message: &str) -> Result<Option<String
 /// Read plan file if exists.
 ///
 /// This is not a git operation, but kept here for convenience.
-/// Reads the most recently modified .md file from `.claude/plans/`.
+/// Reads the most recently modified .md file from `.codex/plans/`.
 pub fn read_plan_file_if_exists(cwd: &Path) -> Option<String> {
-    let plans_dir = cwd.join(".claude").join("plans");
+    let plans_dir = cwd.join(".codex").join("plans");
     if !plans_dir.exists() {
         return None;
     }
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn test_read_plan_file_with_plan() {
         let temp = TempDir::new().unwrap();
-        let plans_dir = temp.path().join(".claude").join("plans");
+        let plans_dir = temp.path().join(".codex").join("plans");
         std::fs::create_dir_all(&plans_dir).unwrap();
         std::fs::write(plans_dir.join("test-plan.md"), "# Plan\n1. Do X").unwrap();
 

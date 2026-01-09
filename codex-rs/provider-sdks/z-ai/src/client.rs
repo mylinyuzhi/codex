@@ -1,5 +1,6 @@
 //! HTTP client implementation for Z.AI SDK.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,11 +11,15 @@ use reqwest::header::HeaderValue;
 use serde::de::DeserializeOwned;
 
 use crate::config::ClientConfig;
+use crate::config::HttpRequest;
+use crate::config::RequestHook;
 use crate::error::Result;
 use crate::error::ZaiError;
 use crate::jwt::JwtTokenCache;
 use crate::resources::Chat;
 use crate::resources::Embeddings;
+use crate::types::Completion;
+use crate::types::SdkHttpResponse;
 
 /// Environment variable for API key.
 const API_KEY_ENV: &str = "ZAI_API_KEY";
@@ -25,6 +30,7 @@ pub(crate) struct BaseClient {
     http_client: reqwest::Client,
     config: ClientConfig,
     jwt_cache: Option<Arc<JwtTokenCache>>,
+    request_hook: Option<Arc<dyn RequestHook>>,
 }
 
 impl BaseClient {
@@ -40,11 +46,13 @@ impl BaseClient {
         };
 
         let http_client = reqwest::Client::builder().timeout(config.timeout).build()?;
+        let request_hook = config.request_hook.clone();
 
         Ok(Self {
             http_client,
             config,
             jwt_cache,
+            request_hook,
         })
     }
 
@@ -85,13 +93,60 @@ impl BaseClient {
         headers
     }
 
+    /// Apply request hook if configured.
+    fn apply_hook(
+        &self,
+        url: String,
+        headers: HeaderMap,
+        body: serde_json::Value,
+    ) -> (String, HeaderMap, serde_json::Value) {
+        if let Some(hook) = &self.request_hook {
+            // Convert HeaderMap to HashMap for hook
+            let header_map: HashMap<String, String> = headers
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+                .collect();
+
+            let mut http_request = HttpRequest {
+                url,
+                headers: header_map,
+                body,
+            };
+
+            // Call the hook
+            hook.on_request(&mut http_request);
+
+            // Convert HashMap back to HeaderMap
+            let mut new_headers = HeaderMap::new();
+            for (k, v) in http_request.headers {
+                if let (Ok(name), Ok(value)) = (
+                    reqwest::header::HeaderName::try_from(k.as_str()),
+                    HeaderValue::from_str(&v),
+                ) {
+                    new_headers.insert(name, value);
+                }
+            }
+
+            (http_request.url, new_headers, http_request.body)
+        } else {
+            (url, headers, body)
+        }
+    }
+
     pub(crate) async fn post<T: DeserializeOwned>(
         &self,
         path: &str,
         body: serde_json::Value,
         accept_language: Option<&str>,
     ) -> Result<T> {
-        let url = format!("{}{path}", self.config.base_url);
+        let base_url = format!("{}{path}", self.config.base_url);
+        let auth_header = self.get_auth_header().await?;
+        let mut base_headers = self.default_headers(accept_language);
+        base_headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&auth_header).expect("valid auth header"),
+        );
+        let (url, headers, body) = self.apply_hook(base_url, base_headers, body);
         let mut last_error = None;
 
         for attempt in 0..=self.config.max_retries {
@@ -100,17 +155,10 @@ impl BaseClient {
                 tokio::time::sleep(delay).await;
             }
 
-            let auth_header = self.get_auth_header().await?;
-            let mut headers = self.default_headers(accept_language);
-            headers.insert(
-                "Authorization",
-                HeaderValue::from_str(&auth_header).expect("valid auth header"),
-            );
-
             let response = self
                 .http_client
                 .post(&url)
-                .headers(headers)
+                .headers(headers.clone())
                 .json(&body)
                 .send()
                 .await;
@@ -130,6 +178,91 @@ impl BaseClient {
 
                     let error_body = resp.text().await.unwrap_or_default();
                     let error = parse_api_error(status.as_u16() as i32, &error_body, request_id);
+
+                    if error.is_retryable() && attempt < self.config.max_retries {
+                        last_error = Some(error);
+                        continue;
+                    }
+
+                    return Err(error);
+                }
+                Err(e) => {
+                    let error = ZaiError::Network(e);
+                    if error.is_retryable() && attempt < self.config.max_retries {
+                        last_error = Some(error);
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        Err(last_error.expect("at least one error should have occurred"))
+    }
+
+    /// Send a POST request and capture HTTP metadata for Completion responses.
+    pub(crate) async fn post_completion(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        accept_language: Option<&str>,
+    ) -> Result<Completion> {
+        let base_url = format!("{}{path}", self.config.base_url);
+        let auth_header = self.get_auth_header().await?;
+        let mut base_headers = self.default_headers(accept_language);
+        base_headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&auth_header).expect("valid auth header"),
+        );
+        let (url, headers, body) = self.apply_hook(base_url, base_headers, body);
+        let mut last_error = None;
+
+        for attempt in 0..=self.config.max_retries {
+            if attempt > 0 {
+                let delay = Duration::from_millis(100 * 2_u64.pow(attempt as u32 - 1));
+                tokio::time::sleep(delay).await;
+            }
+
+            let response = self
+                .http_client
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let status_code = status.as_u16() as i32;
+                    let request_id = resp
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from);
+
+                    // Capture headers
+                    let response_headers: HashMap<String, String> = resp
+                        .headers()
+                        .iter()
+                        .filter_map(|(k, v)| {
+                            v.to_str().ok().map(|val| (k.to_string(), val.to_string()))
+                        })
+                        .collect();
+
+                    let body_text = resp.text().await.map_err(ZaiError::from)?;
+
+                    if status.is_success() {
+                        let mut completion: Completion = serde_json::from_str(&body_text)?;
+                        completion.sdk_http_response = Some(SdkHttpResponse::new(
+                            status_code,
+                            response_headers,
+                            body_text,
+                        ));
+                        return Ok(completion);
+                    }
+
+                    let error = parse_api_error(status_code, &body_text, request_id);
 
                     if error.is_retryable() && attempt < self.config.max_retries {
                         last_error = Some(error);

@@ -45,6 +45,10 @@ pub enum ArkError {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// Parse error with custom message (includes raw body for debugging).
+    #[error("parse error: {0}")]
+    Parse(String),
+
     /// Context window exceeded.
     #[error("context window exceeded")]
     ContextWindowExceeded,

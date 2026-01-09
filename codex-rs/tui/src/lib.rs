@@ -40,6 +40,7 @@ mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
 mod chatwidget_ext;
+mod chatwidget_model_ext;
 mod cli;
 mod clipboard_paste;
 mod color;

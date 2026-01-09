@@ -41,6 +41,6 @@ impl<'a> Responses<'a> {
     /// ```
     pub async fn create(&self, params: ResponseCreateParams) -> Result<Response> {
         let body = serde_json::to_value(&params)?;
-        self.client.post("/responses", body).await
+        self.client.post_response("/responses", body).await
     }
 }

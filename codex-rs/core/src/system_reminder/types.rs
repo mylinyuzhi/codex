@@ -90,15 +90,24 @@ pub enum ReminderTier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
-    // === Core tier (Phase 1) ===
-    /// Periodic plan tool reminder (update_plan tool usage).
+    // === Task Plan (update_plan tool) ===
+    /// 任务计划提醒：当 update_plan tool 长期未使用时提醒用户跟踪任务进度。
+    /// Periodic reminder about using update_plan tool for task tracking.
     PlanToolReminder,
-    /// Plan mode instructions.
-    PlanMode,
-    /// Plan mode re-entry instructions.
-    PlanModeReentry,
-    /// Approved plan injection (one-time after ExitPlanMode approval).
-    PlanApproved,
+
+    // === Plan Mode (5阶段设计工作流) ===
+    /// 进入 Plan Mode：注入5阶段工作流指令和约束。
+    /// Injected when entering Plan Mode with 5-phase workflow instructions.
+    /// Note: Reentry is handled internally by varying the content, not as a separate type.
+    PlanModeEnter,
+    /// Plan Mode 批准：ExitPlanMode 被用户批准后一次性注入计划内容。
+    /// One-time injection after user approves ExitPlanMode with plan content.
+    PlanModeApproved,
+    /// Plan Mode 文件引用：Compaction 后恢复 plan 文件时注入内容。
+    /// Injected when plan file is restored after compaction.
+    PlanModeFileReference,
+
+    // === Core tier (Phase 1) ===
     /// File change notification.
     ChangedFiles,
     /// User-defined critical instruction.
@@ -119,10 +128,6 @@ pub enum AttachmentType {
     // === Main agent only (Phase 1) ===
     /// Output style instructions (e.g., Explanatory, Learning).
     OutputStyle,
-
-    /// Plan file reference restored after compaction.
-    /// Matches Claude Code's "plan_file_reference" attachment type.
-    PlanFileReference,
 
     // === Phase 2 (Future) ===
     /// Tool call result metadata.
@@ -172,9 +177,9 @@ impl fmt::Display for AttachmentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             AttachmentType::PlanToolReminder => "plan_tool_reminder",
-            AttachmentType::PlanMode => "plan_mode",
-            AttachmentType::PlanModeReentry => "plan_mode_reentry",
-            AttachmentType::PlanApproved => "plan_approved",
+            AttachmentType::PlanModeEnter => "plan_mode_enter",
+            AttachmentType::PlanModeApproved => "plan_mode_approved",
+            AttachmentType::PlanModeFileReference => "plan_mode_file_reference",
             AttachmentType::ChangedFiles => "changed_files",
             AttachmentType::CriticalInstruction => "critical_instruction",
             AttachmentType::ToolResult => "tool_result",
@@ -188,7 +193,6 @@ impl fmt::Display for AttachmentType {
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
             AttachmentType::OutputStyle => "output_style",
-            AttachmentType::PlanFileReference => "plan_file_reference",
         };
         write!(f, "{name}")
     }
@@ -313,7 +317,7 @@ mod tests {
     #[test]
     fn test_attachment_type_tier_mapping() {
         assert_eq!(AttachmentType::PlanToolReminder.tier(), ReminderTier::Core);
-        assert_eq!(AttachmentType::PlanMode.tier(), ReminderTier::Core);
+        assert_eq!(AttachmentType::PlanModeEnter.tier(), ReminderTier::Core);
         assert_eq!(AttachmentType::ChangedFiles.tier(), ReminderTier::Core);
         assert_eq!(
             AttachmentType::CriticalInstruction.tier(),
@@ -401,7 +405,10 @@ mod tests {
             format!("{}", AttachmentType::PlanToolReminder),
             "plan_tool_reminder"
         );
-        assert_eq!(format!("{}", AttachmentType::PlanMode), "plan_mode");
+        assert_eq!(
+            format!("{}", AttachmentType::PlanModeEnter),
+            "plan_mode_enter"
+        );
         assert_eq!(
             format!("{}", AttachmentType::BackgroundTask),
             "background_task"

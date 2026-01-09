@@ -1,6 +1,8 @@
-//! Plan approved generator.
+//! Plan mode approved generator.
 //!
-//! One-time injection after ExitPlanMode approval.
+//! Plan Mode 批准：ExitPlanMode 被用户批准后一次性注入计划内容。
+//! One-time injection after user approves ExitPlanMode with plan content.
+//!
 //! Matches Claude Code's post-approval plan embedding behavior.
 
 use crate::config::system_reminder::SystemReminderConfig;
@@ -12,37 +14,38 @@ use crate::system_reminder::types::AttachmentType;
 use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 
-/// Plan approved generator.
+/// Plan mode approved generator.
 ///
+/// Plan Mode 批准：ExitPlanMode 被用户批准后一次性注入计划内容。
 /// Generates a one-time reminder after plan approval containing:
 /// - Full plan content
 /// - "User has approved your plan. You can now start coding." instruction
 ///
 /// Matches Claude Code's ExitPlanMode tool_result embedding.
 #[derive(Debug)]
-pub struct PlanApprovedGenerator;
+pub struct PlanModeApprovedGenerator;
 
-impl PlanApprovedGenerator {
+impl PlanModeApprovedGenerator {
     /// Create a new plan approved generator.
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for PlanApprovedGenerator {
+impl Default for PlanModeApprovedGenerator {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl AttachmentGenerator for PlanApprovedGenerator {
+impl AttachmentGenerator for PlanModeApprovedGenerator {
     fn name(&self) -> &str {
-        "plan_approved"
+        "plan_mode_approved"
     }
 
     fn attachment_type(&self) -> AttachmentType {
-        AttachmentType::PlanApproved
+        AttachmentType::PlanModeApproved
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -62,13 +65,13 @@ impl AttachmentGenerator for PlanApprovedGenerator {
         );
 
         tracing::info!(
-            generator = "plan_approved",
+            generator = "plan_mode_approved",
             file_path = %plan.file_path,
-            "Generating approved plan reminder"
+            "Generating plan mode approved reminder"
         );
 
         Ok(Some(SystemReminder::new(
-            AttachmentType::PlanApproved,
+            AttachmentType::PlanModeApproved,
             content,
         )))
     }
@@ -128,7 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generates_when_plan_approved() {
-        let generator = PlanApprovedGenerator::new();
+        let generator = PlanModeApprovedGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
 
@@ -142,7 +145,7 @@ mod tests {
 
         assert!(result.is_some());
         let reminder = result.unwrap();
-        assert_eq!(reminder.attachment_type, AttachmentType::PlanApproved);
+        assert_eq!(reminder.attachment_type, AttachmentType::PlanModeApproved);
         assert!(reminder.content.contains("User has approved your plan"));
         assert!(reminder.content.contains("Step one"));
         assert!(reminder.content.contains("/path/to/plan.md"));
@@ -150,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_returns_none_without_approved_plan() {
-        let generator = PlanApprovedGenerator::new();
+        let generator = PlanModeApprovedGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
 
@@ -162,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_no_throttling() {
-        let generator = PlanApprovedGenerator::new();
+        let generator = PlanModeApprovedGenerator::new();
         let config = generator.throttle_config();
         assert_eq!(config.min_turns_between, 0);
         assert_eq!(config.min_turns_after_trigger, 0);
@@ -170,8 +173,11 @@ mod tests {
 
     #[test]
     fn test_attachment_type() {
-        let generator = PlanApprovedGenerator::new();
-        assert_eq!(generator.attachment_type(), AttachmentType::PlanApproved);
+        let generator = PlanModeApprovedGenerator::new();
+        assert_eq!(
+            generator.attachment_type(),
+            AttachmentType::PlanModeApproved
+        );
         assert_eq!(generator.tier(), ReminderTier::Core);
     }
 }

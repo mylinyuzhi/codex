@@ -27,6 +27,7 @@ pub fn adapter_config(cfg: &TestConfig) -> AdapterConfig {
         base_url: cfg.base_url.clone(),
         model: cfg.model.clone(),
         extra: None,
+        request_hook: None,
     }
 }
 

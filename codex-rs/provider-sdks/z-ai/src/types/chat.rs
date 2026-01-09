@@ -9,6 +9,7 @@ use super::CompletionUsage;
 use super::ContentBlock;
 use super::Function;
 use super::MessageParam;
+use super::SdkHttpResponse;
 use super::ThinkingConfig;
 use super::Tool;
 use super::ToolChoice;
@@ -226,6 +227,9 @@ pub struct Completion {
     pub id: Option<String>,
     /// Token usage information.
     pub usage: CompletionUsage,
+    /// HTTP response metadata (populated by SDK, not from API).
+    #[serde(skip)]
+    pub sdk_http_response: Option<SdkHttpResponse>,
 }
 
 impl Completion {

@@ -131,8 +131,8 @@ impl Default for SystemReminderConfig {
 pub struct AttachmentSettings {
     /// Critical instruction reminder (default: true).
     pub critical_instruction: bool,
-    /// Plan mode instructions (default: true).
-    pub plan_mode: bool,
+    /// Plan mode enter instructions (default: true).
+    pub plan_mode_enter: bool,
     /// Plan tool reminder - update_plan tool usage (default: true).
     pub plan_tool_reminder: bool,
     /// File change notifications (default: true).
@@ -165,7 +165,7 @@ impl Default for AttachmentSettings {
     fn default() -> Self {
         Self {
             critical_instruction: true,
-            plan_mode: true,
+            plan_mode_enter: true,
             plan_tool_reminder: true,
             changed_files: true,
             background_task: true,
@@ -199,7 +199,7 @@ mod tests {
     fn test_attachment_settings_default() {
         let settings = AttachmentSettings::default();
         assert!(settings.critical_instruction);
-        assert!(settings.plan_mode);
+        assert!(settings.plan_mode_enter);
         assert!(settings.plan_tool_reminder);
         assert!(settings.changed_files);
         assert!(settings.background_task);
@@ -228,7 +228,7 @@ mod tests {
 
             [attachments]
             critical_instruction = true
-            plan_mode = false
+            plan_mode_enter = false
             plan_tool_reminder = true
             changed_files = false
             background_task = true
@@ -242,7 +242,7 @@ mod tests {
         );
         assert_eq!(config.timeout_ms, Some(2000));
         assert!(config.attachments.critical_instruction);
-        assert!(!config.attachments.plan_mode);
+        assert!(!config.attachments.plan_mode_enter);
         assert!(config.attachments.plan_tool_reminder);
         assert!(!config.attachments.changed_files);
         assert!(config.attachments.background_task);
@@ -258,7 +258,7 @@ mod tests {
         assert!(!config.enabled);
         // Defaults should apply
         assert!(config.critical_instruction.is_none());
-        assert!(config.attachments.plan_mode);
+        assert!(config.attachments.plan_mode_enter);
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod tests {
             critical_instruction: Some("Test instruction".to_string()),
             attachments: AttachmentSettings {
                 critical_instruction: true,
-                plan_mode: false,
+                plan_mode_enter: false,
                 ..Default::default()
             },
             timeout_ms: Some(1500),

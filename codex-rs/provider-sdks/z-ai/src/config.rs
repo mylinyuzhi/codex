@@ -1,9 +1,32 @@
 //! Client configuration for Z.AI SDK.
 
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// Configuration for the Z.AI / ZhipuAI client.
+// ============================================================================
+// Request Hook Support
+// ============================================================================
+
+/// HTTP request information that can be modified by a hook.
 #[derive(Debug, Clone)]
+pub struct HttpRequest {
+    /// Request URL.
+    pub url: String,
+    /// Request headers as key-value pairs.
+    pub headers: HashMap<String, String>,
+    /// Request body as JSON.
+    pub body: serde_json::Value,
+}
+
+/// Trait for request hooks that can modify HTTP requests before they are sent.
+pub trait RequestHook: Send + Sync + Debug {
+    /// Called before the HTTP request is sent.
+    fn on_request(&self, request: &mut HttpRequest);
+}
+
+/// Configuration for the Z.AI / ZhipuAI client.
 pub struct ClientConfig {
     /// API key for authentication.
     pub api_key: String,
@@ -17,6 +40,36 @@ pub struct ClientConfig {
     pub disable_token_cache: bool,
     /// Source channel identifier.
     pub source_channel: Option<String>,
+    /// Optional request hook for interceptor support.
+    pub request_hook: Option<Arc<dyn RequestHook>>,
+}
+
+impl Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .field("disable_token_cache", &self.disable_token_cache)
+            .field("source_channel", &self.source_channel)
+            .field("request_hook", &self.request_hook.is_some())
+            .finish()
+    }
+}
+
+impl Clone for ClientConfig {
+    fn clone(&self) -> Self {
+        Self {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            timeout: self.timeout,
+            max_retries: self.max_retries,
+            disable_token_cache: self.disable_token_cache,
+            source_channel: self.source_channel.clone(),
+            request_hook: self.request_hook.clone(),
+        }
+    }
 }
 
 impl ClientConfig {
@@ -41,6 +94,7 @@ impl ClientConfig {
             max_retries: Self::DEFAULT_MAX_RETRIES,
             disable_token_cache: true,
             source_channel: None,
+            request_hook: None,
         }
     }
 
@@ -53,6 +107,7 @@ impl ClientConfig {
             max_retries: Self::DEFAULT_MAX_RETRIES,
             disable_token_cache: true,
             source_channel: None,
+            request_hook: None,
         }
     }
 
@@ -83,6 +138,12 @@ impl ClientConfig {
     /// Set source channel.
     pub fn source_channel(mut self, channel: impl Into<String>) -> Self {
         self.source_channel = Some(channel.into());
+        self
+    }
+
+    /// Set the request hook.
+    pub fn request_hook(mut self, hook: Arc<dyn RequestHook>) -> Self {
+        self.request_hook = Some(hook);
         self
     }
 }

@@ -1,7 +1,9 @@
-//! Plan file reference generator.
+//! Plan mode file restored generator.
 //!
-//! Injects plan content after compaction restores the plan file.
-//! Matches Claude Code's "plan_file_reference" attachment type.
+//! Plan Mode 文件引用：Compaction 后恢复 plan 文件时注入内容。
+//! Injected when plan file is restored after compaction.
+//!
+//! Matches Claude Code's "plan_file_reference" attachment behavior.
 
 use crate::config::system_reminder::SystemReminderConfig;
 use crate::error::Result;
@@ -12,36 +14,37 @@ use crate::system_reminder::types::AttachmentType;
 use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 
-/// Plan file reference generator.
+/// Plan mode file restored generator.
 ///
+/// Plan Mode 文件引用：Compaction 后恢复 plan 文件时注入内容。
 /// Generates a reminder after compaction when a plan file is restored.
 /// Contains the full plan content with instructions to continue if relevant.
 ///
 /// Matches Claude Code's plan_file_reference attachment behavior.
 #[derive(Debug)]
-pub struct PlanFileReferenceGenerator;
+pub struct PlanModeFileReferenceGenerator;
 
-impl PlanFileReferenceGenerator {
+impl PlanModeFileReferenceGenerator {
     /// Create a new plan file reference generator.
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for PlanFileReferenceGenerator {
+impl Default for PlanModeFileReferenceGenerator {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl AttachmentGenerator for PlanFileReferenceGenerator {
+impl AttachmentGenerator for PlanModeFileReferenceGenerator {
     fn name(&self) -> &str {
-        "plan_file_reference"
+        "plan_mode_file_reference"
     }
 
     fn attachment_type(&self) -> AttachmentType {
-        AttachmentType::PlanFileReference
+        AttachmentType::PlanModeFileReference
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -60,13 +63,13 @@ impl AttachmentGenerator for PlanFileReferenceGenerator {
         );
 
         tracing::info!(
-            generator = "plan_file_reference",
+            generator = "plan_mode_file_reference",
             file_path = %plan.file_path,
-            "Generating plan file reference reminder after compaction"
+            "Generating plan mode file restored reminder after compaction"
         );
 
         Ok(Some(SystemReminder::new(
-            AttachmentType::PlanFileReference,
+            AttachmentType::PlanModeFileReference,
             content,
         )))
     }
@@ -125,13 +128,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_generates_when_plan_restored() {
-        let generator = PlanFileReferenceGenerator::new();
+        let generator = PlanModeFileReferenceGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
 
         let restored_plan = RestoredPlanInfo {
             content: "# My Plan\n\n1. Step one\n2. Step two".to_string(),
-            file_path: "/home/user/.claude/plans/bright-aurora.md".to_string(),
+            file_path: "/home/user/.codex/plans/bright-aurora.md".to_string(),
         };
 
         let ctx = make_context(Some(restored_plan), &tracker, &plan_state);
@@ -139,7 +142,10 @@ mod tests {
 
         assert!(result.is_some());
         let reminder = result.unwrap();
-        assert_eq!(reminder.attachment_type, AttachmentType::PlanFileReference);
+        assert_eq!(
+            reminder.attachment_type,
+            AttachmentType::PlanModeFileReference
+        );
         assert!(
             reminder
                 .content
@@ -152,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_returns_none_without_restored_plan() {
-        let generator = PlanFileReferenceGenerator::new();
+        let generator = PlanModeFileReferenceGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
 
@@ -164,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_no_throttling() {
-        let generator = PlanFileReferenceGenerator::new();
+        let generator = PlanModeFileReferenceGenerator::new();
         let config = generator.throttle_config();
         assert_eq!(config.min_turns_between, 0);
         assert_eq!(config.min_turns_after_trigger, 0);
@@ -172,17 +178,17 @@ mod tests {
 
     #[test]
     fn test_attachment_type() {
-        let generator = PlanFileReferenceGenerator::new();
+        let generator = PlanModeFileReferenceGenerator::new();
         assert_eq!(
             generator.attachment_type(),
-            AttachmentType::PlanFileReference
+            AttachmentType::PlanModeFileReference
         );
         assert_eq!(generator.tier(), ReminderTier::Core);
     }
 
     #[test]
     fn test_name() {
-        let generator = PlanFileReferenceGenerator::new();
-        assert_eq!(generator.name(), "plan_file_reference");
+        let generator = PlanModeFileReferenceGenerator::new();
+        assert_eq!(generator.name(), "plan_mode_file_reference");
     }
 }

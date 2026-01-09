@@ -43,7 +43,7 @@ impl<'a> Messages<'a> {
     /// ```
     pub async fn create(&self, params: MessageCreateParams) -> Result<Message> {
         let body = serde_json::to_value(&params)?;
-        self.client.post("/v1/messages", body).await
+        self.client.post_message("/v1/messages", body).await
     }
 
     /// Count the number of tokens in a message.

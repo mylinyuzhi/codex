@@ -61,6 +61,33 @@ impl LoopPromptBuilder {
 
 use super::context::LoopContext;
 
+/// Complexity assessment prompt - injected on each iteration to guide planning decisions.
+///
+/// Helps the LLM decide whether to enter Plan Mode for complex tasks.
+/// EnterPlanMode/ExitPlanMode are auto-approved in SpawnAgent context.
+const COMPLEXITY_ASSESSMENT_PROMPT: &str = r#"<task_assessment>
+## Task Complexity Assessment
+
+Before working on this iteration, evaluate the task complexity:
+
+1. **Complexity Check**:
+   - Is this a multi-file change? (3+ files)
+   - Does it require understanding existing architecture?
+   - Could changes break existing functionality?
+
+2. **Decision**:
+   - If complex → Use `EnterPlanMode` to explore the codebase and plan first
+   - If simple → Proceed directly with implementation
+
+3. **When in Plan Mode**:
+   - Explore the codebase to understand patterns and architecture
+   - Write your plan to the plan file
+   - Call `ExitPlanMode` when ready to implement
+
+Note: EnterPlanMode and ExitPlanMode are auto-approved in this context.
+</task_assessment>
+"#;
+
 /// Loop context template for enhanced prompts.
 const LOOP_CONTEXT_TEMPLATE: &str = r#"<task_context>
 ## Original Task
@@ -95,11 +122,15 @@ Summary: {summary}
 
 /// Build enhanced prompt with context injection.
 ///
-/// For iteration 0, returns original prompt.
-/// For iteration > 0, prepends context block with history.
+/// For iteration 0, returns original prompt with complexity assessment.
+/// For iteration > 0, prepends context block with history and complexity assessment.
+///
+/// The complexity assessment prompt is injected on every iteration to guide the LLM
+/// to use EnterPlanMode for complex tasks (auto-approved in SpawnAgent context).
 pub fn build_enhanced_prompt(original: &str, iteration: i32, context: &LoopContext) -> String {
     if iteration == 0 {
-        return original.to_string();
+        // First iteration: add complexity assessment before original prompt
+        return format!("{COMPLEXITY_ASSESSMENT_PROMPT}\n{original}");
     }
 
     // Build plan section
@@ -138,7 +169,8 @@ pub fn build_enhanced_prompt(original: &str, iteration: i32, context: &LoopConte
         .replace("{base_commit_id}", &context.base_commit_id)
         .replace("{iteration_records}", &iteration_records);
 
-    format!("{context_block}\n\n{original}")
+    // Subsequent iterations: context block + complexity assessment + original
+    format!("{context_block}\n{COMPLEXITY_ASSESSMENT_PROMPT}\n{original}")
 }
 
 #[cfg(test)]
@@ -180,7 +212,11 @@ mod tests {
     fn enhanced_prompt_first_iteration() {
         let ctx = LoopContext::new("abc123".to_string(), "Implement X".to_string(), None, 5);
         let result = build_enhanced_prompt("Do the task", 0, &ctx);
-        assert_eq!(result, "Do the task");
+        // First iteration includes complexity assessment prompt
+        assert!(result.contains("<task_assessment>"));
+        assert!(result.contains("Task Complexity Assessment"));
+        assert!(result.contains("EnterPlanMode"));
+        assert!(result.contains("Do the task"));
     }
 
     #[test]
@@ -214,6 +250,9 @@ mod tests {
         assert!(result.contains("Did step one"));
         assert!(result.contains("DO NOT run git commit"));
         assert!(result.contains("Continue work"));
+        // Complexity assessment should also be present
+        assert!(result.contains("<task_assessment>"));
+        assert!(result.contains("EnterPlanMode"));
     }
 
     #[test]

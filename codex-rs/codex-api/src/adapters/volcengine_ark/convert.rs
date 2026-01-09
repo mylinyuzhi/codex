@@ -1,4 +1,10 @@
 //! Conversion functions between codex-api and Volcengine Ark SDK types.
+//!
+//! This module stores the full `Response` in `Reasoning.encrypted_content`
+//! for round-trip preservation. On sendback, we extract the Content directly
+//! from the stored response.
+
+use std::collections::HashSet;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -18,6 +24,8 @@ use volcengine_ark_sdk::ToolChoice;
 
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
+use crate::common_ext::EncryptedContent;
+use crate::common_ext::PROVIDER_SDK_VOLCENGINE_ARK;
 
 // ============================================================================
 // Request conversion: Prompt -> Ark messages
@@ -26,17 +34,55 @@ use crate::common::ResponseEvent;
 /// Convert a codex-api Prompt to Ark InputMessages and optional system instructions.
 ///
 /// This function handles the conversion of:
+/// - Reasoning with encrypted_content -> Extract Content directly from stored response
 /// - User messages -> InputMessage with role="user"
-/// - Assistant messages -> InputMessage with role="assistant"
-/// - FunctionCall -> Appended as text to assistant message (Ark handles function calls at output level)
+/// - Assistant messages -> InputMessage with role="assistant" (skipped if already processed)
+/// - FunctionCall -> Skipped if already processed, otherwise appended as text
 /// - FunctionCallOutput -> InputMessage with function_call_output content
-/// - Reasoning -> Skipped (handled by ThinkingConfig)
 pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>) {
     let mut messages: Vec<InputMessage> = Vec::new();
     let mut current_assistant_content: Vec<InputContentBlock> = Vec::new();
+    let mut processed_response_ids: HashSet<String> = HashSet::new();
 
     for item in &prompt.input {
         match item {
+            // Handle Reasoning with stored full response first
+            ResponseItem::Reasoning {
+                id: resp_id,
+                encrypted_content: Some(enc),
+                ..
+            } => {
+                if processed_response_ids.contains(resp_id) {
+                    continue;
+                }
+                // Flush any pending assistant content first
+                flush_assistant_message(&mut messages, &mut current_assistant_content);
+
+                if let Some(assistant_msg) = extract_full_response_message(enc) {
+                    messages.push(assistant_msg);
+                    processed_response_ids.insert(resp_id.clone());
+                }
+            }
+
+            // Reasoning without encrypted_content - skip (handled by ThinkingConfig)
+            ResponseItem::Reasoning { .. } => {}
+
+            // Skip assistant messages if already processed via Reasoning
+            ResponseItem::Message {
+                id: Some(resp_id),
+                role,
+                ..
+            } if role == "assistant" && processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
+            // Skip FunctionCall if already processed via Reasoning
+            ResponseItem::FunctionCall {
+                id: Some(resp_id), ..
+            } if processed_response_ids.contains(resp_id) => {
+                continue;
+            }
+
             ResponseItem::Message { role, content, .. } => {
                 if role == "assistant" {
                     // Continue or start assistant message
@@ -59,7 +105,7 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
             } => {
                 // For Ark, function calls from assistant are represented as text in the conversation
                 // The actual function call happens in the response. We include it as context.
-                let text = format!("[Called function: {} with arguments: {}]", name, arguments);
+                let text = format!("[Called function: {name} with arguments: {arguments}]");
                 current_assistant_content.push(InputContentBlock::text(text));
             }
 
@@ -70,10 +116,6 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
                 // Add function call output as user message
                 let content = function_output_to_block(call_id, output);
                 messages.push(InputMessage::user(vec![content]));
-            }
-
-            ResponseItem::Reasoning { .. } => {
-                // Reasoning is handled by ThinkingConfig, skip in messages
             }
 
             // Skip types not applicable to Ark API
@@ -92,6 +134,50 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
     };
 
     (messages, system_prompt)
+}
+
+/// Extract InputMessage from stored Ark Response body.
+fn extract_full_response_message(encrypted_content: &str) -> Option<InputMessage> {
+    let ec = EncryptedContent::from_json_string(encrypted_content)?;
+    let response: Response = ec.parse_body()?;
+
+    // Convert Response.output to InputMessage content blocks
+    let content: Vec<InputContentBlock> = response
+        .output
+        .iter()
+        .flat_map(|item| match item {
+            OutputItem::Message { content, .. } => content
+                .iter()
+                .filter_map(|c| match c {
+                    OutputContentBlock::Text { text } => Some(InputContentBlock::text(text)),
+                    OutputContentBlock::Thinking { thinking, .. } => {
+                        Some(InputContentBlock::text(thinking))
+                    }
+                    OutputContentBlock::FunctionCall { .. } => None, // Handled separately
+                })
+                .collect::<Vec<_>>(),
+            OutputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                // Include function call as descriptive text for model context
+                vec![InputContentBlock::text(format!(
+                    "[Function call {call_id} ({name}): {arguments}]"
+                ))]
+            }
+            OutputItem::Reasoning { content, .. } => {
+                vec![InputContentBlock::text(content)]
+            }
+        })
+        .collect();
+
+    if content.is_empty() {
+        None
+    } else {
+        Some(InputMessage::assistant(content))
+    }
 }
 
 /// Flush the current assistant message content to the messages list.
@@ -220,12 +306,24 @@ pub fn parse_tool_choice(extra: &Option<Value>) -> Option<ToolChoice> {
 
 /// Convert an Ark Response to codex-api ResponseEvents.
 ///
+/// Stores the full response JSON in `Reasoning.encrypted_content` for round-trip preservation.
 /// Returns a vector of events and optional token usage.
 pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
     let mut events = Vec::new();
 
+    // Extract raw body from sdk_http_response for storage
+    let full_response_json = response
+        .sdk_http_response
+        .as_ref()
+        .and_then(|r| r.body.clone())
+        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_VOLCENGINE_ARK))
+        .and_then(|ec| ec.to_json_string());
+
     // Add Created event
     events.push(ResponseEvent::Created);
+
+    // Collect reasoning content from all sources
+    let mut reasoning_texts: Vec<String> = Vec::new();
 
     for item in &response.output {
         match item {
@@ -239,17 +337,8 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
                             text_parts.push(text.clone());
                         }
                         OutputContentBlock::Thinking { thinking, .. } => {
-                            // Add reasoning event for thinking content
-                            events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                                    text: thinking.clone(),
-                                }],
-                                content: Some(vec![ReasoningItemContent::ReasoningText {
-                                    text: thinking.clone(),
-                                }]),
-                                encrypted_content: None,
-                            }));
+                            // Collect thinking for the combined Reasoning item
+                            reasoning_texts.push(thinking.clone());
                         }
                         OutputContentBlock::FunctionCall {
                             id,
@@ -259,7 +348,7 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
                             // Flush text first
                             if !text_parts.is_empty() {
                                 events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
-                                    id: None,
+                                    id: Some(response.id.clone()),
                                     role: "assistant".to_string(),
                                     content: vec![ContentItem::OutputText {
                                         text: text_parts.join(""),
@@ -272,7 +361,7 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
                             // Note: Ark uses `id` as the call_id, and arguments is serde_json::Value
                             events.push(ResponseEvent::OutputItemDone(
                                 ResponseItem::FunctionCall {
-                                    id: None,
+                                    id: Some(response.id.clone()),
                                     call_id: id.clone(),
                                     name: name.clone(),
                                     arguments: serde_json::to_string(arguments).unwrap_or_default(),
@@ -285,7 +374,7 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
                 // Flush any remaining text
                 if !text_parts.is_empty() {
                     events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
-                        id: None,
+                        id: Some(response.id.clone()),
                         role: "assistant".to_string(),
                         content: vec![ContentItem::OutputText {
                             text: text_parts.join(""),
@@ -301,7 +390,7 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
                 ..
             } => {
                 events.push(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
-                    id: None,
+                    id: Some(response.id.clone()),
                     call_id: call_id.clone(),
                     name: name.clone(),
                     arguments: arguments.clone(),
@@ -309,34 +398,42 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
             }
 
             OutputItem::Reasoning {
-                id,
-                content,
-                summary,
-                ..
+                content, summary, ..
             } => {
-                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                    id: id
-                        .clone()
-                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                    summary: summary
-                        .as_ref()
-                        .map(|summaries| {
-                            summaries
-                                .iter()
-                                .map(|s| ReasoningItemReasoningSummary::SummaryText {
-                                    text: s.text.clone(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    content: Some(vec![ReasoningItemContent::ReasoningText {
-                        text: content.clone(),
-                    }]),
-                    encrypted_content: None,
-                }));
+                // Collect reasoning content
+                reasoning_texts.push(content.clone());
+                if let Some(summaries) = summary {
+                    for s in summaries {
+                        reasoning_texts.push(s.text.clone());
+                    }
+                }
             }
         }
     }
+
+    // Always emit a Reasoning item with encrypted_content for round-trip support
+    let summary: Vec<ReasoningItemReasoningSummary> = reasoning_texts
+        .iter()
+        .map(|t| ReasoningItemReasoningSummary::SummaryText { text: t.clone() })
+        .collect();
+
+    let content: Option<Vec<ReasoningItemContent>> = if !reasoning_texts.is_empty() {
+        Some(
+            reasoning_texts
+                .iter()
+                .map(|t| ReasoningItemContent::ReasoningText { text: t.clone() })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+        id: response.id.clone(),
+        summary,
+        content,
+        encrypted_content: full_response_json,
+    }));
 
     // Extract token usage
     let usage = extract_usage(&response.usage);

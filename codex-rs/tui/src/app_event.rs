@@ -68,11 +68,13 @@ pub(crate) enum AppEvent {
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+        model_provider: Option<String>,
     },
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        provider_id: Option<String>,
     },
 
     /// Open the full model picker (non-auto models).

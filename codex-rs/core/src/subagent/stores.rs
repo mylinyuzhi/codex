@@ -30,6 +30,7 @@ use crate::system_reminder::PlanState;
 use crate::system_reminder::PlanStep;
 use crate::system_reminder::SystemReminderOrchestrator;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::PlanModeApprovalPolicy;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol_ext::PlanExitPermissionMode;
 
@@ -83,6 +84,9 @@ pub struct SubagentStores {
     /// Post-plan permission mode for auto-approval.
     /// Set when user approves ExitPlanMode with a permission mode.
     permission_mode: Arc<RwLock<Option<PlanExitPermissionMode>>>,
+    /// Plan mode approval policy (controls whether EnterPlanMode/ExitPlanMode need user approval).
+    /// Independent from permission_mode which controls subsequent tool approval.
+    plan_mode_approval_policy: Arc<RwLock<PlanModeApprovalPolicy>>,
 }
 
 /// Build default search paths for custom agent discovery.
@@ -130,6 +134,7 @@ impl SubagentStores {
             user_answer_channels: Arc::new(RwLock::new(std::collections::HashMap::new())),
             approved_plan: Arc::new(RwLock::new(None)),
             permission_mode: Arc::new(RwLock::new(None)),
+            plan_mode_approval_policy: Arc::new(RwLock::new(PlanModeApprovalPolicy::default())),
         }
     }
 
@@ -366,6 +371,37 @@ impl SubagentStores {
             }
             Some(PlanExitPermissionMode::Default) | None => false,
         }
+    }
+
+    // ========================================================================
+    // Plan Mode Approval Policy helpers
+    // ========================================================================
+
+    /// Set the plan mode approval policy.
+    ///
+    /// Called during SpawnAgent initialization to configure silent approval.
+    pub fn set_plan_mode_approval_policy(&self, policy: PlanModeApprovalPolicy) {
+        if let Ok(mut p) = self.plan_mode_approval_policy.write() {
+            *p = policy;
+        }
+    }
+
+    /// Get the current plan mode approval policy.
+    pub fn get_plan_mode_approval_policy(&self) -> PlanModeApprovalPolicy {
+        self.plan_mode_approval_policy
+            .read()
+            .map(|p| *p)
+            .unwrap_or_default()
+    }
+
+    /// Check if plan mode should be auto-approved (EnterPlanMode/ExitPlanMode).
+    ///
+    /// Returns true if `AutoApprove` policy is set.
+    pub fn should_auto_approve_plan_mode(&self) -> bool {
+        matches!(
+            self.get_plan_mode_approval_policy(),
+            PlanModeApprovalPolicy::AutoApprove
+        )
     }
 }
 

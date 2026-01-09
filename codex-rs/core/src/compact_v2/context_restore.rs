@@ -12,11 +12,11 @@ use crate::state::state_ext;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 
-/// Get the .claude directory path using home directory for consistency.
-fn get_claude_dir() -> PathBuf {
+/// Get the .codex directory path using home directory for consistency.
+fn get_codex_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
+        .join(".codex")
 }
 
 /// Restored context after compaction.
@@ -62,8 +62,8 @@ pub struct PlanAttachment {
 /// Agent-related files are excluded because they are managed separately
 /// and may contain stale or conflicting state.
 pub fn is_agent_file(filename: &str, agent_id: &str) -> bool {
-    filename.contains(".claude/plans/")
-        || filename.contains(&format!(".claude/agents/{agent_id}"))
+    filename.contains(".codex/plans/")
+        || filename.contains(&format!(".codex/agents/{agent_id}"))
         || filename.ends_with(".agent.json")
 }
 
@@ -71,8 +71,8 @@ pub fn is_agent_file(filename: &str, agent_id: &str) -> bool {
 ///
 /// Restores:
 /// - Recently read files (from state_ext read file tracking)
-/// - Todo list (from .claude/todos/{conversation_id}.json)
-/// - Plan file (from .claude/plans/*-{conversation_id}.md)
+/// - Todo list (from .codex/todos/{conversation_id}.json)
+/// - Plan file (from .codex/plans/*-{conversation_id}.md)
 pub fn restore_context(conversation_id: &str, config: &CompactConfig) -> RestoredContext {
     let mut result = RestoredContext::default();
 
@@ -189,8 +189,8 @@ fn read_and_truncate_file(
 
 /// Restore todo list from file.
 fn restore_todo_list(conversation_id: &str) -> Option<TodoAttachment> {
-    let claude_dir = get_claude_dir();
-    let todos_dir = claude_dir.join("todos");
+    let codex_dir = get_codex_dir();
+    let todos_dir = codex_dir.join("todos");
 
     // Try conversation-specific path first
     let todo_path = todos_dir.join(format!("{conversation_id}.json"));
@@ -207,10 +207,10 @@ fn restore_todo_list(conversation_id: &str) -> Option<TodoAttachment> {
     None
 }
 
-/// Restore plan file from .claude/plans directory.
+/// Restore plan file from .codex/plans directory.
 fn restore_plan_file(conversation_id: &str) -> Option<PlanAttachment> {
-    // Use absolute path for .claude/plans directory
-    let plans_dir = get_claude_dir().join("plans");
+    // Use absolute path for .codex/plans directory
+    let plans_dir = get_codex_dir().join("plans");
     if !plans_dir.exists() {
         return None;
     }
@@ -301,18 +301,18 @@ mod tests {
 
     #[test]
     fn is_agent_file_detects_plans() {
-        assert!(is_agent_file(".claude/plans/my-plan.md", "agent-123"));
-        assert!(is_agent_file("/path/to/.claude/plans/test.md", "agent-123"));
+        assert!(is_agent_file(".codex/plans/my-plan.md", "agent-123"));
+        assert!(is_agent_file("/path/to/.codex/plans/test.md", "agent-123"));
     }
 
     #[test]
     fn is_agent_file_detects_agent_dirs() {
         assert!(is_agent_file(
-            ".claude/agents/agent-123/state.json",
+            ".codex/agents/agent-123/state.json",
             "agent-123"
         ));
         assert!(!is_agent_file(
-            ".claude/agents/other/state.json",
+            ".codex/agents/other/state.json",
             "agent-123"
         ));
     }
@@ -327,7 +327,7 @@ mod tests {
     fn is_agent_file_allows_regular_files() {
         assert!(!is_agent_file("src/main.rs", "agent-123"));
         assert!(!is_agent_file("README.md", "agent-123"));
-        assert!(!is_agent_file(".claude/config.toml", "agent-123"));
+        assert!(!is_agent_file(".codex/config.toml", "agent-123"));
     }
 
     #[test]

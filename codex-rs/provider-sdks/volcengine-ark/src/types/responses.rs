@@ -1,5 +1,7 @@
 //! Response API types.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -411,6 +413,42 @@ impl ResponseCreateParams {
 }
 
 // ============================================================================
+// SDK HTTP Response (for round-trip preservation)
+// ============================================================================
+
+/// HTTP response metadata (not serialized, populated by client).
+/// Used to retain the full HTTP response for debugging/round-trip preservation.
+#[derive(Debug, Clone, Default)]
+pub struct SdkHttpResponse {
+    /// HTTP status code.
+    pub status_code: Option<i32>,
+    /// Response headers.
+    pub headers: Option<HashMap<String, String>>,
+    /// Raw response body.
+    pub body: Option<String>,
+}
+
+impl SdkHttpResponse {
+    /// Create a new SdkHttpResponse with all fields.
+    pub fn new(status_code: i32, headers: HashMap<String, String>, body: String) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: Some(headers),
+            body: Some(body),
+        }
+    }
+
+    /// Create from status code and body only.
+    pub fn from_status_and_body(status_code: i32, body: String) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: None,
+            body: Some(body),
+        }
+    }
+}
+
+// ============================================================================
 // Response
 // ============================================================================
 
@@ -461,6 +499,11 @@ pub struct Response {
     /// Reason generation stopped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<StopReason>,
+
+    /// HTTP response metadata (not serialized, populated by client).
+    /// Used to retain the full HTTP response for round-trip preservation.
+    #[serde(skip)]
+    pub sdk_http_response: Option<SdkHttpResponse>,
 }
 
 impl Response {

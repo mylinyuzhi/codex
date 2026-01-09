@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::chatwidget_model_ext::extract_provider_id;
+use crate::chatwidget_model_ext::get_custom_provider_presets;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
@@ -2665,6 +2667,30 @@ impl ChatWidget {
             });
         }
 
+        // Add custom provider presets
+        let custom_providers = get_custom_provider_presets(&self.config);
+        for preset in custom_providers {
+            let provider_id = extract_provider_id(&preset.id);
+            let preset_for_action = preset.clone();
+            let provider_id_for_action = provider_id.clone();
+            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReasoningPopup {
+                    model: preset_for_action.clone(),
+                    provider_id: provider_id_for_action.clone(),
+                });
+            })];
+            let is_current = provider_id.as_deref() == Some(self.config.model_provider_id.as_str());
+            items.push(SelectionItem {
+                name: preset.display_name.clone(),
+                description: Some(preset.description.clone()),
+                is_current,
+                actions,
+                dismiss_on_select: single_supported_effort,
+                ..Default::default()
+            });
+        }
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model".to_string()),
             subtitle: Some("Pick a quick auto mode or browse all models.".to_string()),
@@ -2724,6 +2750,7 @@ impl ChatWidget {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    provider_id: None,
                 });
             })];
             items.push(SelectionItem {
@@ -2753,6 +2780,14 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
+        Self::model_selection_actions_with_provider(model_for_action, effort_for_action, None)
+    }
+
+    fn model_selection_actions_with_provider(
+        model_for_action: String,
+        effort_for_action: Option<ReasoningEffortConfig>,
+        model_provider: Option<String>,
+    ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let effort_label = effort_for_action
                 .map(|effort| effort.to_string())
@@ -2770,17 +2805,23 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                model_provider: model_provider.clone(),
             });
             tracing::info!(
-                "Selected model: {}, Selected effort: {}",
+                "Selected model: {}, Selected effort: {}, Provider: {:?}",
                 model_for_action,
-                effort_label
+                effort_label,
+                model_provider
             );
         })]
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+    pub(crate) fn open_reasoning_popup(
+        &mut self,
+        preset: ModelPreset,
+        provider_id: Option<String>,
+    ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
@@ -2827,9 +2868,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort), provider_id);
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(preset.model, None, provider_id);
             }
             return;
         }
@@ -2888,7 +2929,12 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let provider_for_action = provider_id.clone();
+            let actions = Self::model_selection_actions_with_provider(
+                model_for_action,
+                choice.stored,
+                provider_for_action,
+            );
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -2926,7 +2972,12 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider_id: Option<String>,
+    ) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
@@ -2942,13 +2993,15 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model: model.clone(),
             effort,
+            model_provider: provider_id.clone(),
         });
         tracing::info!(
-            "Selected model: {}, Selected effort: {}",
+            "Selected model: {}, Selected effort: {}, Provider: {:?}",
             model,
             effort
                 .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string())
+                .unwrap_or_else(|| "default".to_string()),
+            provider_id
         );
     }
 

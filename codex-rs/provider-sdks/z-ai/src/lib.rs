@@ -33,6 +33,8 @@ mod types;
 pub use client::ZaiClient;
 pub use client::ZhipuAiClient;
 pub use config::ClientConfig;
+pub use config::HttpRequest;
+pub use config::RequestHook;
 pub use error::Result;
 pub use error::ZaiError;
 

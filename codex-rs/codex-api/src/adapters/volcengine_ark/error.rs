@@ -97,6 +97,8 @@ pub fn map_error(err: ArkError) -> ApiError {
         },
 
         ArkError::Serialization(e) => ApiError::Stream(format!("Serialization error: {e}")),
+
+        ArkError::Parse(msg) => ApiError::Stream(format!("Parse error: {msg}")),
     }
 }
 

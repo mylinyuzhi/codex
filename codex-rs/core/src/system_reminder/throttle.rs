@@ -45,7 +45,7 @@ pub fn default_throttle_config(attachment_type: AttachmentType) -> ThrottleConfi
             min_turns_after_trigger: 5, // TURNS_SINCE_UPDATE
             max_per_session: None,
         },
-        AttachmentType::PlanMode => ThrottleConfig {
+        AttachmentType::PlanModeEnter => ThrottleConfig {
             min_turns_between: 5, // After first, every 5+ turns
             min_turns_after_trigger: 0,
             max_per_session: None,
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_default_throttle_config_plan_mode() {
-        let config = default_throttle_config(AttachmentType::PlanMode);
+        let config = default_throttle_config(AttachmentType::PlanModeEnter);
         assert_eq!(config.min_turns_between, 5);
     }
 
