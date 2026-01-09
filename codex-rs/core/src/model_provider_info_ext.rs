@@ -6,6 +6,7 @@
 //!      key. These override or extend the defaults at runtime.
 
 use codex_protocol::config_types_ext::ModelParameters;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -81,6 +82,11 @@ pub struct ModelProviderInfoExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_family_id: Option<String>,
 
+    /// Supported reasoning effort options for UI display.
+    /// If not set, defaults to [Low, Medium, High].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_reasoning_efforts: Vec<ReasoningEffortPreset>,
+
     /// Model family for this provider (derived at runtime, not serialized).
     /// Used by providers to get proper system instructions fallback.
     #[serde(skip)]
@@ -102,6 +108,7 @@ impl Default for ModelProviderInfoExt {
             ultrathink_config: None,
             request_timeout_ms: None,
             model_family_id: None,
+            supported_reasoning_efforts: Vec::new(),
             model_family: None,
         }
     }

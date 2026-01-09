@@ -26,6 +26,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::edit_ext::ConfigEditsBuilderExt;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
@@ -265,6 +266,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
+                    model_provider: None,
                 });
             }
             ModelMigrationOutcome::Rejected => {
@@ -784,8 +786,8 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.current_model = model;
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup { model, provider_id } => {
+                self.chat_widget.open_reasoning_popup(model, provider_id);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -919,11 +921,16 @@ impl App {
                     let _ = preset;
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_model(Some(model.as_str()), effort)
+                    .set_model_provider(model_provider.as_deref())
                     .apply()
                     .await
                 {
@@ -932,6 +939,11 @@ impl App {
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
                             message.push_str(label);
+                        }
+                        if let Some(ref provider) = model_provider {
+                            message.push_str(" (provider: ");
+                            message.push_str(provider);
+                            message.push(')');
                         }
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -1264,6 +1276,7 @@ impl App {
         use codex_core::spawn_task::plan_fork::read_plan_content;
         use codex_core::subagent::ApprovalMode;
         use codex_core::subagent::get_or_create_stores;
+        use codex_protocol::config_types::PlanModeApprovalPolicy;
 
         let task_id = args
             .name
@@ -1332,6 +1345,7 @@ impl App {
             approval_mode: ApprovalMode::DontAsk,
             model_override: args.model.clone(),
             forked_plan_content,
+            plan_mode_approval_policy: PlanModeApprovalPolicy::AutoApprove,
         };
 
         let context = SpawnAgentContext {

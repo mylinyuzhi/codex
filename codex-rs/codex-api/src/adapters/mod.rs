@@ -25,15 +25,134 @@ pub mod zai;
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
+use crate::interceptors::InterceptorContext;
+use crate::interceptors::apply_interceptors;
 use async_trait::async_trait;
+use codex_client::Request as ClientRequest;
 use codex_protocol::protocol::TokenUsage;
+use http::HeaderValue;
+use http::Method;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::RwLock;
 
+// ============================================================================
+// Request Hook System
+// ============================================================================
+
+/// HTTP request information that can be modified by a hook.
+///
+/// This struct is passed to `RequestHook::on_request()` before the actual
+/// HTTP request is sent, allowing interceptors to modify headers, URL, or body.
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    /// Request URL.
+    pub url: String,
+    /// Request headers as key-value pairs.
+    pub headers: HashMap<String, String>,
+    /// Request body as JSON.
+    pub body: serde_json::Value,
+}
+
+/// Trait for request hooks that can modify HTTP requests before they are sent.
+///
+/// This enables codex-api interceptors to be applied to adapter requests,
+/// which use their own HTTP clients (provider SDKs).
+///
+/// # Example
+///
+/// ```ignore
+/// struct MyHook;
+///
+/// impl RequestHook for MyHook {
+///     fn on_request(&self, request: &mut HttpRequest) {
+///         request.headers.insert("X-Custom".to_string(), "value".to_string());
+///     }
+/// }
+/// ```
+pub trait RequestHook: Send + Sync + Debug {
+    /// Called before the HTTP request is sent.
+    /// Implementations can modify the request's URL, headers, or body.
+    fn on_request(&self, request: &mut HttpRequest);
+}
+
+// ============================================================================
+// InterceptorHook - Bridges codex-api interceptors to provider SDKs
+// ============================================================================
+
+/// A RequestHook implementation that applies codex-api interceptors.
+///
+/// This bridges the interceptor system to provider SDKs by converting
+/// between `HttpRequest` and `codex_client::Request` formats.
+#[derive(Debug)]
+pub struct InterceptorHook {
+    ctx: InterceptorContext,
+    interceptor_names: Vec<String>,
+}
+
+impl InterceptorHook {
+    /// Create a new InterceptorHook.
+    pub fn new(ctx: InterceptorContext, interceptor_names: Vec<String>) -> Self {
+        Self {
+            ctx,
+            interceptor_names,
+        }
+    }
+}
+
+impl RequestHook for InterceptorHook {
+    fn on_request(&self, request: &mut HttpRequest) {
+        // Convert HttpRequest to codex_client::Request
+        let mut client_req = ClientRequest::new(Method::POST, request.url.clone());
+
+        // Convert HashMap<String, String> to HeaderMap
+        for (k, v) in &request.headers {
+            if let (Ok(name), Ok(value)) = (
+                http::header::HeaderName::try_from(k.as_str()),
+                HeaderValue::from_str(v),
+            ) {
+                client_req.headers.insert(name, value);
+            }
+        }
+        client_req.body = Some(request.body.clone());
+
+        // Apply interceptors
+        apply_interceptors(&mut client_req, &self.ctx, &self.interceptor_names);
+
+        // Convert back to HttpRequest
+        request.url = client_req.url;
+        request.headers = client_req
+            .headers
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+            .collect();
+        if let Some(body) = client_req.body {
+            request.body = body;
+        }
+    }
+}
+
+/// Build an InterceptorHook if there are interceptors configured.
+///
+/// Returns `None` if no interceptors are configured.
+pub fn build_interceptor_hook(
+    ctx: InterceptorContext,
+    interceptor_names: &[String],
+) -> Option<Arc<dyn RequestHook>> {
+    if interceptor_names.is_empty() {
+        None
+    } else {
+        Some(Arc::new(InterceptorHook::new(
+            ctx,
+            interceptor_names.to_vec(),
+        )))
+    }
+}
+
 /// Configuration for an adapter instance.
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct AdapterConfig {
     /// API key for authentication.
     pub api_key: Option<String>,
@@ -43,6 +162,32 @@ pub struct AdapterConfig {
     pub model: String,
     /// Additional provider-specific configuration as JSON.
     pub extra: Option<serde_json::Value>,
+    /// Optional request hook for interceptor support.
+    pub request_hook: Option<Arc<dyn RequestHook>>,
+}
+
+impl Debug for AdapterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdapterConfig")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("extra", &self.extra)
+            .field("request_hook", &self.request_hook.is_some())
+            .finish()
+    }
+}
+
+impl Clone for AdapterConfig {
+    fn clone(&self) -> Self {
+        Self {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            extra: self.extra.clone(),
+            request_hook: self.request_hook.clone(),
+        }
+    }
 }
 
 /// Result of a non-streaming generate call.

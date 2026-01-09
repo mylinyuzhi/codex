@@ -39,7 +39,7 @@ impl<'a> Completions<'a> {
     pub async fn create(&self, params: ChatCompletionsCreateParams) -> Result<Completion> {
         let body = serde_json::to_value(&params)?;
         self.client
-            .post("/chat/completions", body, self.accept_language)
+            .post_completion("/chat/completions", body, self.accept_language)
             .await
     }
 }

@@ -13,6 +13,7 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol_ext::ExtEventMsg;
+use codex_protocol::protocol_ext::PlanModeEnteredEvent;
 use codex_protocol::protocol_ext::PlanModeEntryRequestEvent;
 
 /// Enter Plan Mode Tool Handler
@@ -51,7 +52,48 @@ impl ToolHandler for EnterPlanModeHandler {
             ));
         }
 
-        // 3. Send PlanModeEntryRequest event for user approval
+        // 3. Check approval policy - auto-approve for SpawnAgent
+        if stores.should_auto_approve_plan_mode() {
+            // Auto-approve: directly enter plan mode
+            let plan_file_path = stores
+                .enter_plan_mode(invocation.session.conversation_id)
+                .map_err(|e| {
+                    tracing::error!("failed to enter plan mode: {e}");
+                    FunctionCallError::RespondToModel(
+                        "Failed to enter plan mode. Please try again.".to_string(),
+                    )
+                })?;
+
+            // Send PlanModeEntered event (notify TUI, but don't block)
+            invocation
+                .session
+                .send_event(
+                    invocation.turn.as_ref(),
+                    EventMsg::Ext(ExtEventMsg::PlanModeEntered(PlanModeEnteredEvent {
+                        plan_file_path: plan_file_path.display().to_string(),
+                    })),
+                )
+                .await;
+
+            return Ok(ToolOutput::Function {
+                content: format!(
+                    "Plan mode entered (auto-approved). Plan file: {}\n\n\
+                     You are now in plan mode. You should:\n\
+                     1. Explore the codebase to understand existing patterns and architecture\n\
+                     2. Identify similar features and approaches\n\
+                     3. Design a concrete implementation strategy\n\
+                     4. Write your plan to the plan file\n\
+                     5. Call ExitPlanMode when ready to implement\n\n\
+                     Remember: DO NOT write or edit any files yet (except the plan file). \
+                     This is a read-only exploration and planning phase.",
+                    plan_file_path.display()
+                ),
+                content_items: None,
+                success: Some(true),
+            });
+        }
+
+        // 4. Require approval: send PlanModeEntryRequest event
         invocation
             .session
             .send_event(
@@ -62,7 +104,7 @@ impl ToolHandler for EnterPlanModeHandler {
             )
             .await;
 
-        // 4. Return pending approval message with detailed guidance
+        // 5. Return pending approval message with detailed guidance
         Ok(ToolOutput::Function {
             content: "Plan mode entry requested. Waiting for user approval.\n\n\
                      If the user approves, you will enter plan mode. In plan mode, you should:\n\

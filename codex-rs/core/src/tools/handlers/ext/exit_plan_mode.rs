@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol_ext::ExtEventMsg;
 use codex_protocol::protocol_ext::PlanModeExitRequestEvent;
+use codex_protocol::protocol_ext::PlanModeExitedEvent;
 
 /// Exit Plan Mode Tool Handler
 ///
@@ -93,8 +94,43 @@ impl ToolHandler for ExitPlanModeHandler {
             ));
         }
 
-        // 6. Send PlanModeExitRequest event
         let plan_file_path_str = plan_file_path.to_string_lossy().to_string();
+
+        // 6. Check approval policy - auto-approve for SpawnAgent
+        if stores.should_auto_approve_plan_mode() {
+            // Auto-approve: directly exit plan mode
+            // Note: NOT setting subsequent permission mode - that's handled by AskForApproval independently
+            stores.exit_plan_mode(true).map_err(|e| {
+                tracing::error!("failed to exit plan mode: {e}");
+                FunctionCallError::RespondToModel(
+                    "Failed to exit plan mode. Please try again.".to_string(),
+                )
+            })?;
+
+            // Send PlanModeExited event (notify TUI, but don't block)
+            invocation
+                .session
+                .send_event(
+                    invocation.turn.as_ref(),
+                    EventMsg::Ext(ExtEventMsg::PlanModeExited(PlanModeExitedEvent {
+                        approved: true,
+                    })),
+                )
+                .await;
+
+            return Ok(ToolOutput::Function {
+                content: format!(
+                    "Plan approved (auto-approved). You can now start implementing.\n\n\
+                     Plan file: {}\n\n\
+                     ## Your Plan:\n\n{}",
+                    plan_file_path_str, plan_content
+                ),
+                content_items: None,
+                success: Some(true),
+            });
+        }
+
+        // 7. Require approval: send PlanModeExitRequest event
         invocation
             .session
             .send_event(
@@ -106,7 +142,7 @@ impl ToolHandler for ExitPlanModeHandler {
             )
             .await;
 
-        // 7. Return success message
+        // 8. Return pending approval message
         Ok(ToolOutput::Function {
             content: format!(
                 "Exit plan mode requested. Waiting for user approval.\n\n\

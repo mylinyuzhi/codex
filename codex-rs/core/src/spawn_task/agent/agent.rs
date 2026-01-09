@@ -30,6 +30,8 @@ use crate::spawn_task::metadata::load_metadata;
 use crate::spawn_task::metadata::log_file_path;
 use crate::spawn_task::metadata::save_metadata;
 use crate::subagent::ApprovalMode;
+use crate::subagent::get_or_create_stores;
+use codex_protocol::config_types::PlanModeApprovalPolicy;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::SessionSource;
 
@@ -53,6 +55,8 @@ pub struct SpawnAgentParams {
     pub model_override: Option<String>,
     /// Forked plan content from parent agent (snapshot).
     pub forked_plan_content: Option<String>,
+    /// Plan mode approval policy (default: AutoApprove for SpawnAgent).
+    pub plan_mode_approval_policy: PlanModeApprovalPolicy,
 }
 
 /// Context needed to spawn a Codex session.
@@ -243,6 +247,10 @@ impl SpawnTask for SpawnAgent {
                     };
                 }
             };
+
+            // Set plan mode approval policy for this session
+            let stores = get_or_create_stores(conversation_id);
+            stores.set_plan_mode_approval_policy(params.plan_mode_approval_policy);
 
             // Create loop driver with progress callback
             let mut driver = LoopDriver::new(params.loop_condition.clone(), token.clone());

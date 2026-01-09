@@ -1,7 +1,30 @@
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// Configuration for the Anthropic client.
+// ============================================================================
+// Request Hook Support
+// ============================================================================
+
+/// HTTP request information that can be modified by a hook.
 #[derive(Debug, Clone)]
+pub struct HttpRequest {
+    /// Request URL.
+    pub url: String,
+    /// Request headers as key-value pairs.
+    pub headers: HashMap<String, String>,
+    /// Request body as JSON.
+    pub body: serde_json::Value,
+}
+
+/// Trait for request hooks that can modify HTTP requests before they are sent.
+pub trait RequestHook: Send + Sync + Debug {
+    /// Called before the HTTP request is sent.
+    fn on_request(&self, request: &mut HttpRequest);
+}
+
+/// Configuration for the Anthropic client.
 pub struct ClientConfig {
     /// API key for authentication.
     pub api_key: String,
@@ -14,6 +37,33 @@ pub struct ClientConfig {
 
     /// Maximum number of retries for failed requests.
     pub max_retries: u32,
+
+    /// Optional request hook for interceptor support.
+    pub request_hook: Option<Arc<dyn RequestHook>>,
+}
+
+impl Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .field("request_hook", &self.request_hook.is_some())
+            .finish()
+    }
+}
+
+impl Clone for ClientConfig {
+    fn clone(&self) -> Self {
+        Self {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            timeout: self.timeout,
+            max_retries: self.max_retries,
+            request_hook: self.request_hook.clone(),
+        }
+    }
 }
 
 impl ClientConfig {
@@ -33,6 +83,7 @@ impl ClientConfig {
             base_url: Self::DEFAULT_BASE_URL.to_string(),
             timeout: Self::DEFAULT_TIMEOUT,
             max_retries: Self::DEFAULT_MAX_RETRIES,
+            request_hook: None,
         }
     }
 
@@ -53,6 +104,12 @@ impl ClientConfig {
         self.max_retries = max_retries;
         self
     }
+
+    /// Set the request hook.
+    pub fn request_hook(mut self, hook: Arc<dyn RequestHook>) -> Self {
+        self.request_hook = Some(hook);
+        self
+    }
 }
 
 impl Default for ClientConfig {
@@ -62,6 +119,7 @@ impl Default for ClientConfig {
             base_url: Self::DEFAULT_BASE_URL.to_string(),
             timeout: Self::DEFAULT_TIMEOUT,
             max_retries: Self::DEFAULT_MAX_RETRIES,
+            request_hook: None,
         }
     }
 }

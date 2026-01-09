@@ -59,6 +59,7 @@ use toml_edit::DocumentMut;
 
 mod constraint;
 pub mod edit;
+pub mod edit_ext;
 pub mod mod_ext;
 pub mod output_style;
 pub mod output_style_loader;

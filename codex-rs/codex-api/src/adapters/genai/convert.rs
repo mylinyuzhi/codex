@@ -27,6 +27,8 @@
 
 use crate::common::Prompt;
 use crate::common::ResponseEvent;
+use crate::common_ext::EncryptedContent;
+use crate::common_ext::PROVIDER_SDK_GENAI;
 use crate::common_ext::enhance_server_call_id;
 use crate::common_ext::extract_original_call_id;
 use crate::common_ext::generate_client_call_id;
@@ -188,10 +190,8 @@ pub fn prompt_to_contents(prompt: &Prompt) -> Vec<Content> {
 
 /// Extract Content from stored full-response format.
 fn extract_full_response_content(encrypted_content: &str) -> Option<Content> {
-    let json: serde_json::Value = serde_json::from_str(encrypted_content).ok()?;
-    let full_response_body = json.get("__genai_full_response_body")?;
-    let response: GenerateContentResponse =
-        serde_json::from_value(full_response_body.clone()).ok()?;
+    let ec = EncryptedContent::from_json_string(encrypted_content)?;
+    let response: GenerateContentResponse = ec.parse_body()?;
     response.candidates?.first()?.content.clone()
 }
 
@@ -236,7 +236,8 @@ pub fn response_to_events(response: &GenerateContentResponse) -> (Vec<ResponseEv
         .sdk_http_response
         .as_ref()
         .and_then(|r| r.body.clone())
-        .map(|body| format!(r#"{{"__genai_full_response_body": {}}}"#, body));
+        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_GENAI))
+        .and_then(|ec| ec.to_json_string());
 
     // Get parts from first candidate
     let Some(parts) = response.parts() else {
@@ -602,7 +603,8 @@ mod tests {
     #[test]
     fn test_response_to_events_stores_full_response() {
         // Create a response with sdk_http_response containing the raw body
-        let raw_body = r#"{"candidates":[{"content":{"parts":[{"text":"Hello!"}],"role":"model"}}]}"#;
+        let raw_body =
+            r#"{"candidates":[{"content":{"parts":[{"text":"Hello!"}],"role":"model"}}]}"#;
 
         let response = GenerateContentResponse {
             candidates: Some(vec![Candidate {
@@ -613,7 +615,10 @@ mod tests {
                 ..Default::default()
             }]),
             response_id: Some("resp-123".to_string()),
-            sdk_http_response: Some(SdkHttpResponse::from_status_and_body(200, raw_body.to_string())),
+            sdk_http_response: Some(SdkHttpResponse::from_status_and_body(
+                200,
+                raw_body.to_string(),
+            )),
             ..Default::default()
         };
 
@@ -634,11 +639,19 @@ mod tests {
             encrypted_content, ..
         }) = reasoning_event.unwrap()
         {
-            let enc = encrypted_content.as_ref().expect("Should have encrypted_content");
+            let enc = encrypted_content
+                .as_ref()
+                .expect("Should have encrypted_content");
+            // Verify it uses the unified format
             assert!(
-                enc.contains("__genai_full_response_body"),
-                "Should contain full response marker"
+                enc.contains("_full_response_body"),
+                "Should contain _full_response_body key"
             );
+            assert!(
+                enc.contains("_provider_sdk"),
+                "Should contain _provider_sdk key"
+            );
+            assert!(enc.contains("genai"), "Should have genai provider");
         }
     }
 
@@ -667,7 +680,10 @@ mod tests {
                 ..Default::default()
             }]),
             response_id: Some("resp-1".to_string()),
-            sdk_http_response: Some(SdkHttpResponse::from_status_and_body(200, raw_body.to_string())),
+            sdk_http_response: Some(SdkHttpResponse::from_status_and_body(
+                200,
+                raw_body.to_string(),
+            )),
             ..Default::default()
         };
 
@@ -783,7 +799,10 @@ mod tests {
         let call_id = generate_client_call_id("get_weather");
         assert!(call_id.starts_with("cligen@get_weather@"));
         assert!(is_client_generated_call_id(&call_id));
-        assert_eq!(parse_function_name_from_call_id(&call_id), Some("get_weather"));
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id),
+            Some("get_weather")
+        );
     }
 
     #[test]
@@ -791,7 +810,10 @@ mod tests {
         let call_id = enhance_server_call_id("server_call_123", "search_files");
         assert_eq!(call_id, "srvgen@search_files@server_call_123");
         assert!(!is_client_generated_call_id(&call_id));
-        assert_eq!(parse_function_name_from_call_id(&call_id), Some("search_files"));
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id),
+            Some("search_files")
+        );
         assert_eq!(extract_original_call_id(&call_id), Some("server_call_123"));
     }
 

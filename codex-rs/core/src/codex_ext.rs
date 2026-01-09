@@ -314,17 +314,14 @@ use codex_protocol::protocol_ext::PlanModeExitedEvent;
 /// Dispatch happens here to minimize changes to codex.rs.
 /// When adding new extension ops, add them to the match pattern in codex.rs
 /// (single line) and add the handler logic here.
-pub async fn handle_ext_op(
-    conversation_id: ConversationId,
-    tx_event: &Sender<Event>,
-    op: Op,
-) {
+pub async fn handle_ext_op(conversation_id: ConversationId, tx_event: &Sender<Event>, op: Op) {
     match op {
         Op::SetPlanMode {
             active,
             plan_file_path,
         } => {
-            handle_set_plan_mode(conversation_id, tx_event, active, plan_file_path.as_deref()).await;
+            handle_set_plan_mode(conversation_id, tx_event, active, plan_file_path.as_deref())
+                .await;
         }
         Op::PlanModeApproval {
             approved,

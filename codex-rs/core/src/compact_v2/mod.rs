@@ -398,21 +398,21 @@ mod tests {
     #[test]
     fn agent_file_detection() {
         // Plan files should be detected
-        assert!(is_agent_file(".claude/plans/my-plan.md", "agent-123"));
+        assert!(is_agent_file(".codex/plans/my-plan.md", "agent-123"));
         assert!(is_agent_file(
-            "/home/user/.claude/plans/test.md",
+            "/home/user/.codex/plans/test.md",
             "agent-123"
         ));
 
         // Agent-specific files should be detected
         assert!(is_agent_file(
-            ".claude/agents/agent-123/state.json",
+            ".codex/agents/agent-123/state.json",
             "agent-123"
         ));
 
         // Other agent's files should NOT be detected
         assert!(!is_agent_file(
-            ".claude/agents/other-agent/state.json",
+            ".codex/agents/other-agent/state.json",
             "agent-123"
         ));
 

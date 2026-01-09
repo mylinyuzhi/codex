@@ -46,9 +46,9 @@ use attachments::CriticalInstructionGenerator;
 use attachments::LspDiagnosticsGenerator;
 use attachments::NestedMemoryGenerator;
 use attachments::OutputStyleGenerator;
-use attachments::PlanApprovedGenerator;
-use attachments::PlanFileReferenceGenerator;
-use attachments::PlanModeGenerator;
+use attachments::PlanModeApprovedGenerator;
+use attachments::PlanModeEnterGenerator;
+use attachments::PlanModeFileReferenceGenerator;
 use attachments::PlanToolReminderGenerator;
 use attachments::ShellTaskGenerator;
 use futures::future::join_all;
@@ -80,9 +80,9 @@ impl SystemReminderOrchestrator {
         let generators: Vec<Arc<dyn AttachmentGenerator>> = vec![
             // Core tier
             Arc::new(CriticalInstructionGenerator::new()),
-            Arc::new(PlanApprovedGenerator::new()),
-            Arc::new(PlanFileReferenceGenerator::new()),
-            Arc::new(PlanModeGenerator::new()),
+            Arc::new(PlanModeApprovedGenerator::new()),
+            Arc::new(PlanModeFileReferenceGenerator::new()),
+            Arc::new(PlanModeEnterGenerator::new()),
             Arc::new(PlanToolReminderGenerator::new()),
             Arc::new(ChangedFilesGenerator::new()),
             Arc::new(NestedMemoryGenerator::new(config.nested_memory.clone())),
@@ -373,7 +373,7 @@ mod tests {
         assert!(
             reminders
                 .iter()
-                .any(|r| r.attachment_type == AttachmentType::PlanMode)
+                .any(|r| r.attachment_type == AttachmentType::PlanModeEnter)
         );
     }
 
@@ -383,7 +383,7 @@ mod tests {
             enabled: true,
             attachments: AttachmentSettings {
                 critical_instruction: false,
-                plan_mode: true,
+                plan_mode_enter: true,
                 plan_tool_reminder: false,
                 changed_files: false,
                 background_task: false,

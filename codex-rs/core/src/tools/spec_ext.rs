@@ -518,7 +518,9 @@ mod tests {
         let local_shell = ToolSpec::LocalShell {};
         assert_eq!(tool_variant(&local_shell), Some("API"));
 
-        let web_search = ToolSpec::WebSearch { external_web_access: None };
+        let web_search = ToolSpec::WebSearch {
+            external_web_access: None,
+        };
         assert_eq!(tool_variant(&web_search), Some("API"));
 
         let mcp_tool = ToolSpec::Function(ResponsesApiTool {
@@ -549,7 +551,12 @@ mod tests {
         assert_eq!(tool_name(&function), "test_tool");
 
         assert_eq!(tool_name(&ToolSpec::LocalShell {}), "local_shell");
-        assert_eq!(tool_name(&ToolSpec::WebSearch { external_web_access: None }), "web_search");
+        assert_eq!(
+            tool_name(&ToolSpec::WebSearch {
+                external_web_access: None
+            }),
+            "web_search"
+        );
     }
 
     // ========================================================================

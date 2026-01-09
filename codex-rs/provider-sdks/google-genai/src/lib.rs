@@ -131,6 +131,8 @@ pub use chat::Chat;
 pub use chat::ChatBuilder;
 pub use client::Client;
 pub use client::ClientConfig;
+pub use client::HttpRequest;
+pub use client::RequestHook;
 pub use error::GenAiError;
 pub use error::Result;
 

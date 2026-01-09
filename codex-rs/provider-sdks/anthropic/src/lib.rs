@@ -34,6 +34,8 @@ mod types;
 // Re-export main types
 pub use client::Client;
 pub use config::ClientConfig;
+pub use config::HttpRequest;
+pub use config::RequestHook;
 pub use error::AnthropicError;
 pub use error::Result;
 

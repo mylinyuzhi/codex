@@ -1,6 +1,8 @@
-//! Plan mode generator.
+//! Plan mode enter generator.
 //!
-//! Plan mode instructions and re-entry handling (P0).
+//! 进入 Plan Mode：注入5阶段工作流指令和约束。
+//! Injected when entering Plan Mode with 5-phase workflow instructions.
+//!
 //! Matches VH5() in Claude Code chunks.107.mjs:1886-1908
 //! And Sb3()/_b3() in chunks.153.mjs:2890-2977.
 
@@ -15,13 +17,14 @@ use crate::system_reminder::types::SystemReminder;
 use async_trait::async_trait;
 use std::path::Path;
 
-/// Plan mode generator.
+/// Plan mode enter generator.
 ///
-/// Generates plan mode instructions and re-entry guidance.
+/// 进入 Plan Mode：注入5阶段工作流指令和约束。
+/// Generates plan mode instructions and re-entry guidance when entering Plan Mode.
 #[derive(Debug)]
-pub struct PlanModeGenerator;
+pub struct PlanModeEnterGenerator;
 
-impl PlanModeGenerator {
+impl PlanModeEnterGenerator {
     /// Create a new plan mode generator.
     pub fn new() -> Self {
         Self
@@ -114,20 +117,20 @@ impl PlanModeGenerator {
     }
 }
 
-impl Default for PlanModeGenerator {
+impl Default for PlanModeEnterGenerator {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl AttachmentGenerator for PlanModeGenerator {
+impl AttachmentGenerator for PlanModeEnterGenerator {
     fn name(&self) -> &str {
-        "plan_mode"
+        "plan_mode_enter"
     }
 
     fn attachment_type(&self) -> AttachmentType {
-        AttachmentType::PlanMode
+        AttachmentType::PlanModeEnter
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -152,19 +155,22 @@ impl AttachmentGenerator for PlanModeGenerator {
         };
 
         tracing::info!(
-            generator = "plan_mode",
+            generator = "plan_mode_enter",
             is_reentry = ctx.is_plan_reentry,
-            "Generating plan mode reminder"
+            "Generating plan mode enter reminder"
         );
-        Ok(Some(SystemReminder::new(AttachmentType::PlanMode, content)))
+        Ok(Some(SystemReminder::new(
+            AttachmentType::PlanModeEnter,
+            content,
+        )))
     }
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
-        config.enabled && config.attachments.plan_mode
+        config.enabled && config.attachments.plan_mode_enter
     }
 
     fn throttle_config(&self) -> ThrottleConfig {
-        default_throttle_config(AttachmentType::PlanMode)
+        default_throttle_config(AttachmentType::PlanModeEnter)
     }
 }
 
@@ -211,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generates_when_plan_mode_active() {
-        let generator = PlanModeGenerator::new();
+        let generator = PlanModeEnterGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
         let ctx = make_context(true, Some("/path/to/plan.md"), false, &tracker, &plan_state);
@@ -220,13 +226,13 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.unwrap();
-        assert_eq!(reminder.attachment_type, AttachmentType::PlanMode);
+        assert_eq!(reminder.attachment_type, AttachmentType::PlanModeEnter);
         assert!(reminder.content.contains("Plan mode is active"));
     }
 
     #[tokio::test]
     async fn test_returns_none_when_not_plan_mode() {
-        let generator = PlanModeGenerator::new();
+        let generator = PlanModeEnterGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
         let ctx = make_context(false, None, false, &tracker, &plan_state);
@@ -237,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_includes_reentry_content() {
-        let generator = PlanModeGenerator::new();
+        let generator = PlanModeEnterGenerator::new();
         let tracker = FileTracker::new();
         let plan_state = PlanState::default();
         let ctx = make_context(true, Some("/path/to/plan.md"), true, &tracker, &plan_state);
@@ -252,15 +258,15 @@ mod tests {
 
     #[test]
     fn test_throttle_config() {
-        let generator = PlanModeGenerator::new();
+        let generator = PlanModeEnterGenerator::new();
         let config = generator.throttle_config();
         assert_eq!(config.min_turns_between, 5);
     }
 
     #[test]
     fn test_attachment_type() {
-        let generator = PlanModeGenerator::new();
-        assert_eq!(generator.attachment_type(), AttachmentType::PlanMode);
+        let generator = PlanModeEnterGenerator::new();
+        assert_eq!(generator.attachment_type(), AttachmentType::PlanModeEnter);
         assert_eq!(generator.tier(), ReminderTier::Core);
     }
 }

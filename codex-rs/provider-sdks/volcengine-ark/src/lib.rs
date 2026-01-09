@@ -54,6 +54,8 @@ pub mod types;
 // Re-export main types at crate root for convenience
 pub use client::Client;
 pub use config::ClientConfig;
+pub use config::HttpRequest;
+pub use config::RequestHook;
 pub use error::ArkError;
 pub use error::Result;
 pub use types::CachingConfig;

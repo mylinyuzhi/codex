@@ -157,7 +157,7 @@ pub struct SubagentConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Directory for custom agent definitions (e.g., .claude/agents/).
+    /// Directory for custom agent definitions (e.g., .codex/agents/).
     #[serde(default)]
     pub agents_dir: Option<String>,
 

@@ -21,9 +21,32 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Debug;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::debug;
 use tracing::instrument;
+
+// ============================================================================
+// Request Hook Support
+// ============================================================================
+
+/// HTTP request information that can be modified by a hook.
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    /// Request URL.
+    pub url: String,
+    /// Request headers as key-value pairs.
+    pub headers: HashMap<String, String>,
+    /// Request body as JSON.
+    pub body: serde_json::Value,
+}
+
+/// Trait for request hooks that can modify HTTP requests before they are sent.
+pub trait RequestHook: Send + Sync + Debug {
+    /// Called before the HTTP request is sent.
+    fn on_request(&self, request: &mut HttpRequest);
+}
 
 /// Base URL for the Gemini API.
 const GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -32,7 +55,6 @@ const GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1b
 const DEFAULT_API_VERSION: &str = "v1beta";
 
 /// Client configuration.
-#[derive(Debug, Clone)]
 pub struct ClientConfig {
     /// API key for authentication.
     pub api_key: Option<String>,
@@ -48,6 +70,35 @@ pub struct ClientConfig {
 
     /// Default extensions for all requests.
     pub extensions: Option<RequestExtensions>,
+
+    /// Optional request hook for interceptor support.
+    pub request_hook: Option<Arc<dyn RequestHook>>,
+}
+
+impl Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("base_url", &self.base_url)
+            .field("api_version", &self.api_version)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("extensions", &self.extensions)
+            .field("request_hook", &self.request_hook.is_some())
+            .finish()
+    }
+}
+
+impl Clone for ClientConfig {
+    fn clone(&self) -> Self {
+        Self {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            api_version: self.api_version.clone(),
+            timeout_secs: self.timeout_secs,
+            extensions: self.extensions.clone(),
+            request_hook: self.request_hook.clone(),
+        }
+    }
 }
 
 impl Default for ClientConfig {
@@ -58,6 +109,7 @@ impl Default for ClientConfig {
             api_version: None,
             timeout_secs: Some(600), // 10 minutes default
             extensions: None,
+            request_hook: None,
         }
     }
 }
@@ -94,10 +146,15 @@ impl ClientConfig {
         self.extensions = Some(ext);
         self
     }
+
+    /// Set the request hook for interceptor support.
+    pub fn request_hook(mut self, hook: Arc<dyn RequestHook>) -> Self {
+        self.request_hook = Some(hook);
+        self
+    }
 }
 
 /// Google Generative AI (Gemini) API Client.
-#[derive(Debug, Clone)]
 pub struct Client {
     /// HTTP client.
     http_client: reqwest::Client,
@@ -114,6 +171,33 @@ pub struct Client {
 
     /// Default extensions for all requests.
     default_extensions: Option<RequestExtensions>,
+
+    /// Optional request hook for interceptor support.
+    request_hook: Option<Arc<dyn RequestHook>>,
+}
+
+impl Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("api_version", &self.api_version)
+            .field("request_hook", &self.request_hook.is_some())
+            .finish()
+    }
+}
+
+impl Clone for Client {
+    fn clone(&self) -> Self {
+        Self {
+            http_client: self.http_client.clone(),
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            api_version: self.api_version.clone(),
+            default_extensions: self.default_extensions.clone(),
+            request_hook: self.request_hook.clone(),
+        }
+    }
 }
 
 impl Client {
@@ -153,6 +237,7 @@ impl Client {
             base_url,
             api_version,
             default_extensions: config.extensions,
+            request_hook: config.request_hook,
         })
     }
 
@@ -273,6 +358,45 @@ impl Client {
         body
     }
 
+    /// Apply request hook if configured.
+    /// Returns the (possibly modified) url, headers, and body.
+    fn apply_hook(
+        &self,
+        url: String,
+        headers: HeaderMap,
+        body: serde_json::Value,
+    ) -> (String, HeaderMap, serde_json::Value) {
+        if let Some(hook) = &self.request_hook {
+            // Convert HeaderMap to HashMap
+            let headers_map: HashMap<String, String> = headers
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+                .collect();
+
+            let mut req = HttpRequest {
+                url,
+                headers: headers_map,
+                body,
+            };
+
+            // Apply the hook
+            hook.on_request(&mut req);
+
+            // Convert back to HeaderMap
+            let mut new_headers = HeaderMap::new();
+            for (k, v) in req.headers {
+                if let (Ok(name), Ok(value)) = (HeaderName::from_str(&k), HeaderValue::from_str(&v))
+                {
+                    new_headers.insert(name, value);
+                }
+            }
+
+            (req.url, new_headers, req.body)
+        } else {
+            (url, headers, body)
+        }
+    }
+
     /// Generate content using the specified model.
     #[instrument(skip(self, contents, config), fields(model = %model))]
     pub async fn generate_content(
@@ -331,6 +455,9 @@ impl Client {
         let mut body = serde_json::to_value(&request)
             .map_err(|e| GenAiError::Parse(format!("Failed to serialize request: {e}")))?;
         body = self.merge_body(body, config.extensions.as_ref());
+
+        // Apply request hook if configured
+        let (url, headers, body) = self.apply_hook(url, headers, body);
 
         let response = self
             .http_client
@@ -464,6 +591,9 @@ impl Client {
             .map_err(|e| GenAiError::Parse(format!("Failed to serialize request: {e}")))?;
         body = self.merge_body(body, config_ext.as_ref());
 
+        // Apply request hook if configured
+        let (url, headers, body) = self.apply_hook(url, headers, body);
+
         let response = self
             .http_client
             .post(&url)
@@ -596,6 +726,7 @@ mod tests {
             base_url: GEMINI_API_BASE_URL.to_string(),
             api_version: DEFAULT_API_VERSION.to_string(),
             default_extensions: None,
+            request_hook: None,
         };
 
         assert_eq!(
@@ -617,6 +748,7 @@ mod tests {
             base_url: GEMINI_API_BASE_URL.to_string(),
             api_version: DEFAULT_API_VERSION.to_string(),
             default_extensions: None,
+            request_hook: None,
         };
 
         // Base URL without ?alt=sse (added by generate_content_stream)
@@ -645,6 +777,7 @@ mod tests {
                 .to_string(),
             api_version: "v1".to_string(),
             default_extensions: None,
+            request_hook: None,
         };
 
         assert_eq!(

@@ -116,3 +116,45 @@ impl ToolChoice {
         }
     }
 }
+
+// ============================================================================
+// SDK HTTP Response (runtime metadata)
+// ============================================================================
+
+/// HTTP response metadata for debugging and inspection.
+///
+/// This struct captures the raw HTTP response information that is not part of
+/// the API response body. It's populated by the client after receiving a response.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SdkHttpResponse {
+    /// HTTP status code.
+    pub status_code: Option<i32>,
+    /// Response headers.
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Raw response body (for debugging).
+    pub body: Option<String>,
+}
+
+impl SdkHttpResponse {
+    /// Create a new SdkHttpResponse with all fields.
+    pub fn new(
+        status_code: i32,
+        headers: std::collections::HashMap<String, String>,
+        body: String,
+    ) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: Some(headers),
+            body: Some(body),
+        }
+    }
+
+    /// Create from status code and body only.
+    pub fn from_status_and_body(status_code: i32, body: String) -> Self {
+        Self {
+            status_code: Some(status_code),
+            headers: None,
+            body: Some(body),
+        }
+    }
+}

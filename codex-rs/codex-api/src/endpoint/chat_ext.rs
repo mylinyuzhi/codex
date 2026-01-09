@@ -5,6 +5,7 @@
 //! delegates to it.
 
 use crate::adapters::AdapterConfig;
+use crate::adapters::build_interceptor_hook;
 use crate::adapters::generate_result_to_stream;
 use crate::adapters::get_adapter;
 use crate::adapters::is_openai_provider;
@@ -45,11 +46,16 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
 
         // Try to find an adapter for this provider
         if let Some(adapter) = get_adapter(adapter_name) {
+            // Build interceptor hook if interceptors are configured
+            let ctx = self.streaming.build_interceptor_context(Some(model), None);
+            let request_hook = build_interceptor_hook(ctx, &provider.interceptors);
+
             let config = AdapterConfig {
                 api_key: self.streaming.auth().bearer_token(),
                 base_url: Some(provider.base_url.clone()),
                 model: model.to_string(),
                 extra: provider.model_parameters.clone(),
+                request_hook,
             };
             let result = adapter.generate(prompt, &config).await?;
             return Ok(Some(generate_result_to_stream(result)));

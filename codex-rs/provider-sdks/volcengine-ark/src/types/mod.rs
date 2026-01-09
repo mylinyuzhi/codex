@@ -33,6 +33,7 @@ pub use responses::Response;
 pub use responses::ResponseCaching;
 pub use responses::ResponseCreateParams;
 pub use responses::ResponseError;
+pub use responses::SdkHttpResponse;
 pub use responses::ThinkingConfig;
 pub use usage::InputTokensDetails;
 pub use usage::OutputTokensDetails;
