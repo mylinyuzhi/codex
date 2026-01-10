@@ -6,12 +6,6 @@ use crate::tools::spec_ext::ToolFilter;
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigExt {
-    /// Maximum number of model output tokens.
-    pub model_max_output_tokens: Option<i64>,
-
-    /// Common LLM sampling parameters (temperature, top_p, etc.).
-    pub model_parameters: Option<codex_protocol::config_types_ext::ModelParameters>,
-
     /// Web search configuration (provider, max_results).
     pub web_search_config: codex_protocol::config_types_ext::WebSearchConfig,
 
@@ -34,8 +28,6 @@ pub struct ConfigExt {
 impl Default for ConfigExt {
     fn default() -> Self {
         Self {
-            model_max_output_tokens: None,
-            model_parameters: None,
             web_search_config: codex_protocol::config_types_ext::WebSearchConfig::default(),
             web_fetch_config: codex_protocol::config_types_ext::WebFetchConfig::default(),
             logging: codex_utils_common::logging::LoggingConfig::default(),
@@ -49,14 +41,6 @@ impl Default for ConfigExt {
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigTomlExt {
-    /// Maximum number of model output tokens.
-    #[serde(default)]
-    pub model_max_output_tokens: Option<i64>,
-
-    /// Common LLM sampling parameters (temperature, top_p, etc.).
-    #[serde(default)]
-    pub model_parameters: Option<codex_protocol::config_types_ext::ModelParameters>,
-
     /// Logging configuration for tracing subscriber.
     #[serde(default)]
     pub logging: Option<codex_utils_common::logging::LoggingConfig>,

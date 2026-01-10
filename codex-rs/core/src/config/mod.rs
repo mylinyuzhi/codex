@@ -1472,8 +1472,6 @@ impl Config {
                 }
             },
             ext: crate::config::mod_ext::ConfigExt {
-                model_max_output_tokens: cfg.ext.model_max_output_tokens,
-                model_parameters: cfg.ext.model_parameters,
                 web_search_config: Default::default(),
                 web_fetch_config: Default::default(),
                 logging: cfg.ext.logging.unwrap_or_default(),

@@ -298,6 +298,11 @@ impl ModelClient {
 
     /// Returns the currently configured model slug.
     pub fn get_model(&self) -> String {
+        // Use provider's explicit model_name for custom endpoints
+        if let Some(model_name) = &self.provider.ext.model_name {
+            return model_name.clone();
+        }
+        // Fall back to model family slug
         self.get_model_family().get_model_slug().to_string()
     }
 
