@@ -25,6 +25,7 @@ mod context_manager;
 pub mod custom_prompts;
 pub mod env;
 mod environment_context;
+mod environment_context_ext;
 pub mod error;
 pub mod exec;
 pub mod exec_env;

@@ -134,6 +134,10 @@ impl ModelsManager {
 
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
+        // Use provider's pre-computed model_family if model_family_id was set
+        if let Some(ref family) = config.model_provider.ext.model_family {
+            return family.clone();
+        }
         Self::find_family_for_model(model)
             .with_remote_overrides(self.remote_models(config).await)
             .with_config_overrides(config)

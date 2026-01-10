@@ -21,11 +21,11 @@ pub struct ModelProviderInfoExt {
     #[serde(default = "default_streaming")]
     pub streaming: bool,
 
-    /// Optional: LLM provider implementation to use.
-    /// Providers handle request transformation and API communication.
-    /// Built-in options: "openai_responses", "openai_chat"
+    /// Optional: LLM adapter implementation to use.
+    /// Adapter handle request transformation and API communication.
+    /// Built-in options: "genai", "anthropic"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
+    pub adapter: Option<String>,
 
     /// Optional: Request interceptors to apply.
     /// Interceptors modify requests before sending (e.g., header injection).
@@ -101,7 +101,7 @@ impl Default for ModelProviderInfoExt {
     fn default() -> Self {
         Self {
             streaming: default_streaming(),
-            provider: None,
+            adapter: None,
             interceptors: Vec::new(),
             model_name: None,
             model_parameters: None,
