@@ -19,6 +19,7 @@
 
 pub mod anthropic;
 pub mod genai;
+pub mod openai;
 pub mod volcengine_ark;
 pub mod zai;
 
@@ -291,6 +292,7 @@ static ADAPTER_REGISTRY: LazyLock<AdapterRegistry> = LazyLock::new(|| {
     registry.register(Arc::new(anthropic::AnthropicAdapter::new()));
     registry.register(Arc::new(volcengine_ark::VolcengineArkAdapter::new()));
     registry.register(Arc::new(zai::ZaiAdapter::new()));
+    registry.register(Arc::new(openai::OpenAIAdapter::new()));
 
     registry
 });
@@ -377,6 +379,11 @@ mod tests {
         let adapter = get_adapter("zai");
         assert!(adapter.is_some());
         assert_eq!(adapter.unwrap().name(), "zai");
+
+        // OpenAIAdapter should be pre-registered
+        let adapter = get_adapter("openai");
+        assert!(adapter.is_some());
+        assert_eq!(adapter.unwrap().name(), "openai");
     }
 
     #[test]
@@ -386,6 +393,7 @@ mod tests {
         assert!(adapters.contains(&"anthropic".to_string()));
         assert!(adapters.contains(&"volc_ark".to_string()));
         assert!(adapters.contains(&"zai".to_string()));
+        assert!(adapters.contains(&"openai".to_string()));
     }
 
     #[test]

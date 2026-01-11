@@ -174,7 +174,7 @@ impl JsonRpcConnection {
 
             // Enter the read loop
             if let Err(e) =
-                Self::read_loop_inner(reader, pending_clone, notification_tx, shutdown_rx).await
+                Self::read_messages(reader, pending_clone, notification_tx, shutdown_rx).await
             {
                 warn!("LSP read loop ended with error: {}", e);
             }
@@ -300,6 +300,27 @@ impl JsonRpcConnection {
         }
     }
 
+    /// Send request and deserialize response, treating null as None
+    ///
+    /// This is a convenience method that handles the common pattern of:
+    /// 1. Sending a request
+    /// 2. Checking if the response is null (returns None)
+    /// 3. Deserializing the response to the target type
+    ///
+    /// This reduces boilerplate in LSP operation handlers.
+    pub async fn request_optional<P, R>(&self, method: &str, params: P) -> Result<Option<R>>
+    where
+        P: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        let value = self.request(method, params).await?;
+        if value.is_null() {
+            Ok(None)
+        } else {
+            serde_json::from_value(value).map(Some).map_err(Into::into)
+        }
+    }
+
     /// Send notification (no response expected)
     pub async fn notify<P: Serialize>(&self, method: &str, params: P) -> Result<()> {
         let notification = serde_json::json!({
@@ -320,34 +341,12 @@ impl JsonRpcConnection {
         Ok(())
     }
 
-    /// Read loop for incoming messages (legacy - without shutdown support)
-    #[allow(dead_code)]
-    async fn read_loop(
-        stdout: ChildStdout,
-        pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
-        notification_tx: mpsc::Sender<(String, serde_json::Value)>,
-    ) -> Result<()> {
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        Self::read_loop_with_shutdown(stdout, pending, notification_tx, shutdown_rx).await
-    }
-
-    /// Read loop for incoming messages with shutdown support
-    #[allow(dead_code)]
-    async fn read_loop_with_shutdown(
-        stdout: ChildStdout,
-        pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
-        notification_tx: mpsc::Sender<(String, serde_json::Value)>,
-        shutdown_rx: watch::Receiver<bool>,
-    ) -> Result<()> {
-        let reader = BufReader::new(stdout);
-        Self::read_loop_inner(reader, pending, notification_tx, shutdown_rx).await
-    }
-
-    /// Inner read loop that takes a pre-created BufReader
+    /// Read and dispatch incoming LSP messages
     ///
-    /// This allows the caller to create the BufReader first and signal readiness
-    /// before entering the read loop, preventing race conditions.
-    async fn read_loop_inner(
+    /// Reads JSON-RPC messages from the server, dispatches responses to pending
+    /// request handlers, and forwards notifications to the notification channel.
+    /// Supports graceful shutdown via the shutdown_rx watch channel.
+    async fn read_messages(
         mut reader: BufReader<ChildStdout>,
         pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,

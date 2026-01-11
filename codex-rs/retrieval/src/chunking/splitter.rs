@@ -69,6 +69,11 @@ use tiktoken_rs::CoreBPE;
 use tiktoken_rs::cl100k_base;
 use tree_sitter::Language;
 
+/// Cached tokenizer for token counting.
+/// Loading cl100k_base() is expensive, so we cache it.
+static TOKENIZER: Lazy<CoreBPE> =
+    Lazy::new(|| cl100k_base().expect("Failed to load cl100k_base tokenizer"));
+
 /// Code chunking service with token-aware splitting.
 ///
 /// Uses CodeSplitter (tree-sitter AST-aware) for supported languages,
@@ -107,11 +112,8 @@ impl CodeChunkerService {
     /// Import blocks at the start of files are kept together as a single chunk
     /// to provide dependency context and enable queries like "what does this file import".
     pub fn chunk(&self, content: &str, language: &str) -> Result<Vec<ChunkSpan>> {
-        // Load tokenizer (cl100k_base is OpenAI's tokenizer)
-        let tokenizer = cl100k_base().expect("Failed to load cl100k_base tokenizer");
-
-        // Create token-aware chunk config
-        let chunk_config = ChunkConfig::new(self.max_tokens).with_sizer(tokenizer);
+        // Create token-aware chunk config using cached tokenizer
+        let chunk_config = ChunkConfig::new(self.max_tokens).with_sizer(&*TOKENIZER);
 
         // Markdown: use MarkdownChunker with token-based size estimation
         if is_markdown_file(language) {
@@ -183,8 +185,7 @@ impl CodeChunkerService {
             overlap_tokens = self.overlap_tokens,
             "Using TextSplitter fallback with overlap"
         );
-        let tokenizer = cl100k_base().expect("tiktoken");
-        let chunk_config = ChunkConfig::new(self.max_tokens).with_sizer(tokenizer.clone());
+        let chunk_config = ChunkConfig::new(self.max_tokens).with_sizer(&*TOKENIZER);
         let splitter = TextSplitter::new(chunk_config);
         let raw_chunks: Vec<(usize, &str)> = splitter.chunk_indices(&remaining_content).collect();
 
@@ -206,7 +207,7 @@ impl CodeChunkerService {
 
         // Apply overlap for text files
         if self.overlap_tokens > 0 && chunks.len() > 1 {
-            Self::apply_overlap(&mut chunks, self.overlap_tokens, &tokenizer);
+            Self::apply_overlap(&mut chunks, self.overlap_tokens, &*TOKENIZER);
         }
 
         Ok(chunks)

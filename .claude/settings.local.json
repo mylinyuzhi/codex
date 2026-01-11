@@ -61,7 +61,8 @@
       "Bash(codex-rs/core/src/system_reminder/attachments/at_mentioned_files.rs )",
       "Bash(codex-rs/core/src/system_reminder/attachments/agent_mentions.rs )",
       "Bash(codex-rs/core/src/system_reminder/attachments/plan_mode.rs )",
-      "Bash(codex-rs/core/src/system_reminder/attachments/output_style.rs)"
+      "Bash(codex-rs/core/src/system_reminder/attachments/output_style.rs)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

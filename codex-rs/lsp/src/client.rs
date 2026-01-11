@@ -370,7 +370,7 @@ impl LspClient {
         // Extract workspace name from URI path
         let workspace_name = root_uri
             .path_segments()
-            .and_then(|segs| segs.last())
+            .and_then(|mut segs| segs.next_back())
             .unwrap_or("workspace")
             .to_string();
 
@@ -909,15 +909,8 @@ impl LspClient {
 
         let result: Option<DocumentSymbolResponse> = self
             .connection
-            .request("textDocument/documentSymbol", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("textDocument/documentSymbol", params)
+            .await?;
 
         let symbols = match result {
             Some(response) => flatten_symbols(&response),
@@ -975,6 +968,31 @@ impl LspClient {
         Ok(symbols_arc)
     }
 
+    /// Find a symbol's position by name, returning an error if not found
+    ///
+    /// This is a helper that encapsulates the common pattern of:
+    /// 1. Getting document symbols
+    /// 2. Finding matching symbols by name and optional kind
+    /// 3. Returning the position of the best match (or error if none found)
+    async fn find_symbol_position(
+        &self,
+        path: &Path,
+        symbol_name: &str,
+        symbol_kind: Option<SymbolKind>,
+    ) -> Result<Position> {
+        let symbols = self.document_symbols(path).await?;
+        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
+
+        if matches.is_empty() {
+            return Err(LspErr::SymbolNotFound {
+                name: symbol_name.to_string(),
+                file: path.display().to_string(),
+            });
+        }
+
+        Ok(matches[0].symbol.position)
+    }
+
     /// Go to definition by symbol name
     pub async fn definition(
         &self,
@@ -990,19 +1008,10 @@ impl LspClient {
             self.server_id
         );
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        // Use the first (best) match
-        let symbol = &matches[0].symbol;
-        let locations = self.definition_at_position(path, symbol.position).await?;
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
+        let locations = self.definition_at_position(path, position).await?;
 
         debug!(
             "Definition result for '{}': {} locations",
@@ -1039,19 +1048,10 @@ impl LspClient {
             });
         }
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        // Use the first (best) match
-        let symbol = &matches[0].symbol;
-        self.implementation_at_position(path, symbol.position).await
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
+        self.implementation_at_position(path, position).await
     }
 
     /// Go to implementation at exact position
@@ -1087,19 +1087,10 @@ impl LspClient {
             });
         }
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        let symbol = &matches[0].symbol;
-        self.type_definition_at_position(path, symbol.position)
-            .await
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
+        self.type_definition_at_position(path, position).await
     }
 
     /// Go to type definition at exact position
@@ -1135,18 +1126,10 @@ impl LspClient {
             });
         }
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        let symbol = &matches[0].symbol;
-        self.declaration_at_position(path, symbol.position).await
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
+        self.declaration_at_position(path, position).await
     }
 
     /// Go to declaration at exact position
@@ -1190,17 +1173,8 @@ impl LspClient {
             partial_result_params: PartialResultParams::default(),
         };
 
-        let result: Option<GotoDefinitionResponse> = self
-            .connection
-            .request(method, params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+        let result: Option<GotoDefinitionResponse> =
+            self.connection.request_optional(method, params).await?;
 
         Ok(match result {
             Some(GotoDefinitionResponse::Scalar(loc)) => vec![loc],
@@ -1233,19 +1207,11 @@ impl LspClient {
             self.server_id
         );
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        let symbol = &matches[0].symbol;
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
         let locations = self
-            .references_at_position(path, symbol.position, include_declaration)
+            .references_at_position(path, position, include_declaration)
             .await?;
 
         debug!(
@@ -1283,15 +1249,8 @@ impl LspClient {
 
         let result: Option<Vec<Location>> = self
             .connection
-            .request("textDocument/references", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("textDocument/references", params)
+            .await?;
 
         Ok(result.unwrap_or_default())
     }
@@ -1311,23 +1270,15 @@ impl LspClient {
             self.server_id
         );
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        let symbol = &matches[0].symbol;
-        let result = self.hover_at_position(path, symbol.position).await?;
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
+        let result = self.hover_at_position(path, position).await?;
 
         debug!(
             "Hover result for '{}': {} chars",
             symbol_name,
-            result.as_ref().map(|s| s.len()).unwrap_or(0)
+            result.as_ref().map(String::len).unwrap_or(0)
         );
 
         Ok(result)
@@ -1354,15 +1305,8 @@ impl LspClient {
 
         let result: Option<Hover> = self
             .connection
-            .request("textDocument/hover", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("textDocument/hover", params)
+            .await?;
 
         Ok(result.map(|hover| match hover.contents {
             lsp_types::HoverContents::Scalar(content) => Self::markup_to_string(content),
@@ -1409,15 +1353,8 @@ impl LspClient {
 
         let result: Option<WorkspaceSymbolResponse> = self
             .connection
-            .request("workspace/symbol", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("workspace/symbol", params)
+            .await?;
 
         let symbols = match result {
             Some(WorkspaceSymbolResponse::Flat(symbols)) => symbols,
@@ -1426,8 +1363,7 @@ impl LspClient {
                 // WorkspaceSymbol has location as OneOf<Location, WorkspaceLocation>
                 symbols
                     .into_iter()
-                    .filter_map(|ws| {
-                        // Extract location from the WorkspaceSymbol
+                    .map(|ws| {
                         let location = match ws.location {
                             lsp_types::OneOf::Left(loc) => loc,
                             lsp_types::OneOf::Right(workspace_loc) => Location {
@@ -1437,14 +1373,14 @@ impl LspClient {
                         };
 
                         #[allow(deprecated)]
-                        Some(SymbolInformation {
+                        SymbolInformation {
                             name: ws.name,
                             kind: ws.kind,
                             tags: ws.tags,
                             deprecated: None,
                             location,
                             container_name: ws.container_name,
-                        })
+                        }
                     })
                     .collect()
             }
@@ -1480,19 +1416,11 @@ impl LspClient {
             path.display()
         );
 
-        let symbols = self.document_symbols(path).await?;
-        let matches = find_matching_symbols(&symbols, symbol_name, symbol_kind);
-
-        if matches.is_empty() {
-            return Err(LspErr::SymbolNotFound {
-                name: symbol_name.to_string(),
-                file: path.display().to_string(),
-            });
-        }
-
-        let symbol = &matches[0].symbol;
+        let position = self
+            .find_symbol_position(path, symbol_name, symbol_kind)
+            .await?;
         let items = self
-            .prepare_call_hierarchy_at_position(path, symbol.position)
+            .prepare_call_hierarchy_at_position(path, position)
             .await?;
 
         debug!("Call hierarchy prepared: {} items", items.len());
@@ -1529,15 +1457,8 @@ impl LspClient {
 
         let result: Option<Vec<CallHierarchyItem>> = self
             .connection
-            .request("textDocument/prepareCallHierarchy", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("textDocument/prepareCallHierarchy", params)
+            .await?;
 
         Ok(result.unwrap_or_default())
     }
@@ -1559,15 +1480,8 @@ impl LspClient {
 
         let result: Option<Vec<CallHierarchyIncomingCall>> = self
             .connection
-            .request("callHierarchy/incomingCalls", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("callHierarchy/incomingCalls", params)
+            .await?;
 
         let calls = result.unwrap_or_default();
 
@@ -1593,15 +1507,8 @@ impl LspClient {
 
         let result: Option<Vec<CallHierarchyOutgoingCall>> = self
             .connection
-            .request("callHierarchy/outgoingCalls", params)
-            .await
-            .and_then(|v| {
-                if v.is_null() {
-                    Ok(None)
-                } else {
-                    serde_json::from_value(v).map(Some).map_err(Into::into)
-                }
-            })?;
+            .request_optional("callHierarchy/outgoingCalls", params)
+            .await?;
 
         let calls = result.unwrap_or_default();
 

@@ -244,10 +244,15 @@ mod tests {
     <root>{cwd}</root>
     <root>{writable_root}</root>
   </writable_roots>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>bash</shell>
 </environment_context>"#,
             cwd = cwd.display(),
             writable_root = writable_root.display(),
+            platform = std::env::consts::OS,
+            cpu_arch = std::env::consts::ARCH,
         );
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -262,12 +267,19 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            cpu_arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -283,12 +295,19 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            cpu_arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -304,12 +323,19 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>restricted</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            cpu_arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -323,12 +349,19 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
   <approval_policy>on-failure</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            cpu_arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }

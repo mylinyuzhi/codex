@@ -9,35 +9,47 @@ use tracing::debug;
 use tracing::warn;
 
 // ============================================================================
+// Default value constants
+// ============================================================================
+
+const DEFAULT_MAX_RESTARTS: i32 = 3;
+const DEFAULT_RESTART_ON_CRASH: bool = true;
+const DEFAULT_STARTUP_TIMEOUT_MS: i64 = 10_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS: i64 = 5_000;
+const DEFAULT_REQUEST_TIMEOUT_MS: i64 = 30_000;
+const DEFAULT_HEALTH_CHECK_INTERVAL_MS: i64 = 30_000;
+const DEFAULT_NOTIFICATION_BUFFER_SIZE: i32 = 100;
+
+// ============================================================================
 // Default value functions for serde
 // ============================================================================
 
 fn default_max_restarts() -> i32 {
-    3
+    DEFAULT_MAX_RESTARTS
 }
 
 fn default_restart_on_crash() -> bool {
-    true
+    DEFAULT_RESTART_ON_CRASH
 }
 
 fn default_startup_timeout_ms() -> i64 {
-    10_000
+    DEFAULT_STARTUP_TIMEOUT_MS
 }
 
 fn default_shutdown_timeout_ms() -> i64 {
-    5_000
+    DEFAULT_SHUTDOWN_TIMEOUT_MS
 }
 
 fn default_request_timeout_ms() -> i64 {
-    30_000
+    DEFAULT_REQUEST_TIMEOUT_MS
 }
 
 fn default_health_check_interval_ms() -> i64 {
-    30_000
+    DEFAULT_HEALTH_CHECK_INTERVAL_MS
 }
 
 fn default_notification_buffer_size() -> i32 {
-    100
+    DEFAULT_NOTIFICATION_BUFFER_SIZE
 }
 
 // ============================================================================
@@ -93,41 +105,49 @@ pub const BUILTIN_SERVERS: &[BuiltinServer] = &[
 
 // ============================================================================
 // Unified LSP Server Configuration
+// Works for both built-in server overrides and custom servers
 // ============================================================================
 
-/// Unified LSP server configuration
-/// Works for both built-in server overrides and custom servers
-/// Helper functions for skip_serializing_if
+// Helper functions for skip_serializing_if
+// Note: serde's skip_serializing_if requires &T, hence #[allow(clippy::trivially_copy_pass_by_ref)]
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_max_restarts(v: &i32) -> bool {
-    *v == default_max_restarts()
+    *v == DEFAULT_MAX_RESTARTS
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_restart_on_crash(v: &bool) -> bool {
-    *v == default_restart_on_crash()
+    *v == DEFAULT_RESTART_ON_CRASH
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_startup_timeout_ms(v: &i64) -> bool {
-    *v == default_startup_timeout_ms()
+    *v == DEFAULT_STARTUP_TIMEOUT_MS
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_shutdown_timeout_ms(v: &i64) -> bool {
-    *v == default_shutdown_timeout_ms()
+    *v == DEFAULT_SHUTDOWN_TIMEOUT_MS
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_request_timeout_ms(v: &i64) -> bool {
-    *v == default_request_timeout_ms()
+    *v == DEFAULT_REQUEST_TIMEOUT_MS
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_health_check_interval_ms(v: &i64) -> bool {
-    *v == default_health_check_interval_ms()
+    *v == DEFAULT_HEALTH_CHECK_INTERVAL_MS
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_notification_buffer_size(v: &i32) -> bool {
-    *v == default_notification_buffer_size()
+    *v == DEFAULT_NOTIFICATION_BUFFER_SIZE
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -600,6 +620,24 @@ impl BuiltinServer {
     pub fn find_by_id(id: &str) -> Option<&'static BuiltinServer> {
         BUILTIN_SERVERS.iter().find(|s| s.id == id)
     }
+}
+
+// ============================================================================
+// Shared Utilities
+// ============================================================================
+
+/// Check if a command exists in PATH using `which`
+///
+/// This is a shared utility used by both `LspServerManager` and `LspInstaller`
+/// to verify that LSP server binaries are installed.
+pub async fn command_exists(cmd: &str) -> bool {
+    if cmd.is_empty() {
+        return false;
+    }
+    let cmd = cmd.to_string();
+    tokio::task::spawn_blocking(move || which::which(&cmd).is_ok())
+        .await
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

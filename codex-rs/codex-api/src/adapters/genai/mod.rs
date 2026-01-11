@@ -72,8 +72,11 @@ impl ProviderAdapter for GeminiAdapter {
         // Create client
         let client = Client::new(client_config).map_err(error::map_error)?;
 
-        // Convert input history to Gemini contents
-        let contents = convert::prompt_to_contents(prompt);
+        // Get effective base_url for context checking
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+
+        // Convert input history to Gemini contents (with cross-adapter support)
+        let contents = convert::prompt_to_contents(prompt, effective_base_url, &config.model);
 
         // Build generation config
         let gen_config = build_generation_config(prompt, config);
@@ -85,7 +88,9 @@ impl ProviderAdapter for GeminiAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events (includes Created and Completed)
-        let (events, response_id) = convert::response_to_events(&response);
+        // Pass base_url and model for model switch detection in EncryptedContent
+        let (events, response_id) =
+            convert::response_to_events(&response, effective_base_url, &config.model);
 
         Ok(GenerateResult {
             events,

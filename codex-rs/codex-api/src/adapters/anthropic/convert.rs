@@ -39,7 +39,16 @@ use crate::common_ext::PROVIDER_SDK_ANTHROPIC;
 /// - Assistant messages -> MessageParam with role="assistant" (skipped if already processed)
 /// - FunctionCall -> Skipped if already processed, otherwise appended as ToolUse
 /// - FunctionCallOutput -> MessageParam with ToolResult content
-pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemPrompt>) {
+///
+/// # Arguments
+/// - `prompt` - The codex-api Prompt
+/// - `base_url` - Current API base URL (for cross-adapter detection)
+/// - `model` - Current model name (for cross-adapter detection)
+pub fn prompt_to_messages(
+    prompt: &Prompt,
+    base_url: &str,
+    model: &str,
+) -> (Vec<MessageParam>, Option<SystemPrompt>) {
     let mut messages: Vec<MessageParam> = Vec::new();
     let mut current_assistant_content: Vec<ContentBlockParam> = Vec::new();
     let mut processed_response_ids: HashSet<String> = HashSet::new();
@@ -50,7 +59,8 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemP
             ResponseItem::Reasoning {
                 id: resp_id,
                 encrypted_content: Some(enc),
-                ..
+                summary,
+                content: reasoning_content,
             } => {
                 if processed_response_ids.contains(resp_id) {
                     continue;
@@ -58,14 +68,52 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemP
                 // Flush any pending assistant content first
                 flush_assistant_message(&mut messages, &mut current_assistant_content);
 
-                if let Some(assistant_msg) = extract_full_response_message(enc) {
+                // Try to extract from adapter-format encrypted_content
+                if let Some(assistant_msg) = extract_full_response_message(enc, base_url, model) {
                     messages.push(assistant_msg);
+                    processed_response_ids.insert(resp_id.clone());
+                    continue;
+                }
+
+                // Fallback: encrypted_content is native OpenAI format (not parseable as adapter)
+                // Extract text from summary/content fields and add as assistant message.
+                // This handles OpenAI Native → Adapter switching.
+                if let Some(text) = extract_text_from_reasoning(summary, reasoning_content) {
+                    messages.push(MessageParam::assistant_with_content(vec![
+                        ContentBlockParam::text(&text),
+                    ]));
+                    processed_response_ids.insert(resp_id.clone());
+                } else {
+                    // Neither adapter-format nor text extraction worked - log and skip
+                    tracing::warn!(
+                        response_id = %resp_id,
+                        encrypted_content_prefix = %enc.chars().take(20).collect::<String>(),
+                        "Unable to extract content from Reasoning with encrypted_content, skipping"
+                    );
                     processed_response_ids.insert(resp_id.clone());
                 }
             }
 
-            // Reasoning without encrypted_content - skip (handled by ThinkingConfig)
-            ResponseItem::Reasoning { .. } => {}
+            // Reasoning without encrypted_content - extract from summary/content
+            ResponseItem::Reasoning {
+                id: resp_id,
+                encrypted_content: None,
+                summary,
+                content: reasoning_content,
+            } => {
+                if processed_response_ids.contains(resp_id) {
+                    continue;
+                }
+                // Flush any pending assistant content first
+                flush_assistant_message(&mut messages, &mut current_assistant_content);
+
+                if let Some(text) = extract_text_from_reasoning(summary, reasoning_content) {
+                    messages.push(MessageParam::assistant_with_content(vec![
+                        ContentBlockParam::text(&text),
+                    ]));
+                    processed_response_ids.insert(resp_id.clone());
+                }
+            }
 
             // Skip assistant messages if already processed via Reasoning
             ResponseItem::Message {
@@ -150,31 +198,81 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<MessageParam>, Option<SystemP
 }
 
 /// Extract MessageParam from stored Anthropic Message body.
-fn extract_full_response_message(encrypted_content: &str) -> Option<MessageParam> {
+///
+/// Supports cross-adapter conversion: if the stored response is from a different
+/// adapter (detected via base_url/model mismatch), converts via normalized format.
+fn extract_full_response_message(
+    encrypted_content: &str,
+    current_base_url: &str,
+    current_model: &str,
+) -> Option<MessageParam> {
     let ec = EncryptedContent::from_json_string(encrypted_content)?;
-    let message: Message = ec.parse_body()?;
 
-    // Convert ContentBlock -> ContentBlockParam
-    let content: Vec<ContentBlockParam> = message
-        .content
+    // Fast path: same adapter context
+    if ec.matches_context(current_base_url, current_model) {
+        let message: Message = ec.parse_body()?;
+
+        // Convert ContentBlock -> ContentBlockParam
+        let content: Vec<ContentBlockParam> = message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(ContentBlockParam::text(text)),
+                ContentBlock::ToolUse { id, name, input } => Some(ContentBlockParam::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                }),
+                // Skip thinking blocks - they are handled by ThinkingConfig
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
+            })
+            .collect();
+
+        if content.is_empty() {
+            return None;
+        }
+        return Some(MessageParam::assistant_with_content(content));
+    }
+
+    // Cross-adapter path: normalize then convert
+    let normalized = ec.to_normalized()?;
+    Some(normalized_to_message(&normalized))
+}
+
+/// Extract text from Reasoning summary/content fields.
+///
+/// Used as fallback when encrypted_content is native OpenAI format (not parseable
+/// as adapter format). This enables OpenAI Native → Adapter model switching.
+fn extract_text_from_reasoning(
+    summary: &[ReasoningItemReasoningSummary],
+    content: &Option<Vec<ReasoningItemContent>>,
+) -> Option<String> {
+    // Prefer content field if available (contains full reasoning text)
+    if let Some(content_items) = content {
+        let texts: Vec<&str> = content_items
+            .iter()
+            .filter_map(|c| match c {
+                ReasoningItemContent::ReasoningText { text } => Some(text.as_str()),
+                ReasoningItemContent::Text { text } => Some(text.as_str()),
+            })
+            .collect();
+        if !texts.is_empty() {
+            return Some(texts.join("\n"));
+        }
+    }
+
+    // Fall back to summary field
+    let texts: Vec<&str> = summary
         .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text { text, .. } => Some(ContentBlockParam::text(text)),
-            ContentBlock::ToolUse { id, name, input } => Some(ContentBlockParam::ToolUse {
-                id: id.clone(),
-                name: name.clone(),
-                input: input.clone(),
-            }),
-            // Skip thinking blocks - they are handled by ThinkingConfig
-            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
+        .filter_map(|s| match s {
+            ReasoningItemReasoningSummary::SummaryText { text } => Some(text.as_str()),
         })
         .collect();
-
-    if content.is_empty() {
-        None
-    } else {
-        Some(MessageParam::assistant_with_content(content))
+    if !texts.is_empty() {
+        return Some(texts.join("\n"));
     }
+
+    None
 }
 
 /// Flush the current assistant message content to the messages list.
@@ -347,7 +445,16 @@ fn tool_json_to_struct(json: &Value) -> Option<Tool> {
 /// - Created (response start)
 /// - OutputItemDone for each content block (Message, FunctionCall, Reasoning)
 /// - Completed (response end with usage)
-pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
+///
+/// # Arguments
+/// - `message` - The Anthropic Message response
+/// - `base_url` - The API base URL (for model switch detection)
+/// - `model` - The model name (for model switch detection)
+pub fn message_to_events(
+    message: &Message,
+    base_url: &str,
+    model: &str,
+) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
     let mut events = Vec::new();
 
     // Add Created event
@@ -358,7 +465,9 @@ pub fn message_to_events(message: &Message) -> (Vec<ResponseEvent>, Option<Token
         .sdk_http_response
         .as_ref()
         .and_then(|r| r.body.clone())
-        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_ANTHROPIC))
+        .and_then(|body| {
+            EncryptedContent::from_body_str(&body, PROVIDER_SDK_ANTHROPIC, base_url, model)
+        })
         .and_then(|ec| ec.to_json_string());
 
     // Collect text content for a single Message event
@@ -491,6 +600,77 @@ fn extract_usage(usage: &anthropic_sdk::Usage) -> TokenUsage {
         reasoning_output_tokens: 0, // Anthropic includes thinking in output_tokens
     }
 }
+
+// ============================================================================
+// Cross-adapter conversion functions
+// ============================================================================
+
+use crate::normalized::NormalizedAssistantMessage;
+use crate::normalized::NormalizedToolCall;
+
+/// Extract NormalizedAssistantMessage from Anthropic response body JSON.
+///
+/// Used when switching from Anthropic to another adapter.
+pub fn extract_normalized(body: &Value) -> Option<NormalizedAssistantMessage> {
+    let message: Message = serde_json::from_value(body.clone()).ok()?;
+
+    let mut msg = NormalizedAssistantMessage::new();
+
+    for block in &message.content {
+        match block {
+            ContentBlock::Text { text, .. } => {
+                msg.text_content.push(text.clone());
+            }
+            ContentBlock::ToolUse { id, name, input } => {
+                msg.tool_calls.push(NormalizedToolCall::new(
+                    id,
+                    name,
+                    serde_json::to_string(input).unwrap_or_default(),
+                ));
+            }
+            ContentBlock::Thinking { thinking, .. } => {
+                msg.thinking_content
+                    .get_or_insert_with(Vec::new)
+                    .push(thinking.clone());
+            }
+            ContentBlock::RedactedThinking { .. } => {
+                // Redacted thinking can't be extracted as content
+            }
+        }
+    }
+
+    if msg.is_empty() { None } else { Some(msg) }
+}
+
+/// Convert NormalizedAssistantMessage to Anthropic MessageParam.
+///
+/// Used when switching from another adapter to Anthropic.
+pub fn normalized_to_message(msg: &NormalizedAssistantMessage) -> MessageParam {
+    let mut content: Vec<ContentBlockParam> = Vec::new();
+
+    // Text content
+    for text in &msg.text_content {
+        content.push(ContentBlockParam::text(text));
+    }
+
+    // Note: Thinking content is not directly addable to MessageParam in Anthropic API.
+    // Thinking blocks are generated by the model, not sent in requests.
+    // We skip thinking_content here as it's model-generated.
+
+    // Tool calls
+    for tc in &msg.tool_calls {
+        let input: Value =
+            serde_json::from_str(&tc.arguments).unwrap_or(Value::Object(serde_json::Map::new()));
+        content.push(ContentBlockParam::ToolUse {
+            id: tc.call_id.clone(),
+            name: tc.name.clone(),
+            input,
+        });
+    }
+
+    MessageParam::assistant_with_content(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,7 +694,7 @@ mod tests {
             previous_response_id: None,
         };
 
-        let (messages, system) = prompt_to_messages(&prompt);
+        let (messages, system) = prompt_to_messages(&prompt, "", "");
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, Role::User);
@@ -561,7 +741,7 @@ mod tests {
             previous_response_id: None,
         };
 
-        let (messages, _) = prompt_to_messages(&prompt);
+        let (messages, _) = prompt_to_messages(&prompt, "", "");
 
         // Should have: user, assistant (with text + tool_use), user (tool_result)
         assert_eq!(messages.len(), 3);

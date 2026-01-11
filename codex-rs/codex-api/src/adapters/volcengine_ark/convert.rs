@@ -39,7 +39,16 @@ use crate::common_ext::PROVIDER_SDK_VOLCENGINE_ARK;
 /// - Assistant messages -> InputMessage with role="assistant" (skipped if already processed)
 /// - FunctionCall -> Skipped if already processed, otherwise appended as text
 /// - FunctionCallOutput -> InputMessage with function_call_output content
-pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>) {
+///
+/// # Arguments
+/// - `prompt` - The codex-api Prompt
+/// - `base_url` - Current API base URL (for cross-adapter detection)
+/// - `model` - Current model name (for cross-adapter detection)
+pub fn prompt_to_messages(
+    prompt: &Prompt,
+    base_url: &str,
+    model: &str,
+) -> (Vec<InputMessage>, Option<String>) {
     let mut messages: Vec<InputMessage> = Vec::new();
     let mut current_assistant_content: Vec<InputContentBlock> = Vec::new();
     let mut processed_response_ids: HashSet<String> = HashSet::new();
@@ -50,7 +59,8 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
             ResponseItem::Reasoning {
                 id: resp_id,
                 encrypted_content: Some(enc),
-                ..
+                summary,
+                content: reasoning_content,
             } => {
                 if processed_response_ids.contains(resp_id) {
                     continue;
@@ -58,14 +68,52 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
                 // Flush any pending assistant content first
                 flush_assistant_message(&mut messages, &mut current_assistant_content);
 
-                if let Some(assistant_msg) = extract_full_response_message(enc) {
+                // Try to extract from adapter-format encrypted_content
+                if let Some(assistant_msg) = extract_full_response_message(enc, base_url, model) {
                     messages.push(assistant_msg);
+                    processed_response_ids.insert(resp_id.clone());
+                    continue;
+                }
+
+                // Fallback: encrypted_content is native OpenAI format (not parseable as adapter)
+                // Extract text from summary/content fields and add as assistant message.
+                // This handles OpenAI Native → Adapter switching.
+                if let Some(text) = extract_text_from_reasoning(summary, reasoning_content) {
+                    messages.push(InputMessage::assistant(vec![InputContentBlock::text(
+                        &text,
+                    )]));
+                    processed_response_ids.insert(resp_id.clone());
+                } else {
+                    // Neither adapter-format nor text extraction worked - log and skip
+                    tracing::warn!(
+                        response_id = %resp_id,
+                        encrypted_content_prefix = %enc.chars().take(20).collect::<String>(),
+                        "Unable to extract content from Reasoning with encrypted_content, skipping"
+                    );
                     processed_response_ids.insert(resp_id.clone());
                 }
             }
 
-            // Reasoning without encrypted_content - skip (handled by ThinkingConfig)
-            ResponseItem::Reasoning { .. } => {}
+            // Reasoning without encrypted_content - extract from summary/content
+            ResponseItem::Reasoning {
+                id: resp_id,
+                encrypted_content: None,
+                summary,
+                content: reasoning_content,
+            } => {
+                if processed_response_ids.contains(resp_id) {
+                    continue;
+                }
+                // Flush any pending assistant content first
+                flush_assistant_message(&mut messages, &mut current_assistant_content);
+
+                if let Some(text) = extract_text_from_reasoning(summary, reasoning_content) {
+                    messages.push(InputMessage::assistant(vec![InputContentBlock::text(
+                        &text,
+                    )]));
+                    processed_response_ids.insert(resp_id.clone());
+                }
+            }
 
             // Skip assistant messages if already processed via Reasoning
             ResponseItem::Message {
@@ -137,47 +185,97 @@ pub fn prompt_to_messages(prompt: &Prompt) -> (Vec<InputMessage>, Option<String>
 }
 
 /// Extract InputMessage from stored Ark Response body.
-fn extract_full_response_message(encrypted_content: &str) -> Option<InputMessage> {
+///
+/// Supports cross-adapter conversion: if the stored response is from a different
+/// adapter (detected via base_url/model mismatch), converts via normalized format.
+fn extract_full_response_message(
+    encrypted_content: &str,
+    current_base_url: &str,
+    current_model: &str,
+) -> Option<InputMessage> {
     let ec = EncryptedContent::from_json_string(encrypted_content)?;
-    let response: Response = ec.parse_body()?;
 
-    // Convert Response.output to InputMessage content blocks
-    let content: Vec<InputContentBlock> = response
-        .output
+    // Fast path: same adapter context
+    if ec.matches_context(current_base_url, current_model) {
+        let response: Response = ec.parse_body()?;
+
+        // Convert Response.output to InputMessage content blocks
+        let content: Vec<InputContentBlock> = response
+            .output
+            .iter()
+            .flat_map(|item| match item {
+                OutputItem::Message { content, .. } => content
+                    .iter()
+                    .filter_map(|c| match c {
+                        OutputContentBlock::Text { text } => Some(InputContentBlock::text(text)),
+                        OutputContentBlock::Thinking { thinking, .. } => {
+                            Some(InputContentBlock::text(thinking))
+                        }
+                        OutputContentBlock::FunctionCall { .. } => None, // Handled separately
+                    })
+                    .collect::<Vec<_>>(),
+                OutputItem::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => {
+                    // Include function call as descriptive text for model context
+                    vec![InputContentBlock::text(format!(
+                        "[Function call {call_id} ({name}): {arguments}]"
+                    ))]
+                }
+                OutputItem::Reasoning { content, .. } => {
+                    vec![InputContentBlock::text(content)]
+                }
+            })
+            .collect();
+
+        if content.is_empty() {
+            return None;
+        }
+        return Some(InputMessage::assistant(content));
+    }
+
+    // Cross-adapter path: normalize then convert
+    let normalized = ec.to_normalized()?;
+    Some(normalized_to_message(&normalized))
+}
+
+/// Extract text from Reasoning summary/content fields.
+///
+/// Used as fallback when encrypted_content is native OpenAI format (not parseable
+/// as adapter format). This enables OpenAI Native → Adapter model switching.
+fn extract_text_from_reasoning(
+    summary: &[ReasoningItemReasoningSummary],
+    content: &Option<Vec<ReasoningItemContent>>,
+) -> Option<String> {
+    // Prefer content field if available (contains full reasoning text)
+    if let Some(content_items) = content {
+        let texts: Vec<&str> = content_items
+            .iter()
+            .filter_map(|c| match c {
+                ReasoningItemContent::ReasoningText { text } => Some(text.as_str()),
+                ReasoningItemContent::Text { text } => Some(text.as_str()),
+            })
+            .collect();
+        if !texts.is_empty() {
+            return Some(texts.join("\n"));
+        }
+    }
+
+    // Fall back to summary field
+    let texts: Vec<&str> = summary
         .iter()
-        .flat_map(|item| match item {
-            OutputItem::Message { content, .. } => content
-                .iter()
-                .filter_map(|c| match c {
-                    OutputContentBlock::Text { text } => Some(InputContentBlock::text(text)),
-                    OutputContentBlock::Thinking { thinking, .. } => {
-                        Some(InputContentBlock::text(thinking))
-                    }
-                    OutputContentBlock::FunctionCall { .. } => None, // Handled separately
-                })
-                .collect::<Vec<_>>(),
-            OutputItem::FunctionCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                // Include function call as descriptive text for model context
-                vec![InputContentBlock::text(format!(
-                    "[Function call {call_id} ({name}): {arguments}]"
-                ))]
-            }
-            OutputItem::Reasoning { content, .. } => {
-                vec![InputContentBlock::text(content)]
-            }
+        .filter_map(|s| match s {
+            ReasoningItemReasoningSummary::SummaryText { text } => Some(text.as_str()),
         })
         .collect();
-
-    if content.is_empty() {
-        None
-    } else {
-        Some(InputMessage::assistant(content))
+    if !texts.is_empty() {
+        return Some(texts.join("\n"));
     }
+
+    None
 }
 
 /// Flush the current assistant message content to the messages list.
@@ -308,7 +406,16 @@ pub fn parse_tool_choice(extra: &Option<Value>) -> Option<ToolChoice> {
 ///
 /// Stores the full response JSON in `Reasoning.encrypted_content` for round-trip preservation.
 /// Returns a vector of events and optional token usage.
-pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
+///
+/// # Arguments
+/// - `response` - The Volcengine Ark Response
+/// - `base_url` - The API base URL (for model switch detection)
+/// - `model` - The model name (for model switch detection)
+pub fn response_to_events(
+    response: &Response,
+    base_url: &str,
+    model: &str,
+) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
     let mut events = Vec::new();
 
     // Extract raw body from sdk_http_response for storage
@@ -316,7 +423,9 @@ pub fn response_to_events(response: &Response) -> (Vec<ResponseEvent>, Option<To
         .sdk_http_response
         .as_ref()
         .and_then(|r| r.body.clone())
-        .and_then(|body| EncryptedContent::from_body_str(&body, PROVIDER_SDK_VOLCENGINE_ARK))
+        .and_then(|body| {
+            EncryptedContent::from_body_str(&body, PROVIDER_SDK_VOLCENGINE_ARK, base_url, model)
+        })
         .and_then(|ec| ec.to_json_string());
 
     // Add Created event
@@ -458,6 +567,93 @@ fn extract_usage(usage: &volcengine_ark_sdk::Usage) -> TokenUsage {
     }
 }
 
+// ============================================================================
+// Cross-adapter conversion functions
+// ============================================================================
+
+use crate::normalized::NormalizedAssistantMessage;
+use crate::normalized::NormalizedToolCall;
+
+/// Extract NormalizedAssistantMessage from Volcengine Ark response body JSON.
+///
+/// Used when switching from Ark to another adapter.
+pub fn extract_normalized(body: &Value) -> Option<NormalizedAssistantMessage> {
+    let response: Response = serde_json::from_value(body.clone()).ok()?;
+
+    let mut msg = NormalizedAssistantMessage::new();
+
+    for item in &response.output {
+        match item {
+            OutputItem::Message { content, .. } => {
+                for block in content {
+                    match block {
+                        OutputContentBlock::Text { text } => {
+                            msg.text_content.push(text.clone());
+                        }
+                        OutputContentBlock::Thinking { thinking, .. } => {
+                            msg.thinking_content
+                                .get_or_insert_with(Vec::new)
+                                .push(thinking.clone());
+                        }
+                        OutputContentBlock::FunctionCall {
+                            id,
+                            name,
+                            arguments,
+                        } => {
+                            msg.tool_calls.push(NormalizedToolCall::new(
+                                id,
+                                name,
+                                serde_json::to_string(arguments).unwrap_or_default(),
+                            ));
+                        }
+                    }
+                }
+            }
+            OutputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                msg.tool_calls
+                    .push(NormalizedToolCall::new(call_id, name, arguments));
+            }
+            OutputItem::Reasoning { content, .. } => {
+                msg.thinking_content
+                    .get_or_insert_with(Vec::new)
+                    .push(content.clone());
+            }
+        }
+    }
+
+    if msg.is_empty() { None } else { Some(msg) }
+}
+
+/// Convert NormalizedAssistantMessage to Volcengine Ark InputMessage.
+///
+/// Used when switching from another adapter to Ark.
+pub fn normalized_to_message(msg: &NormalizedAssistantMessage) -> InputMessage {
+    let mut content: Vec<InputContentBlock> = Vec::new();
+
+    // Text content
+    for text in &msg.text_content {
+        content.push(InputContentBlock::text(text));
+    }
+
+    // Note: Thinking content is model-generated, not sent in requests.
+    // Ark doesn't have a way to include previous thinking in input messages.
+
+    // Tool calls - Ark represents them as descriptive text in assistant messages
+    for tc in &msg.tool_calls {
+        content.push(InputContentBlock::text(format!(
+            "[Function call {} ({}): {}]",
+            tc.call_id, tc.name, tc.arguments
+        )));
+    }
+
+    InputMessage::assistant(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,7 +676,7 @@ mod tests {
             previous_response_id: None,
         };
 
-        let (messages, system) = prompt_to_messages(&prompt);
+        let (messages, system) = prompt_to_messages(&prompt, "", "");
 
         assert_eq!(messages.len(), 1);
         assert!(system.is_some());
@@ -527,7 +723,7 @@ mod tests {
             previous_response_id: None,
         };
 
-        let (messages, _) = prompt_to_messages(&prompt);
+        let (messages, _) = prompt_to_messages(&prompt, "", "");
 
         // Should have: user, assistant (with text + function_call as text), user (function_output)
         assert_eq!(messages.len(), 3);

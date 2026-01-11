@@ -6,6 +6,7 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
+use crate::requests::responses_ext::filter_input_for_openai;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
@@ -117,6 +118,18 @@ impl<'a> ResponsesRequestBuilder<'a> {
         let input = self
             .input
             .ok_or_else(|| ApiError::Stream("missing input for responses request".into()))?;
+
+        // Filter adapter encrypted_content when sending to native OpenAI (no adapter).
+        // Adapter-format encrypted_content ("codex-ec:*") cannot be verified by OpenAI,
+        // so we strip it before sending. Native OpenAI encrypted_content is preserved.
+        let filtered;
+        let input = if provider.adapter.is_none() {
+            filtered = filter_input_for_openai(input);
+            &filtered[..]
+        } else {
+            input
+        };
+
         let tools = self.tools.unwrap_or_default();
 
         let store = self

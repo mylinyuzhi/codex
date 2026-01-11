@@ -1222,6 +1222,10 @@ impl Config {
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
+        tracing::debug!(
+            "User-defined model_providers from config.toml: {:?}",
+            cfg.model_providers.keys().collect::<Vec<_>>()
+        );
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
         }

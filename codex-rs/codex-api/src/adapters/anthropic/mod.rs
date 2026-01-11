@@ -70,8 +70,12 @@ impl ProviderAdapter for AnthropicAdapter {
         // Create client
         let client = Client::new(client_config).map_err(error::map_error)?;
 
-        // Convert prompt to Anthropic messages
-        let (messages, system_prompt) = convert::prompt_to_messages(prompt);
+        // Get effective base_url for context checking
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+
+        // Convert prompt to Anthropic messages (with cross-adapter support)
+        let (messages, system_prompt) =
+            convert::prompt_to_messages(prompt, effective_base_url, &config.model);
 
         // Extract max_tokens from extra config (required for Anthropic)
         let max_tokens = extract_max_tokens(&config.extra);
@@ -108,7 +112,10 @@ impl ProviderAdapter for AnthropicAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events
-        let (events, usage) = convert::message_to_events(&message);
+        // Pass base_url and model for model switch detection in EncryptedContent
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+        let (events, usage) =
+            convert::message_to_events(&message, effective_base_url, &config.model);
 
         Ok(GenerateResult {
             events,

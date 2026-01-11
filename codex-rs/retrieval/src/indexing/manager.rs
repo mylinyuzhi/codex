@@ -53,6 +53,27 @@ use crate::types::CodeChunk;
 use crate::types::compute_chunk_hash;
 use crate::types::detect_language;
 
+/// Context for a single indexing operation.
+///
+/// Bundles all parameters needed for `run_indexing` to reduce function signature complexity.
+struct IndexContext<'a> {
+    workspace: &'a str,
+    root: &'a Path,
+    config: &'a RetrievalConfig,
+    change_detector: &'a ChangeDetector,
+    snippet_storage: &'a SnippetStorage,
+    chunker: &'a CodeChunkerService,
+    lock: &'a IndexLockGuard,
+    tx: mpsc::Sender<IndexProgress>,
+    // Optional embedding components
+    lancedb: Option<&'a Arc<LanceDbStore>>,
+    provider: Option<&'a Arc<dyn EmbeddingProvider>>,
+    cache_info: Option<(&'a Path, &'a str)>, // (cache_path, artifact_id)
+    // Optional BM25 searcher for custom BM25 indexing
+    bm25_searcher: Option<&'a Arc<Bm25Searcher>>,
+    rebuild_mode: RebuildMode,
+}
+
 /// Index manager for coordinating indexing operations.
 ///
 /// Supports two modes:
@@ -197,26 +218,26 @@ impl IndexManager {
         let has_embeddings = self.has_embeddings();
 
         tokio::spawn(async move {
-            let result = Self::run_indexing(
-                &workspace,
-                &root,
-                &config,
-                &change_detector,
-                &snippet_storage,
-                &chunker,
-                &lock,
-                tx.clone(),
-                lancedb.as_ref(),
-                provider.as_ref(),
-                if has_embeddings {
+            let ctx = IndexContext {
+                workspace: &workspace,
+                root: &root,
+                config: &config,
+                change_detector: &change_detector,
+                snippet_storage: &snippet_storage,
+                chunker: &chunker,
+                lock: &lock,
+                tx: tx.clone(),
+                lancedb: lancedb.as_ref(),
+                provider: provider.as_ref(),
+                cache_info: if has_embeddings {
                     Some((&cache_path, artifact_id.as_str()))
                 } else {
                     None
                 },
-                bm25_searcher.as_ref(),
-                RebuildMode::Incremental, // index_workspace always uses incremental mode
-            )
-            .await;
+                bm25_searcher: bm25_searcher.as_ref(),
+                rebuild_mode: RebuildMode::Incremental, // index_workspace always uses incremental mode
+            };
+            let result = Self::run_indexing(ctx).await;
 
             if let Err(e) = result {
                 // Emit failure event
@@ -235,25 +256,24 @@ impl IndexManager {
     }
 
     /// Run the indexing process.
-    #[allow(clippy::too_many_arguments)]
-    async fn run_indexing(
-        workspace: &str,
-        root: &Path,
-        config: &RetrievalConfig,
-        change_detector: &ChangeDetector,
-        snippet_storage: &SnippetStorage,
-        chunker: &CodeChunkerService,
-        lock: &IndexLockGuard,
-        tx: mpsc::Sender<IndexProgress>,
-        // Optional embedding components
-        lancedb: Option<&Arc<LanceDbStore>>,
-        provider: Option<&Arc<dyn EmbeddingProvider>>,
-        cache_info: Option<(&Path, &str)>, // (cache_path, artifact_id)
-        // Optional BM25 searcher for custom BM25 indexing
-        bm25_searcher: Option<&Arc<Bm25Searcher>>,
-        // Rebuild mode for statistics
-        rebuild_mode: RebuildMode,
-    ) -> Result<()> {
+    async fn run_indexing(ctx: IndexContext<'_>) -> Result<()> {
+        // Destructure context for easier access
+        let IndexContext {
+            workspace,
+            root,
+            config,
+            change_detector,
+            snippet_storage,
+            chunker,
+            lock,
+            tx,
+            lancedb,
+            provider,
+            cache_info,
+            bm25_searcher,
+            rebuild_mode,
+        } = ctx;
+
         // Create cache if embedding mode is enabled
         let cache = if let Some((cache_path, artifact_id)) = cache_info {
             Some(EmbeddingCache::open(cache_path, artifact_id)?)

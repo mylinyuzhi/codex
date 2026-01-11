@@ -4,6 +4,7 @@
 //! Supports rustup (Rust), go install (Go), and npm (Node) installation methods.
 
 use crate::config::BuiltinServer;
+use crate::config::command_exists;
 use crate::error::LspErr;
 use crate::error::Result;
 use std::process::Stdio;
@@ -91,18 +92,7 @@ impl LspInstaller {
             return false;
         }
 
-        Self::command_exists(command).await
-    }
-
-    /// Check if a command exists in PATH
-    async fn command_exists(cmd: &str) -> bool {
-        if cmd.is_empty() {
-            return false;
-        }
-        let cmd = cmd.to_string();
-        tokio::task::spawn_blocking(move || which::which(&cmd).is_ok())
-            .await
-            .unwrap_or(false)
+        command_exists(command).await
     }
 
     /// Parse install_hint to determine installer type
@@ -126,8 +116,7 @@ impl LspInstaller {
     pub async fn install_server(&self, server_id: &str) -> Result<()> {
         let builtin = BuiltinServer::find_by_id(server_id).ok_or_else(|| {
             LspErr::InstallError(format!(
-                "Server '{}' not found in built-in servers",
-                server_id
+                "Server '{server_id}' not found in built-in servers"
             ))
         })?;
 
@@ -190,8 +179,7 @@ impl LspInstaller {
         let parts: Vec<&str> = install_hint.split_whitespace().collect();
         if parts.len() < 4 || parts[0] != "rustup" || parts[1] != "component" || parts[2] != "add" {
             return Err(LspErr::InstallError(format!(
-                "Invalid rustup install hint: {}",
-                install_hint
+                "Invalid rustup install hint: {install_hint}"
             )));
         }
 
@@ -206,8 +194,7 @@ impl LspInstaller {
         let parts: Vec<&str> = install_hint.split_whitespace().collect();
         if parts.len() < 3 || parts[0] != "go" || parts[1] != "install" {
             return Err(LspErr::InstallError(format!(
-                "Invalid go install hint: {}",
-                install_hint
+                "Invalid go install hint: {install_hint}"
             )));
         }
 
@@ -221,8 +208,7 @@ impl LspInstaller {
         let parts: Vec<&str> = install_hint.split_whitespace().collect();
         if parts.len() < 4 || parts[0] != "npm" {
             return Err(LspErr::InstallError(format!(
-                "Invalid npm install hint: {}",
-                install_hint
+                "Invalid npm install hint: {install_hint}"
             )));
         }
 
