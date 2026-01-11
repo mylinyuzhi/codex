@@ -187,6 +187,45 @@ fn rrf_score(rank: i32, weight: f32, k: f32) -> f32 {
     weight / (rank as f32 + k)
 }
 
+/// RRF source with results and weight.
+struct RrfSource<'a> {
+    results: &'a [SearchResult],
+    weight: f32,
+}
+
+/// Internal unified RRF fusion implementation.
+fn fuse_sources(sources: &[RrfSource<'_>], k: f32, limit: i32) -> Vec<SearchResult> {
+    let mut scores: HashMap<String, (f32, CodeChunk)> = HashMap::new();
+
+    for source in sources {
+        for (rank, result) in source.results.iter().enumerate() {
+            let score = rrf_score(rank as i32, source.weight, k);
+            scores
+                .entry(result.chunk.id.clone())
+                .and_modify(|(s, _)| *s += score)
+                .or_insert((score, result.chunk.clone()));
+        }
+    }
+
+    let mut results: Vec<_> = scores
+        .into_iter()
+        .map(|(_, (score, chunk))| SearchResult {
+            chunk,
+            score,
+            score_type: ScoreType::Hybrid,
+            is_stale: None,
+        })
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit as usize);
+    results
+}
+
 /// Fuse multiple ranked lists using RRF.
 ///
 /// # Arguments
@@ -205,54 +244,24 @@ pub fn fuse_results(
     config: &RrfConfig,
     limit: i32,
 ) -> Vec<SearchResult> {
-    // Accumulate scores by chunk ID
-    let mut scores: HashMap<String, (f32, CodeChunk)> = HashMap::new();
-
-    // Process BM25 results
-    for (rank, result) in bm25_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.bm25_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Process vector results
-    for (rank, result) in vector_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.vector_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Process snippet results
-    for (rank, result) in snippet_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.snippet_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Sort by fused score (descending)
-    let mut results: Vec<_> = scores
-        .into_iter()
-        .map(|(_, (score, chunk))| SearchResult {
-            chunk,
-            score,
-            score_type: ScoreType::Hybrid,
-            is_stale: None,
-        })
-        .collect();
-
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    results.truncate(limit as usize);
-    results
+    fuse_sources(
+        &[
+            RrfSource {
+                results: bm25_results,
+                weight: config.bm25_weight,
+            },
+            RrfSource {
+                results: vector_results,
+                weight: config.vector_weight,
+            },
+            RrfSource {
+                results: snippet_results,
+                weight: config.snippet_weight,
+            },
+        ],
+        config.k,
+        limit,
+    )
 }
 
 /// Fuse only BM25 and vector results (simpler variant).
@@ -288,63 +297,28 @@ pub fn fuse_all_results(
         "RRF fusion started"
     );
 
-    // Accumulate scores by chunk ID
-    let mut scores: HashMap<String, (f32, CodeChunk)> = HashMap::new();
-
-    // Process BM25 results
-    for (rank, result) in bm25_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.bm25_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Process vector results
-    for (rank, result) in vector_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.vector_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Process snippet results
-    for (rank, result) in snippet_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.snippet_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Process recent results (from recently edited files)
-    for (rank, result) in recent_results.iter().enumerate() {
-        let score = rrf_score(rank as i32, config.recent_weight, config.k);
-        scores
-            .entry(result.chunk.id.clone())
-            .and_modify(|(s, _)| *s += score)
-            .or_insert((score, result.chunk.clone()));
-    }
-
-    // Sort by fused score (descending)
-    let mut results: Vec<_> = scores
-        .into_iter()
-        .map(|(_, (score, chunk))| SearchResult {
-            chunk,
-            score,
-            score_type: ScoreType::Hybrid,
-            is_stale: None,
-        })
-        .collect();
-
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    results.truncate(limit as usize);
-    results
+    fuse_sources(
+        &[
+            RrfSource {
+                results: bm25_results,
+                weight: config.bm25_weight,
+            },
+            RrfSource {
+                results: vector_results,
+                weight: config.vector_weight,
+            },
+            RrfSource {
+                results: snippet_results,
+                weight: config.snippet_weight,
+            },
+            RrfSource {
+                results: recent_results,
+                weight: config.recent_weight,
+            },
+        ],
+        config.k,
+        limit,
+    )
 }
 
 /// Detect if a query looks like an identifier.

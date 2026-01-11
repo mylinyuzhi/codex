@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "provider-sdks/anthropic",
+    "provider-sdks/openai",
     "provider-sdks/volcengine-ark",
     "provider-sdks/z-ai",
     "provider-sdks/google-genai",
@@ -71,6 +72,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal
 anthropic-sdk = { path = "provider-sdks/anthropic" }
+openai-sdk = { path = "provider-sdks/openai" }
 volcengine-ark-sdk = { path = "provider-sdks/volcengine-ark" }
 z-ai-sdk = { path = "provider-sdks/z-ai" }
 app_test_support = { path = "app-server/tests/common" }

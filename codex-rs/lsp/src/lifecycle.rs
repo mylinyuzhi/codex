@@ -244,7 +244,7 @@ impl ServerLifecycle {
         let server_id = self.server_id.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        let handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut consecutive_failures: u32 = 0;
 
             // Initial delay before first health check (with jitter)
@@ -279,9 +279,7 @@ impl ServerLifecycle {
                     }
                 }
             }
-        });
-
-        handle
+        })
     }
 
     /// Calculate health check interval with jitter and exponential backoff

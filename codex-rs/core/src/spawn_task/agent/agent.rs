@@ -73,22 +73,21 @@ pub struct SpawnAgentContext {
     pub codex_home: PathBuf,
 }
 
-/// Apply model override from "provider_name" or "provider_name/model" format.
+/// Apply model override from "provider_id" or "provider_id/model" format.
 ///
-/// - Looks up provider by `name` field (not by HashMap key)
-/// - If only provider specified: uses provider's ext.model_name
-/// - If provider/model specified: uses explicit model
+/// - Looks up provider by provider_id (HashMap key in model_providers)
+/// - If only provider_id specified: uses provider's ext.model_name
+/// - If provider_id/model specified: uses explicit model
 /// - Provider's ultrathink_config and model_parameters are inherited automatically
 fn apply_model_override(config: &mut Config, model_str: &str) {
     let parts: Vec<&str> = model_str.splitn(2, '/').collect();
-    let provider_name = parts[0];
+    let provider_id = parts[0];
 
-    // Find provider by name (not by HashMap key)
+    // Find provider by provider_id (HashMap key)
     let found = config
         .model_providers
-        .iter()
-        .find(|(_, info)| info.name == provider_name)
-        .map(|(id, info)| (id.clone(), info.clone()));
+        .get(provider_id)
+        .map(|info| (provider_id.to_string(), info.clone()));
 
     if let Some((provider_id, provider_info)) = found {
         // Switch to new provider
@@ -97,7 +96,7 @@ fn apply_model_override(config: &mut Config, model_str: &str) {
 
         // Determine model name
         let model_name = if parts.len() > 1 {
-            // Explicit model: "provider/model"
+            // Explicit model: "provider_id/model"
             Some(parts[1].to_string())
         } else {
             // Use provider's model_name from ext
@@ -109,13 +108,12 @@ fn apply_model_override(config: &mut Config, model_str: &str) {
         }
 
         info!(
-            provider_name = %provider_name,
             provider_id = %provider_id,
             model = ?config.model,
             "Applied model override for spawn task"
         );
     } else {
-        warn!(provider_name = %provider_name, "Model provider not found by name in config");
+        warn!(provider_id = %provider_id, "Model provider not found by provider_id in config");
     }
 }
 

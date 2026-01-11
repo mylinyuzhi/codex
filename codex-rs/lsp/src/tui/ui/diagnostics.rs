@@ -1,7 +1,7 @@
 //! Diagnostics view widget.
 
 use super::super::app::App;
-use super::utils::relative_path_buf;
+use super::utils::relative_path;
 use codex_lsp::DiagnosticSeverityLevel;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -41,7 +41,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         };
 
         // File path (relative if possible)
-        let file_path = relative_path_buf(&diag.file, &app.workspace);
+        let file_path = relative_path(&diag.file, &app.workspace);
 
         let line_num = diag.line;
 

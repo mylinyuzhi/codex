@@ -31,12 +31,17 @@ fn text_user_input(text: String) -> serde_json::Value {
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     let shell_name = shell.name();
+    let platform = std::env::consts::OS;
+    let cpu_arch = std::env::consts::ARCH;
     format!(
         r#"<environment_context>
   <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
@@ -381,9 +386,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
   <writable_roots>
     <root>{}</root>
   </writable_roots>
+  <is_git_repo>false</is_git_repo>
+  <platform>{}</platform>
+  <cpu_arch>{}</cpu_arch>
   <shell>{}</shell>
 </environment_context>"#,
         writable.path().display(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
         shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
@@ -577,10 +587,15 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
   <writable_roots>
     <root>{}</root>
   </writable_roots>
+  <is_git_repo>false</is_git_repo>
+  <platform>{}</platform>
+  <cpu_arch>{}</cpu_arch>
   <shell>{}</shell>
 </environment_context>"#,
         new_cwd.path().display(),
         writable.path().display(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
         shell.name(),
     );
     let expected_env_msg_2 = serde_json::json!({
@@ -767,11 +782,16 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     assert_eq!(body1["input"], expected_input_1);
 
     let shell_name = shell.name();
+    let platform = std::env::consts::OS;
+    let cpu_arch = std::env::consts::ARCH;
     let expected_env_msg_2 = text_user_input(format!(
         r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>{shell_name}</shell>
 </environment_context>"#
     ));

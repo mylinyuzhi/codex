@@ -7,6 +7,7 @@ use crate::config::ConfigLevel;
 use crate::config::LifecycleConfig;
 use crate::config::LspServerConfig;
 use crate::config::LspServersConfig;
+use crate::config::command_exists;
 use crate::diagnostics::DiagnosticsStore;
 use crate::error::LspErr;
 use crate::error::Result;
@@ -87,7 +88,7 @@ impl LspServerManager {
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
         let config = LspServersConfig::load(project_root);
-        Self::new(config, project_root.map(|p| p.to_path_buf()), diagnostics)
+        Self::new(config, project_root.map(Path::to_path_buf), diagnostics)
     }
 
     /// Reload configuration from disk
@@ -392,7 +393,7 @@ impl LspServerManager {
         // --- Extensions: user config > template ---
         let extensions = if config.file_extensions.is_empty() {
             template
-                .map(|t| t.extensions.iter().map(|s| s.to_string()).collect())
+                .map(|t| t.extensions.iter().map(ToString::to_string).collect())
                 .unwrap_or_default()
         } else {
             config.file_extensions.clone()
@@ -401,7 +402,7 @@ impl LspServerManager {
         // --- Languages: user config > template ---
         let languages = if config.languages.is_empty() {
             template
-                .map(|t| t.languages.iter().map(|s| s.to_string()).collect())
+                .map(|t| t.languages.iter().map(ToString::to_string).collect())
                 .unwrap_or_default()
         } else {
             config.languages.clone()
@@ -489,17 +490,6 @@ impl LspServerManager {
         file_path.parent().unwrap_or(file_path).to_path_buf()
     }
 
-    /// Check if a command exists in PATH using `which`
-    async fn command_exists(cmd: &str) -> bool {
-        if cmd.is_empty() {
-            return false;
-        }
-        let cmd = cmd.to_string();
-        tokio::task::spawn_blocking(move || which::which(&cmd).is_ok())
-            .await
-            .unwrap_or(false)
-    }
-
     /// Spawn a new LSP server process
     async fn spawn_server(&self, server_info: &ServerInfo, root_path: &Path) -> Result<LspClient> {
         info!(
@@ -512,7 +502,7 @@ impl LspServerManager {
         );
 
         // Check if command exists before trying to spawn
-        if !Self::command_exists(&server_info.command).await {
+        if !command_exists(&server_info.command).await {
             warn!(
                 "LSP server '{}' not installed: command '{}' not found. Install: {}",
                 server_info.id, server_info.command, server_info.install_hint
@@ -641,7 +631,7 @@ impl LspServerManager {
             let extensions = if !server_config.file_extensions.is_empty() {
                 server_config.file_extensions.clone()
             } else if let Some(builtin) = BuiltinServer::find_by_id(id) {
-                builtin.extensions.iter().map(|s| s.to_string()).collect()
+                builtin.extensions.iter().map(ToString::to_string).collect()
             } else {
                 Vec::new()
             };
@@ -808,7 +798,7 @@ impl LspServerManager {
             let extensions = if !server_config.file_extensions.is_empty() {
                 server_config.file_extensions.clone()
             } else if let Some(tmpl) = template {
-                tmpl.extensions.iter().map(|s| s.to_string()).collect()
+                tmpl.extensions.iter().map(ToString::to_string).collect()
             } else {
                 Vec::new()
             };
@@ -820,33 +810,15 @@ impl LspServerManager {
 
             // Check if command exists
             let program = command.split_whitespace().next().unwrap_or("");
-            let installed = Self::command_exists(program).await;
+            let installed = command_exists(program).await;
 
-            let status = if server_config.disabled {
-                ServerStatus::Disabled
-            } else if command.is_empty() {
-                ServerStatus::NotInstalled // Missing command
-            } else if !installed {
-                ServerStatus::NotInstalled
-            } else {
-                // Check if running by looking at lifecycles
-                let mut is_running = false;
-                let lifecycles = self.lifecycles.lock().await;
-                for ((server_id, _), lifecycle) in lifecycles.iter() {
-                    if server_id == id {
-                        let health = lifecycle.health().await;
-                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
-                            is_running = true;
-                            break;
-                        }
-                    }
-                }
-                if is_running {
-                    ServerStatus::Running
-                } else {
-                    ServerStatus::Idle
-                }
-            };
+            let status = self
+                .determine_server_status(
+                    server_config.disabled,
+                    command.is_empty() || !installed,
+                    id,
+                )
+                .await;
 
             statuses.push(ServerStatusInfo {
                 id: id.clone(),
@@ -875,7 +847,7 @@ impl LspServerManager {
                 .first()
                 .and_then(|c| c.split_whitespace().next())
                 .unwrap_or("");
-            let installed = Self::command_exists(command).await;
+            let installed = command_exists(command).await;
 
             // Check if already configured (and possibly running)
             let is_disabled = config
@@ -884,33 +856,13 @@ impl LspServerManager {
                 .map(|c| c.disabled)
                 .unwrap_or(false);
 
-            let status = if is_disabled {
-                ServerStatus::Disabled
-            } else if !installed {
-                ServerStatus::NotInstalled
-            } else {
-                // Check if running
-                let mut is_running = false;
-                let lifecycles = self.lifecycles.lock().await;
-                for ((server_id, _), lifecycle) in lifecycles.iter() {
-                    if server_id == builtin.id {
-                        let health = lifecycle.health().await;
-                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
-                            is_running = true;
-                            break;
-                        }
-                    }
-                }
-                if is_running {
-                    ServerStatus::Running
-                } else {
-                    ServerStatus::Idle
-                }
-            };
+            let status = self
+                .determine_server_status(is_disabled, !installed, builtin.id)
+                .await;
 
             statuses.push(ServerStatusInfo {
                 id: builtin.id.to_string(),
-                extensions: builtin.extensions.iter().map(|s| s.to_string()).collect(),
+                extensions: builtin.extensions.iter().map(ToString::to_string).collect(),
                 status,
                 install_hint: builtin.install_hint.to_string(),
             });
@@ -930,6 +882,38 @@ impl LspServerManager {
             }
         }
         count
+    }
+
+    /// Determine the status of a server based on its state
+    async fn determine_server_status(
+        &self,
+        disabled: bool,
+        not_installed: bool,
+        server_id: &str,
+    ) -> ServerStatus {
+        if disabled {
+            ServerStatus::Disabled
+        } else if not_installed {
+            ServerStatus::NotInstalled
+        } else if self.is_server_running(server_id).await {
+            ServerStatus::Running
+        } else {
+            ServerStatus::Idle
+        }
+    }
+
+    /// Check if a specific server is currently running
+    async fn is_server_running(&self, server_id: &str) -> bool {
+        let lifecycles = self.lifecycles.lock().await;
+        for ((id, _), lifecycle) in lifecycles.iter() {
+            if id == server_id {
+                let health = lifecycle.health().await;
+                if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Get all servers for Configure Servers UI
@@ -956,7 +940,7 @@ impl LspServerManager {
                 .first()
                 .and_then(|c| c.split_whitespace().next())
                 .unwrap_or("");
-            let installed = Self::command_exists(command).await;
+            let installed = command_exists(command).await;
 
             // Detect config level
             let config_level = LspServersConfig::detect_config_level(
@@ -972,36 +956,15 @@ impl LspServerManager {
                 .map(|c| c.disabled)
                 .unwrap_or(false);
 
-            // Determine status
-            let status = if is_disabled {
-                ServerStatus::Disabled
-            } else if !installed {
-                ServerStatus::NotInstalled
-            } else {
-                // Check if running
-                let mut is_running = false;
-                let lifecycles = self.lifecycles.lock().await;
-                for ((server_id, _), lifecycle) in lifecycles.iter() {
-                    if server_id == builtin.id {
-                        let health = lifecycle.health().await;
-                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
-                            is_running = true;
-                            break;
-                        }
-                    }
-                }
-                if is_running {
-                    ServerStatus::Running
-                } else {
-                    ServerStatus::Idle
-                }
-            };
+            let status = self
+                .determine_server_status(is_disabled, !installed, builtin.id)
+                .await;
 
             servers.insert(
                 builtin.id.to_string(),
                 ServerConfigInfo {
                     id: builtin.id.to_string(),
-                    extensions: builtin.extensions.iter().map(|s| s.to_string()).collect(),
+                    extensions: builtin.extensions.iter().map(ToString::to_string).collect(),
                     binary_installed: installed,
                     config_level,
                     status,
@@ -1016,39 +979,16 @@ impl LspServerManager {
                 continue; // Already added from builtins
             }
 
-            // Get command
             let command = server_config.command.clone().unwrap_or_default();
             let program = command.split_whitespace().next().unwrap_or("");
-            let installed = !command.is_empty() && Self::command_exists(program).await;
+            let installed = !command.is_empty() && command_exists(program).await;
 
-            // Detect config level
             let config_level =
                 LspServersConfig::detect_config_level(id, user_config_dir, project_config_dir);
 
-            // Determine status
-            let status = if server_config.disabled {
-                ServerStatus::Disabled
-            } else if !installed {
-                ServerStatus::NotInstalled
-            } else {
-                // Check if running
-                let mut is_running = false;
-                let lifecycles = self.lifecycles.lock().await;
-                for ((server_id, _), lifecycle) in lifecycles.iter() {
-                    if server_id == id {
-                        let health = lifecycle.health().await;
-                        if matches!(health, ServerHealth::Healthy | ServerHealth::Starting) {
-                            is_running = true;
-                            break;
-                        }
-                    }
-                }
-                if is_running {
-                    ServerStatus::Running
-                } else {
-                    ServerStatus::Idle
-                }
-            };
+            let status = self
+                .determine_server_status(server_config.disabled, !installed, id)
+                .await;
 
             servers.insert(
                 id.clone(),

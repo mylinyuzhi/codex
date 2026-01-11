@@ -71,8 +71,12 @@ impl ProviderAdapter for VolcengineArkAdapter {
         // Create client
         let client = Client::new(client_config).map_err(error::map_error)?;
 
-        // Convert prompt to Ark messages
-        let (messages, system_prompt) = convert::prompt_to_messages(prompt);
+        // Get effective base_url for context checking
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+
+        // Convert prompt to Ark messages (with cross-adapter support)
+        let (messages, system_prompt) =
+            convert::prompt_to_messages(prompt, effective_base_url, &config.model);
 
         // Build request parameters
         let mut params = ResponseCreateParams::new(&config.model, messages);
@@ -113,7 +117,10 @@ impl ProviderAdapter for VolcengineArkAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events
-        let (events, usage) = convert::response_to_events(&response);
+        // Pass base_url and model for model switch detection in EncryptedContent
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+        let (events, usage) =
+            convert::response_to_events(&response, effective_base_url, &config.model);
 
         Ok(GenerateResult {
             events,

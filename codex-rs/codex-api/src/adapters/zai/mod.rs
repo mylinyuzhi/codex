@@ -72,8 +72,12 @@ impl ProviderAdapter for ZaiAdapter {
         // Create client
         let client = ZaiClient::new(client_config).map_err(error::map_error)?;
 
-        // Convert prompt to Z.AI messages
-        let (mut messages, system_prompt) = convert::prompt_to_messages(prompt);
+        // Get effective base_url for context checking
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+
+        // Convert prompt to Z.AI messages (with cross-adapter support)
+        let (mut messages, system_prompt) =
+            convert::prompt_to_messages(prompt, effective_base_url, &config.model);
 
         // Prepend system prompt as a system message
         if let Some(system) = system_prompt {
@@ -107,7 +111,9 @@ impl ProviderAdapter for ZaiAdapter {
             .map_err(error::map_error)?;
 
         // Convert response to events
-        let events = convert::completion_to_events(&completion);
+        // Pass base_url and model for model switch detection in EncryptedContent
+        let effective_base_url = config.base_url.as_deref().unwrap_or("");
+        let events = convert::completion_to_events(&completion, effective_base_url, &config.model);
 
         Ok(GenerateResult {
             events,

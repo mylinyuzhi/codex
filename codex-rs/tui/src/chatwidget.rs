@@ -2668,7 +2668,19 @@ impl ChatWidget {
         }
 
         // Add custom provider presets
+        tracing::debug!(
+            "model_providers keys: {:?}",
+            self.config.model_providers.keys().collect::<Vec<_>>()
+        );
         let custom_providers = get_custom_provider_presets(&self.config);
+        tracing::debug!(
+            "custom_providers count: {}, names: {:?}",
+            custom_providers.len(),
+            custom_providers
+                .iter()
+                .map(|p| &p.display_name)
+                .collect::<Vec<_>>()
+        );
         for preset in custom_providers {
             let provider_id = extract_provider_id(&preset.id);
             let preset_for_action = preset.clone();

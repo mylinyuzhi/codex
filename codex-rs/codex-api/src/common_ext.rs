@@ -408,16 +408,18 @@ pub const CLIENT_GEN_PREFIX: &str = "cligen@";
 /// Prefix for server-generated (enhanced) call IDs.
 pub const SERVER_GEN_PREFIX: &str = "srvgen@";
 
-/// Generate a client-side call_id with embedded function name.
+/// Generate a client-side call_id with embedded function name and index.
 ///
-/// Format: `cligen@<function_name>@<uuid>`
+/// Format: `cligen@<function_name>#<index>@<uuid>`
 ///
 /// Use when the server doesn't provide a call_id for function calls.
-pub fn generate_client_call_id(function_name: &str) -> String {
+/// The index allows distinguishing multiple calls to the same function.
+pub fn generate_client_call_id(function_name: &str, index: usize) -> String {
     format!(
-        "{}{}@{}",
+        "{}{}#{}@{}",
         CLIENT_GEN_PREFIX,
         function_name,
+        index,
         uuid::Uuid::new_v4()
     )
 }
@@ -443,12 +445,34 @@ pub fn is_client_generated_call_id(call_id: &str) -> bool {
 
 /// Parse function name from enhanced call_id (works for both cligen@ and srvgen@).
 ///
+/// For client-generated: `cligen@<name>#<index>@<uuid>` → extracts `<name>`
+/// For server-generated: `srvgen@<name>@<original_id>` → extracts `<name>`
+///
 /// Returns `None` for non-enhanced IDs.
 pub fn parse_function_name_from_call_id(call_id: &str) -> Option<&str> {
-    let rest = call_id
-        .strip_prefix(CLIENT_GEN_PREFIX)
-        .or_else(|| call_id.strip_prefix(SERVER_GEN_PREFIX))?;
-    rest.split('@').next()
+    if let Some(rest) = call_id.strip_prefix(CLIENT_GEN_PREFIX) {
+        // Client-generated format: <name>#<index>@<uuid>
+        rest.split('#').next()
+    } else if let Some(rest) = call_id.strip_prefix(SERVER_GEN_PREFIX) {
+        // Server-generated format: <name>@<original_id>
+        rest.split('@').next()
+    } else {
+        None
+    }
+}
+
+/// Parse the index from a client-generated call_id.
+///
+/// Format: `cligen@<function_name>#<index>@<uuid>`
+///
+/// Returns `None` for server-generated or invalid format.
+pub fn parse_call_index(call_id: &str) -> Option<usize> {
+    let rest = call_id.strip_prefix(CLIENT_GEN_PREFIX)?;
+    // Format: <function_name>#<index>@<uuid>
+    let hash_pos = rest.find('#')?;
+    let after_hash = &rest[hash_pos + 1..];
+    let at_pos = after_hash.find('@')?;
+    after_hash[..at_pos].parse().ok()
 }
 
 /// Extract original call_id from server-enhanced format.
@@ -534,29 +558,56 @@ pub const PROVIDER_SDK_VOLCENGINE_ARK: &str = "volcengine-ark";
 pub const PROVIDER_SDK_ANTHROPIC: &str = "anthropic";
 /// Provider SDK identifier for Z.AI.
 pub const PROVIDER_SDK_ZAI: &str = "zai";
+/// Provider SDK identifier for native OpenAI Responses API.
+pub const PROVIDER_SDK_OPENAI: &str = "openai";
+
+/// Prefix to identify our EncryptedContent JSON vs native API strings.
+/// Native API may have its own encrypted_content (e.g., o1 reasoning),
+/// so we use this prefix to distinguish our format.
+pub const ENCRYPTED_CONTENT_PREFIX: &str = "codex-ec:";
 
 /// Unified encrypted_content storage format.
 ///
 /// Used by adapters to store full response body for round-trip preservation.
-/// This struct provides type-safe access and extensibility.
+/// For adapters: stores raw HTTP response JSON.
+/// For native OpenAI (SSE): stores NormalizedAssistantMessage JSON.
 ///
 /// JSON format:
 /// ```json
 /// {
-///   "_full_response_body": <raw_json>,
-///   "_provider_sdk": "genai" | "volcengine-ark",
+///   "_full_response_body": <raw_json or NormalizedAssistantMessage>,
+///   "_provider_sdk": "genai" | "volcengine-ark" | "anthropic" | "zai" | "openai",
+///   "_base_url": "https://...",
+///   "_model": "model-name",
+///   "_original_encrypted_content": "...",  // Optional, for OpenAI restore
 ///   "_ext": {}
 /// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedContent {
-    /// Full response body from provider SDK (raw JSON).
+    /// Full response body from provider SDK (raw JSON) or NormalizedAssistantMessage (OpenAI SSE).
     #[serde(rename = "_full_response_body")]
     pub full_response_body: Value,
 
-    /// Provider SDK identifier (e.g., "genai", "volcengine-ark").
+    /// Provider SDK identifier (e.g., "genai", "volcengine-ark", "openai").
     #[serde(rename = "_provider_sdk")]
     pub provider_sdk: String,
+
+    /// Endpoint URL for model switch detection.
+    #[serde(rename = "_base_url")]
+    pub base_url: String,
+
+    /// Model name for model switch detection.
+    #[serde(rename = "_model")]
+    pub model: String,
+
+    /// Original encrypted_content from ResponseItem.Reasoning (preserved for restore on same-model sendback).
+    #[serde(
+        rename = "_original_encrypted_content",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_encrypted_content: Option<String>,
 
     /// Extension data for future use.
     #[serde(rename = "_ext", default)]
@@ -564,34 +615,110 @@ pub struct EncryptedContent {
 }
 
 impl EncryptedContent {
-    /// Create new EncryptedContent with given body and provider.
-    pub fn new(full_response_body: Value, provider_sdk: impl Into<String>) -> Self {
+    /// Create new EncryptedContent with full context for model switch detection.
+    pub fn new(
+        full_response_body: Value,
+        provider_sdk: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             full_response_body,
             provider_sdk: provider_sdk.into(),
+            base_url: base_url.into(),
+            model: model.into(),
+            original_encrypted_content: None,
             ext: Value::Object(Default::default()),
         }
     }
 
-    /// Create from raw body string (parses JSON).
-    pub fn from_body_str(body: &str, provider_sdk: impl Into<String>) -> Option<Self> {
+    /// Create from raw body string (parses JSON) with full context.
+    pub fn from_body_str(
+        body: &str,
+        provider_sdk: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Option<Self> {
         let full_response_body: Value = serde_json::from_str(body).ok()?;
-        Some(Self::new(full_response_body, provider_sdk))
+        Some(Self::new(full_response_body, provider_sdk, base_url, model))
     }
 
-    /// Serialize to JSON string for storage in encrypted_content field.
+    /// Create with original_encrypted_content preserved (for OpenAI SSE).
+    pub fn with_original_encrypted_content(
+        full_response_body: Value,
+        provider_sdk: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        original_encrypted_content: Option<String>,
+    ) -> Self {
+        Self {
+            full_response_body,
+            provider_sdk: provider_sdk.into(),
+            base_url: base_url.into(),
+            model: model.into(),
+            original_encrypted_content,
+            ext: Value::Object(Default::default()),
+        }
+    }
+
+    /// Check if (base_url, model) matches current context.
+    /// Used to determine if we can use fast-path (same model) or need normalization.
+    pub fn matches_context(&self, base_url: &str, model: &str) -> bool {
+        self.base_url == base_url && self.model == model
+    }
+
+    /// Serialize to JSON string with prefix for storage in encrypted_content field.
+    /// Format: "codex-ec:{json}"
     pub fn to_json_string(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
+        serde_json::to_string(self)
+            .ok()
+            .map(|json| format!("{ENCRYPTED_CONTENT_PREFIX}{json}"))
     }
 
-    /// Deserialize from JSON string.
+    /// Deserialize from prefixed JSON string.
+    /// Only parses strings that start with "codex-ec:" prefix.
     pub fn from_json_string(s: &str) -> Option<Self> {
-        serde_json::from_str(s).ok()
+        s.strip_prefix(ENCRYPTED_CONTENT_PREFIX)
+            .and_then(|json| serde_json::from_str(json).ok())
+    }
+
+    /// Check if a string is our EncryptedContent format (has "codex-ec:" prefix).
+    /// Use this to distinguish our format from native API's encrypted_content.
+    pub fn is_codex_format(s: &str) -> bool {
+        s.starts_with(ENCRYPTED_CONTENT_PREFIX)
     }
 
     /// Extract full_response_body as specific type.
     pub fn parse_body<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
         serde_json::from_value(self.full_response_body.clone()).ok()
+    }
+
+    /// Convert to NormalizedAssistantMessage by dispatching to provider-specific extractor.
+    ///
+    /// Used for cross-adapter model switching: when the stored response comes from a
+    /// different adapter than the current one, extract as normalized format first,
+    /// then convert to target adapter's message type.
+    pub fn to_normalized(&self) -> Option<crate::normalized::NormalizedAssistantMessage> {
+        match self.provider_sdk.as_str() {
+            PROVIDER_SDK_GENAI => {
+                crate::adapters::genai::convert::extract_normalized(&self.full_response_body)
+            }
+            PROVIDER_SDK_ANTHROPIC => {
+                crate::adapters::anthropic::convert::extract_normalized(&self.full_response_body)
+            }
+            PROVIDER_SDK_VOLCENGINE_ARK => {
+                crate::adapters::volcengine_ark::convert::extract_normalized(
+                    &self.full_response_body,
+                )
+            }
+            PROVIDER_SDK_ZAI => {
+                crate::adapters::zai::convert::extract_normalized(&self.full_response_body)
+            }
+            PROVIDER_SDK_OPENAI => {
+                crate::adapters::openai::convert::extract_normalized(&self.full_response_body)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -900,15 +1027,52 @@ mod tests {
 
     #[test]
     fn test_generate_client_call_id() {
-        let call_id = generate_client_call_id("get_weather");
-        assert!(call_id.starts_with("cligen@get_weather@"));
+        let call_id = generate_client_call_id("get_weather", 0);
+        assert!(call_id.starts_with("cligen@get_weather#0@"));
         assert!(is_enhanced_call_id(&call_id));
         assert!(is_client_generated_call_id(&call_id));
         assert_eq!(
             parse_function_name_from_call_id(&call_id),
             Some("get_weather")
         );
+        assert_eq!(parse_call_index(&call_id), Some(0));
         assert_eq!(extract_original_call_id(&call_id), None);
+    }
+
+    #[test]
+    fn test_generate_client_call_id_with_index() {
+        let call_id_0 = generate_client_call_id("get_weather", 0);
+        let call_id_1 = generate_client_call_id("get_weather", 1);
+        let call_id_5 = generate_client_call_id("get_weather", 5);
+
+        assert!(call_id_0.starts_with("cligen@get_weather#0@"));
+        assert!(call_id_1.starts_with("cligen@get_weather#1@"));
+        assert!(call_id_5.starts_with("cligen@get_weather#5@"));
+
+        assert_eq!(parse_call_index(&call_id_0), Some(0));
+        assert_eq!(parse_call_index(&call_id_1), Some(1));
+        assert_eq!(parse_call_index(&call_id_5), Some(5));
+
+        // All should have the same function name
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id_0),
+            Some("get_weather")
+        );
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id_1),
+            Some("get_weather")
+        );
+        assert_eq!(
+            parse_function_name_from_call_id(&call_id_5),
+            Some("get_weather")
+        );
+    }
+
+    #[test]
+    fn test_parse_call_index_server_generated() {
+        // Server-generated IDs don't have index
+        let server_id = enhance_server_call_id("call_abc123", "search_files");
+        assert_eq!(parse_call_index(&server_id), None);
     }
 
     #[test]
@@ -936,11 +1100,12 @@ mod tests {
     #[test]
     fn test_function_name_with_underscores() {
         // Function names with underscores should work correctly
-        let client_id = generate_client_call_id("read_file_contents");
+        let client_id = generate_client_call_id("read_file_contents", 0);
         assert_eq!(
             parse_function_name_from_call_id(&client_id),
             Some("read_file_contents")
         );
+        assert_eq!(parse_call_index(&client_id), Some(0));
 
         let server_id = enhance_server_call_id("srv_123", "write_to_database");
         assert_eq!(
@@ -957,31 +1122,57 @@ mod tests {
     #[test]
     fn test_encrypted_content_new() {
         let body = serde_json::json!({"key": "value"});
-        let ec = EncryptedContent::new(body.clone(), PROVIDER_SDK_GENAI);
+        let ec = EncryptedContent::new(
+            body.clone(),
+            PROVIDER_SDK_GENAI,
+            "https://api.example.com",
+            "gemini-2.0-flash",
+        );
 
         assert_eq!(ec.full_response_body, body);
         assert_eq!(ec.provider_sdk, "genai");
+        assert_eq!(ec.base_url, "https://api.example.com");
+        assert_eq!(ec.model, "gemini-2.0-flash");
+        assert!(ec.original_encrypted_content.is_none());
         assert!(ec.ext.is_object());
     }
 
     #[test]
     fn test_encrypted_content_from_body_str() {
         let body_str = r#"{"key": "value"}"#;
-        let ec = EncryptedContent::from_body_str(body_str, PROVIDER_SDK_GENAI).unwrap();
+        let ec = EncryptedContent::from_body_str(
+            body_str,
+            PROVIDER_SDK_GENAI,
+            "https://api.example.com",
+            "gemini-2.0-flash",
+        )
+        .unwrap();
 
         assert_eq!(
             ec.full_response_body.get("key").unwrap().as_str().unwrap(),
             "value"
         );
         assert_eq!(ec.provider_sdk, "genai");
+        assert_eq!(ec.base_url, "https://api.example.com");
+        assert_eq!(ec.model, "gemini-2.0-flash");
     }
 
     #[test]
     fn test_encrypted_content_roundtrip() {
         let body = serde_json::json!({"test": 123});
-        let ec = EncryptedContent::new(body, PROVIDER_SDK_VOLCENGINE_ARK);
+        let ec = EncryptedContent::new(
+            body,
+            PROVIDER_SDK_VOLCENGINE_ARK,
+            "https://ark.cn-beijing.volces.com",
+            "doubao-pro",
+        );
 
         let json_str = ec.to_json_string().unwrap();
+
+        // Verify prefix is added
+        assert!(json_str.starts_with(ENCRYPTED_CONTENT_PREFIX));
+        assert!(EncryptedContent::is_codex_format(&json_str));
+
         let ec2 = EncryptedContent::from_json_string(&json_str).unwrap();
 
         assert_eq!(
@@ -993,6 +1184,8 @@ mod tests {
             123
         );
         assert_eq!(ec2.provider_sdk, "volcengine-ark");
+        assert_eq!(ec2.base_url, "https://ark.cn-beijing.volces.com");
+        assert_eq!(ec2.model, "doubao-pro");
     }
 
     #[test]
@@ -1003,7 +1196,12 @@ mod tests {
         }
 
         let body = serde_json::json!({"key": "hello"});
-        let ec = EncryptedContent::new(body, PROVIDER_SDK_GENAI);
+        let ec = EncryptedContent::new(
+            body,
+            PROVIDER_SDK_GENAI,
+            "https://api.example.com",
+            "gemini-2.0-flash",
+        );
 
         let parsed: TestBody = ec.parse_body().unwrap();
         assert_eq!(parsed.key, "hello");
@@ -1012,13 +1210,102 @@ mod tests {
     #[test]
     fn test_encrypted_content_json_format() {
         let body = serde_json::json!({"data": 42});
-        let ec = EncryptedContent::new(body, PROVIDER_SDK_GENAI);
+        let ec = EncryptedContent::new(
+            body,
+            PROVIDER_SDK_GENAI,
+            "https://api.example.com",
+            "gemini-2.0-flash",
+        );
         let json_str = ec.to_json_string().unwrap();
 
-        // Verify the JSON contains the expected keys with underscore prefix
-        let parsed: Value = serde_json::from_str(&json_str).unwrap();
+        // Verify prefix is present
+        assert!(json_str.starts_with(ENCRYPTED_CONTENT_PREFIX));
+
+        // Strip prefix and parse JSON
+        let json_only = json_str.strip_prefix(ENCRYPTED_CONTENT_PREFIX).unwrap();
+        let parsed: Value = serde_json::from_str(json_only).unwrap();
         assert!(parsed.get("_full_response_body").is_some());
         assert!(parsed.get("_provider_sdk").is_some());
+        assert!(parsed.get("_base_url").is_some());
+        assert!(parsed.get("_model").is_some());
         assert!(parsed.get("_ext").is_some());
+        // _original_encrypted_content should be skipped when None
+        assert!(parsed.get("_original_encrypted_content").is_none());
+    }
+
+    #[test]
+    fn test_encrypted_content_is_codex_format() {
+        // Our format
+        let our_format = "codex-ec:{\"_full_response_body\":{}}";
+        assert!(EncryptedContent::is_codex_format(our_format));
+
+        // Native API format (e.g., o1 reasoning)
+        let native_format = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0";
+        assert!(!EncryptedContent::is_codex_format(native_format));
+
+        // Empty string
+        assert!(!EncryptedContent::is_codex_format(""));
+
+        // Random JSON (not our format)
+        let random_json = r#"{"key": "value"}"#;
+        assert!(!EncryptedContent::is_codex_format(random_json));
+    }
+
+    #[test]
+    fn test_encrypted_content_from_json_string_rejects_non_prefixed() {
+        // Direct JSON without prefix should not parse
+        let direct_json = r#"{"_full_response_body":{},"_provider_sdk":"genai","_base_url":"","_model":"","_ext":{}}"#;
+        assert!(EncryptedContent::from_json_string(direct_json).is_none());
+
+        // With prefix should parse
+        let prefixed = format!("{ENCRYPTED_CONTENT_PREFIX}{direct_json}");
+        assert!(EncryptedContent::from_json_string(&prefixed).is_some());
+    }
+
+    #[test]
+    fn test_encrypted_content_matches_context() {
+        let body = serde_json::json!({"data": 42});
+        let ec = EncryptedContent::new(
+            body,
+            PROVIDER_SDK_GENAI,
+            "https://api.example.com",
+            "gemini-2.0-flash",
+        );
+
+        // Same context
+        assert!(ec.matches_context("https://api.example.com", "gemini-2.0-flash"));
+        // Different model
+        assert!(!ec.matches_context("https://api.example.com", "gemini-1.5-pro"));
+        // Different base_url
+        assert!(!ec.matches_context("https://other.api.com", "gemini-2.0-flash"));
+        // Both different
+        assert!(!ec.matches_context("https://other.api.com", "gpt-4o"));
+    }
+
+    #[test]
+    fn test_encrypted_content_with_original() {
+        let body = serde_json::json!({"text": "hello"});
+        let original = Some("original_encrypted_data".to_string());
+        let ec = EncryptedContent::with_original_encrypted_content(
+            body,
+            PROVIDER_SDK_OPENAI,
+            "https://api.openai.com",
+            "gpt-4o",
+            original.clone(),
+        );
+
+        assert_eq!(ec.provider_sdk, "openai");
+        assert_eq!(ec.original_encrypted_content, original);
+
+        // Verify it serializes with prefix and roundtrips correctly
+        let json_str = ec.to_json_string().unwrap();
+        assert!(json_str.starts_with(ENCRYPTED_CONTENT_PREFIX));
+
+        // Parse back and verify original_encrypted_content is preserved
+        let parsed = EncryptedContent::from_json_string(&json_str).unwrap();
+        assert_eq!(
+            parsed.original_encrypted_content.as_deref(),
+            Some("original_encrypted_data")
+        );
     }
 }

@@ -51,6 +51,7 @@ pub use config::LSP_SERVERS_CONFIG_FILE;
 pub use config::LifecycleConfig;
 pub use config::LspServerConfig;
 pub use config::LspServersConfig;
+pub use config::command_exists;
 pub use diagnostics::DiagnosticEntry;
 pub use diagnostics::DiagnosticSeverityLevel;
 pub use diagnostics::DiagnosticsStore;

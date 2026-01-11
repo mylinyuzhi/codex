@@ -4,12 +4,15 @@
 //! - Setting `previous_response_id` for conversation continuity
 //! - Setting `stream` mode explicitly
 //! - Building non-streaming requests with input filtering
+//! - Filtering input items for cross-adapter encrypted_content compatibility
 
+use crate::common_ext::ENCRYPTED_CONTENT_PREFIX;
 use crate::common_ext::filter_incremental_input;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::ResponsesRequest;
 use crate::requests::ResponsesRequestBuilder;
+use codex_protocol::models::ResponseItem;
 
 impl<'a> ResponsesRequestBuilder<'a> {
     /// Set the previous response ID for conversation continuity.
@@ -81,6 +84,57 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
         self.build(provider)
     }
+}
+
+/// Filter input items for OpenAI Responses API requests.
+///
+/// Handles cross-adapter encrypted_content compatibility when sending to native OpenAI:
+///
+/// - **Adapter format** (`"codex-ec:*"` prefix): Strip `encrypted_content` field.
+///   OpenAI cannot verify adapter-generated encrypted content, so we remove it.
+///   OpenAI will regenerate reasoning content if needed.
+///
+/// - **Native OpenAI format** (no prefix): Preserve `encrypted_content` as-is.
+///   OpenAI can verify its own encrypted content format.
+///
+/// - **No encrypted_content**: Pass through unchanged.
+///
+/// # Background
+///
+/// Adapters (genai, anthropic, volcengine_ark, zai) store their full response body
+/// in `encrypted_content` with `"codex-ec:"` prefix for cross-adapter switching.
+/// When sending back to native OpenAI Responses API, this adapter format must be
+/// stripped because OpenAI's verification would fail on non-native formats.
+pub fn filter_input_for_openai(input: &[ResponseItem]) -> Vec<ResponseItem> {
+    input
+        .iter()
+        .map(|item| match item {
+            ResponseItem::Reasoning {
+                encrypted_content: Some(ec),
+                ..
+            } if ec.starts_with(ENCRYPTED_CONTENT_PREFIX) => {
+                // Adapter format detected - clone item and strip encrypted_content
+                // OpenAI cannot verify adapter's format, so we remove it
+                let ResponseItem::Reasoning {
+                    id,
+                    summary,
+                    content,
+                    ..
+                } = item
+                else {
+                    unreachable!()
+                };
+                ResponseItem::Reasoning {
+                    id: id.clone(),
+                    summary: summary.clone(),
+                    content: content.clone(),
+                    encrypted_content: None,
+                }
+            }
+            // Native OpenAI encrypted_content or no encrypted_content - keep as-is
+            _ => item.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -280,5 +334,120 @@ mod tests {
             .get("previous_response_id")
             .and_then(|v| v.as_str());
         assert_eq!(prev_id, Some("resp-123"));
+    }
+
+    // Tests for filter_input_for_openai
+
+    #[test]
+    fn test_filter_input_for_openai_strips_adapter_encrypted_content() {
+        use codex_protocol::models::ReasoningItemReasoningSummary;
+
+        let input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Hello".to_string(),
+                }],
+            },
+            ResponseItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                    text: "Thinking...".to_string(),
+                }],
+                content: None,
+                // Adapter format - should be stripped
+                encrypted_content: Some("codex-ec:{\"provider_sdk\":\"genai\"}".to_string()),
+            },
+            ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "Hi!".to_string(),
+                }],
+            },
+        ];
+
+        let filtered = filter_input_for_openai(&input);
+
+        assert_eq!(filtered.len(), 3);
+
+        // First item unchanged
+        assert!(matches!(&filtered[0], ResponseItem::Message { role, .. } if role == "user"));
+
+        // Reasoning item should have encrypted_content cleared
+        match &filtered[1] {
+            ResponseItem::Reasoning {
+                id,
+                summary,
+                encrypted_content,
+                ..
+            } => {
+                assert_eq!(id, "reasoning-1");
+                assert_eq!(summary.len(), 1);
+                assert_eq!(*encrypted_content, None); // Stripped!
+            }
+            _ => panic!("Expected Reasoning item"),
+        }
+
+        // Last item unchanged
+        assert!(matches!(&filtered[2], ResponseItem::Message { role, .. } if role == "assistant"));
+    }
+
+    #[test]
+    fn test_filter_input_for_openai_preserves_native_encrypted_content() {
+        use codex_protocol::models::ReasoningItemReasoningSummary;
+
+        let input = vec![ResponseItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Thinking...".to_string(),
+            }],
+            content: None,
+            // Native OpenAI format (no codex-ec: prefix) - should be preserved
+            encrypted_content: Some("native-openai-encrypted-content".to_string()),
+        }];
+
+        let filtered = filter_input_for_openai(&input);
+
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0] {
+            ResponseItem::Reasoning {
+                encrypted_content, ..
+            } => {
+                // Native format preserved
+                assert_eq!(
+                    *encrypted_content,
+                    Some("native-openai-encrypted-content".to_string())
+                );
+            }
+            _ => panic!("Expected Reasoning item"),
+        }
+    }
+
+    #[test]
+    fn test_filter_input_for_openai_handles_no_encrypted_content() {
+        use codex_protocol::models::ReasoningItemReasoningSummary;
+
+        let input = vec![ResponseItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Thinking...".to_string(),
+            }],
+            content: None,
+            encrypted_content: None, // No encrypted_content
+        }];
+
+        let filtered = filter_input_for_openai(&input);
+
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0] {
+            ResponseItem::Reasoning {
+                encrypted_content, ..
+            } => {
+                assert_eq!(*encrypted_content, None);
+            }
+            _ => panic!("Expected Reasoning item"),
+        }
     }
 }

@@ -22,14 +22,14 @@ Commands:
   /spawn --merge <task-id>...        Merge task branches
 
 Start Options:
-  --name <id>        Task identifier (default: auto-generated)
-  --model <provider> Model provider name, or provider/model format
-  --iter <n>         Run for n iterations
-  --time <duration>  Run for duration (e.g., 1h, 30m)
+  --name <id>           Task identifier (default: auto-generated)
+  --model <provider_id> Provider ID (config key), or provider_id/model format
+  --iter <n>            Run for n iterations
+  --time <duration>     Run for duration (e.g., 1h, 30m)
 
 Examples:
   /spawn --iter 5 --prompt implement user authentication
-  /spawn --name auth-task --model DeepSeek --iter 3 --prompt add login
+  /spawn --name auth-task --model deepseek --iter 3 --prompt add login
   /spawn --kill my-task
   /spawn --merge task-1 task-2 --prompt review and merge
 

@@ -281,25 +281,23 @@ impl DiagnosticsStore {
         for (file, file_entries) in by_file {
             output.push_str(&format!("File: {}\n", file.display()));
             for entry in file_entries {
-                let severity = match entry.severity {
-                    DiagnosticSeverityLevel::Error => "[error]",
-                    DiagnosticSeverityLevel::Warning => "[warning]",
-                    DiagnosticSeverityLevel::Info => "[info]",
-                    DiagnosticSeverityLevel::Hint => "[hint]",
-                };
                 let code_str = entry
                     .code
                     .as_ref()
-                    .map(|c| format!(" [{}]", c))
+                    .map(|c| format!(" [{c}]"))
                     .unwrap_or_default();
                 let source_str = entry
                     .source
                     .as_ref()
-                    .map(|s| format!(" ({})", s))
+                    .map(|s| format!(" ({s})"))
                     .unwrap_or_default();
                 output.push_str(&format!(
-                    "  Line {}: {} {}{}{}\n",
-                    entry.line, severity, entry.message, code_str, source_str
+                    "  Line {}: [{}] {}{}{}\n",
+                    entry.line,
+                    entry.severity.as_str(),
+                    entry.message,
+                    code_str,
+                    source_str
                 ));
             }
             output.push('\n');
