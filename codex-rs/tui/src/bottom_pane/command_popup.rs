@@ -15,18 +15,21 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
-/// A selectable item in the popup: either a built-in command or a user prompt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A selectable item in the popup: either a built-in command, user prompt, or plugin command.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
     // Index into `prompts`
     UserPrompt(usize),
+    // Plugin command name (e.g., "my-plugin:review")
+    PluginCommand(String),
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
     prompts: Vec<CustomPrompt>,
+    plugin_commands: Vec<crate::plugin_commands::PluginCommandEntry>,
     state: ScrollState,
 }
 
@@ -44,8 +47,33 @@ impl CommandPopup {
             command_filter: String::new(),
             builtins,
             prompts,
+            plugin_commands: Vec::new(),
             state: ScrollState::new(),
         }
+    }
+
+    /// Set plugin commands. Should be called after loading plugin commands.
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        mut commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        // Exclude commands that collide with builtin names
+        let exclude: HashSet<String> = self
+            .builtins
+            .iter()
+            .map(|(n, _)| (*n).to_string())
+            .collect();
+        commands.retain(|c| !exclude.contains(&c.name));
+        commands.sort_by(|a, b| a.name.cmp(&b.name));
+        self.plugin_commands = commands;
+    }
+
+    /// Get a plugin command by name.
+    pub(crate) fn plugin_command(
+        &self,
+        name: &str,
+    ) -> Option<&crate::plugin_commands::PluginCommandEntry> {
+        self.plugin_commands.iter().find(|c| c.name == name)
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
@@ -103,9 +131,9 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Sorted by ascending
-    /// score, then by name for stability.
+    /// Compute fuzzy-filtered matches over built-in commands, user prompts,
+    /// and plugin commands. Paired with optional highlight indices and score.
+    /// Sorted by ascending score, then by name for stability.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
@@ -117,6 +145,10 @@ impl CommandPopup {
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
                 out.push((CommandItem::UserPrompt(idx), None, 0));
+            }
+            // Then plugin commands, already sorted by name.
+            for cmd in self.plugin_commands.iter() {
+                out.push((CommandItem::PluginCommand(cmd.name.clone()), None, 0));
             }
             return out;
         }
@@ -135,18 +167,30 @@ impl CommandPopup {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
+        // Plugin commands
+        for cmd in self.plugin_commands.iter() {
+            if let Some((indices, score)) = fuzzy_match(&cmd.name, filter) {
+                out.push((
+                    CommandItem::PluginCommand(cmd.name.clone()),
+                    Some(indices),
+                    score,
+                ));
+            }
+        }
         // When filtering, sort by ascending score and then by name for stability.
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
-                let an = match a.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                let an = match &a.0 {
+                    CommandItem::Builtin(c) => c.command().to_string(),
+                    CommandItem::UserPrompt(i) => self.prompts[*i].name.clone(),
+                    CommandItem::PluginCommand(n) => n.clone(),
                 };
-                let bn = match b.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                let bn = match &b.0 {
+                    CommandItem::Builtin(c) => c.command().to_string(),
+                    CommandItem::UserPrompt(i) => self.prompts[*i].name.clone(),
+                    CommandItem::PluginCommand(n) => n.clone(),
                 };
-                an.cmp(bn)
+                an.cmp(&bn)
             })
         });
         out
@@ -177,6 +221,13 @@ impl CommandPopup {
                             format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name),
                             description,
                         )
+                    }
+                    CommandItem::PluginCommand(ref cmd_name) => {
+                        let description = self
+                            .plugin_command(cmd_name)
+                            .map(|c| c.description.clone())
+                            .unwrap_or_else(|| "plugin command".to_string());
+                        (format!("/{cmd_name}"), description)
                     }
                 };
                 GenericDisplayRow {
@@ -211,7 +262,7 @@ impl CommandPopup {
         let matches = self.filtered_items();
         self.state
             .selected_idx
-            .and_then(|idx| matches.get(idx).copied())
+            .and_then(|idx| matches.get(idx).cloned())
     }
 }
 
@@ -246,7 +297,7 @@ mod tests {
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
-            CommandItem::UserPrompt(_) => false,
+            CommandItem::UserPrompt(_) | CommandItem::PluginCommand(_) => false,
         });
         assert!(
             has_init,
@@ -265,6 +316,9 @@ mod tests {
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
             Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
+            Some(CommandItem::PluginCommand(_)) => {
+                panic!("unexpected plugin command selected for '/init'")
+            }
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -278,6 +332,9 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
             Some(CommandItem::UserPrompt(_)) => {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            Some(CommandItem::PluginCommand(_)) => {
+                panic!("unexpected plugin command ranked before '/model' for '/mo'")
             }
             None => panic!("expected at least one match for '/mo'"),
         }
@@ -385,7 +442,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::PluginCommand(_) => None,
             })
             .collect();
         assert!(

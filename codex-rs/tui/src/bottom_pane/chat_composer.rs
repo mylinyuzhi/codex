@@ -75,6 +75,11 @@ pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
+    /// Plugin command execution request.
+    PluginCommand {
+        name: String,
+        args: String,
+    },
     None,
 }
 
@@ -117,6 +122,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    plugin_commands: Vec<crate::plugin_commands::PluginCommandEntry>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
@@ -166,6 +172,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            plugin_commands: Vec::new(),
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
@@ -600,6 +607,17 @@ impl ChatComposer {
                                 }
                             }
                         }
+                        CommandItem::PluginCommand(ref name) => {
+                            // Tab completion: insert command name
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&format!("/{name}"));
+                            if !starts_with_cmd {
+                                self.textarea.set_text(&format!("/{name} "));
+                            }
+                            if !self.textarea.text().is_empty() {
+                                cursor_target = Some(self.textarea.text().len());
+                            }
+                        }
                     }
                     if let Some(pos) = cursor_target {
                         self.textarea.set_cursor(pos);
@@ -652,6 +670,23 @@ impl ChatComposer {
                                 }
                             }
                             return (InputResult::None, true);
+                        }
+                        CommandItem::PluginCommand(ref name) => {
+                            // Return a PluginCommand result to be handled asynchronously
+                            // Extract args from the command line
+                            let args = first_line
+                                .strip_prefix(&format!("/{name}"))
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_default();
+                            let name_owned = name.clone();
+                            self.textarea.set_text("");
+                            return (
+                                InputResult::PluginCommand {
+                                    name: name_owned,
+                                    args,
+                                },
+                                true,
+                            );
                         }
                     }
                 }
@@ -1817,6 +1852,7 @@ impl ChatComposer {
                     let skills_enabled = self.skills_enabled();
                     let mut command_popup =
                         CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
+                    command_popup.set_plugin_commands(self.plugin_commands.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1828,6 +1864,16 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        self.plugin_commands = commands.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_plugin_commands(commands);
         }
     }
 
@@ -2775,6 +2821,9 @@ mod tests {
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/mo'")
                 }
+                Some(CommandItem::PluginCommand(_)) => {
+                    panic!("unexpected plugin command selected for '/mo'")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -2831,6 +2880,9 @@ mod tests {
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")
                 }
+                Some(CommandItem::PluginCommand(_)) => {
+                    panic!("unexpected plugin command selected for '/res'")
+                }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
@@ -2884,6 +2936,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/init'")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -2921,6 +2976,9 @@ mod tests {
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, got literal submit: {text}")
+            }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/review'")
             }
             InputResult::None => panic!("expected CommandWithArgs result for '/review'"),
         }
@@ -2998,6 +3056,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/diff'")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -3033,6 +3094,9 @@ mod tests {
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/mention'")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

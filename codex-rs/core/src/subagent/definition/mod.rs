@@ -100,7 +100,7 @@ impl ToolAccess {
 }
 
 /// Source of agent definition.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentSource {
     /// Built-in agent (Explore, Plan).
@@ -110,6 +110,8 @@ pub enum AgentSource {
     User,
     /// Project-level agent.
     Project,
+    /// Plugin-provided agent.
+    Plugin(String),
 }
 
 /// The level of thinking tokens that the model should generate.

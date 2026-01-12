@@ -497,6 +497,50 @@ pub fn make_hook_context(
     }
 }
 
+/// Register hooks from plugins into the global executor.
+///
+/// This converts each `InjectedHook` to the internal `HookConfig` format
+/// and registers it as a global hook. Should be called after `init_hooks`.
+///
+/// # Arguments
+///
+/// * `hooks` - List of injected hooks from plugins
+///
+/// # Returns
+///
+/// Number of hooks successfully registered, or 0 if executor not initialized.
+pub fn register_plugin_hooks(hooks: Vec<codex_plugin::injection::InjectedHook>) -> i32 {
+    let Some(executor) = HOOK_EXECUTOR.get() else {
+        warn!("Cannot register plugin hooks: executor not initialized");
+        return 0;
+    };
+
+    let mut converted = Vec::new();
+    for hook in hooks {
+        match hook.to_hook_config() {
+            Ok((event_type, matcher)) => {
+                debug!(
+                    event = %event_type,
+                    plugin = %hook.source_plugin,
+                    "Converting plugin hook"
+                );
+                converted.push((event_type, matcher));
+            }
+            Err(e) => {
+                warn!(
+                    plugin = %hook.source_plugin,
+                    error = %e,
+                    "Failed to convert plugin hook"
+                );
+            }
+        }
+    }
+
+    let count = executor.registry().register_plugin_hooks(converted);
+    debug!("Registered {} plugin hooks", count);
+    count
+}
+
 /// Clear session hooks when a session ends.
 pub fn clear_session_hooks(session_id: &str) {
     if let Some(executor) = HOOK_EXECUTOR.get() {

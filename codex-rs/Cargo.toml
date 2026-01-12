@@ -57,6 +57,7 @@ members = [
     "utils/string",
     "codex-client",
     "codex-api",
+    "codex-plugin",
 ]
 resolver = "2"
 
@@ -103,6 +104,7 @@ codex-lsp = { path = "lsp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-plugin = { path = "codex-plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
@@ -218,6 +220,7 @@ serde = "1"
 serde_json = "1"
 serde_with = "3.16"
 serde_yaml = "0.9"
+semver = "1"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"

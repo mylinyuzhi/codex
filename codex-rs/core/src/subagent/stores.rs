@@ -117,6 +117,49 @@ fn build_default_search_paths() -> Vec<PathBuf> {
 }
 
 impl SubagentStores {
+    /// Initialize plugins and register plugin components (agents, hooks).
+    ///
+    /// This should be called after the stores are created to load
+    /// plugin components from the plugin registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `codex_home` - Path to the codex home directory (~/.codex)
+    /// * `project_path` - Optional project path for project-scoped plugins
+    pub async fn init_plugins(
+        &self,
+        codex_home: &std::path::Path,
+        project_path: Option<&std::path::Path>,
+    ) {
+        // Initialize plugin service
+        match codex_plugin::get_or_init_plugin_service(codex_home).await {
+            Ok(service) => {
+                // Load all enabled plugins
+                if let Err(e) = service.load_all(project_path).await {
+                    tracing::warn!("Failed to load plugins: {e}");
+                    return;
+                }
+
+                // Register plugin agents
+                let agents = service.get_agents().await;
+                if !agents.is_empty() {
+                    let count = self.registry.register_plugin_agents(agents).await;
+                    tracing::info!("Initialized {count} plugin agents");
+                }
+
+                // Register plugin hooks
+                let hooks = service.get_hooks().await;
+                if !hooks.is_empty() {
+                    let count = crate::hooks_ext::register_plugin_hooks(hooks);
+                    tracing::info!("Initialized {count} plugin hooks");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize plugin service: {e}");
+            }
+        }
+    }
+
     pub fn new() -> Self {
         let search_paths = build_default_search_paths();
         Self {

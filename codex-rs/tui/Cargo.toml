@@ -36,6 +36,7 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-plugin = { workspace = true }
 codex-feedback = { workspace = true }
 codex-utils-common = { workspace = true }
 codex-file-search = { workspace = true }

@@ -169,6 +169,38 @@ impl HookRegistry {
             .unwrap_or(0)
     }
 
+    /// Register hooks from plugins.
+    ///
+    /// This registers pre-converted hook configurations as global hooks.
+    /// The conversion from plugin types to hook types should be done
+    /// externally (e.g., via `InjectedHook::to_hook_config()`).
+    ///
+    /// # Arguments
+    ///
+    /// * `hooks` - List of (event_type, matcher) pairs to register
+    ///
+    /// # Returns
+    ///
+    /// Number of hooks successfully registered.
+    pub fn register_plugin_hooks(&self, hooks: Vec<(HookEventType, HookMatcher)>) -> i32 {
+        let mut registered = 0;
+
+        for (event_type, matcher) in hooks {
+            debug!(
+                event = %event_type,
+                "Registering plugin hook"
+            );
+            self.global_hooks
+                .entry(event_type)
+                .or_default()
+                .push(matcher);
+            registered += 1;
+        }
+
+        tracing::info!("Registered {} plugin hooks", registered);
+        registered
+    }
+
     /// Check if any hooks are registered for an event type.
     pub fn has_hooks(&self, event_type: HookEventType, session_id: Option<&str>) -> bool {
         // Check global hooks

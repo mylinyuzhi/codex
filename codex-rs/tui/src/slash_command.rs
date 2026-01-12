@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     Spawn,
+    Plugin,
     TestApproval,
 }
 
@@ -62,6 +63,7 @@ impl SlashCommand {
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::Spawn => "spawn background tasks with --iter or --time",
+            SlashCommand::Plugin => "manage plugins (install, uninstall, enable, disable)",
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -85,6 +87,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Experimental
             | SlashCommand::Review
+            | SlashCommand::Plugin
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

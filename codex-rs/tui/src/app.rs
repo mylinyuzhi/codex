@@ -768,6 +768,17 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::PluginResult(text) => {
+                // Display plugin command result as an info message
+                self.chat_widget.add_info_message(text, None);
+            }
+            AppEvent::PluginCommandExpanded(text) => {
+                // Submit expanded plugin command as user message
+                self.chat_widget.submit_prompt(text);
+            }
+            AppEvent::PluginCommandsLoaded(commands) => {
+                self.chat_widget.on_plugin_commands_loaded(commands);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

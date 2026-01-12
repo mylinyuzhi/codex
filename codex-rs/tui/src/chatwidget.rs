@@ -1503,6 +1503,15 @@ impl ChatWidget {
 
         widget.prefetch_rate_limits();
 
+        // Initialize plugin commands asynchronously
+        let codex_home = widget.config.codex_home.clone();
+        let tx = widget.app_event_tx.clone();
+        tokio::spawn(async move {
+            let _ = crate::plugin_commands::init_plugin_commands(&codex_home).await;
+            let commands = crate::plugin_commands::plugin_commands().list().await;
+            tx.send(AppEvent::PluginCommandsLoaded(commands));
+        });
+
         widget
     }
 
@@ -1591,6 +1600,15 @@ impl ChatWidget {
 
         widget.prefetch_rate_limits();
 
+        // Initialize plugin commands asynchronously
+        let codex_home = widget.config.codex_home.clone();
+        let tx = widget.app_event_tx.clone();
+        tokio::spawn(async move {
+            let _ = crate::plugin_commands::init_plugin_commands(&codex_home).await;
+            let commands = crate::plugin_commands::plugin_commands().list().await;
+            tx.send(AppEvent::PluginCommandsLoaded(commands));
+        });
+
         widget
     }
 
@@ -1666,6 +1684,9 @@ impl ChatWidget {
                     }
                     InputResult::CommandWithArgs(cmd, args) => {
                         self.dispatch_command_with_args(cmd, args);
+                    }
+                    InputResult::PluginCommand { name, args } => {
+                        self.dispatch_plugin_command(name, args);
                     }
                     InputResult::None => {}
                 }
@@ -1828,6 +1849,13 @@ impl ChatWidget {
             SlashCommand::Spawn => {
                 self.handle_spawn_command();
             }
+            SlashCommand::Plugin => {
+                crate::chatwidget_plugin_ext::spawn_plugin_help(
+                    self.app_event_tx.clone(),
+                    self.config.codex_home.clone(),
+                    Some(self.config.cwd.clone()),
+                );
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;
@@ -1892,8 +1920,31 @@ impl ChatWidget {
                     },
                 });
             }
+            SlashCommand::Plugin => {
+                crate::chatwidget_plugin_ext::spawn_plugin_command(
+                    self.app_event_tx.clone(),
+                    self.config.codex_home.clone(),
+                    Some(self.config.cwd.clone()),
+                    trimmed.to_string(),
+                );
+            }
             _ => self.dispatch_command(cmd),
         }
+    }
+
+    fn dispatch_plugin_command(&mut self, name: String, args: String) {
+        if self.bottom_pane.is_task_running() {
+            let message =
+                format!("Plugin command '/{name}' is disabled while a task is in progress.");
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+        crate::chatwidget_plugin_ext::spawn_plugin_command_expansion(
+            self.app_event_tx.clone(),
+            name,
+            args,
+        );
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -1967,6 +2018,11 @@ impl ChatWidget {
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    /// Submit a text prompt as a user message (used by plugin commands).
+    pub(crate) fn submit_prompt(&mut self, text: String) {
+        self.submit_user_message(text.into());
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -3604,6 +3660,14 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    pub(crate) fn on_plugin_commands_loaded(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        debug!("received {} plugin commands", commands.len());
+        self.bottom_pane.set_plugin_commands(commands);
     }
 
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {

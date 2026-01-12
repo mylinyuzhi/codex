@@ -433,6 +433,15 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update plugin commands available for the slash popup.
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        self.composer.set_plugin_commands(commands);
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }

@@ -52,6 +52,15 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Result of executing a `/plugin` command.
+    PluginResult(String),
+
+    /// Submit expanded plugin command as user message.
+    PluginCommandExpanded(String),
+
+    /// Plugin commands loaded from plugin service.
+    PluginCommandsLoaded(Vec<crate::plugin_commands::PluginCommandEntry>),
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

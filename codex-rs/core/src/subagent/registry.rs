@@ -130,6 +130,59 @@ impl AgentRegistry {
 
         Ok(loaded)
     }
+
+    /// Register agents from plugins.
+    ///
+    /// Each plugin agent definition file is loaded and the agent is registered
+    /// with `AgentSource::Plugin(plugin_id)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `agents` - List of injected agents from plugins
+    pub async fn register_plugin_agents(
+        &self,
+        agents: Vec<codex_plugin::injection::InjectedAgent>,
+    ) -> i32 {
+        use super::definition::AgentSource;
+
+        let mut registered = 0;
+
+        for agent in agents {
+            // Load definition from file
+            if let Some(mut definition) = self.load_from_file(&agent.definition_path).await {
+                // Override source to indicate plugin origin
+                definition.source = AgentSource::Plugin(agent.source_plugin.clone());
+
+                // Override display_name if provided
+                if let Some(name) = agent.display_name {
+                    definition.display_name = Some(name);
+                }
+
+                // Override when_to_use if provided
+                if let Some(when) = agent.when_to_use {
+                    definition.when_to_use = Some(when);
+                }
+
+                tracing::debug!(
+                    agent_type = %definition.agent_type,
+                    plugin = %agent.source_plugin,
+                    "Registering plugin agent"
+                );
+
+                self.register(definition);
+                registered += 1;
+            } else {
+                tracing::warn!(
+                    path = %agent.definition_path.display(),
+                    plugin = %agent.source_plugin,
+                    "Failed to load plugin agent definition"
+                );
+            }
+        }
+
+        tracing::info!("Registered {} plugin agents", registered);
+        registered
+    }
 }
 
 impl Default for AgentRegistry {
