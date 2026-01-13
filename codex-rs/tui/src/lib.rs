@@ -30,7 +30,6 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
@@ -38,9 +37,13 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod app_ext;
 mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
+mod chatwidget_ext;
+mod chatwidget_model_ext;
+mod chatwidget_plugin_ext;
 mod cli;
 mod clipboard_paste;
 mod color;
@@ -63,7 +66,9 @@ mod model_migration;
 mod notifications;
 pub mod onboarding;
 mod oss_selection;
+mod output_style;
 mod pager_overlay;
+mod plugin_commands;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
@@ -71,12 +76,15 @@ mod selection_list;
 mod session_log;
 mod shimmer;
 mod slash_command;
+mod slash_command_ext;
+mod spawn_command_ext;
 mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+pub mod thinking_ext;
 mod tooltips;
 mod tui;
 mod ui_consts;
@@ -265,21 +273,19 @@ pub async fn run_main(
     let (non_blocking, _guard) = non_blocking(log_file);
 
     // use RUST_LOG env var, default to info for codex crates.
-    let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
-        })
-    };
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        // `with_target(true)` is the default, but we previously disabled it for file output.
-        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
-        // grep for a specific module/target while troubleshooting.
-        .with_target(true)
-        .with_ansi(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .with_filter(env_filter());
+    // Build file_layer with config-driven settings
+    let file_layer = codex_utils_common::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            // `with_target(true)` is the default, but we previously disabled it for file output.
+            // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
+            // grep for a specific module/target while troubleshooting.
+            .with_target(true)
+            .with_ansi(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL),
+        &config.ext.logging,
+        "codex_core=info,codex_tui=info,codex_rmcp_client=info"
+    );
 
     let feedback = codex_feedback::CodexFeedback::new();
     let feedback_layer = feedback.logger_layer();

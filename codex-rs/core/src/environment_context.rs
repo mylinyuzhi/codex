@@ -1,4 +1,5 @@
 use crate::codex::TurnContext;
+use crate::environment_context_ext::EnvironmentContextExt;
 use crate::shell::Shell;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -59,11 +60,15 @@ impl EnvironmentContext {
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
+        // Compute extended env info before self.cwd is moved
+        let ext_lines =
+            EnvironmentContextExt::from_cwd(self.cwd.as_deref()).serialize_to_xml_lines();
         let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
-
+        // Add extended environment info (is_git_repo, platform, cpu_arch)
+        lines.extend(ext_lines);
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());

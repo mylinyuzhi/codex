@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    streaming: StreamingClient<T, A>,
+    pub(crate) streaming: StreamingClient<T, A>,
 }
 
 #[derive(Default)]
@@ -59,7 +59,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         request: ResponsesRequest,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers, request.compression)
+        self.stream(request.body, request.headers, request.compression, None)
             .await
     }
 
@@ -70,6 +70,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         prompt: &ApiPrompt,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        // Try adapter routing for non-OpenAI providers (ext)
+        if let Some(stream) = self.try_adapter(model, prompt).await? {
+            return Ok(stream);
+        }
+
+        // Built-in OpenAI format
         let ResponsesOptions {
             reasoning,
             include,
@@ -82,6 +88,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             compression,
         } = options;
 
+        // Build interceptor context for this request
+        let _ctx = self
+            .streaming
+            .build_interceptor_context(Some(model), conversation_id.as_deref());
+
+        let provider = self.streaming.provider();
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
@@ -93,13 +105,15 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .model_parameters(provider.model_parameters.clone())
+            .stream(provider.streaming)
             .compression(compression)
             .build(self.streaming.provider())?;
 
         self.stream_request(request).await
     }
 
-    fn path(&self) -> &'static str {
+    pub(crate) fn path(&self) -> &'static str {
         match self.streaming.provider().wire {
             WireApi::Responses | WireApi::Compact => "responses",
             WireApi::Chat => "chat/completions",
@@ -111,6 +125,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         body: Value,
         extra_headers: HeaderMap,
         compression: Compression,
+        ctx: Option<&crate::interceptors::InterceptorContext>,
     ) -> Result<ResponseStream, ApiError> {
         let compression = match compression {
             Compression::None => RequestCompression::None,
@@ -122,6 +137,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 self.path(),
                 body,
                 extra_headers,
+                ctx,
                 compression,
                 spawn_response_stream,
             )

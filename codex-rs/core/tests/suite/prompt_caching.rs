@@ -33,9 +33,13 @@ fn text_user_input(text: String) -> serde_json::Value {
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     let shell_name = shell.name();
+    let platform = std::env::consts::OS;
+    let cpu_arch = std::env::consts::ARCH;
     format!(
         r#"<environment_context>
   <cwd>{cwd}</cwd>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
@@ -123,6 +127,14 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "update_plan",
         "apply_patch",
         "view_image",
+        "glob_files",
+        "think",
+        "write_file",
+        "BashOutput",
+        "KillShell",
+        "ExitPlanMode",
+        "EnterPlanMode",
+        "AskUserQuestion",
     ];
     let body0 = req1.single_request().body_json();
 

@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    OutputStyle,
     Approvals,
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
@@ -35,6 +36,8 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Spawn,
+    Plugin,
     TestApproval,
 }
 
@@ -57,12 +60,15 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::OutputStyle => "set the output style for responses",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
+            SlashCommand::Spawn => "spawn background tasks with --iter or --time",
+            SlashCommand::Plugin => "manage plugins (install, uninstall, enable, disable)",
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -83,16 +89,19 @@ impl SlashCommand {
             | SlashCommand::Compact
             // | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::OutputStyle
             | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
+            | SlashCommand::Plugin
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Ps
+            | SlashCommand::Spawn
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit

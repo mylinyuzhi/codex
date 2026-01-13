@@ -1,5 +1,6 @@
 pub mod apply_patch;
 pub(crate) mod collab;
+pub mod ext;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -7,6 +8,7 @@ mod mcp_resource;
 mod plan;
 mod read_file;
 mod shell;
+pub mod shell_ext;
 mod test_sync;
 mod unified_exec;
 mod view_image;
