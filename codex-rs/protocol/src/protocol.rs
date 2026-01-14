@@ -43,6 +43,16 @@ pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 
+// Re-export extension types for backwards compatibility
+pub use crate::protocol_ext::CompactCompletedEvent;
+pub use crate::protocol_ext::CompactFailedEvent;
+pub use crate::protocol_ext::CompactThresholdExceededEvent;
+pub use crate::protocol_ext::ExtEventMsg;
+pub use crate::protocol_ext::MicroCompactCompletedEvent;
+pub use crate::protocol_ext::PlanExitPermissionMode;
+pub use crate::protocol_ext::SubagentActivityEvent;
+pub use crate::protocol_ext::SubagentEventType;
+
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
@@ -50,6 +60,11 @@ pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+
+/// Helper for serde skip_serializing_if with bool fields.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -84,6 +99,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Whether ultrathink mode is enabled via TUI toggle (Ctrl+E).
+        #[serde(default, skip_serializing_if = "is_false")]
+        ultrathink_enabled: bool,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -244,6 +262,38 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+
+    /// Set Plan Mode state.
+    SetPlanMode {
+        /// Whether Plan Mode is active.
+        active: bool,
+        /// Plan file path (set when entering Plan Mode).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan_file_path: Option<String>,
+    },
+
+    /// User's approval decision for Plan Mode exit.
+    PlanModeApproval {
+        /// Whether the user approved the plan.
+        approved: bool,
+        /// Permission mode for post-plan execution (if approved).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<PlanExitPermissionMode>,
+    },
+
+    /// User's approval decision for entering Plan Mode.
+    EnterPlanModeApproval {
+        /// Whether the user approved entering plan mode.
+        approved: bool,
+    },
+
+    /// User's answer to AskUserQuestion tool.
+    UserQuestionAnswer {
+        /// The tool call ID for this question.
+        tool_call_id: String,
+        /// User's answers (question header -> selected answer or custom text).
+        answers: std::collections::HashMap<String, String>,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -693,6 +743,10 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Extension events (subagent, compact v2, etc.)
+    /// All custom events are wrapped here to minimize upstream conflicts.
+    Ext(ExtEventMsg),
 }
 
 /// Agent lifecycle status, derived from emitted events.
@@ -880,6 +934,9 @@ pub struct WarningEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
+
+// CompactCompletedEvent, MicroCompactCompletedEvent, CompactFailedEvent,
+// CompactThresholdExceededEvent moved to protocol_ext.rs
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
@@ -1264,6 +1321,8 @@ pub enum SessionSource {
     Exec,
     Mcp,
     SubAgent(SubAgentSource),
+    /// SpawnAgent task execution.
+    SpawnAgent,
     #[serde(other)]
     Unknown,
 }
@@ -1285,6 +1344,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::SpawnAgent => f.write_str("spawn_agent"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
     }
@@ -1663,6 +1723,8 @@ pub struct StreamErrorEvent {
     pub additional_details: Option<String>,
 }
 
+// SubagentEventType, SubagentActivityEvent moved to protocol_ext.rs
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamInfoEvent {
     pub message: String,
@@ -2003,6 +2065,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -2020,6 +2083,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             }
         );
 
@@ -2039,6 +2103,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            ultrathink_enabled: false,
         };
 
         let json_op = serde_json::to_value(op)?;

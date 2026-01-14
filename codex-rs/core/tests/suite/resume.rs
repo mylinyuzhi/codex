@@ -38,6 +38,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
                 text: "Record some messages".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -91,6 +92,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
                 text: "Record reasoning messages".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 

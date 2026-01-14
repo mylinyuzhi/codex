@@ -30,6 +30,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::edit_ext::ConfigEditsBuilderExt;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
@@ -42,6 +43,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::thinking::ThinkingState;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -266,6 +268,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
+                    model_provider: None,
                 });
             }
             ModelMigrationOutcome::Rejected => {
@@ -295,6 +298,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) current_model: String,
+    pub(crate) current_output_style: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -323,6 +327,9 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Session-level thinking state for ultrathink toggle.
+    pub(crate) thinking_state: ThinkingState,
 }
 
 impl App {
@@ -443,6 +450,17 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Initialize retrieval service early (background task)
+        // This starts indexing immediately when cwd is known, rather than waiting
+        // for the first code_search or repomap tool invocation.
+        codex_core::spawn_retrieval_init(
+            &config.cwd,
+            config
+                .features
+                .enabled(codex_core::features::Feature::Retrieval),
+        );
+
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -453,6 +471,7 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -466,6 +485,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -833,6 +853,17 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            // Extension events - batch delegation to app_ext.rs to minimize upstream conflicts.
+            // Simple events that only need ChatWidget access are handled in app_ext.
+            ext @ (AppEvent::PluginResult(_)
+            | AppEvent::PluginCommandExpanded(_)
+            | AppEvent::PluginCommandsLoaded(_)
+            | AppEvent::SetOutputStyle { .. }
+            | AppEvent::TogglePlanMode
+            | AppEvent::ToggleUltrathink
+            | AppEvent::SpawnTaskResult { .. }) => {
+                crate::app_ext::handle_simple_ext_event(self, ext);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -851,8 +882,8 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.current_model = model;
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup { model, provider_id } => {
+                self.chat_widget.open_reasoning_popup(model, provider_id);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -1031,11 +1062,16 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_model(Some(model.as_str()), effort)
+                    .set_model_provider(model_provider.as_deref())
                     .apply()
                     .await
                 {
@@ -1044,6 +1080,11 @@ impl App {
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
                             message.push_str(label);
+                        }
+                        if let Some(ref provider) = model_provider {
+                            message.push_str(" (provider: ");
+                            message.push_str(provider);
+                            message.push(')');
                         }
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -1251,6 +1292,16 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            // Spawn events - batch delegation to app_ext.rs
+            ext @ (AppEvent::StartSpawnTask { .. }
+            | AppEvent::SpawnListRequest
+            | AppEvent::SpawnStatusRequest { .. }
+            | AppEvent::SpawnKillRequest { .. }
+            | AppEvent::SpawnDropRequest { .. }
+            | AppEvent::SpawnMergeRequest { .. }) => {
+                crate::app_ext::handle_spawn_event(self, ext).await;
+            }
+            // Note: SpawnTaskResult is handled in batch delegation above
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();
@@ -1286,6 +1337,15 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                     ));
                 }
+                // Plan-related approval requests - batch delegation to app_ext.rs
+                ref req @ (ApprovalRequest::Plan { .. }
+                | ApprovalRequest::EnterPlanMode
+                | ApprovalRequest::UserQuestion { .. }) => {
+                    if let Some(overlay) = crate::app_ext::build_plan_approval_overlay(req) {
+                        let _ = tui.enter_alt_screen();
+                        self.overlay = Some(overlay);
+                    }
+                }
             },
         }
         Ok(true)
@@ -1317,6 +1377,8 @@ impl App {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
     }
+
+    // Spawn handlers moved to app_ext.rs for upstream sync compatibility
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
         let editor_cmd = match external_editor::resolve_editor_command() {
@@ -1533,6 +1595,7 @@ mod tests {
             auth_manager,
             config,
             current_model,
+            current_output_style: String::from("default"),
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -1546,6 +1609,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         }
     }
 
@@ -1573,6 +1637,7 @@ mod tests {
                 auth_manager,
                 config,
                 current_model,
+                current_output_style: String::from("default"),
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
@@ -1586,6 +1651,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                thinking_state: ThinkingState::default(),
             },
             rx,
             op_rx,

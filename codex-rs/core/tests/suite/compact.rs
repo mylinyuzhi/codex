@@ -161,6 +161,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text: "hello world".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -182,6 +183,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text: THIRD_USER_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -575,6 +577,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 text: user_message.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .expect("submit user input");
@@ -1051,6 +1054,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: FIRST_AUTO_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1063,6 +1067,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: SECOND_AUTO_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1075,6 +1080,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: POST_AUTO_USER_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1384,6 +1390,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: FIRST_AUTO_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1395,6 +1402,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: SECOND_AUTO_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1406,6 +1414,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: POST_AUTO_USER_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1498,6 +1507,7 @@ async fn manual_compact_retries_after_context_window_error() {
                 text: "first turn".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1631,6 +1641,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: first_user_message.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1645,6 +1656,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: second_user_message.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1659,6 +1671,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: final_user_message.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1837,6 +1850,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
             .submit(Op::UserInput {
                 items: vec![UserInput::Text { text: user.into() }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();
@@ -1950,6 +1964,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1962,6 +1977,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
                 text: follow_up_user.into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -2077,6 +2093,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             .submit(Op::UserInput {
                 items: vec![UserInput::Text { text: user.into() }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();

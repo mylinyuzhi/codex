@@ -72,6 +72,7 @@ async fn fork_thread_twice_drops_to_first_message() {
                     text: text.to_string(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();

@@ -1,4 +1,5 @@
 use crate::codex::TurnContext;
+use crate::environment_context_ext::EnvironmentContextExt;
 use crate::shell::Shell;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -59,11 +60,15 @@ impl EnvironmentContext {
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
+        // Compute extended env info before self.cwd is moved
+        let ext_lines =
+            EnvironmentContextExt::from_cwd(self.cwd.as_deref()).serialize_to_xml_lines();
         let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
-
+        // Add extended environment info (is_git_repo, platform, cpu_arch)
+        lines.extend(ext_lines);
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
@@ -104,12 +109,18 @@ mod tests {
         let cwd = test_path_buf("/repo");
         let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell());
 
+        // Note: is_git_repo=false because test_path_buf doesn't create a real git repo
         let expected = format!(
             r#"<environment_context>
   <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
 </environment_context>"#,
             cwd = cwd.display(),
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
         );
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -119,9 +130,16 @@ mod tests {
     fn serialize_read_only_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -130,9 +148,16 @@ mod tests {
     fn serialize_external_sandbox_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -141,9 +166,16 @@ mod tests {
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -152,9 +184,16 @@ mod tests {
     fn serialize_full_access_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }

@@ -358,10 +358,10 @@ impl Codex {
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    conversation_id: ThreadId,
+    pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
-    state: Mutex<SessionState>,
+    pub(crate) state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -393,6 +393,8 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    /// Critical instruction for system reminder injection.
+    pub(crate) critical_instruction: Option<String>,
 }
 
 impl TurnContext {
@@ -447,7 +449,7 @@ pub(crate) struct SessionConfiguration {
     cwd: PathBuf,
 
     // TODO(pakrym): Remove config from here
-    original_config_do_not_use: Arc<Config>,
+    pub(crate) original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
 }
@@ -529,10 +531,19 @@ impl Session {
             session_configuration.session_source.clone(),
         );
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &per_turn_config.features,
+            web_search_config: Some(per_turn_config.ext.web_search_config.clone()),
         });
+
+        // Apply tool filters and log loaded tools (extracted to codex_ext.rs)
+        crate::codex_ext::apply_tool_filter(
+            &mut tools_config,
+            per_turn_config.ext.tool_filter.as_ref(),
+            conversation_id,
+            &session_configuration.model,
+        );
 
         TurnContext {
             sub_id,
@@ -551,6 +562,11 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            critical_instruction: per_turn_config
+                .ext
+                .system_reminder
+                .critical_instruction
+                .clone(),
         }
     }
 
@@ -794,7 +810,7 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
+    pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage()
     }
@@ -1877,6 +1893,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            // Extension ops - dispatch to codex_ext.rs for detailed handling
+            Op::SetPlanMode { .. }
+            | Op::PlanModeApproval { .. }
+            | Op::EnterPlanModeApproval { .. }
+            | Op::UserQuestionAnswer { .. } => {
+                crate::codex_ext::handle_ext_op(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    sub.op.clone(),
+                )
+                .await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -1934,6 +1962,11 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        // Clear response_id if model is being changed (forces full message send with new model)
+        if updates.model.is_some() {
+            let mut state = sess.state.lock().await;
+            state.clear_last_response_id();
+        }
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -1977,6 +2010,7 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                ultrathink_enabled: _, // TODO: Wire to SessionSettingsUpdate.thinking_state
             } => (
                 items,
                 SessionSettingsUpdate {
@@ -2227,6 +2261,12 @@ mod handlers {
     }
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+        // Clear response_id before compacting (forces full message send after compact)
+        {
+            let mut state = sess.state.lock().await;
+            state.clear_last_response_id();
+        }
+
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         sess.spawn_task(
@@ -2321,6 +2361,9 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        // Clean up subagent stores for this conversation
+        crate::codex_ext::cleanup_session_resources(&sess.conversation_id);
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -2384,6 +2427,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
+        web_search_config: None, // Reviews don't use web_search
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2433,6 +2477,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: model_info.truncation_policy.into(),
+        critical_instruction: parent_turn_context.critical_instruction.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2555,11 +2600,21 @@ pub(crate) async fn run_turn(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let turn_input: Vec<ResponseItem> = {
+        let mut turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.for_prompt()
         };
+
+        // Inject system reminders (background tasks, plan reminders, changed files, etc.)
+        // Count is tracked internally per main agent call
+        crate::codex_ext::maybe_inject_system_reminders(
+            &mut turn_input,
+            &turn_context.cwd,
+            Some(&sess.conversation_id),
+            turn_context.critical_instruction.as_deref(),
+        )
+        .await;
 
         let turn_input_messages = turn_input
             .iter()
@@ -2631,6 +2686,11 @@ pub(crate) async fn run_turn(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    // Try V2 compact first (encapsulates Feature::CompactV2 check)
+    if crate::compact_v2::try_auto_compact(sess.clone(), turn_context.clone()).await {
+        return;
+    }
+    // Fall back to legacy compact
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {
@@ -2676,12 +2736,19 @@ async fn run_model_turn(
         .get_model_info()
         .supports_parallel_tool_calls;
 
+    // Get previous_response_id from session state for conversation continuity
+    let previous_response_id = {
+        let state = sess.state.lock().await;
+        state.get_last_response_id().map(String::from)
+    };
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        previous_response_id,
     };
 
     let mut client_session = turn_context.client.new_session();
@@ -2710,6 +2777,16 @@ async fn run_model_turn(
                     sess.update_rate_limits(&turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
+            }
+            Err(CodexErr::PreviousResponseNotFound) => {
+                // Server doesn't recognize the previous_response_id (expired or invalid).
+                // Clear stale tracking and retry with full history.
+                sess.state.lock().await.clear_last_response_id();
+                tracing::warn!(
+                    "Previous response ID not found on server - cleared tracking, retrying with full history"
+                );
+                // Don't count this against retry budget - it's a logical error, not a network error
+                continue;
             }
             Err(err) => err,
         };
@@ -2908,9 +2985,15 @@ async fn try_run_turn(
                     .await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                // Store response_id for next turn (universal field, always store)
+                if !response_id.is_empty() {
+                    let mut state = sess.state.lock().await;
+                    state.set_last_response_id(Some(response_id.clone()));
+                }
+
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
@@ -4059,6 +4142,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                CancellationToken::new(),
             )
             .await
             .expect_err("expected fatal error");
@@ -4247,6 +4331,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -4284,6 +4369,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -4337,6 +4423,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 

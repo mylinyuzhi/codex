@@ -1913,6 +1913,8 @@ impl ChatWidget {
             .send(Op::UserInput {
                 items,
                 final_output_json_schema: None,
+                // TODO: Wire thinking_state from App (requires ChatWidget refactoring)
+                ultrathink_enabled: false,
             })
             .unwrap_or_else(|e| {
                 tracing::error!("failed to send message: {e}");
@@ -2075,7 +2077,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::Ext(_) => {}
         }
     }
 

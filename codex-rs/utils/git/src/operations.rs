@@ -237,3 +237,64 @@ struct GitRun {
     command: String,
     output: std::process::Output,
 }
+
+// === Public API for basic git operations ===
+
+/// Get the current HEAD commit ID.
+///
+/// Returns the full SHA of HEAD, or an error if not in a git repository.
+pub fn get_head_commit(path: &Path) -> Result<String, GitToolingError> {
+    resolve_head(path)?.ok_or_else(|| GitToolingError::NotAGitRepository {
+        path: path.to_path_buf(),
+    })
+}
+
+/// Get list of uncommitted changes using `git status --porcelain`.
+///
+/// Returns a list of file paths that have uncommitted changes.
+pub fn get_uncommitted_changes(path: &Path) -> Result<Vec<String>, GitToolingError> {
+    let output = run_git_for_stdout(path, ["status", "--porcelain"], None)?;
+
+    let files: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            // git status --porcelain format: "XY filename"
+            // X = staged status, Y = unstaged status
+            let trimmed = line.trim();
+            if trimmed.len() > 3 {
+                Some(trimmed[3..].to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(files)
+}
+
+/// Stage all changes and create a commit.
+///
+/// Returns the new commit ID, or None if there were no changes to commit.
+pub fn commit_all(path: &Path, message: &str) -> Result<Option<String>, GitToolingError> {
+    // Check for changes first
+    let changes = get_uncommitted_changes(path)?;
+    if changes.is_empty() {
+        return Ok(None);
+    }
+
+    // git add -A
+    run_git_for_status(path, ["add", "-A"], None)?;
+
+    // git commit
+    match run_git_for_status(path, ["commit", "-m", message], None) {
+        Ok(()) => {}
+        Err(GitToolingError::GitCommand { stderr, .. }) if stderr.contains("nothing to commit") => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    }
+
+    // Get new commit ID
+    let commit_id = get_head_commit(path)?;
+    Ok(Some(commit_id))
+}

@@ -23,17 +23,20 @@ fn windows_degraded_sandbox_active() -> bool {
 }
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
     // Index into `prompts`
     UserPrompt(usize),
+    // Plugin command name (e.g., "my-plugin:review")
+    PluginCommand(String),
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    builtins: Vec<(&'static str, SlashCommand)>,
+    pub(super) builtins: Vec<(&'static str, SlashCommand)>,
     prompts: Vec<CustomPrompt>,
+    pub(super) plugin_commands: Vec<crate::plugin_commands::PluginCommandEntry>,
     state: ScrollState,
 }
 
@@ -53,6 +56,7 @@ impl CommandPopup {
             command_filter: String::new(),
             builtins,
             prompts,
+            plugin_commands: Vec::new(),
             state: ScrollState::new(),
         }
     }
@@ -112,9 +116,9 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Sorted by ascending
-    /// score, then by name for stability.
+    /// Compute fuzzy-filtered matches over built-in commands, user prompts,
+    /// and plugin commands. Paired with optional highlight indices and score.
+    /// Sorted by ascending score, then by name for stability.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
@@ -127,6 +131,10 @@ impl CommandPopup {
             for idx in 0..self.prompts.len() {
                 out.push((CommandItem::UserPrompt(idx), None, 0));
             }
+            // Then plugin commands, already sorted by name.
+            out.extend(super::command_popup_ext::list_all_plugin_commands(
+                &self.plugin_commands,
+            ));
             return out;
         }
 
@@ -144,18 +152,25 @@ impl CommandPopup {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
+        // Plugin commands
+        out.extend(super::command_popup_ext::filter_plugin_commands(
+            &self.plugin_commands,
+            filter,
+        ));
         // When filtering, sort by ascending score and then by name for stability.
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
-                let an = match a.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                let an = match &a.0 {
+                    CommandItem::Builtin(c) => c.command().to_string(),
+                    CommandItem::UserPrompt(i) => self.prompts[*i].name.clone(),
+                    CommandItem::PluginCommand(n) => n.clone(),
                 };
-                let bn = match b.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                let bn = match &b.0 {
+                    CommandItem::Builtin(c) => c.command().to_string(),
+                    CommandItem::UserPrompt(i) => self.prompts[*i].name.clone(),
+                    CommandItem::PluginCommand(n) => n.clone(),
                 };
-                an.cmp(bn)
+                an.cmp(&bn)
             })
         });
         out
@@ -185,6 +200,12 @@ impl CommandPopup {
                         (
                             format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name),
                             description,
+                        )
+                    }
+                    CommandItem::PluginCommand(ref cmd_name) => {
+                        super::command_popup_ext::plugin_command_name_and_description(
+                            cmd_name,
+                            &self.plugin_commands,
                         )
                     }
                 };
@@ -220,7 +241,7 @@ impl CommandPopup {
         let matches = self.filtered_items();
         self.state
             .selected_idx
-            .and_then(|idx| matches.get(idx).copied())
+            .and_then(|idx| matches.get(idx).cloned())
     }
 }
 
@@ -255,7 +276,7 @@ mod tests {
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
-            CommandItem::UserPrompt(_) => false,
+            CommandItem::UserPrompt(_) | CommandItem::PluginCommand(_) => false,
         });
         assert!(
             has_init,
@@ -274,6 +295,9 @@ mod tests {
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
             Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
+            Some(CommandItem::PluginCommand(_)) => {
+                panic!("unexpected plugin command selected for '/init'")
+            }
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -287,6 +311,9 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
             Some(CommandItem::UserPrompt(_)) => {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            Some(CommandItem::PluginCommand(_)) => {
+                panic!("unexpected plugin command ranked before '/model' for '/mo'")
             }
             None => panic!("expected at least one match for '/mo'"),
         }
@@ -394,7 +421,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::PluginCommand(_) => None,
             })
             .collect();
         assert!(

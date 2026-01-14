@@ -62,6 +62,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
                 text: "hello world".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

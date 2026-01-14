@@ -22,13 +22,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::chatwidget_model_ext::build_custom_provider_selection_items;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
-use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::features::all_features;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -388,6 +389,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Plan mode flag; tracks whether plan mode is active.
+    is_plan_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
@@ -399,6 +402,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    // Current output style name
+    current_output_style: String,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1534,18 +1539,29 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+
+        // Initialize plugin commands asynchronously
+        let codex_home = widget.config.codex_home.clone();
+        let tx = widget.app_event_tx.clone();
+        tokio::spawn(async move {
+            let _ = crate::plugin_commands::init_plugin_commands(&codex_home).await;
+            let commands = crate::plugin_commands::plugin_commands().list().await;
+            tx.send(AppEvent::PluginCommandsLoaded(commands));
+        });
 
         widget
     }
@@ -1624,18 +1640,29 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+
+        // Initialize plugin commands asynchronously
+        let codex_home = widget.config.codex_home.clone();
+        let tx = widget.app_event_tx.clone();
+        tokio::spawn(async move {
+            let _ = crate::plugin_commands::init_plugin_commands(&codex_home).await;
+            let commands = crate::plugin_commands::plugin_commands().list().await;
+            tx.send(AppEvent::PluginCommandsLoaded(commands));
+        });
 
         widget
     }
@@ -1709,6 +1736,9 @@ impl ChatWidget {
                     }
                     InputResult::CommandWithArgs(cmd, args) => {
                         self.dispatch_command_with_args(cmd, args);
+                    }
+                    InputResult::PluginCommand { name, args } => {
+                        self.dispatch_plugin_command(name, args);
                     }
                     InputResult::None => {}
                 }
@@ -1828,6 +1858,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::OutputStyle => {
+                self.open_output_style_popup();
+            }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
@@ -1930,6 +1963,16 @@ impl ChatWidget {
                     self.add_info_message("Rollout path is not available yet.".to_string(), None);
                 }
             }
+            SlashCommand::Spawn => {
+                self.handle_spawn_command();
+            }
+            SlashCommand::Plugin => {
+                crate::chatwidget_plugin_ext::spawn_plugin_help(
+                    self.app_event_tx.clone(),
+                    self.config.codex_home.clone(),
+                    Some(self.config.cwd.clone()),
+                );
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;
@@ -1993,6 +2036,14 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+            }
+            SlashCommand::Plugin => {
+                crate::chatwidget_plugin_ext::spawn_plugin_command(
+                    self.app_event_tx.clone(),
+                    self.config.codex_home.clone(),
+                    Some(self.config.cwd.clone()),
+                    trimmed.to_string(),
+                );
             }
             _ => self.dispatch_command(cmd),
         }
@@ -2115,6 +2166,11 @@ impl ChatWidget {
             items.push(UserInput::LocalImage { path });
         }
 
+        // /spawn commands - dispatch logic moved to spawn_command_ext.rs
+        if self.try_dispatch_spawn_command(&text) {
+            return;
+        }
+
         if !text.is_empty() {
             items.push(UserInput::Text { text: text.clone() });
         }
@@ -2133,6 +2189,8 @@ impl ChatWidget {
             .send(Op::UserInput {
                 items,
                 final_output_json_schema: None,
+                // TODO: Wire thinking_state from App (requires ChatWidget refactoring)
+                ultrathink_enabled: false,
             })
             .unwrap_or_else(|e| {
                 tracing::error!("failed to send message: {e}");
@@ -2297,6 +2355,7 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
+            EventMsg::Ext(ext_msg) => self.on_ext_event(ext_msg),
         }
     }
 
@@ -2360,7 +2419,7 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::ExitRequest);
     }
 
-    fn request_redraw(&mut self) {
+    pub(crate) fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
@@ -2368,6 +2427,54 @@ impl ChatWidget {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
         self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
+    }
+
+    // Helper methods for chatwidget_ext.rs to minimize field access
+    pub(crate) fn push_approval_request_and_redraw(&mut self, request: ApprovalRequest) {
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_plan_mode_and_redraw(&mut self, active: bool) {
+        self.is_plan_mode = active;
+        self.bottom_pane.set_plan_mode(active);
+        self.request_redraw();
+    }
+
+    pub(crate) fn codex_home(&self) -> &std::path::Path {
+        &self.config.codex_home
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
+    pub(crate) fn app_event_tx(&self) -> &AppEventSender {
+        &self.app_event_tx
+    }
+
+    pub(crate) fn cwd(&self) -> &std::path::Path {
+        &self.config.cwd
+    }
+
+    pub(crate) fn current_output_style(&self) -> &str {
+        &self.current_output_style
+    }
+
+    pub(crate) fn set_current_output_style(&mut self, style: String) {
+        self.current_output_style = style;
+    }
+
+    pub(crate) fn show_selection_view(&mut self, params: crate::bottom_pane::SelectionViewParams) {
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        self.bottom_pane.set_plugin_commands(commands);
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -2715,6 +2822,8 @@ impl ChatWidget {
                 ..Default::default()
             });
         }
+        // Add custom provider presets (logic moved to chatwidget_model_ext.rs)
+        items.extend(build_custom_provider_selection_items(&self.config));
 
         let header = self.model_menu_header(
             "Select Model",
@@ -2761,6 +2870,7 @@ impl ChatWidget {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    provider_id: None,
                 });
             })];
             items.push(SelectionItem {
@@ -2790,6 +2900,14 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
+        Self::model_selection_actions_with_provider(model_for_action, effort_for_action, None)
+    }
+
+    fn model_selection_actions_with_provider(
+        model_for_action: String,
+        effort_for_action: Option<ReasoningEffortConfig>,
+        model_provider: Option<String>,
+    ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let effort_label = effort_for_action
                 .map(|effort| effort.to_string())
@@ -2807,17 +2925,23 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                model_provider: model_provider.clone(),
             });
             tracing::info!(
-                "Selected model: {}, Selected effort: {}",
+                "Selected model: {}, Selected effort: {}, Provider: {:?}",
                 model_for_action,
-                effort_label
+                effort_label,
+                model_provider
             );
         })]
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+    pub(crate) fn open_reasoning_popup(
+        &mut self,
+        preset: ModelPreset,
+        provider_id: Option<String>,
+    ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
@@ -2864,9 +2988,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort), provider_id);
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(preset.model, None, provider_id);
             }
             return;
         }
@@ -2925,7 +3049,12 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let provider_for_action = provider_id.clone();
+            let actions = Self::model_selection_actions_with_provider(
+                model_for_action,
+                choice.stored,
+                provider_for_action,
+            );
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -2963,7 +3092,12 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider_id: Option<String>,
+    ) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
@@ -2979,13 +3113,15 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model: model.clone(),
             effort,
+            model_provider: provider_id.clone(),
         });
         tracing::info!(
-            "Selected model: {}, Selected effort: {}",
+            "Selected model: {}, Selected effort: {}, Provider: {:?}",
             model,
             effort
                 .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string())
+                .unwrap_or_else(|| "default".to_string()),
+            provider_id
         );
     }
 
@@ -3109,8 +3245,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
-            .iter()
+        let features: Vec<BetaFeatureItem> = all_features()
             .filter_map(|spec| {
                 let name = spec.stage.beta_menu_name()?;
                 let description = spec.stage.beta_menu_description()?;
@@ -3721,6 +3856,14 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Submit a text message programmatically (e.g., for merge prompts).
+    pub(crate) fn submit_text_message(&mut self, text: &str) {
+        self.queue_user_message(UserMessage {
+            text: text.to_string(),
+            image_paths: Vec::new(),
+        });
+    }
+
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
@@ -3984,6 +4127,10 @@ impl ChatWidget {
 
     pub(crate) fn thread_id(&self) -> Option<ThreadId> {
         self.thread_id
+    }
+
+    pub(crate) fn is_plan_mode(&self) -> bool {
+        self.is_plan_mode
     }
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {

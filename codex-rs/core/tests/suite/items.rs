@@ -44,6 +44,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
                 text: "please inspect sample.txt".into(),
             }]),
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -101,6 +102,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
                 text: "please summarize results".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -158,6 +160,7 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
                 text: "explain your reasoning".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -217,6 +220,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
                 text: "find the weather".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -270,6 +274,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
                 text: "please stream text".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -336,6 +341,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
                 text: "reason through it".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -394,6 +400,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
                 text: "show raw reasoning".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 

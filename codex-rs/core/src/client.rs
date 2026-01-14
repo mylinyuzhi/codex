@@ -20,8 +20,8 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+use codex_api::UltrathinkConfig as ApiUltrathinkConfig;
 use codex_api::build_conversation_headers;
-use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
@@ -52,12 +52,13 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_ultrathink_ext::build_reasoning_for_request;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::features::FEATURES;
 use crate::features::Feature;
+use crate::features::all_features;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -156,6 +157,10 @@ impl ModelClient {
 
     /// Returns the currently configured model slug.
     pub fn get_model(&self) -> String {
+        // Use provider's explicit model_name for custom endpoints
+        if let Some(model_name) = &self.state.provider.ext.model_name {
+            return model_name.clone();
+        }
         self.state.model_info.slug.clone()
     }
 
@@ -273,15 +278,26 @@ impl ModelClientSession {
     ) -> ApiResponsesOptions {
         let model_info = &self.state.model_info;
 
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.state.summary)
-                },
+        // Use build_reasoning_for_request for full priority chain:
+        // 1. "ultrathink" keyword → provider's ultrathink_config.effort
+        // 2. Per-turn effort override
+        // 3. Global config.model_reasoning_effort
+        // 4. Model default
+        let reasoning_result = build_reasoning_for_request(
+            &prompt.input,
+            self.state.effort,
+            self.state.config.model_reasoning_effort,
+            model_info,
+            self.state.provider.ext.ultrathink_config.as_ref(),
+            self.state.summary,
+        );
+        let reasoning = reasoning_result.reasoning;
+
+        // Build ultrathink config when active (for adapters)
+        let ultrathink_config = if reasoning_result.ultrathink_active {
+            Some(ApiUltrathinkConfig {
+                effort: reasoning_result.effort,
+                budget_tokens: reasoning_result.budget_tokens,
             })
         } else {
             None
@@ -321,6 +337,7 @@ impl ModelClientSession {
             session_source: Some(self.state.session_source.clone()),
             extra_headers: beta_feature_headers(&self.state.config),
             compression,
+            ultrathink_config,
         }
     }
 
@@ -611,12 +628,12 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+        previous_response_id: prompt.previous_response_id.clone(),
     }
 }
 
 fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
-    let enabled = FEATURES
-        .iter()
+    let enabled = all_features()
         .filter_map(|spec| {
             if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
                 Some(spec.key)

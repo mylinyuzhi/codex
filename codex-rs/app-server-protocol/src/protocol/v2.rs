@@ -698,6 +698,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
             CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
+            CoreSessionSource::SpawnAgent => SessionSource::Unknown,
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }

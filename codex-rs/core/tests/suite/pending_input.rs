@@ -102,6 +102,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text: "first prompt".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -117,6 +118,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text: "second prompt".into(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
