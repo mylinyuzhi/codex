@@ -622,6 +622,7 @@ mod tests {
                 steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -635,6 +636,7 @@ mod tests {
                 steer_enabled: true,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
     }

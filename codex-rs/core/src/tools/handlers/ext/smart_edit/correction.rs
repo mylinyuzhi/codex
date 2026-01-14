@@ -145,6 +145,7 @@ Analyze why the search string didn't match and provide corrected values in JSON 
     // Stream with timeout wrapper (key pattern from research)
     let result = timeout(CORRECTION_TIMEOUT, async move {
         let mut stream = client
+            .new_session()
             .stream(&prompt)
             .await
             .map_err(|e| CodexErr::Fatal(format!("LLM stream failed: {e}")))?;

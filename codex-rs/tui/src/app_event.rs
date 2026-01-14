@@ -230,7 +230,7 @@ pub(crate) enum AppEvent {
     /// Toggle plan mode on/off via keyboard shortcut (Shift+Tab).
     TogglePlanMode,
 
-    /// Toggle ultrathink mode on/off via keyboard shortcut (Tab).
+    /// Toggle ultrathink mode on/off via keyboard shortcut (Ctrl+E).
     ToggleUltrathink,
 
     /// Start a spawn task with the given arguments.

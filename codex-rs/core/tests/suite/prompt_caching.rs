@@ -38,6 +38,7 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     format!(
         r#"<environment_context>
   <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
   <platform>{platform}</platform>
   <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>{shell_name}</shell>
@@ -570,11 +571,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
 
     let expected_env_text_2 = format!(
         r#"<environment_context>
-  <cwd>{}</cwd>
-  <shell>{}</shell>
+  <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
+  <shell>{shell_name}</shell>
 </environment_context>"#,
-        new_cwd.path().display(),
-        shell.name()
+        cwd = new_cwd.path().display(),
+        platform = std::env::consts::OS,
+        cpu_arch = std::env::consts::ARCH,
+        shell_name = shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",

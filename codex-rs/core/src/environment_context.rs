@@ -109,12 +109,18 @@ mod tests {
         let cwd = test_path_buf("/repo");
         let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell());
 
+        // Note: is_git_repo=false because test_path_buf doesn't create a real git repo
         let expected = format!(
             r#"<environment_context>
   <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
 </environment_context>"#,
             cwd = cwd.display(),
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
         );
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -124,9 +130,16 @@ mod tests {
     fn serialize_read_only_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -135,9 +148,16 @@ mod tests {
     fn serialize_external_sandbox_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -146,9 +166,16 @@ mod tests {
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -157,9 +184,16 @@ mod tests {
     fn serialize_full_access_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
+        let expected = format!(
+            r#"<environment_context>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{arch}</cpu_arch>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            platform = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }

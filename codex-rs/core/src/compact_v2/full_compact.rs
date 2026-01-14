@@ -375,7 +375,7 @@ async fn stream_and_collect_response(
     client: &ModelClient,
     prompt: &Prompt,
 ) -> Result<SummarizationResult, CodexErr> {
-    let mut stream = client.clone().stream(prompt).await?;
+    let mut stream = client.clone().new_session().stream(prompt).await?;
     let mut response_text = String::new();
     let mut input_tokens: i64 = 0;
     let mut output_tokens: i64 = 0;

@@ -202,7 +202,7 @@ async fn call_llm_for_summary(
     };
 
     // Stream and collect response
-    let mut stream = client.clone().stream(&prompt).await?;
+    let mut stream = client.clone().new_session().stream(&prompt).await?;
     let mut response_text = String::new();
 
     loop {

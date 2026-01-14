@@ -48,6 +48,7 @@ impl Interceptor for GptOpenapiInterceptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_client::RequestCompression;
     use http::HeaderMap;
     use http::Method;
 
@@ -58,6 +59,7 @@ mod tests {
             headers: HeaderMap::new(),
             body: None,
             timeout: None,
+            compression: RequestCompression::None,
         }
     }
 

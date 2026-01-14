@@ -1475,7 +1475,6 @@ mod tests {
         );
 
         // Build expected from the same helpers used by the builder.
-        let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         use crate::tools::ext::ask_user_question::create_ask_user_question_tool;
         use crate::tools::ext::enter_plan_mode::create_enter_plan_mode_tool;
         use crate::tools::ext::exit_plan_mode::create_exit_plan_mode_tool;
