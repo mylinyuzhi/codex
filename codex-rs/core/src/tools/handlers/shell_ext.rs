@@ -12,7 +12,7 @@ use crate::shell_background::SharedOutputBuffer;
 use crate::shell_background::ShellResult;
 use crate::shell_background::get_global_shell_store;
 use crate::tools::context::ToolOutput;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use serde::Deserialize;
@@ -51,7 +51,7 @@ pub async fn run_shell_background(
     description: Option<String>,
     cwd: Option<std::path::PathBuf>,
     env: Option<std::collections::HashMap<String, String>>,
-    conversation_id: Option<ConversationId>,
+    conversation_id: Option<ThreadId>,
     store: &SharedBackgroundShellStore,
 ) -> ToolOutput {
     let command_str = command.join(" ");
@@ -110,7 +110,7 @@ pub async fn run_shell_background(
 pub async fn try_handle_shell_background(
     arguments: &str,
     turn: &TurnContext,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
     let bg_params = parse_background_params(arguments);
     if !bg_params.run_in_background {
@@ -144,7 +144,7 @@ pub async fn try_handle_shell_command_background(
     arguments: &str,
     session: &Session,
     turn: &TurnContext,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
     let bg_params = parse_background_params(arguments);
     if !bg_params.run_in_background {

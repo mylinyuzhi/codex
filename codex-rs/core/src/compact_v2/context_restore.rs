@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 
 use super::CompactConfig;
 use super::token_counter::TokenCounter;
@@ -80,7 +80,7 @@ pub fn restore_context(conversation_id: &str, config: &CompactConfig) -> Restore
     let token_counter = TokenCounter::from(config);
 
     // Restore files (from state_ext read file tracking)
-    if let Ok(conv_id) = ConversationId::from_string(conversation_id) {
+    if let Ok(conv_id) = ThreadId::from_string(conversation_id) {
         result.files = restore_file_reads(conv_id, conversation_id, config, &token_counter);
     }
 
@@ -106,7 +106,7 @@ pub fn restore_context(conversation_id: &str, config: &CompactConfig) -> Restore
 ///
 /// Files are sorted by recency (most recent first) and agent files are excluded.
 fn restore_file_reads(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     agent_id: &str,
     config: &CompactConfig,
     token_counter: &TokenCounter,

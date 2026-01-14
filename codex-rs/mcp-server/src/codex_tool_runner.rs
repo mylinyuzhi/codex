@@ -95,6 +95,7 @@ pub async fn run_codex_tool_session(
                 text: initial_prompt.clone(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         },
     };
 
@@ -124,6 +125,7 @@ pub async fn run_codex_tool_session_reply(
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: prompt }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
     {

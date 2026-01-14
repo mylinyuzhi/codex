@@ -165,6 +165,9 @@ pub struct AdapterConfig {
     pub extra: Option<serde_json::Value>,
     /// Optional request hook for interceptor support.
     pub request_hook: Option<Arc<dyn RequestHook>>,
+    /// Ultrathink config when ultrathink is active (keyword or toggle).
+    /// Adapters use effort (OpenAI/Gemini) or budget_tokens (Claude).
+    pub ultrathink_config: Option<crate::common::UltrathinkConfig>,
 }
 
 impl Debug for AdapterConfig {
@@ -187,6 +190,7 @@ impl Clone for AdapterConfig {
             model: self.model.clone(),
             extra: self.extra.clone(),
             request_hook: self.request_hook.clone(),
+            ultrathink_config: self.ultrathink_config.clone(),
         }
     }
 }

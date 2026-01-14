@@ -20,7 +20,7 @@ use crate::client::ModelClient;
 use crate::codex::Codex;
 use crate::config::Config;
 use crate::spawn_task::LogFileSink;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -83,7 +83,7 @@ pub struct SummarizerContext {
     /// Config with model provider settings.
     pub config: Arc<Config>,
     /// Conversation ID for telemetry.
-    pub conversation_id: ConversationId,
+    pub conversation_id: ThreadId,
 }
 
 /// Driver for loop-based agent execution.
@@ -478,6 +478,7 @@ impl LoopDriver {
                 .submit(Op::UserInput {
                     items: input,
                     final_output_json_schema: None,
+                    ultrathink_enabled: false,
                 })
                 .await
             {

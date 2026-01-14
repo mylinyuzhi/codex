@@ -113,6 +113,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             session_source,
             extra_headers,
             compression: _,
+            ultrathink_config: _, // TODO: pass to adapters when needed for non-streaming
         } = options;
 
         // Apply tweakcc filtering when previous_response_id exists
@@ -164,10 +165,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
     ///
     /// * `model` - The model name to use
     /// * `prompt` - The prompt containing instructions, input, and tools
+    /// * `ultrathink_config` - Dynamic ultrathink config when active
     pub(crate) async fn try_adapter(
         &self,
         model: &str,
         prompt: &ApiPrompt,
+        ultrathink_config: Option<crate::common::UltrathinkConfig>,
     ) -> Result<Option<ResponseStream>, ApiError> {
         let provider = self.streaming.provider();
 
@@ -194,6 +197,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 model: model.to_string(),
                 extra: provider.model_parameters.clone(),
                 request_hook,
+                ultrathink_config,
             };
             let result = adapter.generate(prompt, &config).await?;
             return Ok(Some(generate_result_to_stream(result)));

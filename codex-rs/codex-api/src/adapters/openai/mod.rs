@@ -148,6 +148,12 @@ impl ProviderAdapter for OpenAIAdapter {
         // Apply extra config options
         params = apply_extra_config(params, &config.extra);
 
+        // Apply ultrathink config (overrides static extra config)
+        if let Some(ut_config) = &config.ultrathink_config {
+            let effort = convert_reasoning_effort(ut_config.effort);
+            params = params.reasoning(ReasoningConfig::with_effort(effort));
+        }
+
         // Make the API call
         let response = client
             .responses()
@@ -271,6 +277,19 @@ fn apply_extra_config(
     }
 
     params
+}
+
+/// Convert protocol ReasoningEffort to openai-sdk ReasoningEffort.
+fn convert_reasoning_effort(
+    effort: codex_protocol::openai_models::ReasoningEffort,
+) -> ReasoningEffort {
+    use codex_protocol::openai_models::ReasoningEffort as ProtocolEffort;
+    match effort {
+        ProtocolEffort::None => ReasoningEffort::None,
+        ProtocolEffort::Minimal | ProtocolEffort::Low => ReasoningEffort::Low,
+        ProtocolEffort::Medium => ReasoningEffort::Medium,
+        ProtocolEffort::High | ProtocolEffort::XHigh => ReasoningEffort::High,
+    }
 }
 
 #[cfg(test)]

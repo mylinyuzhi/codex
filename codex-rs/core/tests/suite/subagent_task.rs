@@ -11,13 +11,13 @@ use codex_core::subagent::BackgroundTaskStore;
 use codex_core::subagent::cleanup_stores;
 use codex_core::subagent::get_or_create_stores;
 use codex_core::subagent::get_stores;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use std::time::Duration;
 
 /// Test that stores are created on first access and reused for subsequent calls.
 #[test]
 fn test_stores_creation_and_reuse() {
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
 
     // First access creates stores
     let stores1 = get_or_create_stores(conv_id);
@@ -35,7 +35,7 @@ fn test_stores_creation_and_reuse() {
 /// Test that cleanup_stores properly removes stores from registry.
 #[test]
 fn test_stores_cleanup() {
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
 
     // Create stores
     let _ = get_or_create_stores(conv_id);
@@ -57,8 +57,8 @@ fn test_stores_cleanup() {
 /// Test that different conversations have isolated stores.
 #[test]
 fn test_stores_isolation() {
-    let conv_id1 = ConversationId::new();
-    let conv_id2 = ConversationId::new();
+    let conv_id1 = ThreadId::new();
+    let conv_id2 = ThreadId::new();
 
     let stores1 = get_or_create_stores(conv_id1);
     let stores2 = get_or_create_stores(conv_id2);
@@ -154,7 +154,7 @@ async fn test_background_task_store_operations() {
 fn test_codex_ext_cleanup_session_resources() {
     use codex_core::codex_ext::cleanup_session_resources;
 
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
 
     // Create stores
     let _ = get_or_create_stores(conv_id);

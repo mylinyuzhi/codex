@@ -63,6 +63,7 @@ impl AgentControl {
                 Op::UserInput {
                     items: vec![UserInput::Text { text: prompt }],
                     final_output_json_schema: None,
+                    ultrathink_enabled: false,
                 },
             )
             .await;
@@ -348,6 +349,7 @@ mod tests {
                     text: "hello from tests".to_string(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             },
         );
         let captured = harness
@@ -378,6 +380,7 @@ mod tests {
                     text: "spawned".to_string(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             },
         );
         let captured = harness

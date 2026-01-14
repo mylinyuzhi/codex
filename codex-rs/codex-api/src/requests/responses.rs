@@ -1,6 +1,7 @@
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
+use crate::common::UltrathinkConfig;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
@@ -49,6 +50,8 @@ pub struct ResponsesRequestBuilder<'a> {
     pub(crate) stream: bool,
     /// Model parameters (temperature, max_tokens, etc.)
     pub(crate) model_parameters: Option<Value>,
+    /// Ultrathink config when ultrathink is active (for adapters)
+    pub(crate) ultrathink_config: Option<UltrathinkConfig>,
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
@@ -119,6 +122,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
     pub fn model_parameters(mut self, params: Option<Value>) -> Self {
         self.model_parameters = params;
+        self
+    }
+
+    pub fn ultrathink_config(mut self, config: Option<UltrathinkConfig>) -> Self {
+        self.ultrathink_config = config;
         self
     }
 

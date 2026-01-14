@@ -2010,6 +2010,7 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                ultrathink_enabled: _, // TODO: Wire to SessionSettingsUpdate.thinking_state
             } => (
                 items,
                 SessionSettingsUpdate {

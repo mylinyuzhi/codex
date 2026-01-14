@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use dashmap::DashMap;
 use rand::prelude::IndexedRandom;
 
@@ -24,7 +24,7 @@ use crate::error::CodexErr;
 
 /// Global cache: conversation_id -> plan_slug
 /// Same session ALWAYS gets the same plan file regardless of how many times /plan is called.
-static PLAN_SLUG_CACHE: LazyLock<DashMap<ConversationId, String>> = LazyLock::new(DashMap::new);
+static PLAN_SLUG_CACHE: LazyLock<DashMap<ThreadId, String>> = LazyLock::new(DashMap::new);
 
 /// Generate a random plan slug.
 /// Format: `{adjective}-{action}-{noun}` (e.g., "bright-exploring-aurora")
@@ -44,7 +44,7 @@ fn generate_random_plan_slug() -> String {
 /// Same session always returns the same slug, enabling:
 /// 1. Re-entry detection (same file exists check)
 /// 2. No path mismatch between TUI and Core
-pub fn get_plan_slug(conversation_id: &ConversationId) -> String {
+pub fn get_plan_slug(conversation_id: &ThreadId) -> String {
     if let Some(slug) = PLAN_SLUG_CACHE.get(conversation_id) {
         return slug.clone();
     }
@@ -55,7 +55,7 @@ pub fn get_plan_slug(conversation_id: &ConversationId) -> String {
 
 /// Clean up slug cache entry for a conversation.
 /// Called when session ends to free memory.
-pub fn cleanup_plan_slug(conversation_id: &ConversationId) {
+pub fn cleanup_plan_slug(conversation_id: &ThreadId) {
     PLAN_SLUG_CACHE.remove(conversation_id);
 }
 
@@ -91,7 +91,7 @@ pub fn get_plans_directory() -> Result<PathBuf, CodexErr> {
 /// # Important
 /// Same conversation_id ALWAYS returns the same path (slug is cached).
 /// This enables proper re-entry detection.
-pub fn get_plan_file_path(conversation_id: &ConversationId) -> Result<PathBuf, CodexErr> {
+pub fn get_plan_file_path(conversation_id: &ThreadId) -> Result<PathBuf, CodexErr> {
     let slug = get_plan_slug(conversation_id);
     Ok(get_plans_directory()?.join(format!("{slug}.md")))
 }

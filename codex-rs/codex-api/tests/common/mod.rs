@@ -28,6 +28,7 @@ pub fn adapter_config(cfg: &TestConfig) -> AdapterConfig {
         model: cfg.model.clone(),
         extra: None,
         request_hook: None,
+        ultrathink_config: None,
     }
 }
 

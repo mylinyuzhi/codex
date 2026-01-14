@@ -3,7 +3,7 @@
 //! This module provides extension functions that hook into Codex lifecycle events
 //! without modifying core files directly, minimizing upstream merge conflicts.
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 use std::path::PathBuf;
@@ -31,7 +31,7 @@ use crate::tools::spec_ext::ToolFilter;
 ///
 /// This prevents memory leaks in long-running server deployments where
 /// conversations accumulate without cleanup.
-pub fn cleanup_session_resources(conversation_id: &ConversationId) {
+pub fn cleanup_session_resources(conversation_id: &ThreadId) {
     cleanup_stores(conversation_id);
 
     // Clean up session-scoped hooks for this conversation
@@ -57,7 +57,7 @@ pub fn cleanup_session_resources(conversation_id: &ConversationId) {
 pub(crate) fn apply_tool_filter(
     tools_config: &mut ToolsConfig,
     ext_tool_filter: Option<&ToolFilter>,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     model: &str,
 ) {
     // Apply Plan Mode tool filter if active (read-only tools + plan file write)
@@ -97,7 +97,7 @@ pub async fn run_system_reminder_injection(
     cwd: &Path,
     is_plan_mode: bool,
     plan_file_path: Option<&str>,
-    conversation_id: Option<&ConversationId>,
+    conversation_id: Option<&ThreadId>,
     critical_instruction: Option<&str>,
 ) -> Vec<String> {
     let shell_store = get_global_shell_store();
@@ -261,7 +261,7 @@ pub async fn run_system_reminder_injection(
 pub async fn maybe_inject_system_reminders(
     history: &mut Vec<ResponseItem>,
     cwd: &Path,
-    conversation_id: Option<&ConversationId>,
+    conversation_id: Option<&ThreadId>,
     critical_instruction: Option<&str>,
 ) {
     // Get plan mode state from stores
@@ -314,7 +314,7 @@ use codex_protocol::protocol_ext::PlanModeExitedEvent;
 /// Dispatch happens here to minimize changes to codex.rs.
 /// When adding new extension ops, add them to the match pattern in codex.rs
 /// (single line) and add the handler logic here.
-pub async fn handle_ext_op(conversation_id: ConversationId, tx_event: &Sender<Event>, op: Op) {
+pub async fn handle_ext_op(conversation_id: ThreadId, tx_event: &Sender<Event>, op: Op) {
     match op {
         Op::SetPlanMode {
             active,
@@ -350,7 +350,7 @@ pub async fn handle_ext_op(conversation_id: ConversationId, tx_event: &Sender<Ev
 /// - Same session = same plan file regardless of how many times /plan is called
 /// - This enables proper re-entry detection
 pub async fn handle_set_plan_mode(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     tx_event: &Sender<Event>,
     active: bool,
     _plan_file_path: Option<&str>, // Ignored - core generates with cached slug
@@ -390,7 +390,7 @@ pub async fn handle_set_plan_mode(
 ///   - `AcceptEdits`: Auto-approve file edits only
 ///   - `Default`: Manual approval for everything
 pub async fn handle_plan_mode_approval(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     tx_event: &Sender<Event>,
     approved: bool,
     permission_mode: Option<PlanExitPermissionMode>,
@@ -442,7 +442,7 @@ pub async fn handle_plan_mode_approval(
 ///
 /// This is called from `codex.rs` submission_loop when the LLM requests to enter plan mode.
 pub async fn handle_enter_plan_mode_approval(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     tx_event: &Sender<Event>,
     approved: bool,
 ) {
@@ -485,7 +485,7 @@ pub async fn handle_enter_plan_mode_approval(
 /// This matches Claude Code's `onAllow(updatedInput with answers)` callback mechanism.
 #[allow(unused_variables)]
 pub async fn handle_user_question_answer(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     tx_event: &Sender<Event>,
     tool_call_id: String,
     answers: std::collections::HashMap<String, String>,

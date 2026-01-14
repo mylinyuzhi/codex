@@ -8,7 +8,7 @@ use super::types::ShellStatus;
 use crate::system_reminder::generator::BackgroundTaskInfo;
 use crate::system_reminder::generator::BackgroundTaskStatus;
 use crate::system_reminder::generator::BackgroundTaskType;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,7 +44,7 @@ impl BackgroundShellStore {
     /// The `conversation_id` is used for session-scoped cleanup.
     pub fn register_pending(
         &self,
-        conversation_id: Option<ConversationId>,
+        conversation_id: Option<ThreadId>,
         command: String,
         description: String,
     ) -> (String, CancellationToken) {
@@ -62,7 +62,7 @@ impl BackgroundShellStore {
     /// The buffers allow streaming output capture during execution.
     pub fn register_pending_with_buffer(
         &self,
-        conversation_id: Option<ConversationId>,
+        conversation_id: Option<ThreadId>,
         command: String,
         description: String,
     ) -> (
@@ -386,7 +386,7 @@ impl BackgroundShellStore {
     /// If `conversation_id` is None, returns shells from all conversations.
     pub fn list_for_reminder(
         &self,
-        conversation_id: Option<&ConversationId>,
+        conversation_id: Option<&ThreadId>,
     ) -> Vec<BackgroundTaskInfo> {
         self.shells
             .iter()
@@ -488,7 +488,7 @@ impl BackgroundShellStore {
     /// cleaned up when a conversation ends, rather than waiting for time-based cleanup.
     ///
     /// Running shells are killed before removal.
-    pub fn cleanup_by_conversation(&self, conversation_id: &ConversationId) {
+    pub fn cleanup_by_conversation(&self, conversation_id: &ThreadId) {
         // First, kill any running shells for this conversation
         let shells_to_kill: Vec<String> = self
             .shells
@@ -594,8 +594,8 @@ mod tests {
     #[test]
     fn test_cleanup_by_conversation() {
         let store = BackgroundShellStore::new();
-        let conv1 = ConversationId::new();
-        let conv2 = ConversationId::new();
+        let conv1 = ThreadId::new();
+        let conv2 = ThreadId::new();
 
         // Register shells for different conversations
         let (shell1, _) =

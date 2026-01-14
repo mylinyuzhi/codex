@@ -3104,6 +3104,7 @@ impl CodexMessageProcessor {
             .submit(Op::UserInput {
                 items: mapped_items,
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await;
 
@@ -3258,6 +3259,7 @@ impl CodexMessageProcessor {
             .submit(Op::UserInput {
                 items: mapped_items,
                 final_output_json_schema: params.output_schema,
+                ultrathink_enabled: false,
             })
             .await;
 

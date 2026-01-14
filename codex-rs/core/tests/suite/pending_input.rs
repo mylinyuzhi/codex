@@ -101,7 +101,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             items: vec![UserInput::Text {
                 text: "first prompt".into(),
             }],
-            final_output_json_schema: None,
+            final_output_json_schema: None, ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -116,7 +116,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             items: vec![UserInput::Text {
                 text: "second prompt".into(),
             }],
-            final_output_json_schema: None,
+            final_output_json_schema: None, ultrathink_enabled: false,
         })
         .await
         .unwrap();

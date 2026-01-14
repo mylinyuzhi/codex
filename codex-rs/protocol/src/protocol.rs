@@ -61,6 +61,11 @@ pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+/// Helper for serde skip_serializing_if with bool fields.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Submission {
@@ -94,6 +99,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Whether ultrathink mode is enabled via TUI toggle (Ctrl+E).
+        #[serde(default, skip_serializing_if = "is_false")]
+        ultrathink_enabled: bool,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -2057,6 +2065,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -2074,6 +2083,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             }
         );
 
@@ -2093,6 +2103,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            ultrathink_enabled: false,
         };
 
         let json_op = serde_json::to_value(op)?;

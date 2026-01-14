@@ -74,6 +74,21 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
 }
 
+/// Ultrathink configuration for extended reasoning.
+///
+/// When ultrathink is active (via keyword detection or Ctrl+E toggle),
+/// this config carries the computed effort and budget for adapters.
+/// Different adapters use different fields:
+/// - effort: For effort-based models (OpenAI, Gemini)
+/// - budget_tokens: For budget-based models (Claude/Anthropic)
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UltrathinkConfig {
+    /// Reasoning effort level.
+    pub effort: ReasoningEffortConfig,
+    /// Token budget for budget-based models.
+    pub budget_tokens: i32,
+}
+
 #[derive(Debug, Serialize, Default, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TextFormatType {

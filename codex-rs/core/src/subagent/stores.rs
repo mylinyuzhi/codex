@@ -29,7 +29,7 @@ use crate::system_reminder::FileTracker;
 use crate::system_reminder::PlanState;
 use crate::system_reminder::PlanStep;
 use crate::system_reminder::SystemReminderOrchestrator;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::PlanModeApprovalPolicy;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol_ext::PlanExitPermissionMode;
@@ -232,7 +232,7 @@ impl SubagentStores {
     /// Enter Plan Mode and return the plan file path.
     pub fn enter_plan_mode(
         &self,
-        conversation_id: ConversationId,
+        conversation_id: ThreadId,
     ) -> Result<std::path::PathBuf, CodexErr> {
         let mut state = self
             .plan_mode
@@ -458,7 +458,7 @@ impl Default for SubagentStores {
 ///
 /// Using LazyLock + DashMap for thread-safe lazy initialization with
 /// concurrent access support.
-static STORES_REGISTRY: LazyLock<DashMap<ConversationId, Arc<SubagentStores>>> =
+static STORES_REGISTRY: LazyLock<DashMap<ThreadId, Arc<SubagentStores>>> =
     LazyLock::new(DashMap::new);
 
 /// Get or create stores for a session by conversation_id.
@@ -472,7 +472,7 @@ static STORES_REGISTRY: LazyLock<DashMap<ConversationId, Arc<SubagentStores>>> =
 /// let stores = get_or_create_stores(session.conversation_id);
 /// // Use stores.background_store, stores.transcript_store, etc.
 /// ```
-pub fn get_or_create_stores(conversation_id: ConversationId) -> Arc<SubagentStores> {
+pub fn get_or_create_stores(conversation_id: ThreadId) -> Arc<SubagentStores> {
     STORES_REGISTRY
         .entry(conversation_id)
         .or_insert_with(|| Arc::new(SubagentStores::new()))
@@ -486,7 +486,7 @@ pub fn get_or_create_stores(conversation_id: ConversationId) -> Arc<SubagentStor
 /// but long-running servers should call this on session cleanup.
 ///
 /// Also cleans up plan slug cache to ensure new sessions get fresh slugs.
-pub fn cleanup_stores(conversation_id: &ConversationId) {
+pub fn cleanup_stores(conversation_id: &ThreadId) {
     STORES_REGISTRY.remove(conversation_id);
     cleanup_plan_slug(conversation_id);
 }
@@ -494,7 +494,7 @@ pub fn cleanup_stores(conversation_id: &ConversationId) {
 /// Get stores if they exist (without creating new ones).
 ///
 /// Useful for operations that should only work on existing sessions.
-pub fn get_stores(conversation_id: &ConversationId) -> Option<Arc<SubagentStores>> {
+pub fn get_stores(conversation_id: &ThreadId) -> Option<Arc<SubagentStores>> {
     STORES_REGISTRY.get(conversation_id).map(|r| r.clone())
 }
 
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_get_or_create_stores() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // First access creates stores
         let stores1 = get_or_create_stores(conv_id);
@@ -540,8 +540,8 @@ mod tests {
 
     #[test]
     fn test_different_sessions_have_different_stores() {
-        let conv_id1 = ConversationId::new();
-        let conv_id2 = ConversationId::new();
+        let conv_id1 = ThreadId::new();
+        let conv_id2 = ThreadId::new();
 
         let stores1 = get_or_create_stores(conv_id1);
         let stores2 = get_or_create_stores(conv_id2);

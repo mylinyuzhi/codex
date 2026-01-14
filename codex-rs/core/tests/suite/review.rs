@@ -658,7 +658,7 @@ async fn review_history_surfaces_in_parent_session() {
             items: vec![UserInput::Text {
                 text: followup.clone(),
             }],
-            final_output_json_schema: None,
+            final_output_json_schema: None, ultrathink_enabled: false,
         })
         .await
         .unwrap();

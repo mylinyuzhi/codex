@@ -58,7 +58,8 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         session_source: Option<SessionSource>,
     ) -> Result<ResponseStream, ApiError> {
         // Try adapter routing for non-OpenAI providers (ext)
-        if let Some(stream) = self.try_adapter(model, prompt).await? {
+        // Note: Chat API doesn't support ultrathink_config directly
+        if let Some(stream) = self.try_adapter(model, prompt, None).await? {
             return Ok(stream);
         }
 

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 
 use super::file_management::get_plan_file_path;
 use crate::error::CodexErr;
@@ -33,7 +33,7 @@ pub struct PlanModeState {
     pub has_approved: bool,
 
     /// Conversation ID (used for file name generation).
-    pub conversation_id: Option<ConversationId>,
+    pub conversation_id: Option<ThreadId>,
 }
 
 impl PlanModeState {
@@ -51,7 +51,7 @@ impl PlanModeState {
     ///
     /// # Returns
     /// Plan file path on success, or error if unable to get directory
-    pub fn enter(&mut self, conversation_id: ConversationId) -> Result<PathBuf, CodexErr> {
+    pub fn enter(&mut self, conversation_id: ThreadId) -> Result<PathBuf, CodexErr> {
         let plan_file_path = get_plan_file_path(&conversation_id)?;
 
         self.is_active = true;

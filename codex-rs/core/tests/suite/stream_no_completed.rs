@@ -97,7 +97,7 @@ async fn retries_on_early_close() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
-            final_output_json_schema: None,
+            final_output_json_schema: None, ultrathink_enabled: false,
         })
         .await
         .unwrap();

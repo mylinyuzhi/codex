@@ -19,11 +19,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 pub struct ReasoningResult {
     /// The Reasoning struct to pass to the API (None if model doesn't support it).
     pub reasoning: Option<Reasoning>,
+    /// The computed reasoning effort level.
+    pub effort: ReasoningEffort,
     /// Token budget when ultrathink is triggered (for budget-based models).
     pub budget_tokens: i32,
     /// Whether ultrathink mode is active (via keyword or toggle).
-    /// Note: To be used in TUI Phase 2 for status display.
-    #[allow(dead_code)]
     pub ultrathink_active: bool,
 }
 
@@ -148,6 +148,7 @@ pub fn build_reasoning_for_request(
 
     ReasoningResult {
         reasoning,
+        effort: effort_result.effort,
         budget_tokens: effort_result.budget_tokens,
         ultrathink_active: effort_result.ultrathink_active,
     }

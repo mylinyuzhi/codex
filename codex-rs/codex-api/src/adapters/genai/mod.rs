@@ -167,7 +167,7 @@ fn build_generation_config(prompt: &Prompt, config: &AdapterConfig) -> GenerateC
             gen_config.top_k = Some(top_k as i32);
         }
 
-        // Handle thinking_level
+        // Handle thinking_level from extra config
         if let Some(thinking_level) = extra.get("thinking_level").and_then(|v| v.as_str()) {
             use google_genai::types::ThinkingConfig;
             use google_genai::types::ThinkingLevel;
@@ -180,6 +180,22 @@ fn build_generation_config(prompt: &Prompt, config: &AdapterConfig) -> GenerateC
             if level != ThinkingLevel::ThinkingLevelUnspecified {
                 gen_config.thinking_config = Some(ThinkingConfig::with_level(level));
             }
+        }
+    }
+
+    // Apply ultrathink config (overrides static extra config)
+    if let Some(ut_config) = &config.ultrathink_config {
+        use codex_protocol::openai_models::ReasoningEffort as ProtocolEffort;
+        use google_genai::types::ThinkingConfig;
+        use google_genai::types::ThinkingLevel;
+        let level = match ut_config.effort {
+            ProtocolEffort::None => ThinkingLevel::ThinkingLevelUnspecified,
+            ProtocolEffort::Minimal | ProtocolEffort::Low => ThinkingLevel::Low,
+            ProtocolEffort::Medium => ThinkingLevel::Medium,
+            ProtocolEffort::High | ProtocolEffort::XHigh => ThinkingLevel::High,
+        };
+        if level != ThinkingLevel::ThinkingLevelUnspecified {
+            gen_config.thinking_config = Some(ThinkingConfig::with_level(level));
         }
     }
 

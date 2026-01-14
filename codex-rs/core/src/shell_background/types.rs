@@ -1,6 +1,6 @@
 //! Type definitions for background shell execution.
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -184,7 +184,7 @@ pub struct BackgroundShell {
     /// Unique shell ID.
     pub shell_id: String,
     /// Conversation ID that owns this shell (for session-scoped cleanup).
-    pub conversation_id: Option<ConversationId>,
+    pub conversation_id: Option<ThreadId>,
     /// The command being executed.
     pub command: String,
     /// Human-readable description for system reminders.
@@ -213,7 +213,7 @@ impl BackgroundShell {
     /// Create a new background shell in Pending status.
     pub fn new_pending(
         shell_id: String,
-        conversation_id: Option<ConversationId>,
+        conversation_id: Option<ThreadId>,
         command: String,
         description: String,
     ) -> Self {

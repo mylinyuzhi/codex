@@ -28,6 +28,7 @@ pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
+pub use crate::common::UltrathinkConfig;
 pub use crate::common::create_text_param_for_request;
 pub use crate::common_ext::NonStreamingResponse;
 pub use crate::common_ext::filter_incremental_input;

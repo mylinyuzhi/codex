@@ -104,6 +104,16 @@ impl ProviderAdapter for AnthropicAdapter {
         // Apply extra configuration
         apply_extra_config(&mut params, &config.extra);
 
+        // Apply ultrathink config (overrides static extra config)
+        if let Some(ut_config) = &config.ultrathink_config {
+            if ut_config.budget_tokens > 0 {
+                match ThinkingConfig::enabled_checked(ut_config.budget_tokens) {
+                    Ok(thinking_config) => params.thinking = Some(thinking_config),
+                    Err(e) => tracing::warn!("Invalid ultrathink budget: {e}"),
+                }
+            }
+        }
+
         // Make API call
         let message = client
             .messages()

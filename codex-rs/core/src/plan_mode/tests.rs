@@ -1,9 +1,9 @@
 //! Tests for Plan Mode module.
 
 use super::*;
-use codex_protocol::ConversationId;
 use std::path::PathBuf;
 use tempfile::tempdir;
+use codex_protocol::ThreadId;
 
 #[test]
 fn test_plan_mode_state_default() {
@@ -17,7 +17,7 @@ fn test_plan_mode_state_default() {
 #[test]
 fn test_plan_mode_enter() {
     let mut state = PlanModeState::new();
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
 
     let path = state.enter(conv_id).expect("should enter plan mode");
 
@@ -95,7 +95,7 @@ fn test_clear_reentry() {
 
 #[test]
 fn test_get_plan_file_path() {
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
     let path = get_plan_file_path(&conv_id).expect("should get path");
 
     assert!(path.to_string_lossy().ends_with(".md"));

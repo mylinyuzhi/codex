@@ -25,6 +25,7 @@ use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
+use codex_api::UltrathinkConfig as ApiUltrathinkConfig;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 
@@ -291,8 +292,16 @@ impl ModelClientSession {
             self.state.summary,
         );
         let reasoning = reasoning_result.reasoning;
-        // budget_tokens available for adapter-specific handling (Claude/Gemini)
-        let _budget_tokens = reasoning_result.budget_tokens;
+
+        // Build ultrathink config when active (for adapters)
+        let ultrathink_config = if reasoning_result.ultrathink_active {
+            Some(ApiUltrathinkConfig {
+                effort: reasoning_result.effort,
+                budget_tokens: reasoning_result.budget_tokens,
+            })
+        } else {
+            None
+        };
 
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -328,6 +337,7 @@ impl ModelClientSession {
             session_source: Some(self.state.session_source.clone()),
             extra_headers: beta_feature_headers(&self.state.config),
             compression,
+            ultrathink_config,
         }
     }
 

@@ -6,17 +6,17 @@
 
 use std::sync::OnceLock;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use dashmap::DashMap;
 
 use crate::compact_v2::CompactState;
 use crate::compact_v2::ReadFileEntry;
 
 /// Global storage for CompactState keyed by conversation_id.
-static COMPACT_STATES: OnceLock<DashMap<ConversationId, CompactState>> = OnceLock::new();
+static COMPACT_STATES: OnceLock<DashMap<ThreadId, CompactState>> = OnceLock::new();
 
 /// Global storage for ReadFileState keyed by conversation_id.
-static READ_FILE_STATES: OnceLock<DashMap<ConversationId, ReadFileState>> = OnceLock::new();
+static READ_FILE_STATES: OnceLock<DashMap<ThreadId, ReadFileState>> = OnceLock::new();
 
 /// Session-level read file state for context restoration.
 ///
@@ -29,12 +29,12 @@ pub struct ReadFileState {
 }
 
 /// Get the global CompactState storage.
-fn get_compact_states() -> &'static DashMap<ConversationId, CompactState> {
+fn get_compact_states() -> &'static DashMap<ThreadId, CompactState> {
     COMPACT_STATES.get_or_init(DashMap::new)
 }
 
 /// Get the global ReadFileState storage.
-fn get_read_file_states() -> &'static DashMap<ConversationId, ReadFileState> {
+fn get_read_file_states() -> &'static DashMap<ThreadId, ReadFileState> {
     READ_FILE_STATES.get_or_init(DashMap::new)
 }
 
@@ -42,8 +42,8 @@ fn get_read_file_states() -> &'static DashMap<ConversationId, ReadFileState> {
 ///
 /// Returns a mutable reference guard that can be used to modify the state.
 pub fn get_compact_state_mut(
-    conversation_id: ConversationId,
-) -> dashmap::mapref::one::RefMut<'static, ConversationId, CompactState> {
+    conversation_id: ThreadId,
+) -> dashmap::mapref::one::RefMut<'static, ThreadId, CompactState> {
     let states = get_compact_states();
     states.entry(conversation_id).or_default()
 }
@@ -53,15 +53,15 @@ pub fn get_compact_state_mut(
 /// Returns None if no state exists for this conversation.
 #[allow(dead_code)] // Reserved for state management
 pub fn get_compact_state(
-    conversation_id: ConversationId,
-) -> Option<dashmap::mapref::one::Ref<'static, ConversationId, CompactState>> {
+    conversation_id: ThreadId,
+) -> Option<dashmap::mapref::one::Ref<'static, ThreadId, CompactState>> {
     let states = get_compact_states();
     states.get(&conversation_id)
 }
 
 /// Clear CompactState for a conversation (for testing or session cleanup).
 #[allow(dead_code)]
-pub fn clear_compact_state(conversation_id: ConversationId) {
+pub fn clear_compact_state(conversation_id: ThreadId) {
     let states = get_compact_states();
     states.remove(&conversation_id);
 }
@@ -71,7 +71,7 @@ pub fn clear_compact_state(conversation_id: ConversationId) {
 /// Updates the read file state for the given conversation, replacing
 /// any existing entry for the same filename with updated timestamp/tokens.
 pub fn record_file_read(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     filename: String,
     timestamp: i64,
     token_count: i64,
@@ -93,7 +93,7 @@ pub fn record_file_read(
 /// Get read files for a conversation (for context restoration).
 ///
 /// Returns files sorted by timestamp (most recent first).
-pub fn get_read_files(conversation_id: ConversationId) -> Vec<ReadFileEntry> {
+pub fn get_read_files(conversation_id: ThreadId) -> Vec<ReadFileEntry> {
     let states = get_read_file_states();
     match states.get(&conversation_id) {
         Some(state) => {
@@ -108,14 +108,14 @@ pub fn get_read_files(conversation_id: ConversationId) -> Vec<ReadFileEntry> {
 
 /// Clear ReadFileState for a conversation (for testing or session cleanup).
 #[allow(dead_code)]
-pub fn clear_read_file_state(conversation_id: ConversationId) {
+pub fn clear_read_file_state(conversation_id: ThreadId) {
     let states = get_read_file_states();
     states.remove(&conversation_id);
 }
 
 /// Clear all state for a conversation (both CompactState and ReadFileState).
 #[allow(dead_code)]
-pub fn clear_all_state(conversation_id: ConversationId) {
+pub fn clear_all_state(conversation_id: ThreadId) {
     clear_compact_state(conversation_id);
     clear_read_file_state(conversation_id);
 }
