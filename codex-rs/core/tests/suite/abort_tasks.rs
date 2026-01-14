@@ -49,7 +49,8 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
             items: vec![UserInput::Text {
                 text: "start sleep".into(),
             }],
-            final_output_json_schema: None, ultrathink_enabled: false,
+            final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -102,7 +103,8 @@ async fn interrupt_tool_records_history_entries() {
             items: vec![UserInput::Text {
                 text: "start history recording".into(),
             }],
-            final_output_json_schema: None, ultrathink_enabled: false,
+            final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -119,7 +121,8 @@ async fn interrupt_tool_records_history_entries() {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
             }],
-            final_output_json_schema: None, ultrathink_enabled: false,
+            final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

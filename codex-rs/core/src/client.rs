@@ -20,12 +20,12 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+use codex_api::UltrathinkConfig as ApiUltrathinkConfig;
 use codex_api::build_conversation_headers;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
-use codex_api::UltrathinkConfig as ApiUltrathinkConfig;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 

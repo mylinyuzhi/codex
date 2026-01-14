@@ -1,9 +1,9 @@
 //! Tests for Plan Mode module.
 
 use super::*;
+use codex_protocol::ThreadId;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use codex_protocol::ThreadId;
 
 #[test]
 fn test_plan_mode_state_default() {

@@ -384,10 +384,7 @@ impl BackgroundShellStore {
     /// - Have finished but not been notified
     ///
     /// If `conversation_id` is None, returns shells from all conversations.
-    pub fn list_for_reminder(
-        &self,
-        conversation_id: Option<&ThreadId>,
-    ) -> Vec<BackgroundTaskInfo> {
+    pub fn list_for_reminder(&self, conversation_id: Option<&ThreadId>) -> Vec<BackgroundTaskInfo> {
         self.shells
             .iter()
             .filter(|r| {
