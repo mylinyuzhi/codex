@@ -94,6 +94,7 @@ impl LoopState {
     }
 
     /// Logs loop interruption warning.
+    #[allow(dead_code)]
     pub fn log_interrupted(&self) {
         if self.condition.is_some() && self.current_iteration > 0 {
             warn!(

@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_session_resources() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // Create stores
         let _ = get_or_create_stores(conv_id);

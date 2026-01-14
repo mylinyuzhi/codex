@@ -31,7 +31,7 @@ fn test_plan_mode_enter() {
 #[test]
 fn test_plan_mode_exit_approved() {
     let mut state = PlanModeState::new();
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
     let _ = state.enter(conv_id).expect("should enter plan mode");
 
     state.exit(true);
@@ -45,7 +45,7 @@ fn test_plan_mode_exit_approved() {
 #[test]
 fn test_plan_mode_exit_rejected() {
     let mut state = PlanModeState::new();
-    let conv_id = ConversationId::new();
+    let conv_id = ThreadId::new();
     let _ = state.enter(conv_id).expect("should enter plan mode");
 
     state.exit(false);

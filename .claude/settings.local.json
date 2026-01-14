@@ -83,7 +83,9 @@
       "Bash(if [ -d \"codex-rs/$crate\" ])",
       "Bash(then)",
       "Bash(else)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(for i in {1..5})",
+      "Bash(do cargo test -p codex-retrieval --lib -- event_emitter::tests)"
     ],
     "deny": [],
     "ask": []

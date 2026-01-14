@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn compact_state_persistence() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // Initially empty
         assert!(get_compact_state(conv_id).is_none());
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn read_file_state_recording() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // Record some files
         record_file_read(conv_id, "file1.rs".to_string(), 100, 500);
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn read_file_state_updates_existing() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // Record file
         record_file_read(conv_id, "file.rs".to_string(), 100, 500);
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn clear_all_state_works() {
-        let conv_id = ConversationId::new();
+        let conv_id = ThreadId::new();
 
         // Setup both states
         {

@@ -277,9 +277,16 @@ impl Default for ScopedEventCollector {
 mod tests {
     use super::*;
     use crate::events::SearchMode;
+    use std::sync::Mutex;
+
+    // Serialize tests that interact with the global emitter to prevent race conditions
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_emit_and_subscribe() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        EventEmitter::set_enabled(true);
+
         let mut rx = EventEmitter::subscribe();
 
         let event = RetrievalEvent::SearchStarted {
@@ -299,6 +306,9 @@ mod tests {
 
     #[test]
     fn test_enable_disable() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        EventEmitter::set_enabled(true); // Ensure clean state
+
         // Ensure enabled by default
         assert!(EventEmitter::is_enabled());
 
@@ -314,13 +324,15 @@ mod tests {
         let count = EventEmitter::emit(event);
         assert_eq!(count, 0);
 
-        // Re-enable
+        // Re-enable (restore state for other tests)
         EventEmitter::set_enabled(true);
         assert!(EventEmitter::is_enabled());
     }
 
     #[test]
     fn test_subscriber_count() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+
         let initial = EventEmitter::subscriber_count();
 
         let _rx1 = EventEmitter::subscribe();
@@ -335,6 +347,9 @@ mod tests {
 
     #[test]
     fn test_scoped_collector() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        EventEmitter::set_enabled(true);
+
         let collector = ScopedEventCollector::new();
 
         // Emit some events
@@ -361,6 +376,9 @@ mod tests {
 
     #[test]
     fn test_events_of_type() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        EventEmitter::set_enabled(true);
+
         let collector = ScopedEventCollector::new();
 
         emit(RetrievalEvent::SearchStarted {
