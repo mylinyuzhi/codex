@@ -125,7 +125,7 @@ impl ProviderAdapter for AnthropicAdapter {
         // Pass base_url and model for model switch detection in EncryptedContent
         let effective_base_url = config.base_url.as_deref().unwrap_or("");
         let (events, usage) =
-            convert::message_to_events(&message, effective_base_url, &config.model);
+            convert::message_to_events(&message, effective_base_url, &config.model)?;
 
         Ok(GenerateResult {
             events,

@@ -35,6 +35,7 @@ use crate::common_ext::generate_client_call_id;
 use crate::common_ext::is_client_generated_call_id;
 use crate::common_ext::log_unexpected_response_item;
 use crate::common_ext::parse_function_name_from_call_id;
+use crate::error::ApiError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -44,6 +45,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use google_genai::types::Blob;
 use google_genai::types::Content;
+use google_genai::types::FinishReason;
 use google_genai::types::FunctionDeclaration;
 use google_genai::types::FunctionResponse;
 use google_genai::types::GenerateContentResponse;
@@ -315,17 +317,53 @@ fn convert_function_output(output: &FunctionCallOutputPayload) -> serde_json::Va
 /// Convert Gemini response to codex-api ResponseEvents.
 ///
 /// Stores the full response JSON in `Reasoning.encrypted_content` for round-trip preservation.
-/// Returns (events, response_id) where response_id is generated for the response.
+/// Returns (events, response_id) where response_id is generated for the response,
+/// or an error if the response indicates a blocked/truncated generation.
 ///
 /// # Arguments
 /// - `response` - The Gemini GenerateContentResponse
 /// - `base_url` - The API base URL (for model switch detection)
 /// - `model` - The model name (for model switch detection)
+///
+/// # Errors
+/// - `ApiError::ContextWindowExceeded` if finish_reason is MaxTokens
+/// - `ApiError::GenerationBlocked` for Safety, Recitation, Language, or unspecified reasons
 pub fn response_to_events(
     response: &GenerateContentResponse,
     base_url: &str,
     model: &str,
-) -> (Vec<ResponseEvent>, String) {
+) -> Result<(Vec<ResponseEvent>, String), ApiError> {
+    // Check finish_reason for error conditions
+    if let Some(reason) = response.finish_reason() {
+        match reason {
+            FinishReason::MaxTokens => return Err(ApiError::ContextWindowExceeded),
+            FinishReason::Safety => {
+                return Err(ApiError::GenerationBlocked(
+                    "blocked for safety".to_string(),
+                ));
+            }
+            FinishReason::Recitation => {
+                return Err(ApiError::GenerationBlocked(
+                    "blocked for recitation".to_string(),
+                ));
+            }
+            FinishReason::Language => {
+                return Err(ApiError::GenerationBlocked(
+                    "unsupported language".to_string(),
+                ));
+            }
+            FinishReason::FinishReasonUnspecified => {
+                return Err(ApiError::GenerationBlocked(
+                    "unspecified reason".to_string(),
+                ));
+            }
+            // Stop → normal completion
+            FinishReason::Stop => {}
+            // Other blocked reasons (Blocklist, ProhibitedContent, Spii, MalformedFunctionCall, etc.)
+            other => return Err(ApiError::GenerationBlocked(format!("{other:?}"))),
+        }
+    }
+
     let mut events = Vec::new();
 
     // Use server-provided response_id if available, otherwise generate one
@@ -349,7 +387,7 @@ pub fn response_to_events(
             response_id: response_id.clone(),
             token_usage: extract_usage(response),
         });
-        return (events, response_id);
+        return Ok((events, response_id));
     };
 
     // Emit Created event first
@@ -441,7 +479,7 @@ pub fn response_to_events(
         token_usage: extract_usage(response),
     });
 
-    (events, response_id)
+    Ok((events, response_id))
 }
 
 /// Extract token usage from Gemini response.
@@ -829,7 +867,8 @@ mod tests {
             &response,
             "https://generativelanguage.googleapis.com",
             "gemini-2.0",
-        );
+        )
+        .unwrap();
 
         assert_eq!(resp_id, "resp-123");
 
@@ -899,7 +938,8 @@ mod tests {
             &response,
             "https://generativelanguage.googleapis.com",
             "gemini-2.0",
-        );
+        )
+        .unwrap();
 
         // Extract items from events
         let items: Vec<ResponseItem> = events

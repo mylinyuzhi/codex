@@ -8,7 +8,7 @@
 //!
 //! Hooks are configured via `hooks.json` files in priority order:
 //! 1. Project: `.codex/hooks.json`
-//! 2. User: `~/.codex/hooks.json`
+//! 2. User: `{codex_home}/hooks.json` (respects `CODEX_HOME` env var)
 //!
 //! See `codex_hooks::config::HooksJsonConfig` for the JSON format.
 
@@ -35,13 +35,17 @@ static HOOK_EXECUTOR: OnceCell<Arc<HookExecutor>> = OnceCell::new();
 /// Initialize the hook system from JSON configuration.
 ///
 /// This should be called once at application startup with the working directory.
-/// Loads configuration from `.codex/hooks.json` (project) or `~/.codex/hooks.json` (user).
+/// Loads configuration from `.codex/hooks.json` (project) or `{codex_home}/hooks.json` (user).
 /// Subsequent calls will be ignored.
 ///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `cwd` - Current working directory for project-level config
+///
 /// Returns `Ok(true)` if hooks were initialized, `Ok(false)` if already initialized or disabled.
-pub fn init_hooks(cwd: &Path) -> Result<bool, codex_hooks::HookError> {
+pub fn init_hooks(codex_home: &Path, cwd: &Path) -> Result<bool, codex_hooks::HookError> {
     // Load config from JSON files
-    let config = codex_hooks::loader::load_hooks_config(cwd)?;
+    let config = codex_hooks::loader::load_hooks_config(codex_home, cwd)?;
 
     if config.is_disabled() {
         debug!("Hooks are disabled via configuration");
@@ -100,8 +104,12 @@ pub fn init_hooks_from_config(
 ///
 /// This is useful for startup paths where hook initialization failure should not
 /// prevent the application from running.
-pub fn try_init_hooks(cwd: &Path) {
-    match init_hooks(cwd) {
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `cwd` - Current working directory for project-level config
+pub fn try_init_hooks(codex_home: &Path, cwd: &Path) {
+    match init_hooks(codex_home, cwd) {
         Ok(true) => debug!("Hooks initialized successfully"),
         Ok(false) => debug!("Hooks not initialized (disabled or none configured)"),
         Err(e) => warn!("Failed to initialize hooks: {}", e),

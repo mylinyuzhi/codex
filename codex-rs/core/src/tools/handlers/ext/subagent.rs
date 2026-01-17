@@ -7,7 +7,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::subagent::SubagentConfigBuilder;
 use crate::subagent::SubagentStatus;
-use crate::subagent::get_or_create_stores;
+use crate::subagent::expect_session_state;
 use crate::subagent::run_subagent_delegate;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -79,7 +79,7 @@ impl ToolHandler for TaskHandler {
             .map_err(|e| FunctionCallError::RespondToModel(format!("Invalid arguments: {e}")))?;
 
         // Get session-scoped stores from global registry
-        let stores = get_or_create_stores(invocation.session.conversation_id);
+        let stores = expect_session_state(&invocation.session.conversation_id);
 
         // Get agent definition
         let definition = stores
@@ -278,7 +278,7 @@ impl ToolHandler for TaskOutputHandler {
             .map_err(|e| FunctionCallError::RespondToModel(format!("Invalid arguments: {e}")))?;
 
         // Get session-scoped stores from global registry
-        let stores = get_or_create_stores(invocation.session.conversation_id);
+        let stores = expect_session_state(&invocation.session.conversation_id);
 
         let timeout = Duration::from_secs(args.timeout as u64);
 

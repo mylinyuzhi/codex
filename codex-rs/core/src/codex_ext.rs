@@ -11,17 +11,18 @@ use std::path::PathBuf;
 use crate::config::system_reminder::LspDiagnosticsMinSeverity;
 use crate::config::system_reminder::SystemReminderConfig;
 use crate::shell_background::get_global_shell_store;
-use crate::subagent::cleanup_stores;
-use crate::subagent::get_or_create_stores;
+use crate::subagent::cleanup_session_state;
+use crate::subagent::expect_session_state;
 use crate::system_reminder::FileTracker;
 use crate::system_reminder::PlanState;
 use crate::system_reminder::SystemReminderOrchestrator;
 use crate::system_reminder::generator::BackgroundTaskType;
 use crate::system_reminder_inject::build_generator_context;
 use crate::system_reminder_inject::inject_system_reminders;
-use crate::tools::handlers::ext::lsp::get_lsp_diagnostics_store;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec_ext::ToolFilter;
+use codex_lsp::DiagnosticsStore;
+use std::sync::Arc;
 
 /// Clean up session-scoped resources when conversation ends.
 ///
@@ -32,7 +33,7 @@ use crate::tools::spec_ext::ToolFilter;
 /// This prevents memory leaks in long-running server deployments where
 /// conversations accumulate without cleanup.
 pub fn cleanup_session_resources(conversation_id: &ThreadId) {
-    cleanup_stores(conversation_id);
+    cleanup_session_state(conversation_id);
 
     // Clean up session-scoped hooks for this conversation
     crate::hooks_ext::clear_session_hooks(&conversation_id.to_string());
@@ -61,7 +62,7 @@ pub(crate) fn apply_tool_filter(
     model: &str,
 ) {
     // Apply Plan Mode tool filter if active (read-only tools + plan file write)
-    let stores = get_or_create_stores(conversation_id);
+    let stores = expect_session_state(&conversation_id);
     if stores.is_plan_mode_active().unwrap_or(false) {
         if let Ok(plan_state) = stores.get_plan_mode_state() {
             tools_config.tool_filter = Some(ToolFilter::for_plan_mode(
@@ -99,12 +100,13 @@ pub async fn run_system_reminder_injection(
     plan_file_path: Option<&str>,
     conversation_id: Option<&ThreadId>,
     critical_instruction: Option<&str>,
+    diagnostics_store: Option<Arc<DiagnosticsStore>>,
 ) -> Vec<String> {
     let shell_store = get_global_shell_store();
 
     // Get or create stores (also provides cached orchestrator)
     // Use get_or_create to ensure orchestrator is available even for new conversations
-    let agent_stores = conversation_id.map(|id| get_or_create_stores(*id));
+    let agent_stores = conversation_id.map(|id| expect_session_state(id));
 
     // Increment inject call count for main agent only
     // This is used by PlanReminderGenerator to determine if reminder should fire
@@ -169,8 +171,7 @@ pub async fn run_system_reminder_injection(
         }
     };
 
-    // Get LSP diagnostics store if available (lazy initialized on first LSP tool use)
-    let diagnostics_store = get_lsp_diagnostics_store();
+    // diagnostics_store is passed from caller (from session.services.lsp_manager)
 
     // Detect re-entry: user re-enters Plan Mode with existing plan file from previous session
     let is_plan_reentry = if is_plan_mode && is_main_agent {
@@ -263,11 +264,12 @@ pub async fn maybe_inject_system_reminders(
     cwd: &Path,
     conversation_id: Option<&ThreadId>,
     critical_instruction: Option<&str>,
+    diagnostics_store: Option<Arc<DiagnosticsStore>>,
 ) {
     // Get plan mode state from stores
     let (is_plan_mode, plan_file_path) = conversation_id
         .map(|id| {
-            let stores = get_or_create_stores(*id);
+            let stores = expect_session_state(id);
             match stores.get_plan_mode_state() {
                 Ok(state) => (
                     state.is_active,
@@ -292,6 +294,7 @@ pub async fn maybe_inject_system_reminders(
         plan_file_path.as_deref(),
         conversation_id,
         critical_instruction,
+        diagnostics_store,
     )
     .await;
 }
@@ -356,7 +359,7 @@ pub async fn handle_set_plan_mode(
     _plan_file_path: Option<&str>, // Ignored - core generates with cached slug
 ) {
     if active {
-        let stores = get_or_create_stores(conversation_id);
+        let stores = expect_session_state(&conversation_id);
         let path = match stores.enter_plan_mode(conversation_id) {
             Ok(p) => p,
             Err(e) => {
@@ -397,7 +400,7 @@ pub async fn handle_plan_mode_approval(
 ) {
     use crate::subagent::ApprovedPlan;
 
-    let stores = get_or_create_stores(conversation_id);
+    let stores = expect_session_state(&conversation_id);
     if let Err(e) = stores.exit_plan_mode(approved) {
         tracing::error!("failed to exit plan mode: {e}");
         // Continue to send event anyway to keep TUI in sync
@@ -447,7 +450,7 @@ pub async fn handle_enter_plan_mode_approval(
     approved: bool,
 ) {
     if approved {
-        let stores = get_or_create_stores(conversation_id);
+        let stores = expect_session_state(&conversation_id);
         match stores.enter_plan_mode(conversation_id) {
             Ok(plan_file_path) => {
                 let event = Event {
@@ -510,7 +513,7 @@ pub async fn handle_user_question_answer(
 
     // Send the answer through the oneshot channel.
     // This unblocks the handler which is awaiting on the receiver.
-    let stores = get_or_create_stores(conversation_id);
+    let stores = expect_session_state(&conversation_id);
     let sent = stores.send_user_answer(&tool_call_id, answers_text);
 
     if sent {
@@ -603,21 +606,24 @@ pub fn spawn_retrieval_init(cwd: &Path, include_code_search: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subagent::get_or_create_stores;
-    use crate::subagent::get_stores;
+    use crate::subagent::get_session_state;
+    use crate::subagent::init_session_state;
+    use std::path::PathBuf;
 
     #[test]
     fn test_cleanup_session_resources() {
         let conv_id = ThreadId::new();
+        let codex_home = PathBuf::from("/tmp/codex_home");
+        let cwd = PathBuf::from("/tmp/project");
 
         // Create stores
-        let _ = get_or_create_stores(conv_id);
-        assert!(get_stores(&conv_id).is_some());
+        let _ = init_session_state(conv_id, &codex_home, &cwd);
+        assert!(get_session_state(&conv_id).is_some());
 
         // Cleanup
         cleanup_session_resources(&conv_id);
 
         // Verify cleanup
-        assert!(get_stores(&conv_id).is_none());
+        assert!(get_session_state(&conv_id).is_none());
     }
 }

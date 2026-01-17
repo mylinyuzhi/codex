@@ -2,7 +2,7 @@
 //!
 //! Restores files, todos, and plan files after compaction to preserve context.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use codex_protocol::ThreadId;
 
@@ -11,13 +11,6 @@ use super::token_counter::TokenCounter;
 use crate::state::state_ext;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
-
-/// Get the .codex directory path using home directory for consistency.
-fn get_codex_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
-}
 
 /// Restored context after compaction.
 #[derive(Debug, Clone, Default)]
@@ -71,9 +64,18 @@ pub fn is_agent_file(filename: &str, agent_id: &str) -> bool {
 ///
 /// Restores:
 /// - Recently read files (from state_ext read file tracking)
-/// - Todo list (from .codex/todos/{conversation_id}.json)
-/// - Plan file (from .codex/plans/*-{conversation_id}.md)
-pub fn restore_context(conversation_id: &str, config: &CompactConfig) -> RestoredContext {
+/// - Todo list (from `{codex_home}/todos/{conversation_id}.json`)
+/// - Plan file (from `{codex_home}/plans/*-{conversation_id}.md`)
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `conversation_id` - Conversation ID
+/// * `config` - Compact configuration
+pub fn restore_context(
+    codex_home: &Path,
+    conversation_id: &str,
+    config: &CompactConfig,
+) -> RestoredContext {
     let mut result = RestoredContext::default();
 
     // Create TokenCounter from config for consistent token estimation
@@ -86,12 +88,12 @@ pub fn restore_context(conversation_id: &str, config: &CompactConfig) -> Restore
 
     // Restore todos
     if config.restore_todos {
-        result.todos = restore_todo_list(conversation_id);
+        result.todos = restore_todo_list(codex_home, conversation_id);
     }
 
     // Restore plan
     if config.restore_plan {
-        result.plan = restore_plan_file(conversation_id);
+        result.plan = restore_plan_file(codex_home, conversation_id);
     }
 
     result
@@ -188,9 +190,8 @@ fn read_and_truncate_file(
 }
 
 /// Restore todo list from file.
-fn restore_todo_list(conversation_id: &str) -> Option<TodoAttachment> {
-    let codex_dir = get_codex_dir();
-    let todos_dir = codex_dir.join("todos");
+fn restore_todo_list(codex_home: &Path, conversation_id: &str) -> Option<TodoAttachment> {
+    let todos_dir = codex_home.join("todos");
 
     // Try conversation-specific path first
     let todo_path = todos_dir.join(format!("{conversation_id}.json"));
@@ -207,10 +208,9 @@ fn restore_todo_list(conversation_id: &str) -> Option<TodoAttachment> {
     None
 }
 
-/// Restore plan file from .codex/plans directory.
-fn restore_plan_file(conversation_id: &str) -> Option<PlanAttachment> {
-    // Use absolute path for .codex/plans directory
-    let plans_dir = get_codex_dir().join("plans");
+/// Restore plan file from `{codex_home}/plans` directory.
+fn restore_plan_file(codex_home: &Path, conversation_id: &str) -> Option<PlanAttachment> {
+    let plans_dir = codex_home.join("plans");
     if !plans_dir.exists() {
         return None;
     }

@@ -83,32 +83,17 @@ impl ToolHandler for CodeSearchHandler {
         // Clamp limit
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).max(1);
 
-        // 2. Get working directory from invocation context
-        let cwd = invocation.turn.cwd.clone();
-
-        // 3. Try to get RetrievalFacade (loads config from retrieval.toml)
-        let service = match codex_retrieval::RetrievalFacade::for_workdir(&cwd).await {
-            Ok(s) => s,
-            Err(codex_retrieval::RetrievalErr::NotEnabled) => {
-                return Ok(ToolOutput::Function {
-                    content: "Code search is not enabled.\n\n\
-                        To enable, create ~/.codex/retrieval.toml with:\n\
-                        ```toml\n\
-                        [retrieval]\n\
-                        enabled = true\n\
-                        ```\n\n\
-                        Or create .codex/retrieval.toml in your project directory."
-                        .to_string(),
-                    content_items: None,
-                    success: Some(false),
-                });
-            }
-            Err(e) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "Failed to initialize code search: {e}"
-                )));
-            }
-        };
+        // 2. Get RetrievalFacade from SessionServices
+        let service = invocation
+            .session
+            .services
+            .retrieval_manager
+            .clone()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "Code search is not enabled. Enable Feature::Retrieval in config.".to_string(),
+                )
+            })?;
 
         // 4. Perform search (using facade's simple API)
         let search_output = service

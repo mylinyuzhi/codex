@@ -18,7 +18,7 @@
 //! 6. LLM receives the actual user answer (not "Waiting for response...")
 
 use crate::function_tool::FunctionCallError;
-use crate::subagent::get_or_create_stores;
+use crate::subagent::expect_session_state;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -140,7 +140,7 @@ impl ToolHandler for AskUserQuestionHandler {
             .collect();
 
         // 4. Create a oneshot channel for receiving the user's answer
-        let stores = get_or_create_stores(invocation.session.conversation_id);
+        let stores = expect_session_state(&invocation.session.conversation_id);
         let rx = stores.create_answer_channel(&invocation.call_id);
 
         // 5. Send event to TUI

@@ -310,9 +310,9 @@ fn init_tracing(
     use tracing_appender::non_blocking;
     use tracing_subscriber::prelude::*;
 
-    // Determine log directory: ~/.codex/log/
-    let log_dir = dirs::home_dir()
-        .map(|h| h.join(".codex").join("log"))
+    // Determine log directory: codex_home/log/ (respects CODEX_HOME)
+    let log_dir = codex_retrieval::config::find_codex_home()
+        .map(|h| h.join("log"))
         .unwrap_or_else(|| PathBuf::from(".codex/log"));
 
     // Create log directory if it doesn't exist

@@ -29,6 +29,8 @@ pub enum ApiError {
     },
     #[error("rate limit: {0}")]
     RateLimit(String),
+    #[error("generation blocked: {0}")]
+    GenerationBlocked(String),
 }
 
 impl From<RateLimitError> for ApiError {

@@ -5,6 +5,16 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 
+/// Get codex home directory (respects CODEX_HOME env var).
+pub fn find_codex_home() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("CODEX_HOME") {
+        if !val.is_empty() {
+            return Some(PathBuf::from(val));
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".codex"))
+}
+
 /// Main retrieval configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetrievalConfig {
@@ -77,9 +87,8 @@ impl Default for RetrievalConfig {
 }
 
 fn default_data_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
+    find_codex_home()
+        .unwrap_or_else(|| PathBuf::from(".codex"))
         .join("retrieval")
 }
 
@@ -1121,9 +1130,9 @@ impl RetrievalConfig {
             return Self::from_file(&project_config);
         }
 
-        // Global config
-        if let Some(home) = dirs::home_dir() {
-            let global_config = home.join(".codex/retrieval.toml");
+        // Global config (respects CODEX_HOME)
+        if let Some(codex_home) = find_codex_home() {
+            let global_config = codex_home.join("retrieval.toml");
             if global_config.exists() {
                 return Self::from_file(&global_config);
             }

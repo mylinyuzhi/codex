@@ -90,7 +90,7 @@ impl ProviderAdapter for GeminiAdapter {
         // Convert response to events (includes Created and Completed)
         // Pass base_url and model for model switch detection in EncryptedContent
         let (events, response_id) =
-            convert::response_to_events(&response, effective_base_url, &config.model);
+            convert::response_to_events(&response, effective_base_url, &config.model)?;
 
         Ok(GenerateResult {
             events,

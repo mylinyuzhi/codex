@@ -74,6 +74,33 @@ pub use symbols::SymbolMatch;
 pub use symbols::find_matching_symbols;
 pub use symbols::flatten_symbols;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Create an `LspServerManager` with standard configuration.
+///
+/// This is a convenience function that loads config from the standard locations
+/// (`~/.codex/lsp_servers.json` and `.codex/lsp_servers.json`) and creates
+/// the manager with a fresh diagnostics store.
+///
+/// # Arguments
+/// * `cwd` - Working directory for the LSP servers. Used for project-local config
+///           and as the workspace root.
+///
+/// # Example
+/// ```ignore
+/// use codex_lsp::create_manager;
+///
+/// // Create manager for current directory
+/// let manager = create_manager(Some(std::env::current_dir().unwrap()));
+/// ```
+pub fn create_manager(cwd: Option<PathBuf>) -> Arc<LspServerManager> {
+    let codex_home = config::find_codex_home();
+    let lsp_config = LspServersConfig::load(codex_home.as_deref(), cwd.as_deref());
+    let diagnostics = Arc::new(DiagnosticsStore::new());
+    Arc::new(LspServerManager::new(lsp_config, cwd, diagnostics))
+}
+
 // Re-export lsp_types for handler use
 pub use lsp_types::CallHierarchyIncomingCall;
 pub use lsp_types::CallHierarchyItem;

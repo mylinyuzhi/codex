@@ -23,6 +23,7 @@ use crate::common::Prompt;
 use crate::common::ResponseEvent;
 use crate::common_ext::EncryptedContent;
 use crate::common_ext::PROVIDER_SDK_ZAI;
+use crate::error::ApiError;
 
 // ============================================================================
 // Request conversion: Prompt -> Z.AI messages
@@ -398,7 +399,8 @@ fn tool_json_to_struct(json: &Value) -> Option<Tool> {
 
 /// Convert a Z.AI Completion response to codex-api ResponseEvents.
 ///
-/// Returns a vector of events.
+/// Returns a vector of events, or an error if the response indicates a blocked/truncated generation.
+///
 /// The events include:
 /// - Created (response start)
 /// - OutputItemDone for each content block (Message, FunctionCall, Reasoning)
@@ -408,11 +410,27 @@ fn tool_json_to_struct(json: &Value) -> Option<Tool> {
 /// - `completion` - The Z.AI Completion response
 /// - `base_url` - The API base URL (for model switch detection)
 /// - `model` - The model name (for model switch detection)
+///
+/// # Errors
+/// - `ApiError::ContextWindowExceeded` if finish_reason is "length"
+/// - `ApiError::GenerationBlocked` for "content_filter" or other blocked reasons
 pub fn completion_to_events(
     completion: &Completion,
     base_url: &str,
     model: &str,
-) -> Vec<ResponseEvent> {
+) -> Result<Vec<ResponseEvent>, ApiError> {
+    // Check finish_reason for error conditions
+    if let Some(first) = completion.choices.first() {
+        match first.finish_reason.as_str() {
+            "length" => return Err(ApiError::ContextWindowExceeded),
+            "content_filter" => {
+                return Err(ApiError::GenerationBlocked("content filtered".to_string()));
+            }
+            // "stop" and "tool_calls" are normal
+            _ => {}
+        }
+    }
+
     let mut events = Vec::new();
 
     // Add Created event
@@ -494,7 +512,7 @@ pub fn completion_to_events(
         token_usage: Some(usage),
     });
 
-    events
+    Ok(events)
 }
 
 /// Extract token usage from Z.AI CompletionUsage.

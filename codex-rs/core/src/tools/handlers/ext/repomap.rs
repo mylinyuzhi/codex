@@ -82,32 +82,17 @@ impl ToolHandler for RepoMapHandler {
             .min(MAX_TOKENS)
             .max(256);
 
-        // 2. Get working directory from invocation context
-        let cwd = invocation.turn.cwd.clone();
-
-        // 3. Try to get RetrievalFacade (loads config from retrieval.toml)
-        let service = match codex_retrieval::RetrievalFacade::for_workdir(&cwd).await {
-            Ok(s) => s,
-            Err(codex_retrieval::RetrievalErr::NotEnabled) => {
-                return Ok(ToolOutput::Function {
-                    content: "RepoMap is not enabled.\n\n\
-                        To enable, create ~/.codex/retrieval.toml with:\n\
-                        ```toml\n\
-                        [retrieval]\n\
-                        enabled = true\n\
-                        ```\n\n\
-                        Or create .codex/retrieval.toml in your project directory."
-                        .to_string(),
-                    content_items: None,
-                    success: Some(false),
-                });
-            }
-            Err(e) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "Failed to initialize repomap: {e}"
-                )));
-            }
-        };
+        // 2. Get RetrievalFacade from SessionServices
+        let service = invocation
+            .session
+            .services
+            .retrieval_manager
+            .clone()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "RepoMap is not enabled. Enable Feature::Retrieval in config.".to_string(),
+                )
+            })?;
 
         // 4. Build request
         let mentioned_idents: HashSet<String> =

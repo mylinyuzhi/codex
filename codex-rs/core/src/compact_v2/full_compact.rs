@@ -135,7 +135,15 @@ pub async fn run_full_compact_v2(
 
     // Phase 6: Restore context
     let conversation_id = sess.conversation_id.to_string();
-    let restored_context = restore_context(&conversation_id, config);
+    let codex_home = sess
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use
+        .codex_home
+        .clone();
+    let restored_context = restore_context(&codex_home, &conversation_id, config);
     debug!(
         "Context restored: {} files, todos={}, plan={}",
         restored_context.files.len(),

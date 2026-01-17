@@ -9,6 +9,7 @@ use crate::App;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ApprovalRequest;
 use crate::pager_overlay::Overlay;
+use codex_core::ThreadManager;
 use codex_core::protocol::Op;
 use codex_core::spawn_task::SpawnCommandArgs;
 use codex_protocol::protocol_ext::UserQuestion;
@@ -16,6 +17,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::sync::Arc;
 
 /// Build paragraph for Plan approval overlay.
 pub fn build_plan_overlay_paragraph(
@@ -208,7 +210,7 @@ fn handle_start_spawn_task(app: &mut App, args: SpawnCommandArgs) {
     use codex_core::spawn_task::agent::SpawnAgentParams;
     use codex_core::spawn_task::plan_fork::read_plan_content;
     use codex_core::subagent::ApprovalMode;
-    use codex_core::subagent::get_or_create_stores;
+    use codex_core::subagent::expect_session_state;
     use codex_protocol::config_types::PlanModeApprovalPolicy;
 
     let task_id = args
@@ -239,7 +241,7 @@ fn handle_start_spawn_task(app: &mut App, args: SpawnCommandArgs) {
     // 2. Parent has a plan file that exists and is non-empty
     let forked_plan_content = if !args.detach {
         app.chat_widget.thread_id().and_then(|conv_id| {
-            let stores = get_or_create_stores(conv_id);
+            let stores = expect_session_state(&conv_id);
             match stores.get_plan_file_path() {
                 Some(plan_path) => {
                     let content = read_plan_content(&plan_path);
@@ -287,6 +289,7 @@ fn handle_start_spawn_task(app: &mut App, args: SpawnCommandArgs) {
         skills_manager: app.server.skills_manager(),
         config: app.config.clone(),
         codex_home: app.config.codex_home.clone(),
+        lsp_manager: app.server.get_lsp_manager(),
     };
 
     let agent = SpawnAgent::new(params, context);
@@ -373,8 +376,12 @@ async fn handle_spawn_status(app: &mut App, task_id: &str) {
 async fn handle_spawn_kill(app: &mut App, task_id: &str) {
     use codex_core::spawn_task::SpawnTaskManager;
 
-    let manager =
-        SpawnTaskManager::new(app.config.codex_home.clone(), app.config.cwd.to_path_buf());
+    let manager = SpawnTaskManager::with_options(
+        app.config.codex_home.clone(),
+        app.config.cwd.to_path_buf(),
+        SpawnTaskManager::DEFAULT_MAX_CONCURRENT,
+        app.server.get_lsp_manager(),
+    );
 
     match manager.kill(task_id).await {
         Ok(()) => {
@@ -391,8 +398,12 @@ async fn handle_spawn_kill(app: &mut App, task_id: &str) {
 async fn handle_spawn_drop(app: &mut App, task_id: &str) {
     use codex_core::spawn_task::SpawnTaskManager;
 
-    let manager =
-        SpawnTaskManager::new(app.config.codex_home.clone(), app.config.cwd.to_path_buf());
+    let manager = SpawnTaskManager::with_options(
+        app.config.codex_home.clone(),
+        app.config.cwd.to_path_buf(),
+        SpawnTaskManager::DEFAULT_MAX_CONCURRENT,
+        app.server.get_lsp_manager(),
+    );
 
     match manager.drop(task_id).await {
         Ok(()) => {
@@ -445,4 +456,19 @@ async fn handle_spawn_merge(app: &mut App, task_ids: Vec<String>, prompt: Option
 
     // Submit merge prompt to agent via chat widget
     app.chat_widget.submit_text_message(&prompt);
+}
+
+// =============================================================================
+// LSP shutdown on exit
+// =============================================================================
+
+/// Shutdown LSP servers on TUI exit.
+///
+/// Called before the TUI exits to ensure all LSP server processes are
+/// properly terminated and don't become zombies.
+pub async fn shutdown_lsp_on_exit(thread_manager: &Arc<ThreadManager>) {
+    if let Some(lsp_manager) = thread_manager.get_lsp_manager() {
+        tracing::info!("Shutting down LSP servers on exit");
+        lsp_manager.shutdown_all().await;
+    }
 }

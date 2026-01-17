@@ -13,11 +13,13 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use openai_sdk::ImageMediaType;
+use openai_sdk::IncompleteReason;
 use openai_sdk::InputContentBlock;
 use openai_sdk::InputMessage;
 use openai_sdk::OutputContentBlock;
 use openai_sdk::OutputItem;
 use openai_sdk::Response;
+use openai_sdk::ResponseStatus;
 use openai_sdk::Tool;
 use openai_sdk::ToolChoice;
 use serde_json::Value;
@@ -26,6 +28,7 @@ use crate::common::Prompt;
 use crate::common::ResponseEvent;
 use crate::common_ext::EncryptedContent;
 use crate::common_ext::PROVIDER_SDK_OPENAI;
+use crate::error::ApiError;
 
 // ============================================================================
 // Request conversion: Prompt -> OpenAI messages
@@ -427,17 +430,38 @@ pub fn parse_tool_choice(extra: &Option<Value>) -> Option<ToolChoice> {
 /// Convert an OpenAI Response to codex-api ResponseEvents.
 ///
 /// Stores the full response JSON in `Reasoning.encrypted_content` for round-trip preservation.
-/// Returns a vector of events and optional token usage.
+/// Returns a vector of events and optional token usage, or an error if the
+/// response indicates a blocked/truncated generation.
 ///
 /// # Arguments
 /// - `response` - The OpenAI Response
 /// - `base_url` - The API base URL (for model switch detection)
 /// - `model` - The model name (for model switch detection)
+///
+/// # Errors
+/// - `ApiError::ContextWindowExceeded` if status is Incomplete with reason MaxOutputTokens
+/// - `ApiError::GenerationBlocked` for other incomplete reasons (ContentFilter, etc.)
 pub fn response_to_events(
     response: &Response,
     base_url: &str,
     model: &str,
-) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
+) -> Result<(Vec<ResponseEvent>, Option<TokenUsage>), ApiError> {
+    // Check for incomplete/blocked response
+    if response.status == ResponseStatus::Incomplete {
+        if let Some(details) = &response.incomplete_details {
+            match details.reason {
+                Some(IncompleteReason::MaxOutputTokens) => {
+                    return Err(ApiError::ContextWindowExceeded);
+                }
+                Some(IncompleteReason::ContentFilter) => {
+                    return Err(ApiError::GenerationBlocked("content filtered".to_string()));
+                }
+                Some(other) => return Err(ApiError::GenerationBlocked(format!("{other:?}"))),
+                None => {}
+            }
+        }
+    }
+
     let mut events = Vec::new();
 
     // Extract raw body from sdk_http_response for storage
@@ -549,7 +573,7 @@ pub fn response_to_events(
         token_usage: Some(usage.clone()),
     });
 
-    (events, Some(usage))
+    Ok((events, Some(usage)))
 }
 
 /// Extract token usage from OpenAI Usage.

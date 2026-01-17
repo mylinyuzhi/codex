@@ -1,9 +1,16 @@
-//! Session-scoped subagent stores with global registry.
+//! Session-scoped state with global registry.
 //!
-//! This module provides a global registry pattern for managing subagent stores
+//! This module provides a global registry pattern for managing session-scoped state
 //! keyed by conversation_id. This avoids modifying Session/codex.rs while
-//! ensuring stores persist across turns within a session.
+//! ensuring state persists across turns within a session.
+//!
+//! The `SessionScopedState` stores various subsystem states:
+//! - Agent subsystem: registry, background tasks, transcripts
+//! - Plan Mode subsystem: plan state, mode state, approved plans
+//! - System Reminder subsystem: orchestrator, file tracker
+//! - User Interaction: pending answers, answer channels
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -45,22 +52,32 @@ pub struct ApprovedPlan {
     pub file_path: String,
 }
 
-/// Session-scoped subagent stores.
+/// Session-scoped state container.
 ///
-/// These stores maintain state that must persist across turns within a session:
-/// - AgentRegistry: Caches loaded agent definitions
-/// - BackgroundTaskStore: Tracks background subagent tasks
-/// - TranscriptStore: Records agent transcripts for resume functionality
-/// - ReminderOrchestrator: Cached system reminder orchestrator (avoids per-turn allocation)
-/// - FileTracker: Tracks file reads for change detection
-/// - PlanState: Tracks plan state for reminder generation
-/// - PlanModeState: Tracks plan mode state (active, file path, re-entry)
-/// - inject_call_count: Tracks main agent reminder injection calls
-/// - pending_user_answers: Stores pending answers from AskUserQuestion tool
-/// - approved_plan: Approved plan content for post-ExitPlanMode injection
-/// - permission_mode: Post-plan permission mode for auto-approval
+/// Maintains state that must persist across turns within a session:
+///
+/// ## Agent Subsystem
+/// - `registry`: Caches loaded agent definitions
+/// - `background_store`: Tracks background subagent tasks
+/// - `transcript_store`: Records agent transcripts for resume functionality
+///
+/// ## System Reminder Subsystem
+/// - `reminder_orchestrator`: Cached system reminder orchestrator
+/// - `file_tracker`: Tracks file reads for change detection
+/// - `inject_call_count`: Tracks main agent reminder injection calls
+///
+/// ## Plan Mode Subsystem
+/// - `plan_state`: Tracks todo/plan state for reminder generation
+/// - `plan_mode`: Tracks plan mode state (active, file path, re-entry)
+/// - `approved_plan`: Approved plan content for post-ExitPlanMode injection
+/// - `permission_mode`: Post-plan permission mode for auto-approval
+/// - `plan_mode_approval_policy`: Controls EnterPlanMode/ExitPlanMode approval
+///
+/// ## User Interaction
+/// - `pending_user_answers`: Stores pending answers from AskUserQuestion tool
+/// - `user_answer_channels`: Oneshot channels for blocking on user response
 #[derive(Debug)]
-pub struct SubagentStores {
+pub struct SessionScopedState {
     pub registry: Arc<AgentRegistry>,
     pub background_store: Arc<BackgroundTaskStore>,
     pub transcript_store: Arc<TranscriptStore>,
@@ -87,15 +104,17 @@ pub struct SubagentStores {
     /// Plan mode approval policy (controls whether EnterPlanMode/ExitPlanMode need user approval).
     /// Independent from permission_mode which controls subsequent tool approval.
     plan_mode_approval_policy: Arc<RwLock<PlanModeApprovalPolicy>>,
+    /// Codex home directory (for plan files, todos, etc.).
+    codex_home: PathBuf,
 }
 
-/// Build default search paths for custom agent discovery.
+/// Build search paths for custom agent discovery.
 ///
 /// Search order:
 /// 1. `~/.config/codex/agents/` - User config directory
-/// 2. `~/.codex/agents/` - User home directory
-/// 3. `.codex/agents/` - Project local directory
-fn build_default_search_paths() -> Vec<PathBuf> {
+/// 2. `{codex_home}/agents/` - User codex home directory
+/// 3. `{cwd}/.codex/agents/` - Project local directory
+fn build_search_paths(codex_home: &Path, cwd: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     // 1. User config directory (~/.config/codex/agents/ on Linux/macOS)
@@ -103,20 +122,16 @@ fn build_default_search_paths() -> Vec<PathBuf> {
         paths.push(config_dir.join("codex").join("agents"));
     }
 
-    // 2. User home directory (~/.codex/agents/)
-    if let Some(home_dir) = dirs::home_dir() {
-        paths.push(home_dir.join(".codex").join("agents"));
-    }
+    // 2. User codex home directory (passed via config.codex_home)
+    paths.push(codex_home.join("agents"));
 
-    // 3. Project local directory (.codex/agents/)
-    if let Ok(cwd) = std::env::current_dir() {
-        paths.push(cwd.join(".codex").join("agents"));
-    }
+    // 3. Project local directory (passed via config.cwd)
+    paths.push(cwd.join(".codex").join("agents"));
 
     paths
 }
 
-impl SubagentStores {
+impl SessionScopedState {
     /// Initialize plugins and register plugin components (agents, hooks).
     ///
     /// This should be called after the stores are created to load
@@ -160,8 +175,8 @@ impl SubagentStores {
         }
     }
 
-    pub fn new() -> Self {
-        let search_paths = build_default_search_paths();
+    pub fn new(codex_home: &Path, cwd: &Path) -> Self {
+        let search_paths = build_search_paths(codex_home, cwd);
         Self {
             registry: Arc::new(AgentRegistry::with_search_paths(search_paths)),
             background_store: Arc::new(BackgroundTaskStore::new()),
@@ -178,7 +193,13 @@ impl SubagentStores {
             approved_plan: Arc::new(RwLock::new(None)),
             permission_mode: Arc::new(RwLock::new(None)),
             plan_mode_approval_policy: Arc::new(RwLock::new(PlanModeApprovalPolicy::default())),
+            codex_home: codex_home.to_path_buf(),
         }
+    }
+
+    /// Get the codex home directory.
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
     }
 
     /// Increment and return the new inject call count.
@@ -238,7 +259,7 @@ impl SubagentStores {
             .plan_mode
             .write()
             .map_err(|_| CodexErr::Fatal("plan_mode lock poisoned".to_string()))?;
-        state.enter(conversation_id)
+        state.enter(&self.codex_home, conversation_id)
     }
 
     /// Exit Plan Mode.
@@ -448,35 +469,51 @@ impl SubagentStores {
     }
 }
 
-impl Default for SubagentStores {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Global registry mapping conversation_id to session-scoped stores.
 ///
 /// Using LazyLock + DashMap for thread-safe lazy initialization with
 /// concurrent access support.
-static STORES_REGISTRY: LazyLock<DashMap<ThreadId, Arc<SubagentStores>>> =
+static SESSION_STATE_REGISTRY: LazyLock<DashMap<ThreadId, Arc<SessionScopedState>>> =
     LazyLock::new(DashMap::new);
 
-/// Get or create stores for a session by conversation_id.
+/// Initialize stores for a conversation.
 ///
-/// This is the main entry point for handlers to access session-scoped stores.
-/// The stores are created on first access and reused for subsequent calls
-/// with the same conversation_id.
+/// Should be called once when a session is created (in Codex::spawn).
+/// Subsequent access should use `expect_session_state()` or `get_session_state()`.
+///
+/// # Arguments
+///
+/// * `conversation_id` - The conversation/thread ID
+/// * `codex_home` - Path to the codex home directory (from config.codex_home)
+/// * `cwd` - Current working directory (from config.cwd)
 ///
 /// # Example
 /// ```ignore
-/// let stores = get_or_create_stores(session.conversation_id);
-/// // Use stores.background_store, stores.transcript_store, etc.
+/// // In Codex::spawn after Session::new
+/// init_session_state(thread_id, &config.codex_home, &config.cwd);
 /// ```
-pub fn get_or_create_stores(conversation_id: ThreadId) -> Arc<SubagentStores> {
-    STORES_REGISTRY
+pub fn init_session_state(
+    conversation_id: ThreadId,
+    codex_home: &Path,
+    cwd: &Path,
+) -> Arc<SessionScopedState> {
+    SESSION_STATE_REGISTRY
         .entry(conversation_id)
-        .or_insert_with(|| Arc::new(SubagentStores::new()))
+        .or_insert_with(|| Arc::new(SessionScopedState::new(codex_home, cwd)))
         .clone()
+}
+
+/// Get stores, panicking if not initialized.
+///
+/// Use this when you're certain the stores have been initialized
+/// (e.g., in tool handlers after session creation).
+///
+/// # Panics
+///
+/// Panics if stores haven't been initialized for this conversation.
+pub fn expect_session_state(conversation_id: &ThreadId) -> Arc<SessionScopedState> {
+    get_session_state(conversation_id)
+        .expect("SessionScopedState should be initialized for this conversation")
 }
 
 /// Cleanup stores when session ends.
@@ -486,16 +523,18 @@ pub fn get_or_create_stores(conversation_id: ThreadId) -> Arc<SubagentStores> {
 /// but long-running servers should call this on session cleanup.
 ///
 /// Also cleans up plan slug cache to ensure new sessions get fresh slugs.
-pub fn cleanup_stores(conversation_id: &ThreadId) {
-    STORES_REGISTRY.remove(conversation_id);
+pub fn cleanup_session_state(conversation_id: &ThreadId) {
+    SESSION_STATE_REGISTRY.remove(conversation_id);
     cleanup_plan_slug(conversation_id);
 }
 
 /// Get stores if they exist (without creating new ones).
 ///
 /// Useful for operations that should only work on existing sessions.
-pub fn get_stores(conversation_id: &ThreadId) -> Option<Arc<SubagentStores>> {
-    STORES_REGISTRY.get(conversation_id).map(|r| r.clone())
+pub fn get_session_state(conversation_id: &ThreadId) -> Option<Arc<SessionScopedState>> {
+    SESSION_STATE_REGISTRY
+        .get(conversation_id)
+        .map(|r| r.clone())
 }
 
 #[cfg(test)]
@@ -503,11 +542,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_default_search_paths() {
-        let paths = build_default_search_paths();
+    fn test_build_search_paths() {
+        let codex_home = PathBuf::from("/tmp/codex_home");
+        let cwd = PathBuf::from("/tmp/project");
+        let paths = build_search_paths(&codex_home, &cwd);
 
-        // Should have at least project local path
-        assert!(!paths.is_empty());
+        // Should have at least 3 paths (config_dir may or may not exist)
+        assert!(paths.len() >= 2);
 
         // All paths should end with "agents"
         for path in &paths {
@@ -516,41 +557,51 @@ mod tests {
                 "Path should end with 'agents': {path:?}"
             );
         }
+
+        // Check codex_home path is included
+        assert!(paths.contains(&codex_home.join("agents")));
+
+        // Check project path is included
+        assert!(paths.contains(&cwd.join(".codex").join("agents")));
     }
 
     #[test]
-    fn test_get_or_create_stores() {
+    fn test_init_and_expect_session_state() {
         let conv_id = ThreadId::new();
+        let codex_home = PathBuf::from("/tmp/codex_home");
+        let cwd = PathBuf::from("/tmp/project");
 
         // First access creates stores
-        let stores1 = get_or_create_stores(conv_id);
+        let stores1 = init_session_state(conv_id, &codex_home, &cwd);
 
-        // Second access returns same stores
-        let stores2 = get_or_create_stores(conv_id);
+        // expect_session_state returns same stores
+        let stores2 = expect_session_state(&conv_id);
 
         // Both should point to same Arc
         assert!(Arc::ptr_eq(&stores1, &stores2));
 
         // Cleanup
-        cleanup_stores(&conv_id);
+        cleanup_session_state(&conv_id);
 
-        // After cleanup, get_stores returns None
-        assert!(get_stores(&conv_id).is_none());
+        // After cleanup, get_session_state returns None
+        assert!(get_session_state(&conv_id).is_none());
     }
 
     #[test]
     fn test_different_sessions_have_different_stores() {
         let conv_id1 = ThreadId::new();
         let conv_id2 = ThreadId::new();
+        let codex_home = PathBuf::from("/tmp/codex_home");
+        let cwd = PathBuf::from("/tmp/project");
 
-        let stores1 = get_or_create_stores(conv_id1);
-        let stores2 = get_or_create_stores(conv_id2);
+        let stores1 = init_session_state(conv_id1, &codex_home, &cwd);
+        let stores2 = init_session_state(conv_id2, &codex_home, &cwd);
 
         // Different sessions should have different stores
         assert!(!Arc::ptr_eq(&stores1, &stores2));
 
         // Cleanup
-        cleanup_stores(&conv_id1);
-        cleanup_stores(&conv_id2);
+        cleanup_session_state(&conv_id1);
+        cleanup_session_state(&conv_id2);
     }
 }

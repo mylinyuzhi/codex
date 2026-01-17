@@ -11,9 +11,12 @@ use anthropic_sdk::ContentBlockParam;
 use anthropic_sdk::ImageMediaType;
 use anthropic_sdk::Message;
 use anthropic_sdk::MessageParam;
+use anthropic_sdk::StopReason;
 use anthropic_sdk::SystemPrompt;
 use anthropic_sdk::Tool;
 use anthropic_sdk::ToolResultContent;
+
+use crate::error::ApiError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
@@ -440,7 +443,9 @@ fn tool_json_to_struct(json: &Value) -> Option<Tool> {
 
 /// Convert an Anthropic Message response to codex-api ResponseEvents.
 ///
-/// Returns a vector of events and optional token usage.
+/// Returns a vector of events and optional token usage, or an error if the
+/// response indicates a blocked/truncated generation.
+///
 /// The events include:
 /// - Created (response start)
 /// - OutputItemDone for each content block (Message, FunctionCall, Reasoning)
@@ -450,11 +455,27 @@ fn tool_json_to_struct(json: &Value) -> Option<Tool> {
 /// - `message` - The Anthropic Message response
 /// - `base_url` - The API base URL (for model switch detection)
 /// - `model` - The model name (for model switch detection)
+///
+/// # Errors
+/// - `ApiError::ContextWindowExceeded` if stop_reason is MaxTokens
+/// - `ApiError::GenerationBlocked` if stop_reason is Refusal
 pub fn message_to_events(
     message: &Message,
     base_url: &str,
     model: &str,
-) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
+) -> Result<(Vec<ResponseEvent>, Option<TokenUsage>), ApiError> {
+    // Check stop_reason for error conditions
+    if let Some(stop_reason) = &message.stop_reason {
+        match stop_reason {
+            StopReason::MaxTokens => return Err(ApiError::ContextWindowExceeded),
+            StopReason::Refusal => {
+                return Err(ApiError::GenerationBlocked("content refused".to_string()));
+            }
+            // EndTurn, ToolUse, StopSequence, PauseTurn → normal completion
+            _ => {}
+        }
+    }
+
     let mut events = Vec::new();
 
     // Add Created event
@@ -584,7 +605,7 @@ pub fn message_to_events(
         token_usage: Some(usage.clone()),
     });
 
-    (events, Some(usage))
+    Ok((events, Some(usage)))
 }
 
 /// Extract token usage from Anthropic Usage.

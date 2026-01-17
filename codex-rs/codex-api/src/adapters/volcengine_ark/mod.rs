@@ -120,7 +120,7 @@ impl ProviderAdapter for VolcengineArkAdapter {
         // Pass base_url and model for model switch detection in EncryptedContent
         let effective_base_url = config.base_url.as_deref().unwrap_or("");
         let (events, usage) =
-            convert::response_to_events(&response, effective_base_url, &config.model);
+            convert::response_to_events(&response, effective_base_url, &config.model)?;
 
         Ok(GenerateResult {
             events,

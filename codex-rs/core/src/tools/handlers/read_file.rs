@@ -164,7 +164,7 @@ impl ToolHandler for ReadFileHandler {
 
         // Track file read for change detection (system reminders)
         // Only track if stores exist for this conversation
-        if let Some(stores) = crate::subagent::get_stores(&session.conversation_id) {
+        if let Some(stores) = crate::subagent::get_session_state(&session.conversation_id) {
             // Read raw content for change detection (without line number formatting)
             if let Ok(raw_content) = std::fs::read_to_string(&path) {
                 stores.file_tracker.track_read(

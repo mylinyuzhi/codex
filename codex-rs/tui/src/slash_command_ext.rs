@@ -99,7 +99,8 @@ async fn handle_install(
     let registry = std::sync::Arc::new(registry);
 
     let cache_dir = ctx.codex_home.join("plugins").join("cache");
-    let installer = codex_plugin::installer::PluginInstaller::new(registry, cache_dir);
+    let installer =
+        codex_plugin::installer::PluginInstaller::new(registry, cache_dir, &ctx.codex_home);
 
     let project_path = ctx.project_path.as_deref();
 
@@ -131,7 +132,8 @@ async fn handle_uninstall(
     let registry = std::sync::Arc::new(registry);
 
     let cache_dir = ctx.codex_home.join("plugins").join("cache");
-    let installer = codex_plugin::installer::PluginInstaller::new(registry, cache_dir);
+    let installer =
+        codex_plugin::installer::PluginInstaller::new(registry, cache_dir, &ctx.codex_home);
 
     let project_path = ctx.project_path.as_deref();
 
@@ -209,7 +211,8 @@ async fn handle_validate(
     let registry = std::sync::Arc::new(registry);
 
     let cache_dir = ctx.codex_home.join("plugins").join("cache");
-    let installer = codex_plugin::installer::PluginInstaller::new(registry, cache_dir);
+    let installer =
+        codex_plugin::installer::PluginInstaller::new(registry, cache_dir, &ctx.codex_home);
 
     match installer.validate(&path).await {
         Ok(manifest) => PluginCommandResult::Success(format!(
@@ -235,7 +238,8 @@ async fn handle_update(
     let registry = std::sync::Arc::new(registry);
 
     let cache_dir = ctx.codex_home.join("plugins").join("cache");
-    let installer = codex_plugin::installer::PluginInstaller::new(registry, cache_dir);
+    let installer =
+        codex_plugin::installer::PluginInstaller::new(registry, cache_dir, &ctx.codex_home);
 
     let project_path = ctx.project_path.as_deref();
 

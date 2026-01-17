@@ -32,6 +32,7 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_lsp::LspServerManager;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
@@ -228,6 +229,8 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<codex_retrieval::RetrievalFacade>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -294,6 +297,8 @@ impl Codex {
             session_source_clone,
             skills_manager,
             agent_control,
+            lsp_manager,
+            retrieval_manager,
         )
         .await
         .map_err(|e| {
@@ -583,6 +588,8 @@ impl Session {
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         agent_control: AgentControl,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<codex_retrieval::RetrievalFacade>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -719,6 +726,8 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager,
+            retrieval_manager,
         };
 
         let sess = Arc::new(Session {
@@ -779,6 +788,14 @@ impl Session {
                 sandbox_state,
             )
             .await;
+
+        // Initialize session-scoped state before any code that might access it.
+        // record_initial_history -> new_default_turn -> apply_tool_filter -> expect_session_state
+        crate::subagent::init_session_state(
+            conversation_id,
+            &config.codex_home,
+            &session_configuration.cwd,
+        );
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -2608,11 +2625,17 @@ pub(crate) async fn run_turn(
 
         // Inject system reminders (background tasks, plan reminders, changed files, etc.)
         // Count is tracked internally per main agent call
+        let diagnostics_store = sess
+            .services
+            .lsp_manager
+            .as_ref()
+            .map(|m| m.diagnostics().clone());
         crate::codex_ext::maybe_inject_system_reminders(
             &mut turn_input,
             &turn_context.cwd,
             Some(&sess.conversation_id),
             turn_context.critical_instruction.as_deref(),
+            diagnostics_store,
         )
         .await;
 
@@ -3720,6 +3743,8 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
+        // Initialize session-scoped state for tests
+        crate::subagent::init_session_state(conversation_id, &config.codex_home, &config.cwd);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
@@ -3775,6 +3800,8 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager: None,
+            retrieval_manager: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3815,6 +3842,8 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
+        // Initialize session-scoped state for tests
+        crate::subagent::init_session_state(conversation_id, &config.codex_home, &config.cwd);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
@@ -3870,6 +3899,8 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager: None,
+            retrieval_manager: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

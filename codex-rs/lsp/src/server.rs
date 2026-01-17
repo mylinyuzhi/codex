@@ -87,7 +87,8 @@ impl LspServerManager {
         project_root: Option<&Path>,
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
-        let config = LspServersConfig::load(project_root);
+        let codex_home = crate::config::find_codex_home();
+        let config = LspServersConfig::load(codex_home.as_deref(), project_root);
         Self::new(config, project_root.map(Path::to_path_buf), diagnostics)
     }
 
@@ -95,7 +96,9 @@ impl LspServerManager {
     ///
     /// This updates the in-memory config to reflect changes made to config files.
     pub async fn reload_config(&self) {
-        let new_config = LspServersConfig::load(self.project_root.as_deref());
+        let codex_home = crate::config::find_codex_home();
+        let new_config =
+            LspServersConfig::load(codex_home.as_deref(), self.project_root.as_deref());
         let mut config = self.config.write().await;
         *config = new_config;
         debug!("LSP configuration reloaded");
@@ -676,6 +679,81 @@ impl LspServerManager {
         }
 
         info!("All LSP servers shut down");
+    }
+
+    /// Shutdown all LSP servers for a specific workspace root
+    ///
+    /// This is used for cleanup when a worktree is deleted (e.g., spawn agent completes).
+    /// Only servers with matching root_path are shut down; other servers remain active.
+    pub async fn shutdown_for_root(&self, root_path: &Path) {
+        let root_path = root_path.to_path_buf();
+
+        // Find keys to remove
+        let keys_to_remove: Vec<ServerKey> = {
+            let clients = self.clients.lock().await;
+            clients
+                .keys()
+                .filter(|(_, path)| *path == root_path)
+                .cloned()
+                .collect()
+        };
+
+        if keys_to_remove.is_empty() {
+            debug!(
+                "No LSP servers to shutdown for root: {}",
+                root_path.display()
+            );
+            return;
+        }
+
+        info!(
+            "Shutting down {} LSP server(s) for root: {}",
+            keys_to_remove.len(),
+            root_path.display()
+        );
+
+        // Signal shutdown to affected lifecycle managers
+        {
+            let lifecycles = self.lifecycles.lock().await;
+            for key in &keys_to_remove {
+                if let Some(lifecycle) = lifecycles.get(key) {
+                    lifecycle.signal_shutdown();
+                }
+            }
+        }
+
+        // Shutdown affected clients
+        {
+            let mut clients = self.clients.lock().await;
+            for key in &keys_to_remove {
+                if let Some(client) = clients.remove(key) {
+                    debug!("Shutting down LSP client: {:?}", key);
+                    if let Err(e) = client.shutdown().await {
+                        warn!("Error shutting down LSP client {:?}: {}", key, e);
+                    }
+                }
+            }
+        }
+
+        // Cleanup affected lifecycle managers
+        {
+            let mut lifecycles = self.lifecycles.lock().await;
+            for key in &keys_to_remove {
+                if let Some(lifecycle) = lifecycles.remove(key) {
+                    lifecycle.abort_health_check().await;
+                }
+            }
+        }
+
+        // Cleanup health check timestamps
+        {
+            let mut last_checks = self.last_health_checks.lock().await;
+            for key in &keys_to_remove {
+                last_checks.remove(key);
+            }
+        }
+
+        info!("LSP servers shut down for root: {}", root_path.display());
     }
 
     /// Get lifecycle manager for a server (for monitoring/testing)

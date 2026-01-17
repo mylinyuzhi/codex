@@ -4,7 +4,7 @@
 //! Aligned with Claude Code's EnterPlanMode (chunks.130.mjs:2336-2398).
 
 use crate::function_tool::FunctionCallError;
-use crate::subagent::get_or_create_stores;
+use crate::subagent::expect_session_state;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -36,7 +36,7 @@ impl ToolHandler for EnterPlanModeHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         // 1. Get stores and check plan mode state
-        let stores = get_or_create_stores(invocation.session.conversation_id);
+        let stores = expect_session_state(&invocation.session.conversation_id);
         let plan_mode_state = stores.get_plan_mode_state().map_err(|e| {
             tracing::error!("failed to get plan mode state: {e}");
             FunctionCallError::RespondToModel(

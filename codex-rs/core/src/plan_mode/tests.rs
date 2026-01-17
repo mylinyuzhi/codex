@@ -16,10 +16,14 @@ fn test_plan_mode_state_default() {
 
 #[test]
 fn test_plan_mode_enter() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
     let mut state = PlanModeState::new();
     let conv_id = ThreadId::new();
 
-    let path = state.enter(conv_id).expect("should enter plan mode");
+    let path = state
+        .enter(codex_home, conv_id)
+        .expect("should enter plan mode");
 
     assert!(state.is_active);
     assert!(state.plan_file_path.is_some());
@@ -30,9 +34,13 @@ fn test_plan_mode_enter() {
 
 #[test]
 fn test_plan_mode_exit_approved() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
     let mut state = PlanModeState::new();
     let conv_id = ThreadId::new();
-    let _ = state.enter(conv_id).expect("should enter plan mode");
+    let _ = state
+        .enter(codex_home, conv_id)
+        .expect("should enter plan mode");
 
     state.exit(true);
 
@@ -44,9 +52,13 @@ fn test_plan_mode_exit_approved() {
 
 #[test]
 fn test_plan_mode_exit_rejected() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
     let mut state = PlanModeState::new();
     let conv_id = ThreadId::new();
-    let _ = state.enter(conv_id).expect("should enter plan mode");
+    let _ = state
+        .enter(codex_home, conv_id)
+        .expect("should enter plan mode");
 
     state.exit(false);
 
@@ -95,20 +107,22 @@ fn test_clear_reentry() {
 
 #[test]
 fn test_get_plan_file_path() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
     let conv_id = ThreadId::new();
-    let path = get_plan_file_path(&conv_id).expect("should get path");
+    let path = get_plan_file_path(codex_home, &conv_id).expect("should get path");
 
     assert!(path.to_string_lossy().ends_with(".md"));
-    assert!(path.to_string_lossy().contains(".codex"));
     assert!(path.to_string_lossy().contains("plans"));
 }
 
 #[test]
 fn test_get_plans_directory() {
-    let plans_dir = get_plans_directory().expect("should get plans directory");
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
+    let plans_dir = get_plans_directory(codex_home).expect("should get plans directory");
 
     assert!(plans_dir.ends_with("plans"));
-    assert!(plans_dir.to_string_lossy().contains(".codex"));
 }
 
 #[test]

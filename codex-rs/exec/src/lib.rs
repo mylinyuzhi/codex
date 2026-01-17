@@ -28,6 +28,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::loop_driver::LoopCondition;
 use codex_core::protocol::AskForApproval;
@@ -323,10 +324,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
+    // Create LspServerManager if Feature::Lsp is enabled
+    let lsp_manager = if config.features.enabled(Feature::Lsp) {
+        Some(codex_lsp::create_manager(Some(config.cwd.clone())))
+    } else {
+        None
+    };
+    // Create RetrievalFacade if Feature::Retrieval is enabled
+    let retrieval_manager = if config.features.enabled(Feature::Retrieval) {
+        codex_retrieval::create_manager(Some(config.cwd.clone())).await
+    } else {
+        None
+    };
     let thread_manager = ThreadManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
         SessionSource::Exec,
+        lsp_manager,
+        retrieval_manager,
     );
     let default_model = thread_manager
         .get_models_manager()

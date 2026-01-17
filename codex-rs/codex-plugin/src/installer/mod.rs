@@ -24,14 +24,26 @@ use tracing::info;
 pub struct PluginInstaller {
     registry: Arc<PluginRegistryV2>,
     cache_dir: PathBuf,
+    /// Codex home directory (for NPM cache etc.)
+    codex_home: PathBuf,
 }
 
 impl PluginInstaller {
     /// Create a new plugin installer.
-    pub fn new(registry: Arc<PluginRegistryV2>, cache_dir: impl Into<PathBuf>) -> Self {
+    ///
+    /// # Arguments
+    /// * `registry` - Plugin registry
+    /// * `cache_dir` - Cache directory for installed plugins
+    /// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+    pub fn new(
+        registry: Arc<PluginRegistryV2>,
+        cache_dir: impl Into<PathBuf>,
+        codex_home: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             registry,
             cache_dir: cache_dir.into(),
+            codex_home: codex_home.into(),
         }
     }
 
@@ -51,7 +63,7 @@ impl PluginInstaller {
         validate_plugin_name(marketplace)?;
 
         // Fetch plugin to temporary location
-        let fetch_result = fetch_plugin_source(source).await?;
+        let fetch_result = fetch_plugin_source(&self.codex_home, source).await?;
 
         // Load and validate manifest
         let manifest = load_manifest_from_dir(&fetch_result.path).await?;
@@ -315,6 +327,7 @@ mod tests {
         let installer = PluginInstaller::new(
             Arc::clone(&registry),
             codex_home.path().join("plugins").join("cache"),
+            codex_home.path(),
         );
 
         let source = PluginSource::Local {
@@ -349,6 +362,7 @@ mod tests {
         let installer = PluginInstaller::new(
             Arc::clone(&registry),
             codex_home.path().join("plugins").join("cache"),
+            codex_home.path(),
         );
 
         let source = PluginSource::Local {
