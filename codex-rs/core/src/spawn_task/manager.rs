@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_lsp::LspServerManager;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -37,15 +38,17 @@ pub struct SpawnTaskManager {
     worktree_manager: WorktreeManager,
     /// Maximum number of concurrent spawn tasks (default: 5).
     max_concurrent_tasks: i32,
+    /// LSP server manager for cleanup when worktree is deleted.
+    lsp_manager: Option<Arc<LspServerManager>>,
 }
 
 impl SpawnTaskManager {
     /// Default maximum concurrent tasks.
-    const DEFAULT_MAX_CONCURRENT: i32 = 5;
+    pub const DEFAULT_MAX_CONCURRENT: i32 = 5;
 
     /// Create a new spawn task manager with default concurrency limit.
     pub fn new(codex_home: PathBuf, project_root: PathBuf) -> Self {
-        Self::with_max_concurrent(codex_home, project_root, Self::DEFAULT_MAX_CONCURRENT)
+        Self::with_options(codex_home, project_root, Self::DEFAULT_MAX_CONCURRENT, None)
     }
 
     /// Create a new spawn task manager with custom concurrency limit.
@@ -53,6 +56,16 @@ impl SpawnTaskManager {
         codex_home: PathBuf,
         project_root: PathBuf,
         max_concurrent_tasks: i32,
+    ) -> Self {
+        Self::with_options(codex_home, project_root, max_concurrent_tasks, None)
+    }
+
+    /// Create a new spawn task manager with all options.
+    pub fn with_options(
+        codex_home: PathBuf,
+        project_root: PathBuf,
+        max_concurrent_tasks: i32,
+        lsp_manager: Option<Arc<LspServerManager>>,
     ) -> Self {
         let worktree_manager = WorktreeManager::new(codex_home.clone(), project_root.clone());
 
@@ -62,6 +75,7 @@ impl SpawnTaskManager {
             project_root,
             worktree_manager,
             max_concurrent_tasks,
+            lsp_manager,
         }
     }
 
@@ -302,7 +316,13 @@ impl SpawnTaskManager {
         // Load metadata to check for worktree
         if let Ok(metadata) = load_metadata(&self.codex_home, task_id).await {
             // WORKTREE: Framework-level cleanup for ALL task types
-            if metadata.worktree_path.is_some() {
+            if let Some(ref worktree_path) = metadata.worktree_path {
+                // Shutdown LSP servers for this worktree BEFORE removing directory
+                if let Some(ref lsp_manager) = self.lsp_manager {
+                    info!(task_id = %task_id, "Shutting down LSP servers for worktree");
+                    lsp_manager.shutdown_for_root(worktree_path).await;
+                }
+
                 info!(task_id = %task_id, "Cleaning up worktree");
                 if let Err(e) = self.worktree_manager.cleanup_worktree(task_id).await {
                     warn!(task_id = %task_id, error = %e, "Failed to cleanup worktree");

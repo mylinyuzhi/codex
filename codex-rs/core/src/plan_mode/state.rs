@@ -1,5 +1,6 @@
 //! Plan Mode state management.
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
@@ -11,7 +12,7 @@ use crate::error::CodexErr;
 ///
 /// Tracks the current session's Plan Mode state, including whether it's active,
 /// the plan file path, and re-entry detection.
-/// Stored in SubagentStores with session lifetime.
+/// Stored in SessionScopedState with session lifetime.
 ///
 /// ## Re-entry Detection
 ///
@@ -47,12 +48,17 @@ impl PlanModeState {
     /// Generates a new plan file path and activates Plan Mode.
     ///
     /// # Arguments
+    /// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
     /// * `conversation_id` - Current conversation ID
     ///
     /// # Returns
     /// Plan file path on success, or error if unable to get directory
-    pub fn enter(&mut self, conversation_id: ThreadId) -> Result<PathBuf, CodexErr> {
-        let plan_file_path = get_plan_file_path(&conversation_id)?;
+    pub fn enter(
+        &mut self,
+        codex_home: &Path,
+        conversation_id: ThreadId,
+    ) -> Result<PathBuf, CodexErr> {
+        let plan_file_path = get_plan_file_path(codex_home, &conversation_id)?;
 
         self.is_active = true;
         self.plan_file_path = Some(plan_file_path.clone());

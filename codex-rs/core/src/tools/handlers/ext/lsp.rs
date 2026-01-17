@@ -12,40 +12,11 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_lsp::CallHierarchyIncomingCall;
 use codex_lsp::CallHierarchyOutgoingCall;
-use codex_lsp::DiagnosticsStore;
 use codex_lsp::Location;
-use codex_lsp::LspServerManager;
-use codex_lsp::LspServersConfig;
 use codex_lsp::SymbolInformation;
 use codex_lsp::SymbolKind;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::OnceCell;
-
-/// Global LSP manager (lazily initialized)
-static LSP_MANAGER: OnceCell<Arc<LspServerManager>> = OnceCell::const_new();
-
-/// Get or create the global LSP manager
-async fn get_lsp_manager() -> Arc<LspServerManager> {
-    LSP_MANAGER
-        .get_or_init(|| async {
-            let config = LspServersConfig::default();
-            let diagnostics = Arc::new(DiagnosticsStore::new());
-            Arc::new(LspServerManager::new(config, None, diagnostics))
-        })
-        .await
-        .clone()
-}
-
-/// Get the global LSP diagnostics store if LSP has been initialized.
-///
-/// Returns None if the LSP tool has never been invoked in this session.
-/// This is used by the system reminder injection to access diagnostics
-/// collected from LSP servers.
-pub fn get_lsp_diagnostics_store() -> Option<Arc<DiagnosticsStore>> {
-    LSP_MANAGER.get().map(|m| m.diagnostics().clone())
-}
 
 /// LSP tool arguments
 #[derive(Debug, Clone, Deserialize)]
@@ -112,8 +83,18 @@ impl ToolHandler for LspHandler {
             )));
         }
 
-        // 3. Get LSP manager and client
-        let manager = get_lsp_manager().await;
+        // 3. Get LSP manager from session services
+        let manager = invocation
+            .session
+            .services
+            .lsp_manager
+            .as_ref()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "LSP feature is not enabled. Enable it in config: [features] lsp = true"
+                        .to_string(),
+                )
+            })?;
 
         // Check if LSP is available for this file type
         if !manager.is_available(&file_path).await {

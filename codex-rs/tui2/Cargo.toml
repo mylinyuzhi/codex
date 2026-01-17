@@ -37,6 +37,8 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-lsp = { workspace = true }
+codex-retrieval = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }

@@ -208,8 +208,9 @@ impl ModelClient {
         let instructions = prompt
             .get_full_instructions(&self.state.model_info)
             .into_owned();
+        let model = self.get_model();
         let payload = ApiCompactionInput {
-            model: &self.state.model_info.slug,
+            model: &model,
             input: &prompt.input,
             instructions: &instructions,
         };
@@ -237,6 +238,15 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    /// Returns the model name to use in API requests.
+    /// Priority: provider.ext.model_name > model_info.slug
+    fn get_model(&self) -> String {
+        if let Some(model_name) = &self.state.provider.ext.model_name {
+            return model_name.clone();
+        }
+        self.state.model_info.slug.clone()
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -378,7 +388,7 @@ impl ModelClientSession {
 
         let store = store_override.unwrap_or(false);
         let payload = ResponseCreateWsRequest {
-            model: self.state.model_info.slug.clone(),
+            model: self.get_model(),
             instructions: api_prompt.instructions.clone(),
             input: api_prompt.input.clone(),
             tools: api_prompt.tools.clone(),
@@ -454,6 +464,7 @@ impl ModelClientSession {
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.state.conversation_id.to_string();
         let session_source = self.state.session_source.clone();
+        let model = self.get_model();
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -475,7 +486,7 @@ impl ModelClientSession {
 
             let stream_result = client
                 .stream_prompt(
-                    &self.state.model_info.slug,
+                    &model,
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
@@ -510,6 +521,7 @@ impl ModelClientSession {
 
         let auth_manager = self.state.auth_manager.clone();
         let api_prompt = self.build_responses_request(prompt)?;
+        let model = self.get_model();
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -533,9 +545,7 @@ impl ModelClientSession {
 
             let options = self.build_responses_options(prompt, compression);
 
-            let stream_result = client
-                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
-                .await;
+            let stream_result = client.stream_prompt(&model, &api_prompt, options).await;
 
             match stream_result {
                 Ok(stream) => {

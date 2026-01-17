@@ -113,7 +113,7 @@ impl ProviderAdapter for ZaiAdapter {
         // Convert response to events
         // Pass base_url and model for model switch detection in EncryptedContent
         let effective_base_url = config.base_url.as_deref().unwrap_or("");
-        let events = convert::completion_to_events(&completion, effective_base_url, &config.model);
+        let events = convert::completion_to_events(&completion, effective_base_url, &config.model)?;
 
         Ok(GenerateResult {
             events,

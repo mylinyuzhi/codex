@@ -58,6 +58,7 @@ mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
 mod key_hint;
+mod lib_ext;
 pub mod live_wrap;
 mod markdown;
 mod markdown_render;
@@ -562,6 +563,9 @@ async fn run_ratatui_app(
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
 
+    let lsp_manager = lib_ext::create_lsp_manager(&config);
+    let retrieval_manager = lib_ext::create_retrieval_manager(&config).await;
+
     let app_result = App::run(
         &mut tui,
         auth_manager,
@@ -572,6 +576,8 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        lsp_manager,
+        retrieval_manager,
     )
     .await;
 

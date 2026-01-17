@@ -8,48 +8,54 @@
 
 use codex_core::subagent::AgentRegistry;
 use codex_core::subagent::BackgroundTaskStore;
-use codex_core::subagent::cleanup_stores;
-use codex_core::subagent::get_or_create_stores;
-use codex_core::subagent::get_stores;
+use codex_core::subagent::cleanup_session_state;
+use codex_core::subagent::expect_session_state;
+use codex_core::subagent::get_session_state;
+use codex_core::subagent::init_session_state;
 use codex_protocol::ThreadId;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Test that stores are created on first access and reused for subsequent calls.
 #[test]
 fn test_stores_creation_and_reuse() {
     let conv_id = ThreadId::new();
+    let test_home = PathBuf::from("/tmp/test-codex");
+    let test_cwd = PathBuf::from("/tmp/test-cwd");
 
     // First access creates stores
-    let stores1 = get_or_create_stores(conv_id);
+    let stores1 = init_session_state(conv_id, &test_home, &test_cwd);
 
     // Second access returns same stores
-    let stores2 = get_or_create_stores(conv_id);
+    let stores2 = expect_session_state(&conv_id);
 
     // Both should point to same Arc
     assert!(std::sync::Arc::ptr_eq(&stores1, &stores2));
 
     // Cleanup
-    cleanup_stores(&conv_id);
+    cleanup_session_state(&conv_id);
 }
 
-/// Test that cleanup_stores properly removes stores from registry.
+/// Test that cleanup_session_state properly removes stores from registry.
 #[test]
 fn test_stores_cleanup() {
     let conv_id = ThreadId::new();
+    let test_home = PathBuf::from("/tmp/test-codex");
+    let test_cwd = PathBuf::from("/tmp/test-cwd");
 
     // Create stores
-    let _ = get_or_create_stores(conv_id);
+    let _ = init_session_state(conv_id, &test_home, &test_cwd);
     assert!(
-        get_stores(&conv_id).is_some(),
+        get_session_state(&conv_id).is_some(),
         "stores should exist after creation"
     );
 
     // Cleanup
-    cleanup_stores(&conv_id);
+    cleanup_session_state(&conv_id);
 
     // Verify cleanup
     assert!(
-        get_stores(&conv_id).is_none(),
+        get_session_state(&conv_id).is_none(),
         "stores should not exist after cleanup"
     );
 }
@@ -59,20 +65,22 @@ fn test_stores_cleanup() {
 fn test_stores_isolation() {
     let conv_id1 = ThreadId::new();
     let conv_id2 = ThreadId::new();
+    let test_home = PathBuf::from("/tmp/test-codex");
+    let test_cwd = PathBuf::from("/tmp/test-cwd");
 
-    let stores1 = get_or_create_stores(conv_id1);
-    let stores2 = get_or_create_stores(conv_id2);
+    let stores1 = init_session_state(conv_id1, &test_home, &test_cwd);
+    let stores2 = init_session_state(conv_id2, &test_home, &test_cwd);
 
     // Different conversations should have different stores
     assert!(!std::sync::Arc::ptr_eq(&stores1, &stores2));
 
     // Cleanup one should not affect the other
-    cleanup_stores(&conv_id1);
-    assert!(get_stores(&conv_id1).is_none());
-    assert!(get_stores(&conv_id2).is_some());
+    cleanup_session_state(&conv_id1);
+    assert!(get_session_state(&conv_id1).is_none());
+    assert!(get_session_state(&conv_id2).is_some());
 
     // Cleanup the other
-    cleanup_stores(&conv_id2);
+    cleanup_session_state(&conv_id2);
 }
 
 /// Test that built-in agents (Explore, Plan) are available.
@@ -155,16 +163,18 @@ fn test_codex_ext_cleanup_session_resources() {
     use codex_core::codex_ext::cleanup_session_resources;
 
     let conv_id = ThreadId::new();
+    let test_home = PathBuf::from("/tmp/test-codex");
+    let test_cwd = PathBuf::from("/tmp/test-cwd");
 
     // Create stores
-    let _ = get_or_create_stores(conv_id);
-    assert!(get_stores(&conv_id).is_some());
+    let _ = init_session_state(conv_id, &test_home, &test_cwd);
+    assert!(get_session_state(&conv_id).is_some());
 
     // Use the extension function to cleanup
     cleanup_session_resources(&conv_id);
 
     // Verify cleanup
-    assert!(get_stores(&conv_id).is_none());
+    assert!(get_session_state(&conv_id).is_none());
 }
 
 /// Test Explore agent has expected configuration.

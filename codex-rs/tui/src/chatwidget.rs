@@ -2884,6 +2884,9 @@ impl ChatWidget {
             });
         }
 
+        // Add custom provider presets
+        items.extend(build_custom_provider_selection_items(&self.config));
+
         let header = self.model_menu_header(
             "Select Model and Effort",
             "Access legacy models by running codex -m <model_name> or in your config.toml",

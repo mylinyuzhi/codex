@@ -163,7 +163,7 @@ impl ProviderAdapter for OpenAIAdapter {
 
         // Convert response to events
         let (events, usage) =
-            convert::response_to_events(&response, effective_base_url, &config.model);
+            convert::response_to_events(&response, effective_base_url, &config.model)?;
 
         // Filter out Created event (not needed for non-streaming)
         let events: Vec<ResponseEvent> = events

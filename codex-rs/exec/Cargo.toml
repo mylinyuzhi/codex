@@ -26,6 +26,8 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-lsp = { workspace = true }
+codex-retrieval = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-common = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

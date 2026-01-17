@@ -30,7 +30,7 @@ use crate::spawn_task::metadata::load_metadata;
 use crate::spawn_task::metadata::log_file_path;
 use crate::spawn_task::metadata::save_metadata;
 use crate::subagent::ApprovalMode;
-use crate::subagent::get_or_create_stores;
+use crate::subagent::expect_session_state;
 use codex_protocol::config_types::PlanModeApprovalPolicy;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::SessionSource;
@@ -71,6 +71,8 @@ pub struct SpawnAgentContext {
     pub config: Config,
     /// Codex home directory.
     pub codex_home: PathBuf,
+    /// LSP server manager (shared from ThreadManager, None if LSP feature disabled).
+    pub lsp_manager: Option<Arc<codex_lsp::LspServerManager>>,
 }
 
 /// Apply model override from "provider_id" or "provider_id/model" format.
@@ -209,6 +211,12 @@ impl SpawnTask for SpawnAgent {
             let mut spawn_config = context.config.clone();
             spawn_config.cwd = cwd.clone();
 
+            // Disable features that require session-level services
+            // Spawn agents run in different worktrees and don't have these services
+            use crate::features::Feature;
+            spawn_config.features.disable(Feature::Retrieval);
+            spawn_config.features.disable(Feature::Lsp);
+
             // Apply model override if specified
             if let Some(model_str) = &params.model_override {
                 apply_model_override(&mut spawn_config, model_str);
@@ -227,6 +235,8 @@ impl SpawnTask for SpawnAgent {
                 InitialHistory::New,
                 SessionSource::SpawnAgent,
                 AgentControl::default(),
+                context.lsp_manager.clone(),
+                None, // Spawn agents don't need retrieval
             )
             .await
             {
@@ -248,7 +258,7 @@ impl SpawnTask for SpawnAgent {
             };
 
             // Set plan mode approval policy for this session
-            let stores = get_or_create_stores(conversation_id);
+            let stores = expect_session_state(&conversation_id);
             stores.set_plan_mode_approval_policy(params.plan_mode_approval_policy);
 
             // Create loop driver with progress callback

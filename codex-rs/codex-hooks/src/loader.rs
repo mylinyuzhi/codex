@@ -2,7 +2,7 @@
 //!
 //! Loads hooks configuration from JSON files in priority order:
 //! 1. Project: `.codex/hooks.json`
-//! 2. User: `~/.codex/hooks.json`
+//! 2. User: `{codex_home}/hooks.json` (respects `CODEX_HOME` env var)
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,17 +19,18 @@ pub const HOOKS_JSON_FILENAME: &str = "hooks.json";
 /// Project-level hooks directory relative to cwd.
 pub const PROJECT_HOOKS_DIR: &str = ".codex";
 
-/// User-level hooks directory name.
-pub const USER_HOOKS_DIR: &str = ".codex";
-
 /// Load hooks configuration from JSON files.
 ///
 /// Tries to load in priority order:
 /// 1. Project: `{cwd}/.codex/hooks.json`
-/// 2. User: `~/.codex/hooks.json`
+/// 2. User: `{codex_home}/hooks.json`
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `cwd` - Current working directory for project-level config
 ///
 /// If no config file exists, returns an empty configuration.
-pub fn load_hooks_config(cwd: &Path) -> Result<HooksJsonConfig, HookError> {
+pub fn load_hooks_config(codex_home: &Path, cwd: &Path) -> Result<HooksJsonConfig, HookError> {
     // Try project config first
     let project_path = cwd.join(PROJECT_HOOKS_DIR).join(HOOKS_JSON_FILENAME);
     if project_path.exists() {
@@ -38,12 +39,10 @@ pub fn load_hooks_config(cwd: &Path) -> Result<HooksJsonConfig, HookError> {
     }
 
     // Fall back to user config
-    if let Some(home) = dirs::home_dir() {
-        let user_path = home.join(USER_HOOKS_DIR).join(HOOKS_JSON_FILENAME);
-        if user_path.exists() {
-            debug!(path = %user_path.display(), "Loading user hooks config");
-            return load_from_file(&user_path);
-        }
+    let user_path = codex_home.join(HOOKS_JSON_FILENAME);
+    if user_path.exists() {
+        debug!(path = %user_path.display(), "Loading user hooks config");
+        return load_from_file(&user_path);
     }
 
     // No config = empty hooks (not an error)
@@ -75,22 +74,25 @@ pub fn get_project_hooks_path(cwd: &Path) -> PathBuf {
 }
 
 /// Get the user hooks config path.
-pub fn get_user_hooks_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(USER_HOOKS_DIR).join(HOOKS_JSON_FILENAME))
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+pub fn get_user_hooks_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(HOOKS_JSON_FILENAME)
 }
 
 /// Check if a hooks config file exists at either project or user level.
-pub fn has_hooks_config(cwd: &Path) -> bool {
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `cwd` - Current working directory for project-level config
+pub fn has_hooks_config(codex_home: &Path, cwd: &Path) -> bool {
     let project_path = get_project_hooks_path(cwd);
     if project_path.exists() {
         return true;
     }
 
-    if let Some(user_path) = get_user_hooks_path() {
-        return user_path.exists();
-    }
-
-    false
+    get_user_hooks_path(codex_home).exists()
 }
 
 #[cfg(test)]
@@ -100,16 +102,18 @@ mod tests {
 
     #[test]
     fn test_load_empty_config_when_no_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = load_hooks_config(temp_dir.path()).unwrap();
+        let codex_home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let config = load_hooks_config(codex_home.path(), cwd.path()).unwrap();
         assert!(!config.is_disabled());
         assert!(config.hooks.is_empty());
     }
 
     #[test]
     fn test_load_project_config() {
-        let temp_dir = TempDir::new().unwrap();
-        let codex_dir = temp_dir.path().join(".codex");
+        let codex_home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let codex_dir = cwd.path().join(".codex");
         std::fs::create_dir_all(&codex_dir).unwrap();
 
         let hooks_json = r#"{
@@ -129,38 +133,47 @@ mod tests {
 
         std::fs::write(codex_dir.join("hooks.json"), hooks_json).unwrap();
 
-        let config = load_hooks_config(temp_dir.path()).unwrap();
+        let config = load_hooks_config(codex_home.path(), cwd.path()).unwrap();
         assert_eq!(config.shell_prefix, Some("/test/prefix.sh".to_string()));
         assert!(config.get_hooks("PreToolUse").is_some());
     }
 
     #[test]
     fn test_parse_invalid_json() {
-        let temp_dir = TempDir::new().unwrap();
-        let codex_dir = temp_dir.path().join(".codex");
+        let codex_home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let codex_dir = cwd.path().join(".codex");
         std::fs::create_dir_all(&codex_dir).unwrap();
 
         std::fs::write(codex_dir.join("hooks.json"), "{ invalid json }").unwrap();
 
-        let result = load_hooks_config(temp_dir.path());
+        let result = load_hooks_config(codex_home.path(), cwd.path());
         assert!(result.is_err());
     }
 
     #[test]
     fn test_has_hooks_config_project() {
-        let temp_dir = TempDir::new().unwrap();
-        assert!(!has_hooks_config(temp_dir.path()));
+        let codex_home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        assert!(!has_hooks_config(codex_home.path(), cwd.path()));
 
-        let codex_dir = temp_dir.path().join(".codex");
+        let codex_dir = cwd.path().join(".codex");
         std::fs::create_dir_all(&codex_dir).unwrap();
         std::fs::write(codex_dir.join("hooks.json"), "{}").unwrap();
 
-        assert!(has_hooks_config(temp_dir.path()));
+        assert!(has_hooks_config(codex_home.path(), cwd.path()));
     }
 
     #[test]
     fn test_get_project_hooks_path() {
         let path = get_project_hooks_path(Path::new("/home/user/project"));
         assert_eq!(path, PathBuf::from("/home/user/project/.codex/hooks.json"));
+    }
+
+    #[test]
+    fn test_get_user_hooks_path() {
+        let codex_home = Path::new("/home/user/.codex");
+        let path = get_user_hooks_path(codex_home);
+        assert_eq!(path, PathBuf::from("/home/user/.codex/hooks.json"));
     }
 }

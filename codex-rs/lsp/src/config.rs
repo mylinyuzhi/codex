@@ -8,6 +8,20 @@ use std::path::PathBuf;
 use tracing::debug;
 use tracing::warn;
 
+/// Find the codex home directory.
+///
+/// Respects `CODEX_HOME` environment variable, falls back to `~/.codex`.
+pub fn find_codex_home() -> Option<PathBuf> {
+    // Honor the `CODEX_HOME` environment variable when it is set
+    if let Ok(val) = std::env::var("CODEX_HOME") {
+        if !val.is_empty() {
+            return Some(PathBuf::from(val));
+        }
+    }
+    // Fall back to ~/.codex
+    dirs::home_dir().map(|h| h.join(".codex"))
+}
+
 // ============================================================================
 // Default value constants
 // ============================================================================
@@ -283,13 +297,17 @@ pub const LSP_SERVERS_CONFIG_FILE: &str = "lsp_servers.json";
 
 impl LspServersConfig {
     /// Load LSP config from standard locations
-    /// Priority: project .codex/ > user ~/.codex/
-    pub fn load(project_root: Option<&Path>) -> Self {
+    /// Priority: project .codex/ > user {codex_home}/
+    ///
+    /// # Arguments
+    /// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+    /// * `project_root` - Project root directory for project-level config
+    pub fn load(codex_home: Option<&Path>, project_root: Option<&Path>) -> Self {
         let mut config = Self::default();
 
-        // 1. Try user-level config first (~/.codex/lsp_servers.json)
-        if let Some(home) = dirs::home_dir() {
-            let user_path = home.join(".codex").join(LSP_SERVERS_CONFIG_FILE);
+        // 1. Try user-level config first ({codex_home}/lsp_servers.json)
+        if let Some(home) = codex_home {
+            let user_path = home.join(LSP_SERVERS_CONFIG_FILE);
             if let Ok(user_config) = Self::from_file(&user_path) {
                 debug!("Loaded user LSP config from: {}", user_path.display());
                 config.merge(user_config);

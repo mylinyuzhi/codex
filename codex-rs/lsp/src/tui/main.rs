@@ -126,10 +126,9 @@ async fn main() -> Result<()> {
     // Canonicalize the workspace path
     let workspace = args.workspace.canonicalize().unwrap_or(args.workspace);
 
-    // Initialize file-based logging to ~/.codex/log/lsp.log
-    let log_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".codex")
+    // Initialize file-based logging to codex_home/log/lsp.log
+    let log_dir = crate::config::find_codex_home()
+        .expect("Could not determine codex home directory")
         .join("log");
     std::fs::create_dir_all(&log_dir)?;
 

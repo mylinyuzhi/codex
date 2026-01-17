@@ -119,3 +119,25 @@ pub use events::LoggingConsumer;
 pub use events::RetrievalEvent;
 pub use events::SearchMode;
 pub use events::SearchResultSummary;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Create a RetrievalFacade for the given working directory.
+///
+/// This is a convenience function for creating a facade without going through
+/// the global cache. Returns None if retrieval is not enabled in config.
+pub async fn create_manager(cwd: Option<PathBuf>) -> Option<Arc<RetrievalFacade>> {
+    let workdir = cwd?;
+    let config = RetrievalConfig::load(&workdir).ok()?;
+    if !config.enabled {
+        return None;
+    }
+    FacadeBuilder::new(config)
+        .features(RetrievalFeatures::STANDARD)
+        .workspace(workdir)
+        .build()
+        .await
+        .ok()
+        .map(Arc::new)
+}

@@ -24,6 +24,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
 
+/// Helper to get user-level codex directory (respects CODEX_HOME).
+fn get_codex_home() -> PathBuf {
+    crate::config::find_codex_home().unwrap_or_else(|| PathBuf::from(".codex"))
+}
+
 /// Application modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -526,9 +531,7 @@ impl App {
                         .unwrap_or(0);
                 } else if matches!(op, Operation::ConfigureServers) {
                     // Go to ConfigServers view
-                    let user_dir = dirs::home_dir()
-                        .map(|h| h.join(".codex"))
-                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                    let user_dir = get_codex_home();
                     let project_dir = self.workspace.join(".codex");
                     self.cached_config_servers = self
                         .manager
@@ -785,9 +788,7 @@ impl App {
             KeyCode::Char('r') => {
                 // Refresh server list (reload config from disk first)
                 self.manager.reload_config().await;
-                let user_dir = dirs::home_dir()
-                    .map(|h| h.join(".codex"))
-                    .unwrap_or_else(|| PathBuf::from(".codex"));
+                let user_dir = get_codex_home();
                 let project_dir = self.workspace.join(".codex");
                 self.cached_config_servers = self
                     .manager
@@ -828,7 +829,7 @@ impl App {
                 if let Some(server) = self.cached_config_servers.get(self.selected_config_server) {
                     if let Some(config_level) = &server.config_level {
                         let config_dir = match config_level {
-                            ConfigLevel::User => dirs::home_dir().map(|h| h.join(".codex")),
+                            ConfigLevel::User => Some(get_codex_home()),
                             ConfigLevel::Project => Some(self.workspace.join(".codex")),
                         };
 
@@ -843,9 +844,7 @@ impl App {
                                     self.config_changed = true;
                                     // Reload config and refresh list
                                     self.manager.reload_config().await;
-                                    let user_dir = dirs::home_dir()
-                                        .map(|h| h.join(".codex"))
-                                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                                    let user_dir = get_codex_home();
                                     let project_dir = self.workspace.join(".codex");
                                     self.cached_config_servers = self
                                         .manager
@@ -872,7 +871,7 @@ impl App {
                 if let Some(server) = self.cached_config_servers.get(self.selected_config_server) {
                     if let Some(config_level) = &server.config_level {
                         let config_dir = match config_level {
-                            ConfigLevel::User => dirs::home_dir().map(|h| h.join(".codex")),
+                            ConfigLevel::User => Some(get_codex_home()),
                             ConfigLevel::Project => Some(self.workspace.join(".codex")),
                         };
 
@@ -886,9 +885,7 @@ impl App {
                                     self.config_changed = true;
                                     // Reload config and refresh list
                                     self.manager.reload_config().await;
-                                    let user_dir = dirs::home_dir()
-                                        .map(|h| h.join(".codex"))
-                                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                                    let user_dir = get_codex_home();
                                     let project_dir = self.workspace.join(".codex");
                                     self.cached_config_servers = self
                                         .manager
@@ -972,9 +969,7 @@ impl App {
                     self.config_changed = true;
                     // Reload config and refresh list
                     self.manager.reload_config().await;
-                    let user_dir = dirs::home_dir()
-                        .map(|h| h.join(".codex"))
-                        .unwrap_or_else(|| PathBuf::from(".codex"));
+                    let user_dir = get_codex_home();
                     let project_dir = self.workspace.join(".codex");
                     self.cached_config_servers = self
                         .manager
@@ -993,7 +988,7 @@ impl App {
         use codex_lsp::config::LspServersConfig;
 
         let config_dir = if self.config_level_selection == 0 {
-            dirs::home_dir().map(|h| h.join(".codex"))
+            Some(get_codex_home())
         } else {
             Some(self.workspace.join(".codex"))
         };

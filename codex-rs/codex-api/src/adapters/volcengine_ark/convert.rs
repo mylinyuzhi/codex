@@ -26,6 +26,8 @@ use crate::common::Prompt;
 use crate::common::ResponseEvent;
 use crate::common_ext::EncryptedContent;
 use crate::common_ext::PROVIDER_SDK_VOLCENGINE_ARK;
+use crate::error::ApiError;
+use volcengine_ark_sdk::ResponseStatus;
 
 // ============================================================================
 // Request conversion: Prompt -> Ark messages
@@ -405,17 +407,35 @@ pub fn parse_tool_choice(extra: &Option<Value>) -> Option<ToolChoice> {
 /// Convert an Ark Response to codex-api ResponseEvents.
 ///
 /// Stores the full response JSON in `Reasoning.encrypted_content` for round-trip preservation.
-/// Returns a vector of events and optional token usage.
+/// Returns a vector of events and optional token usage, or an error if the
+/// response indicates a blocked/truncated generation.
 ///
 /// # Arguments
 /// - `response` - The Volcengine Ark Response
 /// - `base_url` - The API base URL (for model switch detection)
 /// - `model` - The model name (for model switch detection)
+///
+/// # Errors
+/// - `ApiError::ContextWindowExceeded` if status is Incomplete
+/// - `ApiError::GenerationBlocked` for Failed status with error details
 pub fn response_to_events(
     response: &Response,
     base_url: &str,
     model: &str,
-) -> (Vec<ResponseEvent>, Option<TokenUsage>) {
+) -> Result<(Vec<ResponseEvent>, Option<TokenUsage>), ApiError> {
+    // Check for incomplete/failed response
+    if response.status == ResponseStatus::Incomplete {
+        return Err(ApiError::ContextWindowExceeded);
+    }
+    if response.status == ResponseStatus::Failed {
+        let msg = response
+            .error
+            .as_ref()
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| "unknown error".to_string());
+        return Err(ApiError::GenerationBlocked(msg));
+    }
+
     let mut events = Vec::new();
 
     // Extract raw body from sdk_http_response for storage
@@ -553,7 +573,7 @@ pub fn response_to_events(
         token_usage: Some(usage.clone()),
     });
 
-    (events, Some(usage))
+    Ok((events, Some(usage)))
 }
 
 /// Extract token usage from Ark Usage.

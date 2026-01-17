@@ -2,7 +2,7 @@
 //!
 //! Plan file naming follows Claude Code convention:
 //! - Format: `{adjective}-{action}-{noun}.md` (e.g., "bright-exploring-aurora.md")
-//! - Location: `~/.codex/plans/`
+//! - Location: `{codex_home}/plans/` (respects `CODEX_HOME` env var)
 //! - Key: Uses **session-to-slug caching** - same session = same file always
 
 use std::path::Path;
@@ -65,12 +65,12 @@ pub fn cleanup_plan_slug(conversation_id: &ThreadId) {
 
 /// Get the plans directory path.
 ///
-/// Returns ~/.codex/plans/, creating the directory if it doesn't exist.
-pub fn get_plans_directory() -> Result<PathBuf, CodexErr> {
-    let plans_dir = dirs::home_dir()
-        .ok_or_else(|| CodexErr::Fatal("Unable to get home directory".to_string()))?
-        .join(".codex")
-        .join("plans");
+/// Returns `{codex_home}/plans/`, creating the directory if it doesn't exist.
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+pub fn get_plans_directory(codex_home: &Path) -> Result<PathBuf, CodexErr> {
+    let plans_dir = codex_home.join("plans");
 
     if !plans_dir.exists() {
         std::fs::create_dir_all(&plans_dir)
@@ -83,17 +83,21 @@ pub fn get_plans_directory() -> Result<PathBuf, CodexErr> {
 /// Get the full plan file path using cached slug.
 ///
 /// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
 /// * `conversation_id` - Conversation ID
 ///
 /// # Returns
-/// Full path, e.g., `~/.codex/plans/bright-exploring-aurora.md`
+/// Full path, e.g., `{codex_home}/plans/bright-exploring-aurora.md`
 ///
 /// # Important
 /// Same conversation_id ALWAYS returns the same path (slug is cached).
 /// This enables proper re-entry detection.
-pub fn get_plan_file_path(conversation_id: &ThreadId) -> Result<PathBuf, CodexErr> {
+pub fn get_plan_file_path(
+    codex_home: &Path,
+    conversation_id: &ThreadId,
+) -> Result<PathBuf, CodexErr> {
     let slug = get_plan_slug(conversation_id);
-    Ok(get_plans_directory()?.join(format!("{slug}.md")))
+    Ok(get_plans_directory(codex_home)?.join(format!("{slug}.md")))
 }
 
 /// Read plan file content.

@@ -2,6 +2,7 @@
 
 use crate::error::PluginError;
 use crate::error::Result;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::fs;
@@ -216,7 +217,11 @@ impl PluginSource {
 /// Fetch a plugin from a source to a temporary directory.
 ///
 /// Returns (temp_dir, git_sha) where git_sha is Some for git-based sources.
-pub async fn fetch_plugin_source(source: &PluginSource) -> Result<FetchResult> {
+///
+/// # Arguments
+/// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
+/// * `source` - Plugin source to fetch from
+pub async fn fetch_plugin_source(codex_home: &Path, source: &PluginSource) -> Result<FetchResult> {
     match source {
         PluginSource::Local { path } => fetch_local(path).await,
         PluginSource::GitHub { repo, ref_spec } => fetch_github(repo, ref_spec.as_deref()).await,
@@ -225,7 +230,7 @@ pub async fn fetch_plugin_source(source: &PluginSource) -> Result<FetchResult> {
             package,
             version,
             registry,
-        } => fetch_npm(package, version.as_deref(), registry.as_deref()).await,
+        } => fetch_npm(codex_home, package, version.as_deref(), registry.as_deref()).await,
         PluginSource::Pip {
             package,
             version,
@@ -355,14 +360,11 @@ async fn extract_git_sha(repo_path: &PathBuf) -> Option<String> {
 
 /// Fetch from NPM.
 async fn fetch_npm(
+    codex_home: &Path,
     package: &str,
     version: Option<&str>,
     registry: Option<&str>,
 ) -> Result<FetchResult> {
-    let codex_home = dirs::home_dir()
-        .ok_or_else(|| PluginError::Source("Cannot determine home directory".to_string()))?
-        .join(".codex");
-
     let npm_cache_dir = codex_home.join("plugins").join("npm-cache");
     fs::create_dir_all(&npm_cache_dir).await?;
 

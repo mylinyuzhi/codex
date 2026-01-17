@@ -96,6 +96,8 @@ mod version;
 
 mod wrapping;
 
+mod lib_ext;
+
 #[cfg(test)]
 pub mod test_backend;
 
@@ -604,6 +606,9 @@ async fn run_ratatui_app(
     tui.set_alt_screen_enabled(use_alt_screen);
     let _ = tui.enter_alt_screen();
 
+    let lsp_manager = lib_ext::create_lsp_manager(&config);
+    let retrieval_manager = lib_ext::create_retrieval_manager(&config).await;
+
     let app_result = App::run(
         &mut tui,
         auth_manager,
@@ -614,6 +619,8 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        lsp_manager,
+        retrieval_manager,
     )
     .await;
 
