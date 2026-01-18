@@ -1,6 +1,7 @@
 //! Rust SDK for OpenAI Responses API.
 //!
-//! This crate provides a minimal, non-streaming client for the OpenAI API.
+//! This crate provides a client for the OpenAI API with both streaming and
+//! non-streaming support.
 //!
 //! # Features
 //!
@@ -64,6 +65,7 @@ mod client;
 mod config;
 pub mod error;
 pub mod resources;
+pub mod streaming;
 pub mod types;
 
 // Re-export main types at crate root for convenience
@@ -143,3 +145,12 @@ pub use types::ThinkingConfig;
 pub use types::Truncation;
 pub use types::Usage;
 pub use types::WebSearchResult;
+
+// Stream event types
+pub use streaming::ResponseStream;
+pub use streaming::ResponseStreamAdapter;
+pub use streaming::SSEDecoder;
+pub use streaming::ServerSentEvent;
+pub use types::ContentPart;
+pub use types::ResponseStreamEvent;
+pub use types::StreamLogprob;

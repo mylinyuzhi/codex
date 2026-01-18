@@ -29,6 +29,7 @@ mod client;
 mod config;
 mod error;
 mod resources;
+mod streaming;
 mod types;
 
 // Re-export main types
@@ -39,6 +40,10 @@ pub use config::RequestHook;
 pub use error::AnthropicError;
 pub use error::Result;
 
+// Re-export streaming types
+pub use streaming::EventStream;
+pub use streaming::MessageStream;
+
 // Re-export all types
 pub use types::{
     // Content types
@@ -48,20 +53,31 @@ pub use types::{
     CacheCreation,
     CacheTtl,
     ContentBlock,
+    // Streaming types
+    ContentBlockDelta,
     ContentBlockParam,
+    ContentBlockStartData,
     // Message types
     CountTokensParams,
     ImageMediaType,
     ImageSource,
     Message,
     MessageCreateParams,
+    MessageDeltaData,
+    MessageDeltaUsage,
     MessageParam,
+    MessageStartData,
     MessageTokensCount,
     // Common types
     Metadata,
+    RawMessageStreamEvent,
     Role,
+    // Server tool usage
+    ServerToolUsage,
+    // Service tier types
     ServiceTier,
     StopReason,
+    StreamError,
     SystemPrompt,
     SystemPromptBlock,
     TextCitation,
@@ -71,4 +87,6 @@ pub use types::{
     ToolResultContent,
     ToolResultContentBlock,
     Usage,
+    // Response service tier (standard/priority/batch)
+    UsedServiceTier,
 };

@@ -1,12 +1,13 @@
 # OpenAI SDK for Rust
 
-Rust SDK for the OpenAI Responses API. This crate provides a minimal, non-streaming client for interacting with OpenAI models.
+Rust SDK for the OpenAI Responses API. This crate provides a full-featured client for interacting with OpenAI models, including streaming support.
 
 Reference: [openai-python](https://github.com/openai/openai-python) @ `722d3fffb82e9150a16da01e432b70d126ca5254`
 
 ## Features
 
-- **Response API** - Create, retrieve, and cancel responses (non-streaming)
+- **Response API** - Create, retrieve, cancel, and stream responses
+- **Streaming** - Full SSE streaming with 53 event types
 - **Embeddings API** - Generate text embeddings
 - **Multi-turn Conversations** - Continue conversations with `previous_response_id`
 - **11 Built-in Tool Types** - Web search, file search, code interpreter, computer use, and more
@@ -92,6 +93,80 @@ let response = client.responses().retrieve("resp_abc123").await?;
 
 ```rust
 let response = client.responses().cancel("resp_abc123").await?;
+```
+
+### Streaming API
+
+Stream responses in real-time with Server-Sent Events (SSE):
+
+#### Basic Streaming
+
+```rust
+use openai_sdk::{Client, ResponseCreateParams, InputMessage, ResponseStreamEvent};
+
+let client = Client::from_env()?;
+let params = ResponseCreateParams::new("gpt-4o", vec![
+    InputMessage::user_text("Write a short story about a robot.")
+]);
+
+let mut stream = client.responses().stream(params).await?;
+
+while let Some(event) = stream.next().await {
+    match event? {
+        ResponseStreamEvent::OutputTextDelta { delta, .. } => {
+            print!("{}", delta);
+        }
+        ResponseStreamEvent::ResponseCompleted { response, .. } => {
+            println!("\n\nDone! Response ID: {}", response.id);
+        }
+        ResponseStreamEvent::Error { message, .. } => {
+            eprintln!("Error: {}", message);
+        }
+        _ => {}
+    }
+}
+```
+
+#### Collect Full Response
+
+```rust
+let mut stream = client.responses().stream(params).await?;
+let response = stream.collect_response().await?;
+println!("{}", response.text());
+```
+
+#### Stream Text Only
+
+```rust
+let mut stream = client.responses().stream(params).await?;
+let text = stream.text_deltas().await?;
+println!("{}", text);
+```
+
+#### Resume Interrupted Stream
+
+```rust
+// Resume from sequence number 10
+let mut stream = client.responses()
+    .stream_from("resp_abc123", Some(10))
+    .await?;
+
+while let Some(event) = stream.next().await {
+    // Process events starting after sequence 10
+}
+```
+
+#### Use with futures Stream
+
+```rust
+use futures::StreamExt;
+
+let stream = client.responses().stream(params).await?;
+let mut event_stream = stream.into_stream();
+
+while let Some(event) = event_stream.next().await {
+    // Process events using futures combinators
+}
 ```
 
 ### Multi-turn Conversations
@@ -505,6 +580,113 @@ The SDK supports 16 output item types:
 | `Incomplete` | Stopped early (length, etc.) |
 | `Cancelled` | Cancelled by user |
 | `Queued` | Waiting in queue |
+
+## Stream Events (53 Types)
+
+All events include a `sequence_number` field for ordering.
+
+### Lifecycle Events
+
+| Event | Description |
+|-------|-------------|
+| `ResponseCreated` | Response object created |
+| `ResponseInProgress` | Processing started |
+| `ResponseCompleted` | Successfully completed |
+| `ResponseFailed` | Failed with error |
+| `ResponseIncomplete` | Stopped early |
+| `ResponseQueued` | Waiting in queue |
+
+### Text Output Events
+
+| Event | Description |
+|-------|-------------|
+| `OutputTextDelta` | Incremental text content |
+| `OutputTextDone` | Text content complete |
+| `RefusalDelta` | Incremental refusal text |
+| `RefusalDone` | Refusal complete |
+
+### Function Call Events
+
+| Event | Description |
+|-------|-------------|
+| `FunctionCallArgumentsDelta` | Incremental function arguments |
+| `FunctionCallArgumentsDone` | Function arguments complete |
+
+### Output Item Events
+
+| Event | Description |
+|-------|-------------|
+| `OutputItemAdded` | New output item started |
+| `OutputItemDone` | Output item complete |
+| `ContentPartAdded` | New content part started |
+| `ContentPartDone` | Content part complete |
+
+### Reasoning Events
+
+| Event | Description |
+|-------|-------------|
+| `ReasoningTextDelta` | Incremental reasoning text |
+| `ReasoningTextDone` | Reasoning text complete |
+| `ReasoningSummaryPartAdded` | Summary part started |
+| `ReasoningSummaryPartDone` | Summary part complete |
+| `ReasoningSummaryTextDelta` | Incremental summary text |
+| `ReasoningSummaryTextDone` | Summary text complete |
+
+### Audio Events
+
+| Event | Description |
+|-------|-------------|
+| `AudioDelta` | Incremental audio data |
+| `AudioDone` | Audio complete |
+| `AudioTranscriptDelta` | Incremental transcript |
+| `AudioTranscriptDone` | Transcript complete |
+
+### MCP Events
+
+| Event | Description |
+|-------|-------------|
+| `McpCallInProgress` | MCP call started |
+| `McpCallCompleted` | MCP call complete |
+| `McpCallFailed` | MCP call failed |
+| `McpCallArgumentsDelta` | Incremental MCP arguments |
+| `McpCallArgumentsDone` | MCP arguments complete |
+| `McpListToolsInProgress` | Tool listing started |
+| `McpListToolsCompleted` | Tool listing complete |
+| `McpListToolsFailed` | Tool listing failed |
+
+### Tool Call Events
+
+| Event | Description |
+|-------|-------------|
+| `FileSearchCallInProgress` | File search started |
+| `FileSearchCallSearching` | File search in progress |
+| `FileSearchCallCompleted` | File search complete |
+| `WebSearchCallInProgress` | Web search started |
+| `WebSearchCallSearching` | Web search in progress |
+| `WebSearchCallCompleted` | Web search complete |
+| `CodeInterpreterCallInProgress` | Code interpreter started |
+| `CodeInterpreterCallInterpreting` | Code executing |
+| `CodeInterpreterCallCompleted` | Code interpreter complete |
+| `CodeInterpreterCallCodeDelta` | Incremental code |
+| `CodeInterpreterCallCodeDone` | Code complete |
+| `ImageGenCallInProgress` | Image generation started |
+| `ImageGenCallGenerating` | Image generating |
+| `ImageGenCallPartialImage` | Partial image available |
+| `ImageGenCallCompleted` | Image generation complete |
+| `CustomToolCallInputDelta` | Incremental custom tool input |
+| `CustomToolCallInputDone` | Custom tool input complete |
+
+### Annotation Events
+
+| Event | Description |
+|-------|-------------|
+| `OutputTextAnnotationAdded` | Text annotation added |
+
+### Error Events
+
+| Event | Description |
+|-------|-------------|
+| `Error` | Stream error occurred |
 
 ## Configuration Options
 

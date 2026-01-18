@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use bytes::Bytes;
+use futures::stream::Stream;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -355,6 +357,77 @@ impl Client {
         }
 
         Err(last_error.expect("at least one error should have occurred"))
+    }
+
+    /// Send a POST request that returns a byte stream for SSE processing.
+    ///
+    /// This method is used for streaming responses. Unlike `post()`, it does not
+    /// deserialize the response but instead returns the raw byte stream that can
+    /// be processed by the SSE decoder.
+    ///
+    /// Note: This method does not support retry logic since streaming responses
+    /// cannot be easily retried.
+    pub(crate) async fn post_stream(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static>
+    {
+        let base_url = format!("{}{}", self.config.base_url, path);
+        let (url, headers, body) = self.apply_hook(base_url, self.default_headers(), body);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let request_id = response
+                .headers()
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(parse_api_error(status.as_u16(), &error_body, request_id));
+        }
+
+        Ok(response.bytes_stream())
+    }
+
+    /// Send a GET request that returns a byte stream for SSE processing.
+    ///
+    /// This method is used for streaming responses from existing response IDs,
+    /// such as when resuming an interrupted stream.
+    ///
+    /// Note: This method does not support retry logic since streaming responses
+    /// cannot be easily retried.
+    pub(crate) async fn get_stream(
+        &self,
+        path: &str,
+    ) -> Result<impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static>
+    {
+        let base_url = format!("{}{}", self.config.base_url, path);
+        let (url, headers, _) =
+            self.apply_hook(base_url, self.default_headers(), serde_json::json!({}));
+
+        let response = self.http_client.get(&url).headers(headers).send().await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let request_id = response
+                .headers()
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(parse_api_error(status.as_u16(), &error_body, request_id));
+        }
+
+        Ok(response.bytes_stream())
     }
 }
 

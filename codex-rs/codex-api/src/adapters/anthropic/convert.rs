@@ -226,8 +226,19 @@ fn extract_full_response_message(
                     name: name.clone(),
                     input: input.clone(),
                 }),
+                // ServerToolUse is similar to ToolUse
+                ContentBlock::ServerToolUse { id, name, input } => {
+                    Some(ContentBlockParam::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    })
+                }
                 // Skip thinking blocks - they are handled by ThinkingConfig
-                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
+                // Skip WebSearchToolResult - it's a result, not a request block
+                ContentBlock::Thinking { .. }
+                | ContentBlock::RedactedThinking { .. }
+                | ContentBlock::WebSearchToolResult { .. } => None,
             })
             .collect();
 
@@ -572,6 +583,32 @@ pub fn message_to_events(
                 }));
                 has_reasoning = true;
             }
+
+            ContentBlock::ServerToolUse { id, name, input } => {
+                // Flush accumulated text first
+                if !text_parts.is_empty() {
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
+                        id: None,
+                        role: "assistant".to_string(),
+                        content: vec![ContentItem::OutputText {
+                            text: text_parts.join(""),
+                        }],
+                    }));
+                    text_parts.clear();
+                }
+
+                // Add function call event (same as ToolUse)
+                events.push(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                    id: None,
+                    call_id: id.clone(),
+                    name: name.clone(),
+                    arguments: serde_json::to_string(input).unwrap_or_default(),
+                }));
+            }
+
+            ContentBlock::WebSearchToolResult { .. } => {
+                // Web search results are tool outputs, skip for now
+            }
         }
     }
 
@@ -656,6 +693,17 @@ pub fn extract_normalized(body: &Value) -> Option<NormalizedAssistantMessage> {
             }
             ContentBlock::RedactedThinking { .. } => {
                 // Redacted thinking can't be extracted as content
+            }
+            ContentBlock::ServerToolUse { id, name, input } => {
+                // ServerToolUse is similar to ToolUse
+                msg.tool_calls.push(NormalizedToolCall::new(
+                    id,
+                    name,
+                    serde_json::to_string(input).unwrap_or_default(),
+                ));
+            }
+            ContentBlock::WebSearchToolResult { .. } => {
+                // Web search results are tool outputs, skip for normalization
             }
         }
     }
