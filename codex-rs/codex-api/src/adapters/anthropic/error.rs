@@ -101,6 +101,13 @@ pub fn map_error(err: AnthropicError) -> ApiError {
             status: StatusCode::NOT_FOUND,
             message: msg,
         },
+
+        AnthropicError::StreamError {
+            error_type,
+            message,
+        } => ApiError::Stream(format!("[{error_type}] {message}")),
+
+        AnthropicError::Parse(msg) => ApiError::Stream(format!("Parse error: {msg}")),
     }
 }
 

@@ -117,6 +117,19 @@ pub enum ContentBlock {
         input: serde_json::Value,
     },
 
+    /// Server-side tool use (e.g., web_search executed by Anthropic).
+    ServerToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+
+    /// Web search tool result (from server-executed web search).
+    WebSearchToolResult {
+        tool_use_id: String,
+        content: serde_json::Value,
+    },
+
     /// Thinking block (extended thinking mode).
     Thinking {
         /// The thinking content.

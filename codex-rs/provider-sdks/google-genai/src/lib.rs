@@ -124,6 +124,7 @@ pub mod chat;
 pub mod client;
 pub mod error;
 pub mod stream;
+pub mod streaming;
 pub mod types;
 
 // Re-export main types at crate root for convenience
@@ -138,6 +139,12 @@ pub use error::Result;
 
 // Re-export streaming types
 pub use stream::ContentStream;
+pub use stream::EventStream;
+pub use stream::SSEDecoder;
+pub use stream::ServerSentEvent;
+pub use stream::parse_sse_events;
+pub use streaming::GenerateContentStream;
+pub use streaming::GenerateContentStreamAdapter;
 
 // Re-export commonly used types
 pub use types::Content;

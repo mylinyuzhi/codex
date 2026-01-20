@@ -10,6 +10,8 @@ use crate::config::HttpRequest;
 use crate::error::AnthropicError;
 use crate::error::Result;
 use crate::resources::Messages;
+use crate::streaming::EventStream;
+use crate::streaming::parse_sse_stream;
 use crate::types::Message;
 use crate::types::SdkHttpResponse;
 
@@ -257,6 +259,43 @@ impl Client {
         }
 
         Err(last_error.expect("at least one error should have occurred"))
+    }
+
+    /// Send a streaming POST request to the API.
+    ///
+    /// Returns a stream of raw SSE events. The request body should include
+    /// `"stream": true` to enable streaming.
+    pub(crate) async fn post_stream(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<EventStream> {
+        let base_url = format!("{}{}", self.config.base_url, path);
+        let (url, headers, body) = self.apply_hook(base_url, self.default_headers(), body);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            // Read error body for non-success
+            let request_id = response
+                .headers()
+                .get("request-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(parse_api_error(status.as_u16(), &error_body, request_id));
+        }
+
+        // Return SSE stream
+        Ok(parse_sse_stream(response.bytes_stream()))
     }
 }
 

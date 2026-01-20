@@ -4,6 +4,7 @@ mod common;
 mod content;
 mod embeddings;
 mod responses;
+mod stream_events;
 mod usage;
 
 // Common types
@@ -77,3 +78,10 @@ pub use responses::WebSearchResult;
 pub use usage::InputTokensDetails;
 pub use usage::OutputTokensDetails;
 pub use usage::Usage;
+
+// Stream event types
+pub use stream_events::ContentPart;
+pub use stream_events::OutputTextAnnotation;
+pub use stream_events::ResponseStreamEvent;
+pub use stream_events::StreamLogprob;
+pub use stream_events::TopLogprob as StreamTopLogprob;

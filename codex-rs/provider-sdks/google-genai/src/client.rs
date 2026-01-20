@@ -6,6 +6,7 @@ use crate::error::GenAiError;
 use crate::error::Result;
 use crate::stream::ContentStream;
 use crate::stream::parse_sse_stream;
+use crate::streaming::GenerateContentStream;
 use crate::types::Content;
 use crate::types::ErrorResponse;
 use crate::types::GenerateContentConfig;
@@ -653,6 +654,79 @@ impl Client {
         config.tools = Some(tools);
         self.generate_content_stream(model, contents, Some(config))
             .await
+    }
+
+    // =========================================================================
+    // High-Level Streaming API (GenerateContentStream wrapper)
+    // =========================================================================
+
+    /// Generate content with streaming response using the high-level wrapper.
+    ///
+    /// Returns a `GenerateContentStream` which provides convenience methods like:
+    /// - `text_stream()` - Stream of text deltas only
+    /// - `get_final_response()` - Accumulate all chunks into final response
+    /// - `get_final_text()` - Get final accumulated text
+    /// - `current_snapshot()` - Peek at current accumulated state
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use google_genai::Client;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = Client::from_env()?;
+    ///
+    /// // Option 1: Iterate over chunks
+    /// let mut stream = client
+    ///     .stream("gemini-2.0-flash", vec![], None)
+    ///     .await?;
+    /// while let Some(result) = stream.next().await {
+    ///     let response = result?;
+    ///     if let Some(text) = response.text() {
+    ///         print!("{}", text);
+    ///     }
+    /// }
+    ///
+    /// // Option 2: Get final text directly
+    /// let stream = client.stream("gemini-2.0-flash", vec![], None).await?;
+    /// let final_text = stream.get_final_text().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn stream(
+        &self,
+        model: &str,
+        contents: Vec<Content>,
+        config: Option<GenerateContentConfig>,
+    ) -> Result<GenerateContentStream> {
+        let content_stream = self
+            .generate_content_stream(model, contents, config)
+            .await?;
+        Ok(GenerateContentStream::new(content_stream))
+    }
+
+    /// Generate content with streaming using simple text prompt (high-level wrapper).
+    pub async fn stream_text(
+        &self,
+        model: &str,
+        prompt: &str,
+        config: Option<GenerateContentConfig>,
+    ) -> Result<GenerateContentStream> {
+        self.stream(model, vec![Content::user(prompt)], config)
+            .await
+    }
+
+    /// Generate content with streaming and tools (high-level wrapper).
+    pub async fn stream_with_tools(
+        &self,
+        model: &str,
+        contents: Vec<Content>,
+        tools: Vec<Tool>,
+        config: Option<GenerateContentConfig>,
+    ) -> Result<GenerateContentStream> {
+        let mut config = config.unwrap_or_default();
+        config.tools = Some(tools);
+        self.stream(model, contents, Some(config)).await
     }
 
     /// Build generate content request body with extensions (shared between streaming and non-streaming).

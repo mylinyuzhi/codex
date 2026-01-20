@@ -359,6 +359,8 @@ name = "anthropic-sdk"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",
@@ -8419,12 +8421,15 @@ dependencies = [
 name = "openai-sdk"
 version = "0.0.0"
 dependencies = [
+ "bytes",
+ "futures",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-stream",
  "wiremock",
 ]
 

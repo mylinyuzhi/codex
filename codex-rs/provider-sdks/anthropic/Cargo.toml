@@ -7,7 +7,9 @@ description = "Rust SDK for the Anthropic Claude API"
 
 [dependencies]
 base64 = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+bytes = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

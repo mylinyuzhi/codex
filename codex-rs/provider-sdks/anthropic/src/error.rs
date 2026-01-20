@@ -40,6 +40,12 @@ pub enum AnthropicError {
 
     #[error("internal server error")]
     InternalServerError,
+
+    #[error("stream error [{error_type}]: {message}")]
+    StreamError { error_type: String, message: String },
+
+    #[error("parse error: {0}")]
+    Parse(String),
 }
 
 impl AnthropicError {
@@ -50,7 +56,15 @@ impl AnthropicError {
             Self::RateLimited { .. } => true,
             Self::InternalServerError => true,
             Self::Api { status, .. } => *status >= 500 || *status == 429,
-            _ => false,
+            Self::Configuration(_)
+            | Self::Validation(_)
+            | Self::Authentication(_)
+            | Self::BadRequest(_)
+            | Self::Serialization(_)
+            | Self::NotFound(_)
+            | Self::PermissionDenied(_)
+            | Self::StreamError { .. }
+            | Self::Parse(_) => false,
         }
     }
 
