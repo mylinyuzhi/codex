@@ -5,6 +5,7 @@ members = [
     "provider-sdks/volcengine-ark",
     "provider-sdks/z-ai",
     "provider-sdks/google-genai",
+    "provider-sdks/hyper-sdk",
     "utils/common",
     "backend-client",
     "ansi-escape",
@@ -128,6 +129,7 @@ codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
 google-genai = { path = "provider-sdks/google-genai" }
+hyper-sdk = { path = "provider-sdks/hyper-sdk" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
