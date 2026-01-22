@@ -5980,9 +5980,11 @@ name = "hyper-sdk"
 version = "0.0.0"
 dependencies = [
  "anthropic-sdk",
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "dotenvy",
  "futures",
  "google-genai",
  "http 1.3.1",

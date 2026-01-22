@@ -209,6 +209,43 @@ match model.generate(request).await {
 }
 ```
 
+## Live Integration Tests
+
+hyper-sdk includes live integration tests that run against real provider APIs.
+
+### Configuration
+
+1. Copy `.env.test.example` to `.env.test`
+2. Fill in your API credentials for the providers you want to test
+
+### Running Tests
+
+```bash
+# Run all configured provider tests
+cargo test -p hyper-sdk --test live -- --test-threads=1
+
+# Run tests for a specific provider
+cargo test -p hyper-sdk --test live openai -- --test-threads=1
+cargo test -p hyper-sdk --test live anthropic -- --test-threads=1
+
+# Run specific test category
+cargo test -p hyper-sdk --test live test_basic -- --test-threads=1
+cargo test -p hyper-sdk --test live test_tools -- --test-threads=1
+cargo test -p hyper-sdk --test live test_streaming -- --test-threads=1
+
+# Run specific provider + feature
+cargo test -p hyper-sdk --test live test_basic_openai -- --test-threads=1
+```
+
+### Test Categories
+
+| Category | Tests |
+|----------|-------|
+| basic | Text generation, token usage, multi-turn |
+| tools | Tool calling, complete tool flow |
+| vision | Image understanding |
+| streaming | Stream events, streaming with tools |
+
 ## Architecture
 
 ```
