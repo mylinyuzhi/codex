@@ -30,6 +30,10 @@ pub struct StreamSnapshot {
     /// Response ID from the provider.
     pub id: Option<String>,
 
+    /// Model name (may differ from requested model due to aliases/defaults).
+    #[serde(default)]
+    pub model: String,
+
     /// Accumulated text content.
     pub text: String,
 

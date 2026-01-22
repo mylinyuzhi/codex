@@ -45,17 +45,15 @@
 
 use super::EventStream;
 use super::StreamEvent;
+use super::processor_state::ProcessorState;
 use super::response::StreamConfig;
 use super::snapshot::StreamSnapshot;
-use super::snapshot::ThinkingSnapshot;
-use super::snapshot::ToolCallSnapshot;
 use super::update::StreamUpdate;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::response::FinishReason;
 use crate::response::GenerateResponse;
 use futures::StreamExt;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -82,15 +80,6 @@ pub struct StreamProcessor {
     inner: EventStream,
     state: ProcessorState,
     config: StreamConfig,
-}
-
-/// Internal state for the processor.
-#[derive(Debug, Default)]
-struct ProcessorState {
-    /// Current snapshot.
-    snapshot: StreamSnapshot,
-    /// Tool call index mapping (stream index -> tool_calls vector index).
-    tool_call_indices: HashMap<i64, usize>,
 }
 
 impl StreamProcessor {
@@ -343,106 +332,11 @@ impl StreamProcessor {
     }
 
     // =========================================================================
-    // Internal: State management
+    // Internal: State management (delegated to processor_state module)
     // =========================================================================
 
     fn update_state(&mut self, event: &StreamEvent) {
-        let snapshot = &mut self.state.snapshot;
-
-        match event {
-            StreamEvent::ResponseCreated { id } => {
-                snapshot.id = Some(id.clone());
-            }
-
-            StreamEvent::TextDelta { delta, .. } => {
-                snapshot.text.push_str(delta);
-            }
-
-            StreamEvent::TextDone { .. } => {
-                // Text done - we trust accumulated deltas
-            }
-
-            StreamEvent::ThinkingDelta { delta, .. } => {
-                if snapshot.thinking.is_none() {
-                    snapshot.thinking = Some(ThinkingSnapshot::new());
-                }
-                if let Some(thinking) = &mut snapshot.thinking {
-                    thinking.append(delta);
-                }
-            }
-
-            StreamEvent::ThinkingDone {
-                content, signature, ..
-            } => {
-                // Prefer accumulated deltas over final content (pure accumulation principle)
-                // Only use final content if no deltas were received
-                if let Some(thinking) = &mut snapshot.thinking {
-                    // Deltas were accumulated - just mark complete and add signature
-                    thinking.signature = signature.clone();
-                    thinking.is_complete = true;
-                } else {
-                    // No deltas received - use the final content
-                    snapshot.thinking = Some(ThinkingSnapshot {
-                        content: content.clone(),
-                        signature: signature.clone(),
-                        is_complete: true,
-                    });
-                }
-            }
-
-            StreamEvent::ToolCallStart { index, id, name } => {
-                let tc = ToolCallSnapshot::new(id, name);
-                snapshot.tool_calls.push(tc);
-                self.state
-                    .tool_call_indices
-                    .insert(*index, snapshot.tool_calls.len() - 1);
-            }
-
-            StreamEvent::ToolCallDelta {
-                index,
-                arguments_delta,
-                ..
-            } => {
-                if let Some(&tc_idx) = self.state.tool_call_indices.get(index) {
-                    if let Some(tc) = snapshot.tool_calls.get_mut(tc_idx) {
-                        tc.append_arguments(arguments_delta);
-                    }
-                }
-            }
-
-            StreamEvent::ToolCallDone { index, tool_call } => {
-                if let Some(&tc_idx) = self.state.tool_call_indices.get(index) {
-                    if let Some(tc) = snapshot.tool_calls.get_mut(tc_idx) {
-                        tc.id.clone_from(&tool_call.id);
-                        tc.name.clone_from(&tool_call.name);
-                        tc.complete(tool_call.arguments.to_string());
-                    }
-                } else {
-                    // Tool call done without start - create it
-                    let tc = ToolCallSnapshot {
-                        id: tool_call.id.clone(),
-                        name: tool_call.name.clone(),
-                        arguments: tool_call.arguments.to_string(),
-                        is_complete: true,
-                    };
-                    snapshot.tool_calls.push(tc);
-                }
-            }
-
-            StreamEvent::ResponseDone {
-                usage,
-                finish_reason,
-                ..
-            } => {
-                snapshot.usage = usage.clone();
-                snapshot.finish_reason = Some(*finish_reason);
-                snapshot.is_complete = true;
-            }
-
-            StreamEvent::Error(_) => {
-                // Error doesn't change snapshot state
-            }
-        }
+        self.state.update(event);
     }
 
     /// Convert the accumulated state into a GenerateResponse.
@@ -481,7 +375,11 @@ impl StreamProcessor {
             content,
             finish_reason: snapshot.finish_reason.unwrap_or(FinishReason::Stop),
             usage: snapshot.usage,
-            model: String::new(),
+            model: if snapshot.model.is_empty() {
+                "unknown".to_string()
+            } else {
+                snapshot.model
+            },
         })
     }
 }
@@ -514,11 +412,7 @@ mod tests {
             StreamEvent::response_created("resp_1"),
             StreamEvent::text_delta(0, "Hello "),
             StreamEvent::text_delta(0, "world!"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -534,11 +428,7 @@ mod tests {
             StreamEvent::response_created("resp_1"),
             StreamEvent::text_delta(0, "Hello "),
             StreamEvent::text_delta(0, "world!"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let snapshots: Arc<Mutex<Vec<StreamSnapshot>>> = Arc::new(Mutex::new(Vec::new()));
@@ -576,11 +466,7 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "get_weather".to_string(),
             },
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::ToolCalls,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::ToolCalls),
         ];
 
         let updates: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
@@ -610,11 +496,7 @@ mod tests {
             StreamEvent::text_delta(0, "A"),
             StreamEvent::text_delta(0, "B"),
             StreamEvent::text_delta(0, "C"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let deltas: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -648,11 +530,7 @@ mod tests {
                 signature: Some("sig123".to_string()),
             },
             StreamEvent::text_delta(1, "The answer is 42."),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -689,11 +567,7 @@ mod tests {
                     serde_json::json!({"city": "NYC"}),
                 ),
             },
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::ToolCalls,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::ToolCalls),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -710,11 +584,7 @@ mod tests {
         let events = vec![
             StreamEvent::text_delta(0, "A"),
             StreamEvent::text_delta(0, "B"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let mut processor = StreamProcessor::new(make_stream(events));
@@ -735,10 +605,10 @@ mod tests {
     async fn test_processor_with_usage() {
         let events = vec![
             StreamEvent::text_delta(0, "Hi"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: Some(TokenUsage {
+            StreamEvent::response_done_full(
+                "resp_1",
+                "test-model",
+                Some(TokenUsage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
                     total_tokens: 15,
@@ -746,7 +616,8 @@ mod tests {
                     cache_creation_tokens: None,
                     reasoning_tokens: None,
                 }),
-            },
+                FinishReason::Stop,
+            ),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -774,11 +645,7 @@ mod tests {
                 signature: Some("sig_abc".to_string()),
             },
             StreamEvent::text_delta(1, "Response text"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -807,11 +674,7 @@ mod tests {
                 signature: Some("sig_xyz".to_string()),
             },
             StreamEvent::text_delta(1, "Response"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let processor = StreamProcessor::new(make_stream(events));
@@ -826,11 +689,7 @@ mod tests {
         let events = vec![
             StreamEvent::response_created("resp_1"),
             StreamEvent::text_delta(0, "Hello"),
-            StreamEvent::ResponseDone {
-                id: "resp_1".to_string(),
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            },
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
 
         let config = StreamConfig {

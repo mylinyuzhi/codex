@@ -1,6 +1,8 @@
 //! Anthropic-specific options.
 
+use super::ProviderMarker;
 use super::ProviderOptionsData;
+use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
@@ -73,6 +75,12 @@ impl AnthropicOptions {
     }
 }
 
+impl ProviderMarker for AnthropicOptions {
+    const PROVIDER_NAME: &'static str = "anthropic";
+}
+
+impl TypedProviderOptions for AnthropicOptions {}
+
 impl ProviderOptionsData for AnthropicOptions {
     fn as_any(&self) -> &dyn Any {
         self
@@ -80,6 +88,10 @@ impl ProviderOptionsData for AnthropicOptions {
 
     fn clone_box(&self) -> Box<dyn ProviderOptionsData> {
         Box::new(self.clone())
+    }
+
+    fn provider_name(&self) -> Option<&'static str> {
+        Some(Self::PROVIDER_NAME)
     }
 }
 

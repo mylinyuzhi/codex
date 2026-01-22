@@ -224,6 +224,9 @@ impl StreamResponse {
                 self.state.finish_reason = Some(*finish_reason);
             }
             StreamEvent::Error(_) => {}
+            StreamEvent::Ignored => {
+                // Explicitly ignored - no state change
+            }
         }
     }
 

@@ -58,6 +58,11 @@ use tracing::debug;
 use tracing::instrument;
 use uuid::Uuid;
 
+/// Generate a unique request ID for hook correlation.
+fn generate_request_id() -> String {
+    format!("req_{}", Uuid::new_v4())
+}
+
 /// Manages conversation state across multiple API calls.
 ///
 /// `ConversationContext` tracks message history, maintains conversation continuity
@@ -234,9 +239,12 @@ impl ConversationContext {
         // Merge session config
         self.session_config.merge_into(&mut request);
 
-        // Build hook context
+        // Build hook context with unique request_id
         let mut hook_ctx =
             HookContext::with_provider(&self.provider, &self.model_id).conversation_id(&self.id);
+
+        // Generate a unique request_id for correlation
+        hook_ctx.request_id = Some(generate_request_id());
 
         if let Some(ref prev_id) = self.previous_response_id {
             hook_ctx = hook_ctx.previous_response_id(prev_id);
@@ -263,8 +271,11 @@ impl ConversationContext {
     ///
     /// This method:
     /// 1. Updates previous_response_id from the response
-    /// 2. Adds assistant message to history (if tracking)
+    /// 2. Adds assistant message to history (if tracking) with source metadata
     /// 3. Runs response hooks
+    ///
+    /// The source provider and model are taken from the hook context, ensuring
+    /// that the message metadata correctly reflects which provider/model generated it.
     #[must_use = "this returns a Result that must be handled"]
     #[instrument(skip(self, response, hook_ctx), fields(conversation_id = %self.id, response_id = %response.id))]
     pub async fn process_response(
@@ -276,9 +287,15 @@ impl ConversationContext {
         // Update previous response ID
         self.previous_response_id = Some(response.id.clone());
 
-        // Add assistant response to history
+        // Add assistant response to history with source metadata
         if self.track_history {
-            let assistant_msg = Message::new(Role::Assistant, response.content.clone());
+            let mut assistant_msg = Message::new(Role::Assistant, response.content.clone());
+            // Set source metadata from hook context (which has the provider/model info)
+            // This ensures thinking signatures can be properly validated in cross-provider scenarios
+            assistant_msg.metadata = crate::messages::ProviderMetadata::with_source(
+                &hook_ctx.provider,
+                &hook_ctx.model_id,
+            );
             self.messages.push(assistant_msg);
         }
 
@@ -612,6 +629,18 @@ mod tests {
         // Message should be added to history
         assert_eq!(ctx.messages().len(), 1);
         assert_eq!(ctx.messages()[0].role, Role::Assistant);
+
+        // Source metadata should be set from hook context
+        assert_eq!(
+            ctx.messages()[0].metadata.source_provider,
+            Some("openai".to_string()),
+            "Source provider should be set from hook context"
+        );
+        assert_eq!(
+            ctx.messages()[0].metadata.source_model,
+            Some("gpt-4o".to_string()),
+            "Source model should be set from hook context"
+        );
     }
 
     // ============================================================

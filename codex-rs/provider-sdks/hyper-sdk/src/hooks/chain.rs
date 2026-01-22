@@ -55,8 +55,11 @@ impl HookChain {
     }
 
     /// Add a stream hook to the chain.
+    ///
+    /// Hooks are automatically sorted by priority when added (lower values run first).
     pub fn add_stream_hook(&mut self, hook: Arc<dyn StreamHook>) -> &mut Self {
         self.stream_hooks.push(hook);
+        self.sort_stream_hooks();
         self
     }
 
@@ -148,6 +151,11 @@ impl HookChain {
     /// Sort response hooks by priority.
     fn sort_response_hooks(&mut self) {
         self.response_hooks.sort_by_key(|h| h.priority());
+    }
+
+    /// Sort stream hooks by priority.
+    fn sort_stream_hooks(&mut self) {
+        self.stream_hooks.sort_by_key(|h| h.priority());
     }
 }
 

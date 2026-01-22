@@ -511,22 +511,43 @@ impl Model for AnthropicModel {
             .map_err(|e| map_anthropic_error(&e))?;
 
         info!("Stream initiated successfully");
-        // Create hyper-sdk event stream
+        // Create hyper-sdk event stream with state tracking
+        // State: (stream, message_id, tool_calls: HashMap<index, (id, name)>)
+        let initial_state = AnthropicStreamState::new(sdk_stream);
         let event_stream: EventStream = Box::pin(futures::stream::unfold(
-            sdk_stream,
-            |mut stream| async move {
-                match stream.next_event().await {
+            initial_state,
+            |mut state| async move {
+                match state.stream.next_event().await {
                     Some(Ok(event)) => {
-                        let hyper_event = convert_stream_event(event);
-                        Some((hyper_event, stream))
+                        let hyper_event = convert_stream_event_stateful(event, &mut state);
+                        Some((hyper_event, state))
                     }
-                    Some(Err(e)) => Some((Err(map_anthropic_error(&e)), stream)),
+                    Some(Err(e)) => Some((Err(map_anthropic_error(&e)), state)),
                     None => None,
                 }
             },
         ));
 
         Ok(StreamResponse::new(event_stream))
+    }
+}
+
+/// State for Anthropic streaming to track IDs across events.
+struct AnthropicStreamState {
+    stream: ant::MessageStream,
+    /// Message ID from MessageStart event.
+    message_id: String,
+    /// Tool call info (id, name) by content block index.
+    tool_calls: std::collections::HashMap<i64, (String, String)>,
+}
+
+impl AnthropicStreamState {
+    fn new(stream: ant::MessageStream) -> Self {
+        Self {
+            stream,
+            message_id: String::new(),
+            tool_calls: std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -656,9 +677,15 @@ fn convert_ant_response(response: ant::Message) -> Result<GenerateResponse, Hype
     })
 }
 
-fn convert_stream_event(event: ant::RawMessageStreamEvent) -> Result<StreamEvent, HyperError> {
+/// Stateful stream event conversion that tracks message ID and tool call info.
+fn convert_stream_event_stateful(
+    event: ant::RawMessageStreamEvent,
+    state: &mut AnthropicStreamState,
+) -> Result<StreamEvent, HyperError> {
     match event {
         ant::RawMessageStreamEvent::MessageStart { message } => {
+            // Track message ID for ResponseDone
+            state.message_id = message.id.clone();
             Ok(StreamEvent::response_created(&message.id))
         }
         ant::RawMessageStreamEvent::ContentBlockStart {
@@ -666,13 +693,17 @@ fn convert_stream_event(event: ant::RawMessageStreamEvent) -> Result<StreamEvent
             content_block,
         } => match content_block {
             ant::ContentBlockStartData::ToolUse { id, name, .. } => {
+                // Track tool call info for ToolCallDelta events
+                state
+                    .tool_calls
+                    .insert(index as i64, (id.clone(), name.clone()));
                 Ok(StreamEvent::ToolCallStart {
                     index: index as i64,
                     id,
                     name,
                 })
             }
-            _ => Ok(StreamEvent::text_delta(0, "")),
+            _ => Ok(StreamEvent::Ignored),
         },
         ant::RawMessageStreamEvent::ContentBlockDelta { index, delta } => match delta {
             ant::ContentBlockDelta::TextDelta { text } => {
@@ -682,13 +713,19 @@ fn convert_stream_event(event: ant::RawMessageStreamEvent) -> Result<StreamEvent
                 Ok(StreamEvent::thinking_delta(index as i64, &thinking))
             }
             ant::ContentBlockDelta::InputJsonDelta { partial_json } => {
+                // Get tracked tool call ID from state
+                let id = state
+                    .tool_calls
+                    .get(&(index as i64))
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_default();
                 Ok(StreamEvent::ToolCallDelta {
                     index: index as i64,
-                    id: String::new(),
+                    id,
                     arguments_delta: partial_json,
                 })
             }
-            _ => Ok(StreamEvent::text_delta(0, "")),
+            _ => Ok(StreamEvent::Ignored),
         },
         ant::RawMessageStreamEvent::MessageDelta { delta, usage, .. } => {
             let finish_reason = match delta.stop_reason {
@@ -710,30 +747,115 @@ fn convert_stream_event(event: ant::RawMessageStreamEvent) -> Result<StreamEvent
                 reasoning_tokens: None,
             };
 
-            Ok(StreamEvent::ResponseDone {
-                id: String::new(),
-                usage: Some(token_usage),
+            Ok(StreamEvent::response_done_full(
+                state.message_id.clone(),
+                String::new(), // Anthropic doesn't provide model in MessageDelta
+                Some(token_usage),
                 finish_reason,
-            })
+            ))
         }
         ant::RawMessageStreamEvent::Error { error } => Err(HyperError::ProviderError {
             code: error.error_type,
             message: error.message,
         }),
-        _ => Ok(StreamEvent::text_delta(0, "")),
+        _ => Ok(StreamEvent::Ignored),
+    }
+}
+
+#[allow(dead_code)]
+fn convert_stream_event(event: ant::RawMessageStreamEvent) -> Result<StreamEvent, HyperError> {
+    match event {
+        ant::RawMessageStreamEvent::MessageStart { message } => {
+            Ok(StreamEvent::response_created(&message.id))
+        }
+        ant::RawMessageStreamEvent::ContentBlockStart {
+            index,
+            content_block,
+        } => match content_block {
+            ant::ContentBlockStartData::ToolUse { id, name, .. } => {
+                Ok(StreamEvent::ToolCallStart {
+                    index: index as i64,
+                    id,
+                    name,
+                })
+            }
+            _ => Ok(StreamEvent::Ignored),
+        },
+        ant::RawMessageStreamEvent::ContentBlockDelta { index, delta } => match delta {
+            ant::ContentBlockDelta::TextDelta { text } => {
+                Ok(StreamEvent::text_delta(index as i64, &text))
+            }
+            ant::ContentBlockDelta::ThinkingDelta { thinking } => {
+                Ok(StreamEvent::thinking_delta(index as i64, &thinking))
+            }
+            ant::ContentBlockDelta::InputJsonDelta { partial_json } => {
+                Ok(StreamEvent::ToolCallDelta {
+                    index: index as i64,
+                    id: String::new(), // Not used in stateful version
+                    arguments_delta: partial_json,
+                })
+            }
+            _ => Ok(StreamEvent::Ignored),
+        },
+        ant::RawMessageStreamEvent::MessageDelta { delta, usage, .. } => {
+            let finish_reason = match delta.stop_reason {
+                Some(ant::StopReason::EndTurn) => FinishReason::Stop,
+                Some(ant::StopReason::MaxTokens) => FinishReason::MaxTokens,
+                Some(ant::StopReason::ToolUse) => FinishReason::ToolCalls,
+                Some(ant::StopReason::StopSequence) => FinishReason::Stop,
+                Some(ant::StopReason::Refusal) => FinishReason::ContentFilter,
+                Some(ant::StopReason::PauseTurn) => FinishReason::InProgress,
+                None => FinishReason::Stop,
+            };
+
+            let token_usage = TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: usage.output_tokens as i64,
+                total_tokens: usage.output_tokens as i64,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
+            };
+
+            Ok(StreamEvent::response_done_full(
+                String::new(), // Anthropic doesn't provide ID in MessageDelta
+                String::new(), // Anthropic doesn't provide model in MessageDelta
+                Some(token_usage),
+                finish_reason,
+            ))
+        }
+        ant::RawMessageStreamEvent::Error { error } => Err(HyperError::ProviderError {
+            code: error.error_type,
+            message: error.message,
+        }),
+        _ => Ok(StreamEvent::Ignored),
     }
 }
 
 fn map_anthropic_error(e: &ant::AnthropicError) -> HyperError {
     match e {
-        ant::AnthropicError::RateLimited { .. } => {
-            HyperError::RateLimitExceeded("Rate limited".to_string())
+        ant::AnthropicError::RateLimited { retry_after } => {
+            // Use the retry_after value from the SDK if available
+            HyperError::Retryable {
+                message: "Rate limited".to_string(),
+                delay: *retry_after,
+            }
         }
         ant::AnthropicError::Authentication(msg) => HyperError::AuthenticationFailed(msg.clone()),
-        ant::AnthropicError::Api { message, .. } => HyperError::ProviderError {
-            code: "api_error".to_string(),
-            message: message.clone(),
-        },
+        ant::AnthropicError::Api { message, .. } => {
+            // Check for quota exceeded patterns in API errors
+            let lower_msg = message.to_lowercase();
+            if lower_msg.contains("quota") || lower_msg.contains("insufficient_quota") {
+                HyperError::QuotaExceeded(message.clone())
+            } else if lower_msg.contains("context") && lower_msg.contains("length") {
+                HyperError::ContextWindowExceeded(message.clone())
+            } else {
+                HyperError::ProviderError {
+                    code: "api_error".to_string(),
+                    message: message.clone(),
+                }
+            }
+        }
         _ => HyperError::ProviderError {
             code: "anthropic_error".to_string(),
             message: e.to_string(),

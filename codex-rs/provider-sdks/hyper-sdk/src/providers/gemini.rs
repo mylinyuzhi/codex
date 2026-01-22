@@ -630,7 +630,8 @@ fn convert_gemini_error(err: gem::GenAiError) -> HyperError {
         gem::GenAiError::Parse(msg) => HyperError::Internal(format!("Parse error: {msg}")),
         gem::GenAiError::Validation(msg) => HyperError::InvalidRequest(msg),
         gem::GenAiError::ContextLengthExceeded(msg) => HyperError::ContextWindowExceeded(msg),
-        gem::GenAiError::QuotaExceeded(msg) => HyperError::RateLimitExceeded(msg),
+        // QuotaExceeded is NOT retryable (requires billing change)
+        gem::GenAiError::QuotaExceeded(msg) => HyperError::QuotaExceeded(msg),
         gem::GenAiError::ContentBlocked(msg) => HyperError::ProviderError {
             code: "content_blocked".to_string(),
             message: msg,
@@ -827,11 +828,12 @@ fn convert_stream_chunk_to_events(
                     reasoning_tokens: None,
                 });
 
-                events.push(Ok(StreamEvent::ResponseDone {
-                    id: chunk.response_id.clone().unwrap_or_default(),
-                    finish_reason: finish,
+                events.push(Ok(StreamEvent::response_done_full(
+                    chunk.response_id.clone().unwrap_or_default(),
+                    chunk.model_version.clone().unwrap_or_default(),
                     usage,
-                }));
+                    finish,
+                )));
             }
         }
     }

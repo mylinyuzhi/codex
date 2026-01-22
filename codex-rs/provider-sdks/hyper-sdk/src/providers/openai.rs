@@ -520,16 +520,17 @@ impl Model for OpenAIModel {
             .map_err(|e| map_openai_error(&e))?;
 
         info!("Stream initiated successfully");
-        // Create hyper-sdk event stream
+        // Create hyper-sdk event stream with state tracking
+        let initial_state = OpenAIStreamState::new(sdk_stream);
         let event_stream: EventStream = Box::pin(futures::stream::unfold(
-            sdk_stream,
-            |mut stream| async move {
-                match stream.next().await {
+            initial_state,
+            |mut state| async move {
+                match state.stream.next().await {
                     Some(Ok(event)) => {
-                        let hyper_event = convert_stream_event(event);
-                        Some((hyper_event, stream))
+                        let hyper_event = convert_stream_event_stateful(event, &mut state);
+                        Some((hyper_event, state))
                     }
-                    Some(Err(e)) => Some((Err(map_openai_error(&e)), stream)),
+                    Some(Err(e)) => Some((Err(map_openai_error(&e)), state)),
                     None => None,
                 }
             },
@@ -544,6 +545,22 @@ impl Model for OpenAIModel {
     ) -> Result<crate::embedding::EmbedResponse, HyperError> {
         let _ = request;
         Err(HyperError::UnsupportedCapability(Capability::Embedding))
+    }
+}
+
+/// State for OpenAI streaming to track tool call names across events.
+struct OpenAIStreamState {
+    stream: oai::ResponseStream,
+    /// Tool call info (id, name) by output_index.
+    tool_calls: std::collections::HashMap<i64, (String, String)>,
+}
+
+impl OpenAIStreamState {
+    fn new(stream: oai::ResponseStream) -> Self {
+        Self {
+            stream,
+            tool_calls: std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -680,6 +697,133 @@ fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, Hyp
     })
 }
 
+/// Stateful stream event conversion that tracks tool call names.
+fn convert_stream_event_stateful(
+    event: oai::ResponseStreamEvent,
+    state: &mut OpenAIStreamState,
+) -> Result<StreamEvent, HyperError> {
+    match event {
+        oai::ResponseStreamEvent::ResponseCreated { response, .. } => {
+            Ok(StreamEvent::response_created(&response.id))
+        }
+        oai::ResponseStreamEvent::OutputTextDelta {
+            delta,
+            content_index,
+            ..
+        } => Ok(StreamEvent::text_delta(content_index as i64, &delta)),
+        oai::ResponseStreamEvent::OutputTextDone {
+            text,
+            content_index,
+            ..
+        } => Ok(StreamEvent::text_done(content_index as i64, &text)),
+        oai::ResponseStreamEvent::ReasoningTextDelta {
+            delta,
+            content_index,
+            ..
+        } => Ok(StreamEvent::thinking_delta(content_index as i64, &delta)),
+        oai::ResponseStreamEvent::ReasoningTextDone {
+            text,
+            content_index,
+            ..
+        } => Ok(StreamEvent::thinking_done(content_index as i64, &text)),
+        oai::ResponseStreamEvent::FunctionCallArgumentsDelta {
+            delta,
+            output_index,
+            item_id,
+            ..
+        } => Ok(StreamEvent::ToolCallDelta {
+            index: output_index as i64,
+            id: item_id,
+            arguments_delta: delta,
+        }),
+        oai::ResponseStreamEvent::FunctionCallArgumentsDone {
+            arguments,
+            output_index,
+            item_id,
+            ..
+        } => {
+            // Get tracked tool call name from state
+            let name = state
+                .tool_calls
+                .get(&(output_index as i64))
+                .map(|(_, name)| name.clone())
+                .unwrap_or_default();
+
+            let args: serde_json::Value =
+                serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
+            Ok(StreamEvent::ToolCallDone {
+                index: output_index as i64,
+                tool_call: crate::tools::ToolCall {
+                    id: item_id,
+                    name,
+                    arguments: args,
+                },
+            })
+        }
+        oai::ResponseStreamEvent::OutputItemAdded {
+            item, output_index, ..
+        } => {
+            // Extract function call info and track it
+            if let oai::OutputItem::FunctionCall { call_id, name, .. } = item {
+                // Track tool call info for FunctionCallArgumentsDone
+                state
+                    .tool_calls
+                    .insert(output_index as i64, (call_id.clone(), name.clone()));
+                Ok(StreamEvent::ToolCallStart {
+                    index: output_index as i64,
+                    id: call_id,
+                    name,
+                })
+            } else {
+                Ok(StreamEvent::Ignored)
+            }
+        }
+        oai::ResponseStreamEvent::ResponseCompleted { response, .. } => {
+            let finish_reason = match response.stop_reason {
+                Some(oai::StopReason::EndTurn) => FinishReason::Stop,
+                Some(oai::StopReason::MaxTokens) => FinishReason::MaxTokens,
+                Some(oai::StopReason::ToolUse) => FinishReason::ToolCalls,
+                Some(oai::StopReason::StopSequence) => FinishReason::Stop,
+                Some(oai::StopReason::ContentFilter) => FinishReason::ContentFilter,
+                None => FinishReason::Stop,
+            };
+
+            let cached_tokens = response.usage.cached_tokens();
+            let reasoning_tokens = response.usage.reasoning_tokens();
+
+            let usage = TokenUsage {
+                prompt_tokens: response.usage.input_tokens as i64,
+                completion_tokens: response.usage.output_tokens as i64,
+                total_tokens: response.usage.total_tokens as i64,
+                cache_read_tokens: if cached_tokens > 0 {
+                    Some(cached_tokens as i64)
+                } else {
+                    None
+                },
+                cache_creation_tokens: None,
+                reasoning_tokens: if reasoning_tokens > 0 {
+                    Some(reasoning_tokens as i64)
+                } else {
+                    None
+                },
+            };
+
+            Ok(StreamEvent::response_done_full(
+                response.id,
+                response.model.unwrap_or_default(),
+                Some(usage),
+                finish_reason,
+            ))
+        }
+        oai::ResponseStreamEvent::Error { code, message, .. } => Err(HyperError::ProviderError {
+            code: code.unwrap_or_else(|| "unknown".to_string()),
+            message,
+        }),
+        _ => Ok(StreamEvent::Ignored),
+    }
+}
+
+#[allow(dead_code)]
 fn convert_stream_event(event: oai::ResponseStreamEvent) -> Result<StreamEvent, HyperError> {
     match event {
         oai::ResponseStreamEvent::ResponseCreated { response, .. } => {
@@ -727,7 +871,7 @@ fn convert_stream_event(event: oai::ResponseStreamEvent) -> Result<StreamEvent, 
                 index: output_index as i64,
                 tool_call: crate::tools::ToolCall {
                     id: item_id,
-                    name: String::new(), // Name comes from OutputItemAdded
+                    name: String::new(), // Not used in stateful version
                     arguments: args,
                 },
             })
@@ -744,7 +888,7 @@ fn convert_stream_event(event: oai::ResponseStreamEvent) -> Result<StreamEvent, 
                 })
             } else {
                 // Ignore other item types in stream events
-                Ok(StreamEvent::text_delta(0, ""))
+                Ok(StreamEvent::Ignored)
             }
         }
         oai::ResponseStreamEvent::ResponseCompleted { response, .. } => {
@@ -777,11 +921,12 @@ fn convert_stream_event(event: oai::ResponseStreamEvent) -> Result<StreamEvent, 
                 },
             };
 
-            Ok(StreamEvent::ResponseDone {
-                id: response.id,
-                usage: Some(usage),
+            Ok(StreamEvent::response_done_full(
+                response.id,
+                response.model.unwrap_or_default(),
+                Some(usage),
                 finish_reason,
-            })
+            ))
         }
         oai::ResponseStreamEvent::Error { code, message, .. } => Err(HyperError::ProviderError {
             code: code.unwrap_or_else(|| "unknown".to_string()),
@@ -789,7 +934,7 @@ fn convert_stream_event(event: oai::ResponseStreamEvent) -> Result<StreamEvent, 
         }),
         _ => {
             // Ignore other event types
-            Ok(StreamEvent::text_delta(0, ""))
+            Ok(StreamEvent::Ignored)
         }
     }
 }
@@ -800,10 +945,16 @@ fn map_openai_error(e: &oai::OpenAIError) -> HyperError {
             HyperError::ContextWindowExceeded("Context window exceeded".to_string())
         }
         oai::OpenAIError::QuotaExceeded => {
-            HyperError::RateLimitExceeded("Quota exceeded".to_string())
+            // QuotaExceeded is NOT retryable (requires billing change)
+            // This is different from RateLimitExceeded which is retryable
+            HyperError::QuotaExceeded("Quota exceeded - check your billing settings".to_string())
         }
-        oai::OpenAIError::RateLimited { .. } => {
-            HyperError::RateLimitExceeded("Rate limited".to_string())
+        oai::OpenAIError::RateLimited { retry_after } => {
+            // Use the retry_after value from the SDK if available
+            HyperError::Retryable {
+                message: "Rate limited".to_string(),
+                delay: *retry_after,
+            }
         }
         oai::OpenAIError::Authentication(msg) => HyperError::AuthenticationFailed(msg.clone()),
         oai::OpenAIError::Api { message, .. } => HyperError::ProviderError {

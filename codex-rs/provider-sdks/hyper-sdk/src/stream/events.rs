@@ -11,6 +11,13 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
+    /// Event that should be ignored by consumers.
+    ///
+    /// This is emitted for provider-specific events that don't map to
+    /// the unified stream event model. Using this instead of empty TextDelta
+    /// prevents UI flicker, incorrect event counting, and hook pollution.
+    Ignored,
+
     // Text events
     /// Delta (incremental) text content.
     TextDelta {
@@ -83,6 +90,9 @@ pub enum StreamEvent {
     ResponseDone {
         /// Response ID.
         id: String,
+        /// Model name (may differ from requested model due to aliases/defaults).
+        #[serde(default)]
+        model: String,
         /// Token usage.
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
@@ -165,11 +175,27 @@ impl StreamEvent {
         StreamEvent::ResponseCreated { id: id.into() }
     }
 
-    /// Create a response done event.
+    /// Create a response done event (without model - for backward compatibility).
     pub fn response_done(id: impl Into<String>, finish_reason: FinishReason) -> Self {
         StreamEvent::ResponseDone {
             id: id.into(),
+            model: String::new(),
             usage: None,
+            finish_reason,
+        }
+    }
+
+    /// Create a full response done event.
+    pub fn response_done_full(
+        id: impl Into<String>,
+        model: impl Into<String>,
+        usage: Option<TokenUsage>,
+        finish_reason: FinishReason,
+    ) -> Self {
+        StreamEvent::ResponseDone {
+            id: id.into(),
+            model: model.into(),
+            usage,
             finish_reason,
         }
     }
@@ -232,5 +258,13 @@ mod tests {
             ToolCall::new("call_1", "get_weather", serde_json::json!({})),
         );
         assert!(!done.is_done());
+    }
+
+    #[test]
+    fn test_ignored_event() {
+        let ignored = StreamEvent::Ignored;
+        assert!(!ignored.is_delta());
+        assert!(!ignored.is_done());
+        assert!(ignored.as_text_delta().is_none());
     }
 }

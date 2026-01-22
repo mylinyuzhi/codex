@@ -115,6 +115,7 @@
 // Module declarations
 pub mod call_id;
 pub mod capability;
+pub mod client;
 pub mod compat;
 pub mod conversation;
 pub mod embedding;
@@ -130,6 +131,7 @@ pub mod rate_limits;
 pub mod registry;
 pub mod request;
 pub mod response;
+pub mod retry;
 pub mod session;
 pub mod stream;
 pub mod telemetry;
@@ -196,6 +198,10 @@ pub use stream::ToolCallSnapshot;
 // Rate limits
 pub use rate_limits::RateLimitSnapshot;
 
+// Retry
+pub use retry::RetryConfig;
+pub use retry::RetryExecutor;
+
 // Telemetry
 pub use telemetry::LoggingTelemetry;
 pub use telemetry::NoopTelemetry;
@@ -207,14 +213,25 @@ pub use model::Model;
 pub use provider::Provider;
 pub use provider::ProviderConfig;
 
+// Client (recommended API)
+pub use client::HyperClient;
+
 // Registry
 pub use registry::ProviderRegistry;
+// Deprecated global API functions - use HyperClient instead
+#[allow(deprecated)]
 pub use registry::get_provider;
+#[allow(deprecated)]
 pub use registry::global_registry;
+#[allow(deprecated)]
 pub use registry::has_provider;
+#[allow(deprecated)]
 pub use registry::list_providers;
+#[allow(deprecated)]
 pub use registry::register_provider;
+#[allow(deprecated)]
 pub use registry::remove_provider;
+#[allow(deprecated)]
 pub use registry::require_provider;
 
 // Provider implementations
@@ -225,19 +242,25 @@ pub use providers::OpenAIProvider;
 pub use providers::VolcengineProvider;
 pub use providers::ZaiProvider;
 pub use providers::any_from_env;
+// Deprecated - use HyperClient::from_env() instead
+#[allow(deprecated)]
 pub use providers::init_from_env;
 
 // Provider options
 pub use options::AnthropicOptions;
 pub use options::GeminiOptions;
 pub use options::OpenAIOptions;
+pub use options::ProviderMarker;
 pub use options::ProviderOptions;
 pub use options::ProviderOptionsData;
 pub use options::ReasoningEffort;
 pub use options::ThinkingConfig;
+pub use options::TypedProviderOptions;
 pub use options::VolcengineOptions;
 pub use options::ZaiOptions;
 pub use options::downcast_options;
+pub use options::try_downcast_options;
+pub use options::validate_options_for_provider;
 
 // Compatibility layer
 pub use compat::HyperAdapter;
@@ -262,6 +285,7 @@ pub use session::SessionConfig;
 pub mod prelude {
     pub use crate::capability::Capability;
     pub use crate::capability::ModelInfo;
+    pub use crate::client::HyperClient;
     pub use crate::conversation::ConversationContext;
     pub use crate::embedding::EmbedRequest;
     pub use crate::embedding::EmbedResponse;
@@ -286,7 +310,10 @@ pub mod prelude {
     pub use crate::providers::VolcengineProvider;
     pub use crate::providers::ZaiProvider;
     pub use crate::rate_limits::RateLimitSnapshot;
+    // Deprecated - use HyperClient instead
+    #[allow(deprecated)]
     pub use crate::registry::get_provider;
+    #[allow(deprecated)]
     pub use crate::registry::register_provider;
     pub use crate::request::GenerateRequest;
     pub use crate::response::FinishReason;

@@ -1,6 +1,8 @@
 //! OpenAI-specific options.
 
+use super::ProviderMarker;
 use super::ProviderOptionsData;
+use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
@@ -67,6 +69,12 @@ impl OpenAIOptions {
     }
 }
 
+impl ProviderMarker for OpenAIOptions {
+    const PROVIDER_NAME: &'static str = "openai";
+}
+
+impl TypedProviderOptions for OpenAIOptions {}
+
 impl ProviderOptionsData for OpenAIOptions {
     fn as_any(&self) -> &dyn Any {
         self
@@ -74,6 +82,10 @@ impl ProviderOptionsData for OpenAIOptions {
 
     fn clone_box(&self) -> Box<dyn ProviderOptionsData> {
         Box::new(self.clone())
+    }
+
+    fn provider_name(&self) -> Option<&'static str> {
+        Some(Self::PROVIDER_NAME)
     }
 }
 

@@ -169,6 +169,13 @@ pub trait StreamHook: Send + Sync + Debug {
     /// Called for each stream event.
     async fn on_event(&self, event: &StreamEvent, context: &HookContext) -> Result<(), HyperError>;
 
+    /// Hook priority (lower = earlier execution).
+    ///
+    /// Default priority is 100. Built-in hooks typically use priorities 0-50.
+    fn priority(&self) -> i32 {
+        100
+    }
+
     /// Hook name for debugging and logging.
     fn name(&self) -> &str;
 }

@@ -20,6 +20,12 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamUpdate {
+    /// An event that should be ignored (no meaningful state change).
+    ///
+    /// This is emitted for provider-specific events that don't map to
+    /// the unified stream event model.
+    Ignored,
+
     /// Response was created (stream started).
     ResponseCreated {
         /// Response ID.
@@ -180,6 +186,7 @@ impl StreamUpdate {
 impl From<super::StreamEvent> for StreamUpdate {
     fn from(event: super::StreamEvent) -> Self {
         match event {
+            super::StreamEvent::Ignored => StreamUpdate::Ignored,
             super::StreamEvent::ResponseCreated { id } => StreamUpdate::ResponseCreated { id },
             super::StreamEvent::TextDelta { index, delta } => {
                 StreamUpdate::TextDelta { index, delta }
@@ -216,6 +223,7 @@ impl From<super::StreamEvent> for StreamUpdate {
                 id,
                 usage,
                 finish_reason,
+                ..
             } => StreamUpdate::Done {
                 id,
                 finish_reason,

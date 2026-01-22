@@ -1,8 +1,14 @@
 //! Request types for generation.
 
 use crate::messages::Message;
+use crate::options::AnthropicOptions;
+use crate::options::GeminiOptions;
+use crate::options::OpenAIOptions;
 use crate::options::ProviderOptions;
+use crate::options::ProviderOptionsData;
 use crate::options::ThinkingConfig;
+use crate::options::VolcengineOptions;
+use crate::options::ZaiOptions;
 use crate::tools::ToolChoice;
 use crate::tools::ToolDefinition;
 use serde::Deserialize;
@@ -153,9 +159,134 @@ impl GenerateRequest {
         self
     }
 
-    /// Set provider-specific options.
+    /// Set provider-specific options (generic).
+    ///
+    /// For better IDE support and type safety hints, prefer using the
+    /// typed methods like [`with_openai_options()`](Self::with_openai_options).
     pub fn provider_options(mut self, options: ProviderOptions) -> Self {
         self.provider_options = Some(options);
+        self
+    }
+
+    /// Set provider-specific options using any type implementing ProviderOptionsData.
+    ///
+    /// This is a convenience method that boxes the options automatically.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, OpenAIOptions};
+    ///
+    /// let request = GenerateRequest::from_text("Hello")
+    ///     .with_provider_options(OpenAIOptions::new());
+    /// ```
+    pub fn with_provider_options(mut self, options: impl ProviderOptionsData + 'static) -> Self {
+        self.provider_options = Some(Box::new(options));
+        self
+    }
+
+    /// Set OpenAI-specific options.
+    ///
+    /// This method provides IDE auto-completion for OpenAI-specific options
+    /// and makes the code more self-documenting.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, OpenAIOptions};
+    /// use hyper_sdk::options::openai::ReasoningEffort;
+    ///
+    /// let request = GenerateRequest::from_text("Solve this math problem")
+    ///     .with_openai_options(
+    ///         OpenAIOptions::new()
+    ///             .with_reasoning_effort(ReasoningEffort::High)
+    ///     );
+    /// ```
+    pub fn with_openai_options(mut self, options: OpenAIOptions) -> Self {
+        self.provider_options = Some(Box::new(options));
+        self
+    }
+
+    /// Set Anthropic-specific options.
+    ///
+    /// This method provides IDE auto-completion for Anthropic-specific options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, AnthropicOptions};
+    ///
+    /// let request = GenerateRequest::from_text("Think step by step")
+    ///     .with_anthropic_options(
+    ///         AnthropicOptions::new()
+    ///             .with_thinking_budget(10000)
+    ///     );
+    /// ```
+    pub fn with_anthropic_options(mut self, options: AnthropicOptions) -> Self {
+        self.provider_options = Some(Box::new(options));
+        self
+    }
+
+    /// Set Google Gemini-specific options.
+    ///
+    /// This method provides IDE auto-completion for Gemini-specific options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, GeminiOptions};
+    /// use hyper_sdk::options::gemini::ThinkingLevel;
+    ///
+    /// let request = GenerateRequest::from_text("Research this topic")
+    ///     .with_gemini_options(
+    ///         GeminiOptions::new()
+    ///             .with_grounding(true)
+    ///             .with_thinking_level(ThinkingLevel::High)
+    ///     );
+    /// ```
+    pub fn with_gemini_options(mut self, options: GeminiOptions) -> Self {
+        self.provider_options = Some(Box::new(options));
+        self
+    }
+
+    /// Set Volcengine Ark-specific options.
+    ///
+    /// This method provides IDE auto-completion for Volcengine-specific options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, VolcengineOptions};
+    ///
+    /// let request = GenerateRequest::from_text("Complex reasoning task")
+    ///     .with_volcengine_options(
+    ///         VolcengineOptions::new()
+    ///             .with_thinking_budget(2048)
+    ///     );
+    /// ```
+    pub fn with_volcengine_options(mut self, options: VolcengineOptions) -> Self {
+        self.provider_options = Some(Box::new(options));
+        self
+    }
+
+    /// Set Z.AI / ZhipuAI-specific options.
+    ///
+    /// This method provides IDE auto-completion for Z.AI-specific options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyper_sdk::{GenerateRequest, ZaiOptions};
+    ///
+    /// let request = GenerateRequest::from_text("Deep reasoning task")
+    ///     .with_zai_options(
+    ///         ZaiOptions::new()
+    ///             .with_thinking_budget(4096)
+    ///             .with_do_sample(true)
+    ///     );
+    /// ```
+    pub fn with_zai_options(mut self, options: ZaiOptions) -> Self {
+        self.provider_options = Some(Box::new(options));
         self
     }
 
@@ -417,5 +548,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ============================================================
+    // Typed Provider Options Tests
+    // ============================================================
+
+    #[test]
+    fn test_with_openai_options() {
+        use crate::options::downcast_options;
+        use crate::options::openai::ReasoningEffort;
+
+        let request = GenerateRequest::from_text("Hello")
+            .with_openai_options(OpenAIOptions::new().with_reasoning_effort(ReasoningEffort::High));
+
+        assert!(request.provider_options.is_some());
+        let opts = downcast_options::<OpenAIOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn test_with_anthropic_options() {
+        use crate::options::downcast_options;
+
+        let request = GenerateRequest::from_text("Hello")
+            .with_anthropic_options(AnthropicOptions::new().with_thinking_budget(10000));
+
+        assert!(request.provider_options.is_some());
+        let opts = downcast_options::<AnthropicOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().thinking_budget_tokens, Some(10000));
+    }
+
+    #[test]
+    fn test_with_gemini_options() {
+        use crate::options::downcast_options;
+        use crate::options::gemini::ThinkingLevel;
+
+        let request = GenerateRequest::from_text("Hello")
+            .with_gemini_options(GeminiOptions::new().with_thinking_level(ThinkingLevel::High));
+
+        assert!(request.provider_options.is_some());
+        let opts = downcast_options::<GeminiOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().thinking_level, Some(ThinkingLevel::High));
+    }
+
+    #[test]
+    fn test_with_volcengine_options() {
+        use crate::options::downcast_options;
+
+        let request = GenerateRequest::from_text("Hello")
+            .with_volcengine_options(VolcengineOptions::new().with_thinking_budget(2048));
+
+        assert!(request.provider_options.is_some());
+        let opts =
+            downcast_options::<VolcengineOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().thinking_budget_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_with_zai_options() {
+        use crate::options::downcast_options;
+
+        let request =
+            GenerateRequest::from_text("Hello").with_zai_options(ZaiOptions::new().with_do_sample(true));
+
+        assert!(request.provider_options.is_some());
+        let opts = downcast_options::<ZaiOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().do_sample, Some(true));
+    }
+
+    #[test]
+    fn test_with_provider_options_generic() {
+        use crate::options::downcast_options;
+
+        let request =
+            GenerateRequest::from_text("Hello").with_provider_options(OpenAIOptions::new().with_seed(42));
+
+        assert!(request.provider_options.is_some());
+        let opts = downcast_options::<OpenAIOptions>(request.provider_options.as_ref().unwrap());
+        assert!(opts.is_some());
+        assert_eq!(opts.unwrap().seed, Some(42));
     }
 }

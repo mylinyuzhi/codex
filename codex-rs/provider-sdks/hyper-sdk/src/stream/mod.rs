@@ -44,6 +44,9 @@ pub mod response;
 pub mod snapshot;
 pub mod update;
 
+// Internal processor state modules
+pub(crate) mod processor_state;
+
 // Callbacks API
 pub use callbacks::CollectTextCallbacks;
 pub use callbacks::PrintCallbacks;

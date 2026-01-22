@@ -69,12 +69,26 @@ impl ProviderRegistry {
 
 /// Register a provider in the global registry.
 ///
+/// # Deprecated
+///
+/// Use [`HyperClient::with_provider()`](crate::HyperClient::with_provider) instead
+/// for better test isolation and multi-tenancy support.
+///
 /// # Example
 ///
 /// ```ignore
+/// // Old way (deprecated)
 /// let provider = OpenAIProvider::from_env()?;
 /// register_provider(Arc::new(provider));
+///
+/// // New way (recommended)
+/// let client = HyperClient::new()
+///     .with_provider(OpenAIProvider::from_env()?);
 /// ```
+#[deprecated(
+    since = "0.2.0",
+    note = "Use HyperClient::new().with_provider() instead for better test isolation"
+)]
 pub fn register_provider(provider: Arc<dyn Provider>) {
     REGISTRY.register(provider);
 }
@@ -83,34 +97,65 @@ pub fn register_provider(provider: Arc<dyn Provider>) {
 ///
 /// Returns `None` if the provider is not found.
 ///
+/// # Deprecated
+///
+/// Use [`HyperClient::provider()`](crate::HyperClient::provider) instead.
+///
 /// # Example
 ///
 /// ```ignore
+/// // Old way (deprecated)
 /// if let Some(provider) = get_provider("openai") {
 ///     let model = provider.model("gpt-4o")?;
 /// }
+///
+/// // New way (recommended)
+/// let client = HyperClient::from_env()?;
+/// let model = client.model("openai", "gpt-4o")?;
 /// ```
+#[deprecated(since = "0.2.0", note = "Use HyperClient::provider() instead")]
 pub fn get_provider(name: &str) -> Option<Arc<dyn Provider>> {
     REGISTRY.get(name)
 }
 
 /// Get a provider by name, returning an error if not found.
+///
+/// # Deprecated
+///
+/// Use [`HyperClient::require_provider()`](crate::HyperClient::require_provider) instead.
+#[deprecated(since = "0.2.0", note = "Use HyperClient::require_provider() instead")]
 #[must_use = "this returns a Result that must be handled"]
 pub fn require_provider(name: &str) -> Result<Arc<dyn Provider>, HyperError> {
+    #[allow(deprecated)]
     get_provider(name).ok_or_else(|| HyperError::ProviderNotFound(name.to_string()))
 }
 
 /// Remove a provider from the global registry.
+///
+/// # Deprecated
+///
+/// Use [`HyperClient::remove_provider()`](crate::HyperClient::remove_provider) instead.
+#[deprecated(since = "0.2.0", note = "Use HyperClient::remove_provider() instead")]
 pub fn remove_provider(name: &str) -> Option<Arc<dyn Provider>> {
     REGISTRY.remove(name)
 }
 
 /// List all registered provider names.
+///
+/// # Deprecated
+///
+/// Use [`HyperClient::list_providers()`](crate::HyperClient::list_providers) instead.
+#[deprecated(since = "0.2.0", note = "Use HyperClient::list_providers() instead")]
 pub fn list_providers() -> Vec<String> {
     REGISTRY.list()
 }
 
 /// Check if a provider is registered.
+///
+/// # Deprecated
+///
+/// Use [`HyperClient::has_provider()`](crate::HyperClient::has_provider) instead.
+#[deprecated(since = "0.2.0", note = "Use HyperClient::has_provider() instead")]
 pub fn has_provider(name: &str) -> bool {
     REGISTRY.has(name)
 }
@@ -119,6 +164,11 @@ pub fn has_provider(name: &str) -> bool {
 ///
 /// This is useful for advanced use cases where you need direct access
 /// to the registry (e.g., for testing).
+///
+/// # Deprecated
+///
+/// Use [`HyperClient::registry()`](crate::HyperClient::registry) instead.
+#[deprecated(since = "0.2.0", note = "Use HyperClient::registry() instead")]
 pub fn global_registry() -> &'static ProviderRegistry {
     &REGISTRY
 }

@@ -1,6 +1,8 @@
 //! Volcengine Ark-specific options.
 
+use super::ProviderMarker;
 use super::ProviderOptionsData;
+use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
@@ -69,6 +71,12 @@ impl VolcengineOptions {
     }
 }
 
+impl ProviderMarker for VolcengineOptions {
+    const PROVIDER_NAME: &'static str = "volcengine";
+}
+
+impl TypedProviderOptions for VolcengineOptions {}
+
 impl ProviderOptionsData for VolcengineOptions {
     fn as_any(&self) -> &dyn Any {
         self
@@ -76,6 +84,10 @@ impl ProviderOptionsData for VolcengineOptions {
 
     fn clone_box(&self) -> Box<dyn ProviderOptionsData> {
         Box::new(self.clone())
+    }
+
+    fn provider_name(&self) -> Option<&'static str> {
+        Some(Self::PROVIDER_NAME)
     }
 }
 
