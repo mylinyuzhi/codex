@@ -545,10 +545,8 @@ fn convert_content_block_to_part(block: &ContentBlock) -> gem::Part {
             is_error,
         } => {
             // Create a function_response part
+            // Note: For JSON content, we preserve the structure and add is_error
             let response_content = match content {
-                ToolResultContent::Text(text) => {
-                    serde_json::json!({ "result": text, "is_error": is_error })
-                }
                 ToolResultContent::Json(json) => {
                     let mut obj = json.clone();
                     if let Some(map) = obj.as_object_mut() {
@@ -556,18 +554,9 @@ fn convert_content_block_to_part(block: &ContentBlock) -> gem::Part {
                     }
                     obj
                 }
-                ToolResultContent::Blocks(blocks) => {
-                    let texts: Vec<String> = blocks
-                        .iter()
-                        .filter_map(|b| {
-                            if let crate::tools::ToolResultBlock::Text { text } = b {
-                                Some(text.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    serde_json::json!({ "result": texts.join("\n"), "is_error": is_error })
+                _ => {
+                    // For Text and Blocks, wrap in a result object
+                    serde_json::json!({ "result": content.to_text(), "is_error": is_error })
                 }
             };
             gem::Part::function_response(tool_use_id.clone(), response_content)

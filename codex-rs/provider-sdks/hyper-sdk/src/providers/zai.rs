@@ -17,7 +17,6 @@ use crate::response::GenerateResponse;
 use crate::response::TokenUsage;
 use crate::stream::StreamResponse;
 use crate::tools::ToolDefinition;
-use crate::tools::ToolResultContent;
 use async_trait::async_trait;
 use std::env;
 use std::sync::Arc;
@@ -349,21 +348,10 @@ impl Model for ZaiModel {
                             ..
                         } = block
                         {
-                            let output = match content {
-                                ToolResultContent::Text(s) => s.clone(),
-                                ToolResultContent::Json(v) => v.to_string(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(""),
-                            };
-                            messages.push(zai::MessageParam::tool_result(tool_use_id, output));
+                            messages.push(zai::MessageParam::tool_result(
+                                tool_use_id,
+                                content.to_text(),
+                            ));
                         }
                     }
                 }
@@ -430,13 +418,13 @@ impl Model for ZaiModel {
                 .completions()
                 .create(params)
                 .await
-                .map_err(|e| map_zai_error(&e))?,
+                .map_err(map_zai_error)?,
             ZaiClientWrapper::ZhipuAi(client) => client
                 .chat()
                 .completions()
                 .create(params)
                 .await
-                .map_err(|e| map_zai_error(&e))?,
+                .map_err(map_zai_error)?,
         };
 
         // Convert response
@@ -561,61 +549,53 @@ fn convert_zai_response(completion: zai::Completion) -> Result<GenerateResponse,
     })
 }
 
-/// Map Z.AI SDK errors to HyperError with proper classification.
+/// Map Z.AI SDK errors to HyperError using enum variants directly.
 ///
-/// This function analyzes error messages to determine the appropriate error type,
-/// distinguishing between retryable errors (rate limits) and non-retryable errors
-/// (quota exceeded, authentication failures, context window exceeded).
-fn map_zai_error(e: &zai::ZaiError) -> HyperError {
-    let message = e.to_string();
-    let lower_msg = message.to_lowercase();
-
-    // Check for rate limiting (retryable)
-    if lower_msg.contains("rate limit")
-        || lower_msg.contains("429")
-        || lower_msg.contains("too many requests")
-    {
-        return HyperError::RateLimitExceeded(message);
-    }
-
-    // Check for quota exceeded (not retryable - requires billing change)
-    if lower_msg.contains("quota")
-        || lower_msg.contains("insufficient")
-        || lower_msg.contains("balance")
-    {
-        return HyperError::QuotaExceeded(message);
-    }
-
-    // Check for context window exceeded
-    if (lower_msg.contains("context") && lower_msg.contains("length"))
-        || lower_msg.contains("token limit")
-        || lower_msg.contains("too long")
-    {
-        return HyperError::ContextWindowExceeded(message);
-    }
-
-    // Check for authentication failures
-    if lower_msg.contains("auth")
-        || lower_msg.contains("api key")
-        || lower_msg.contains("401")
-        || lower_msg.contains("unauthorized")
-        || lower_msg.contains("invalid key")
-    {
-        return HyperError::AuthenticationFailed(message);
-    }
-
-    // Check for invalid request
-    if lower_msg.contains("invalid")
-        || lower_msg.contains("400")
-        || lower_msg.contains("bad request")
-    {
-        return HyperError::InvalidRequest(message);
-    }
-
-    // Default to generic provider error
-    HyperError::ProviderError {
-        code: "zhipuai_error".to_string(),
-        message,
+/// This function leverages the structured error types from the Z.AI SDK
+/// instead of string matching, providing more reliable error classification.
+fn map_zai_error(e: zai::ZaiError) -> HyperError {
+    match e {
+        zai::ZaiError::RateLimited { retry_after } => HyperError::Retryable {
+            message: "rate limit exceeded".to_string(),
+            delay: retry_after,
+        },
+        zai::ZaiError::Authentication(msg) => HyperError::AuthenticationFailed(msg),
+        zai::ZaiError::BadRequest(msg) => HyperError::InvalidRequest(msg),
+        zai::ZaiError::Validation(msg) => HyperError::InvalidRequest(msg),
+        zai::ZaiError::Configuration(msg) => HyperError::ConfigError(msg),
+        zai::ZaiError::Api {
+            status,
+            message,
+            request_id: _,
+        } => {
+            // Further classify based on HTTP status code
+            if status == 429 {
+                HyperError::RateLimitExceeded(message)
+            } else if status == 401 || status == 403 {
+                HyperError::AuthenticationFailed(message)
+            } else if status >= 500 {
+                HyperError::Retryable {
+                    message,
+                    delay: None,
+                }
+            } else {
+                HyperError::ProviderError {
+                    code: "zai_error".to_string(),
+                    message,
+                }
+            }
+        }
+        zai::ZaiError::InternalServerError => HyperError::Retryable {
+            message: "internal server error".to_string(),
+            delay: None,
+        },
+        zai::ZaiError::ServerFlowExceeded => HyperError::Retryable {
+            message: "server flow exceeded".to_string(),
+            delay: None,
+        },
+        zai::ZaiError::Network(e) => HyperError::NetworkError(e.to_string()),
+        zai::ZaiError::Serialization(e) => HyperError::ParseError(e.to_string()),
+        zai::ZaiError::JwtError(msg) => HyperError::AuthenticationFailed(msg),
     }
 }
 

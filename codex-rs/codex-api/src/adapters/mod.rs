@@ -19,7 +19,6 @@
 
 pub mod anthropic;
 pub mod genai;
-pub mod hyper_sdk;
 pub mod openai;
 pub mod volcengine_ark;
 pub mod zai;

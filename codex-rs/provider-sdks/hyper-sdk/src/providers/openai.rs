@@ -19,7 +19,6 @@ use crate::stream::EventStream;
 use crate::stream::StreamEvent;
 use crate::stream::StreamResponse;
 use crate::tools::ToolDefinition;
-use crate::tools::ToolResultContent;
 use async_trait::async_trait;
 use openai_sdk as oai;
 use std::env;
@@ -315,20 +314,7 @@ impl Model for OpenAIModel {
                             is_error,
                         } = block
                         {
-                            let output = match content {
-                                ToolResultContent::Text(s) => s.clone(),
-                                ToolResultContent::Json(v) => v.to_string(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(""),
-                            };
+                            let output = content.to_text();
                             input_messages.push(oai::InputMessage::user(vec![
                                 oai::InputContentBlock::function_call_output(
                                     tool_use_id,
@@ -440,20 +426,7 @@ impl Model for OpenAIModel {
                             is_error,
                         } = block
                         {
-                            let output = match content {
-                                ToolResultContent::Text(s) => s.clone(),
-                                ToolResultContent::Json(v) => v.to_string(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(""),
-                            };
+                            let output = content.to_text();
                             input_messages.push(oai::InputMessage::user(vec![
                                 oai::InputContentBlock::function_call_output(
                                     tool_use_id,

@@ -131,6 +131,26 @@ impl ToolResultContent {
             _ => None,
         }
     }
+
+    /// Convert to a text string, handling all content types.
+    ///
+    /// - `Text`: returns the string directly
+    /// - `Json`: serializes to JSON string
+    /// - `Blocks`: concatenates all text blocks, ignoring images
+    pub fn to_text(&self) -> String {
+        match self {
+            ToolResultContent::Text(s) => s.clone(),
+            ToolResultContent::Json(v) => v.to_string(),
+            ToolResultContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ToolResultBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
 }
 
 /// A block within a tool result (for complex results).
@@ -213,5 +233,35 @@ mod tests {
 
         let json = ToolResultContent::json(serde_json::json!({"status": "ok"}));
         assert!(json.as_text().is_none());
+    }
+
+    #[test]
+    fn test_tool_result_content_to_text() {
+        // Text variant returns the string directly
+        let text = ToolResultContent::Text("Hello, world!".to_string());
+        assert_eq!(text.to_text(), "Hello, world!");
+
+        // Json variant serializes to JSON string
+        let json = ToolResultContent::Json(serde_json::json!({"key": "value"}));
+        assert_eq!(json.to_text(), r#"{"key":"value"}"#);
+
+        // Blocks variant concatenates text blocks, ignoring images
+        let blocks = ToolResultContent::Blocks(vec![
+            ToolResultBlock::Text {
+                text: "First ".to_string(),
+            },
+            ToolResultBlock::Image {
+                data: "base64data".to_string(),
+                media_type: "image/png".to_string(),
+            },
+            ToolResultBlock::Text {
+                text: "Second".to_string(),
+            },
+        ]);
+        assert_eq!(blocks.to_text(), "First Second");
+
+        // Empty blocks returns empty string
+        let empty_blocks = ToolResultContent::Blocks(vec![]);
+        assert_eq!(empty_blocks.to_text(), "");
     }
 }

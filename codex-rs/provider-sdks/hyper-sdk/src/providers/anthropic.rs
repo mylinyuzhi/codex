@@ -19,7 +19,6 @@ use crate::stream::EventStream;
 use crate::stream::StreamEvent;
 use crate::stream::StreamResponse;
 use crate::tools::ToolDefinition;
-use crate::tools::ToolResultContent;
 use anthropic_sdk as ant;
 use async_trait::async_trait;
 use std::env;
@@ -297,30 +296,9 @@ impl Model for AnthropicModel {
                             is_error,
                         } = block
                         {
-                            let content = match content {
-                                ToolResultContent::Text(s) => {
-                                    Some(ant::ToolResultContent::Text(s.clone()))
-                                }
-                                ToolResultContent::Json(v) => {
-                                    Some(ant::ToolResultContent::Text(v.to_string()))
-                                }
-                                ToolResultContent::Blocks(blocks) => {
-                                    let text = blocks
-                                        .iter()
-                                        .filter_map(|b| match b {
-                                            crate::tools::ToolResultBlock::Text { text } => {
-                                                Some(text.clone())
-                                            }
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("");
-                                    Some(ant::ToolResultContent::Text(text))
-                                }
-                            };
                             tool_results.push(ant::ContentBlockParam::ToolResult {
                                 tool_use_id: tool_use_id.clone(),
-                                content,
+                                content: Some(ant::ToolResultContent::Text(content.to_text())),
                                 is_error: Some(*is_error),
                                 cache_control: None,
                             });
@@ -431,30 +409,9 @@ impl Model for AnthropicModel {
                             is_error,
                         } = block
                         {
-                            let content = match content {
-                                ToolResultContent::Text(s) => {
-                                    Some(ant::ToolResultContent::Text(s.clone()))
-                                }
-                                ToolResultContent::Json(v) => {
-                                    Some(ant::ToolResultContent::Text(v.to_string()))
-                                }
-                                ToolResultContent::Blocks(blocks) => {
-                                    let text = blocks
-                                        .iter()
-                                        .filter_map(|b| match b {
-                                            crate::tools::ToolResultBlock::Text { text } => {
-                                                Some(text.clone())
-                                            }
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("");
-                                    Some(ant::ToolResultContent::Text(text))
-                                }
-                            };
                             tool_results.push(ant::ContentBlockParam::ToolResult {
                                 tool_use_id: tool_use_id.clone(),
-                                content,
+                                content: Some(ant::ToolResultContent::Text(content.to_text())),
                                 is_error: Some(*is_error),
                                 cache_control: None,
                             });

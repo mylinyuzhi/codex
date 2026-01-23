@@ -17,7 +17,6 @@ use crate::response::GenerateResponse;
 use crate::response::TokenUsage;
 use crate::stream::StreamResponse;
 use crate::tools::ToolDefinition;
-use crate::tools::ToolResultContent;
 use async_trait::async_trait;
 use std::env;
 use std::sync::Arc;
@@ -274,24 +273,10 @@ impl Model for VolcengineModel {
                             is_error,
                         } = block
                         {
-                            let output = match content {
-                                ToolResultContent::Text(s) => s.clone(),
-                                ToolResultContent::Json(v) => v.to_string(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(""),
-                            };
                             input_messages.push(ark::InputMessage::user(vec![
                                 ark::InputContentBlock::function_call_output(
                                     tool_use_id,
-                                    output,
+                                    content.to_text(),
                                     Some(*is_error),
                                 ),
                             ]));
@@ -365,7 +350,7 @@ impl Model for VolcengineModel {
             .responses()
             .create(params)
             .await
-            .map_err(|e| map_ark_error(&e))?;
+            .map_err(map_ark_error)?;
 
         // Convert response
         convert_ark_response(response)
@@ -524,62 +509,58 @@ fn convert_ark_response(response: ark::Response) -> Result<GenerateResponse, Hyp
     })
 }
 
-/// Map Volcengine Ark SDK errors to HyperError with proper classification.
+/// Map Volcengine Ark SDK errors to HyperError using enum variants directly.
 ///
-/// This function analyzes error messages to determine the appropriate error type,
-/// distinguishing between retryable errors (rate limits) and non-retryable errors
-/// (quota exceeded, authentication failures, context window exceeded).
-fn map_ark_error(e: &ark::ArkError) -> HyperError {
-    let message = e.to_string();
-    let lower_msg = message.to_lowercase();
-
-    // Check for rate limiting (retryable)
-    if lower_msg.contains("rate limit")
-        || lower_msg.contains("429")
-        || lower_msg.contains("too many requests")
-    {
-        return HyperError::RateLimitExceeded(message);
-    }
-
-    // Check for quota exceeded (not retryable - requires billing change)
-    if lower_msg.contains("quota")
-        || lower_msg.contains("insufficient")
-        || lower_msg.contains("balance")
-    {
-        return HyperError::QuotaExceeded(message);
-    }
-
-    // Check for context window exceeded
-    if (lower_msg.contains("context") && lower_msg.contains("length"))
-        || lower_msg.contains("token limit")
-        || lower_msg.contains("too long")
-    {
-        return HyperError::ContextWindowExceeded(message);
-    }
-
-    // Check for authentication failures
-    if lower_msg.contains("auth")
-        || lower_msg.contains("api key")
-        || lower_msg.contains("401")
-        || lower_msg.contains("unauthorized")
-        || lower_msg.contains("invalid key")
-        || lower_msg.contains("access key")
-    {
-        return HyperError::AuthenticationFailed(message);
-    }
-
-    // Check for invalid request
-    if lower_msg.contains("invalid")
-        || lower_msg.contains("400")
-        || lower_msg.contains("bad request")
-    {
-        return HyperError::InvalidRequest(message);
-    }
-
-    // Default to generic provider error
-    HyperError::ProviderError {
-        code: "ark_error".to_string(),
-        message,
+/// This function leverages the structured error types from the Ark SDK
+/// instead of string matching, providing more reliable error classification.
+fn map_ark_error(e: ark::ArkError) -> HyperError {
+    match e {
+        ark::ArkError::RateLimited { retry_after } => HyperError::Retryable {
+            message: "rate limit exceeded".to_string(),
+            delay: retry_after,
+        },
+        ark::ArkError::QuotaExceeded => {
+            HyperError::QuotaExceeded("quota exceeded".to_string())
+        }
+        ark::ArkError::ContextWindowExceeded => {
+            HyperError::ContextWindowExceeded("context window exceeded".to_string())
+        }
+        ark::ArkError::PreviousResponseNotFound => {
+            HyperError::PreviousResponseNotFound("previous response not found".to_string())
+        }
+        ark::ArkError::Authentication(msg) => HyperError::AuthenticationFailed(msg),
+        ark::ArkError::BadRequest(msg) => HyperError::InvalidRequest(msg),
+        ark::ArkError::Validation(msg) => HyperError::InvalidRequest(msg),
+        ark::ArkError::Configuration(msg) => HyperError::ConfigError(msg),
+        ark::ArkError::Api {
+            status,
+            message,
+            request_id: _,
+        } => {
+            // Further classify based on HTTP status code
+            if status == 429 {
+                HyperError::RateLimitExceeded(message)
+            } else if status == 401 || status == 403 {
+                HyperError::AuthenticationFailed(message)
+            } else if status >= 500 {
+                HyperError::Retryable {
+                    message,
+                    delay: None,
+                }
+            } else {
+                HyperError::ProviderError {
+                    code: "volcengine_error".to_string(),
+                    message,
+                }
+            }
+        }
+        ark::ArkError::InternalServerError => HyperError::Retryable {
+            message: "internal server error".to_string(),
+            delay: None,
+        },
+        ark::ArkError::Network(e) => HyperError::NetworkError(e.to_string()),
+        ark::ArkError::Serialization(e) => HyperError::ParseError(e.to_string()),
+        ark::ArkError::Parse(msg) => HyperError::ParseError(msg),
     }
 }
 
