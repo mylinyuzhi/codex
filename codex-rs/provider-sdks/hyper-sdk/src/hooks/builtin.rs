@@ -6,6 +6,7 @@ use super::ResponseHook;
 use super::StreamHook;
 use crate::error::HyperError;
 use crate::options::OpenAIOptions;
+use crate::options::VolcengineOptions;
 use crate::options::downcast_options;
 use crate::request::GenerateRequest;
 use crate::response::GenerateResponse;
@@ -58,7 +59,21 @@ impl RequestHook for ResponseIdHook {
 
                 request.provider_options = Some(Box::new(options));
             }
-            // For other providers, we could add similar handling
+            // For Volcengine provider, inject into Volcengine options
+            else if context.provider == "volcengine" {
+                let mut options = request
+                    .provider_options
+                    .as_ref()
+                    .and_then(|opts| downcast_options::<VolcengineOptions>(opts))
+                    .cloned()
+                    .unwrap_or_default();
+
+                if options.previous_response_id.is_none() {
+                    options.previous_response_id = Some(prev_id.clone());
+                }
+
+                request.provider_options = Some(Box::new(options));
+            }
         }
         Ok(())
     }
@@ -406,8 +421,29 @@ mod tests {
 
         hook.on_request(&mut request, &mut context).await.unwrap();
 
-        // For non-OpenAI providers, options should not be set
+        // For non-supported providers, options should not be set
         assert!(request.provider_options.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_response_id_hook_volcengine() {
+        let hook = ResponseIdHook::new();
+        let mut request = GenerateRequest::new(vec![Message::user("Hello")]);
+        let mut context = HookContext::with_provider("volcengine", "doubao-pro-32k")
+            .previous_response_id("resp_prev_456");
+
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        // Check that provider options were set
+        let options = request
+            .provider_options
+            .as_ref()
+            .and_then(|opts| downcast_options::<VolcengineOptions>(opts))
+            .unwrap();
+        assert_eq!(
+            options.previous_response_id,
+            Some("resp_prev_456".to_string())
+        );
     }
 
     #[tokio::test]

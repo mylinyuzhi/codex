@@ -3,6 +3,12 @@
 //! `ConversationContext` manages conversation state across multiple API calls,
 //! including message history, previous response IDs for continuity, and hooks.
 //!
+//! # Multi-Turn Conversations
+//!
+//! The [`generate`] and [`stream`] methods **automatically prepend conversation
+//! history** to each request. This means you only need to provide the new message(s)
+//! for each turn, and the context will include all previous messages automatically.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -22,19 +28,26 @@
 //!
 //! conversation.add_request_hook(Arc::new(ResponseIdHook));
 //!
-//! // First turn
+//! // First turn - sends: [user: "Hello!"]
 //! let response = conversation.generate(
 //!     model.as_ref(),
 //!     GenerateRequest::new(vec![Message::user("Hello!")]),
 //! ).await?;
 //!
-//! // Second turn - automatically includes previous_response_id
+//! // Second turn - automatically includes history
+//! // Sends: [user: "Hello!", assistant: <response>, user: "What's 2+2?"]
 //! let response = conversation.generate(
 //!     model.as_ref(),
 //!     GenerateRequest::new(vec![Message::user("What's 2+2?")]),
 //! ).await?;
 //!
-//! // Access history
+//! // For single-turn requests without history, use generate_stateless()
+//! let response = conversation.generate_stateless(
+//!     model.as_ref(),
+//!     GenerateRequest::new(vec![Message::user("Independent question")]),
+//! ).await?;
+//!
+//! // Access full history
 //! println!("Messages: {:?}", conversation.messages());
 //! # Ok(())
 //! # }
@@ -217,23 +230,41 @@ impl ConversationContext {
     /// Prepare a request with conversation context.
     ///
     /// This method:
-    /// 1. Merges session config into the request
-    /// 2. Builds hook context with previous_response_id
-    /// 3. Runs request hooks
+    /// 1. Optionally prepends conversation history to the request
+    /// 2. Merges session config into the request
+    /// 3. Builds hook context with previous_response_id
+    /// 4. Runs request hooks
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request to prepare
+    /// * `model` - The model to use
+    /// * `with_history` - Whether to prepend conversation history to the request
     #[must_use = "this returns a Result that must be handled"]
-    #[instrument(skip(self, request, model), fields(conversation_id = %self.id, provider = %model.provider()))]
+    #[instrument(skip(self, request, model, with_history), fields(conversation_id = %self.id, provider = %model.provider()))]
     pub async fn prepare_request(
         &mut self,
         mut request: GenerateRequest,
         model: &dyn Model,
+        with_history: bool,
     ) -> Result<(GenerateRequest, HookContext), HyperError> {
-        debug!(messages = request.messages.len(), "Preparing request");
+        debug!(
+            messages = request.messages.len(),
+            with_history, "Preparing request"
+        );
         // Update provider/model info from the model
         if self.provider.is_empty() {
             self.provider = model.provider().to_string();
         }
         if self.model_id.is_empty() {
             self.model_id = model.model_id().to_string();
+        }
+
+        // Prepend conversation history if requested
+        if with_history && !self.messages.is_empty() {
+            let mut combined = self.messages.clone();
+            combined.extend(request.messages);
+            request.messages = combined;
         }
 
         // Merge session config
@@ -255,9 +286,11 @@ impl ConversationContext {
             .run_request_hooks(&mut request, &mut hook_ctx)
             .await?;
 
-        // Track user messages in history
+        // Track user messages in history (only track new messages, not the ones from history)
         if self.track_history {
-            for msg in &request.messages {
+            // We need to only track the NEW user messages, not the ones we prepended from history
+            let history_len = if with_history { self.messages.len() } else { 0 };
+            for msg in request.messages.iter().skip(history_len) {
                 if msg.role == Role::User {
                     self.messages.push(msg.clone());
                 }
@@ -307,10 +340,17 @@ impl ConversationContext {
 
     /// Generate a response with conversation context.
     ///
+    /// This method automatically prepends the conversation history to the request,
+    /// creating a multi-turn conversation experience. The history includes all
+    /// previous user and assistant messages from this conversation.
+    ///
     /// This is a convenience method that:
-    /// 1. Prepares the request with hooks and session config
-    /// 2. Calls the model's generate method
-    /// 3. Processes the response with hooks
+    /// 1. Prepends conversation history to the request
+    /// 2. Prepares the request with hooks and session config
+    /// 3. Calls the model's generate method
+    /// 4. Processes the response with hooks
+    ///
+    /// For single-turn requests without history, use [`generate_stateless`].
     #[must_use = "this returns a Result that must be handled"]
     #[instrument(skip(self, model, request), fields(conversation_id = %self.id, provider = %model.provider(), model_id = %model.model_id()))]
     pub async fn generate(
@@ -319,13 +359,35 @@ impl ConversationContext {
         request: GenerateRequest,
     ) -> Result<GenerateResponse, HyperError> {
         debug!("Conversation turn starting");
-        let (prepared_request, hook_ctx) = self.prepare_request(request, model).await?;
+        let (prepared_request, hook_ctx) = self.prepare_request(request, model, true).await?;
+        let mut response = model.generate(prepared_request).await?;
+        self.process_response(&mut response, &hook_ctx).await?;
+        Ok(response)
+    }
+
+    /// Generate a response without auto-attaching conversation history.
+    ///
+    /// Unlike [`generate`], this method does NOT prepend the conversation history
+    /// to the request. Only the messages in the provided request are sent.
+    ///
+    /// Use this when you want full control over the messages sent to the model,
+    /// or when implementing custom history management.
+    #[must_use = "this returns a Result that must be handled"]
+    pub async fn generate_stateless(
+        &mut self,
+        model: &dyn Model,
+        request: GenerateRequest,
+    ) -> Result<GenerateResponse, HyperError> {
+        let (prepared_request, hook_ctx) = self.prepare_request(request, model, false).await?;
         let mut response = model.generate(prepared_request).await?;
         self.process_response(&mut response, &hook_ctx).await?;
         Ok(response)
     }
 
     /// Stream a response with conversation context.
+    ///
+    /// This method automatically prepends the conversation history to the request,
+    /// similar to [`generate`].
     ///
     /// Note: For streaming, hook context is built but response hooks are not
     /// automatically run. The caller should process stream events and call
@@ -336,23 +398,24 @@ impl ConversationContext {
         model: &dyn Model,
         request: GenerateRequest,
     ) -> Result<(StreamResponse, HookContext), HyperError> {
-        let (prepared_request, hook_ctx) = self.prepare_request(request, model).await?;
+        let (prepared_request, hook_ctx) = self.prepare_request(request, model, true).await?;
         let stream = model.stream(prepared_request).await?;
         Ok((stream, hook_ctx))
     }
 
-    /// Build a combined request with full history.
+    /// Stream a response without auto-attaching conversation history.
     ///
-    /// This creates a new request that includes all messages from history
-    /// plus the new messages from the provided request.
-    pub fn build_request_with_history(&self, request: GenerateRequest) -> GenerateRequest {
-        let mut combined_messages = self.messages.clone();
-        combined_messages.extend(request.messages);
-
-        GenerateRequest {
-            messages: combined_messages,
-            ..request
-        }
+    /// Unlike [`stream`], this method does NOT prepend the conversation history
+    /// to the request. Only the messages in the provided request are sent.
+    #[must_use = "this returns a Result that must be handled"]
+    pub async fn stream_stateless(
+        &mut self,
+        model: &dyn Model,
+        request: GenerateRequest,
+    ) -> Result<(StreamResponse, HookContext), HyperError> {
+        let (prepared_request, hook_ctx) = self.prepare_request(request, model, false).await?;
+        let stream = model.stream(prepared_request).await?;
+        Ok((stream, hook_ctx))
     }
 
     /// Switch to a different provider/model for subsequent requests.
@@ -410,13 +473,14 @@ impl ConversationContext {
             };
 
             // Prepare request with temporary provider context
+            // Use with_history=false since we've already built the combined messages above
             let original_provider = std::mem::take(&mut self.provider);
             let original_model = std::mem::take(&mut self.model_id);
             self.provider = model.provider().to_string();
             self.model_id = model.model_id().to_string();
 
             let (prepared_request, hook_ctx) =
-                self.prepare_request(modified_request, model).await?;
+                self.prepare_request(modified_request, model, false).await?;
 
             // Restore original provider context
             self.provider = original_provider;
@@ -577,22 +641,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_request_with_history() {
-        let mut ctx = ConversationContext::new();
-        ctx.add_message(Message::user("Previous question"));
-        ctx.add_message(Message::assistant("Previous answer"));
-
-        let new_request = GenerateRequest::new(vec![Message::user("New question")]);
-
-        let combined = ctx.build_request_with_history(new_request);
-
-        assert_eq!(combined.messages.len(), 3);
-        assert_eq!(combined.messages[0].text(), "Previous question");
-        assert_eq!(combined.messages[1].text(), "Previous answer");
-        assert_eq!(combined.messages[2].text(), "New question");
-    }
-
-    #[test]
     fn test_builder() {
         let ctx = ConversationContextBuilder::new()
             .id("conv_123")
@@ -641,6 +689,156 @@ mod tests {
             Some("gpt-4o".to_string()),
             "Source model should be set from hook context"
         );
+    }
+
+    // ============================================================
+    // Auto-Attach History Tests
+    // ============================================================
+
+    #[derive(Debug)]
+    struct MockModel {
+        provider: String,
+        model_id: String,
+    }
+
+    impl MockModel {
+        fn new(provider: &str, model_id: &str) -> Self {
+            Self {
+                provider: provider.to_string(),
+                model_id: model_id.to_string(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::model::Model for MockModel {
+        fn model_id(&self) -> &str {
+            &self.model_id
+        }
+        fn provider(&self) -> &str {
+            &self.provider
+        }
+        fn capabilities(&self) -> &[crate::capability::Capability] {
+            &[]
+        }
+        async fn generate(
+            &self,
+            _request: GenerateRequest,
+        ) -> Result<crate::response::GenerateResponse, HyperError> {
+            Ok(
+                crate::response::GenerateResponse::new("resp_1", &self.model_id)
+                    .with_content(vec![ContentBlock::text("Response")])
+                    .with_finish_reason(FinishReason::Stop),
+            )
+        }
+        async fn stream(
+            &self,
+            _request: GenerateRequest,
+        ) -> Result<crate::stream::StreamResponse, HyperError> {
+            Err(HyperError::UnsupportedCapability(
+                crate::capability::Capability::Streaming,
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_request_with_history() {
+        let mock_model = MockModel::new("openai", "gpt-4o");
+        let mut ctx = ConversationContext::new();
+
+        // Add some history
+        ctx.add_message(Message::user("Previous question"));
+        ctx.add_message(Message::assistant("Previous answer"));
+
+        // Create a new request
+        let request = GenerateRequest::new(vec![Message::user("New question")]);
+
+        // Prepare with history (default)
+        let (prepared, _) = ctx
+            .prepare_request(request, &mock_model, true)
+            .await
+            .unwrap();
+
+        // Should have 3 messages: history (2) + new (1)
+        assert_eq!(prepared.messages.len(), 3);
+        assert_eq!(prepared.messages[0].text(), "Previous question");
+        assert_eq!(prepared.messages[1].text(), "Previous answer");
+        assert_eq!(prepared.messages[2].text(), "New question");
+    }
+
+    #[tokio::test]
+    async fn test_prepare_request_without_history() {
+        let mock_model = MockModel::new("openai", "gpt-4o");
+        let mut ctx = ConversationContext::new();
+
+        // Add some history
+        ctx.add_message(Message::user("Previous question"));
+        ctx.add_message(Message::assistant("Previous answer"));
+
+        // Create a new request
+        let request = GenerateRequest::new(vec![Message::user("New question")]);
+
+        // Prepare without history
+        let (prepared, _) = ctx
+            .prepare_request(request, &mock_model, false)
+            .await
+            .unwrap();
+
+        // Should only have the new message
+        assert_eq!(prepared.messages.len(), 1);
+        assert_eq!(prepared.messages[0].text(), "New question");
+    }
+
+    #[tokio::test]
+    async fn test_generate_auto_attaches_history() {
+        let mock_model = MockModel::new("openai", "gpt-4o");
+        let mut ctx = ConversationContext::new();
+
+        // First turn
+        let _response = ctx
+            .generate(
+                &mock_model,
+                GenerateRequest::new(vec![Message::user("Hello")]),
+            )
+            .await
+            .unwrap();
+
+        // History should contain user message + assistant response
+        assert_eq!(ctx.messages().len(), 2);
+
+        // Second turn - should automatically include history
+        let _response = ctx
+            .generate(
+                &mock_model,
+                GenerateRequest::new(vec![Message::user("Follow up")]),
+            )
+            .await
+            .unwrap();
+
+        // History should now have 4 messages
+        assert_eq!(ctx.messages().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_generate_stateless_no_history() {
+        let mock_model = MockModel::new("openai", "gpt-4o");
+        let mut ctx = ConversationContext::new();
+
+        // Add some history
+        ctx.add_message(Message::user("Previous question"));
+        ctx.add_message(Message::assistant("Previous answer"));
+
+        // Use generate_stateless - should NOT prepend history
+        let _response = ctx
+            .generate_stateless(
+                &mock_model,
+                GenerateRequest::new(vec![Message::user("Independent")]),
+            )
+            .await
+            .unwrap();
+
+        // The new user message should still be tracked
+        assert_eq!(ctx.messages().len(), 4); // 2 original + 1 new user + 1 response
     }
 
     // ============================================================

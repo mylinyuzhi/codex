@@ -183,7 +183,7 @@ pub fn validate_options_for_provider(
         _ if type_id == TypeId::of::<AnthropicOptions>() => "anthropic",
         _ if type_id == TypeId::of::<GeminiOptions>() => "gemini",
         _ if type_id == TypeId::of::<VolcengineOptions>() => "volcengine",
-        _ if type_id == TypeId::of::<ZaiOptions>() => "zai",
+        _ if type_id == TypeId::of::<ZaiOptions>() => "zhipuai",
         _ => {
             // Unknown options type - allow for extensibility
             return Ok(true);
@@ -250,7 +250,7 @@ pub mod provider_names {
     /// Volcengine Ark provider name.
     pub const VOLCENGINE: &str = "volcengine";
     /// Z.AI / ZhipuAI provider name.
-    pub const ZAI: &str = "zai";
+    pub const ZHIPUAI: &str = "zhipuai";
 }
 
 #[cfg(test)]
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_provider_marker_zai() {
-        assert_eq!(ZaiOptions::PROVIDER_NAME, "zai");
+        assert_eq!(ZaiOptions::PROVIDER_NAME, "zhipuai");
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         assert!(validate_options_for_provider(Some(&volcengine_opts), "volcengine").unwrap());
 
         let zai_opts: ProviderOptions = ZaiOptions::new().boxed();
-        assert!(validate_options_for_provider(Some(&zai_opts), "zai").unwrap());
+        assert!(validate_options_for_provider(Some(&zai_opts), "zhipuai").unwrap());
     }
 
     #[test]

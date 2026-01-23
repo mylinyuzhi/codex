@@ -218,21 +218,6 @@ pub use client::HyperClient;
 
 // Registry
 pub use registry::ProviderRegistry;
-// Deprecated global API functions - use HyperClient instead
-#[allow(deprecated)]
-pub use registry::get_provider;
-#[allow(deprecated)]
-pub use registry::global_registry;
-#[allow(deprecated)]
-pub use registry::has_provider;
-#[allow(deprecated)]
-pub use registry::list_providers;
-#[allow(deprecated)]
-pub use registry::register_provider;
-#[allow(deprecated)]
-pub use registry::remove_provider;
-#[allow(deprecated)]
-pub use registry::require_provider;
 
 // Provider implementations
 pub use providers::AnthropicProvider;
@@ -242,9 +227,6 @@ pub use providers::OpenAIProvider;
 pub use providers::VolcengineProvider;
 pub use providers::ZaiProvider;
 pub use providers::any_from_env;
-// Deprecated - use HyperClient::from_env() instead
-#[allow(deprecated)]
-pub use providers::init_from_env;
 
 // Provider options
 pub use options::AnthropicOptions;
@@ -310,11 +292,6 @@ pub mod prelude {
     pub use crate::providers::VolcengineProvider;
     pub use crate::providers::ZaiProvider;
     pub use crate::rate_limits::RateLimitSnapshot;
-    // Deprecated - use HyperClient instead
-    #[allow(deprecated)]
-    pub use crate::registry::get_provider;
-    #[allow(deprecated)]
-    pub use crate::registry::register_provider;
     pub use crate::request::GenerateRequest;
     pub use crate::response::FinishReason;
     pub use crate::response::GenerateResponse;

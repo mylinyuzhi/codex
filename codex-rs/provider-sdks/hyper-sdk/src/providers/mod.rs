@@ -15,62 +15,7 @@ pub use volcengine::VolcengineProvider;
 pub use zai::ZaiProvider;
 
 use crate::error::HyperError;
-#[allow(deprecated)]
-use crate::registry::register_provider;
 use std::sync::Arc;
-
-/// Initialize all built-in providers from environment variables.
-///
-/// This attempts to create providers for all known services using
-/// their standard environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
-///
-/// Providers that fail to initialize (e.g., missing API keys) are silently skipped.
-///
-/// # Deprecated
-///
-/// Use [`HyperClient::from_env()`](crate::HyperClient::from_env) instead for
-/// better test isolation and multi-tenancy support.
-///
-/// # Example
-///
-/// ```no_run
-/// use hyper_sdk::HyperClient;
-///
-/// // New way (recommended)
-/// let client = HyperClient::from_env()?;
-/// # Ok::<(), hyper_sdk::HyperError>(())
-/// ```
-#[deprecated(
-    since = "0.2.0",
-    note = "Use HyperClient::from_env() instead for better test isolation"
-)]
-#[allow(deprecated)]
-pub fn init_from_env() {
-    // OpenAI
-    if let Ok(provider) = OpenAIProvider::from_env() {
-        register_provider(Arc::new(provider));
-    }
-
-    // Anthropic
-    if let Ok(provider) = AnthropicProvider::from_env() {
-        register_provider(Arc::new(provider));
-    }
-
-    // Gemini
-    if let Ok(provider) = GeminiProvider::from_env() {
-        register_provider(Arc::new(provider));
-    }
-
-    // Volcengine Ark
-    if let Ok(provider) = VolcengineProvider::from_env() {
-        register_provider(Arc::new(provider));
-    }
-
-    // Z.AI / ZhipuAI
-    if let Ok(provider) = ZaiProvider::from_env() {
-        register_provider(Arc::new(provider));
-    }
-}
 
 /// Try to create a provider from environment variables.
 ///

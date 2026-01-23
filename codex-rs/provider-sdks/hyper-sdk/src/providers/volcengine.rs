@@ -360,12 +360,12 @@ impl Model for VolcengineModel {
         }
 
         // Make API call
-        let response = self.client.responses().create(params).await.map_err(|e| {
-            HyperError::ProviderError {
-                code: "ark_error".to_string(),
-                message: e.to_string(),
-            }
-        })?;
+        let response = self
+            .client
+            .responses()
+            .create(params)
+            .await
+            .map_err(|e| map_ark_error(&e))?;
 
         // Convert response
         convert_ark_response(response)
@@ -522,6 +522,65 @@ fn convert_ark_response(response: ark::Response) -> Result<GenerateResponse, Hyp
         usage: Some(usage),
         model: response.model.unwrap_or_default(),
     })
+}
+
+/// Map Volcengine Ark SDK errors to HyperError with proper classification.
+///
+/// This function analyzes error messages to determine the appropriate error type,
+/// distinguishing between retryable errors (rate limits) and non-retryable errors
+/// (quota exceeded, authentication failures, context window exceeded).
+fn map_ark_error(e: &ark::ArkError) -> HyperError {
+    let message = e.to_string();
+    let lower_msg = message.to_lowercase();
+
+    // Check for rate limiting (retryable)
+    if lower_msg.contains("rate limit")
+        || lower_msg.contains("429")
+        || lower_msg.contains("too many requests")
+    {
+        return HyperError::RateLimitExceeded(message);
+    }
+
+    // Check for quota exceeded (not retryable - requires billing change)
+    if lower_msg.contains("quota")
+        || lower_msg.contains("insufficient")
+        || lower_msg.contains("balance")
+    {
+        return HyperError::QuotaExceeded(message);
+    }
+
+    // Check for context window exceeded
+    if (lower_msg.contains("context") && lower_msg.contains("length"))
+        || lower_msg.contains("token limit")
+        || lower_msg.contains("too long")
+    {
+        return HyperError::ContextWindowExceeded(message);
+    }
+
+    // Check for authentication failures
+    if lower_msg.contains("auth")
+        || lower_msg.contains("api key")
+        || lower_msg.contains("401")
+        || lower_msg.contains("unauthorized")
+        || lower_msg.contains("invalid key")
+        || lower_msg.contains("access key")
+    {
+        return HyperError::AuthenticationFailed(message);
+    }
+
+    // Check for invalid request
+    if lower_msg.contains("invalid")
+        || lower_msg.contains("400")
+        || lower_msg.contains("bad request")
+    {
+        return HyperError::InvalidRequest(message);
+    }
+
+    // Default to generic provider error
+    HyperError::ProviderError {
+        code: "ark_error".to_string(),
+        message,
+    }
 }
 
 #[cfg(test)]

@@ -147,11 +147,7 @@ impl ZaiProvider {
 #[async_trait]
 impl Provider for ZaiProvider {
     fn name(&self) -> &str {
-        if self.config.use_zhipuai {
-            "zhipuai"
-        } else {
-            "zai"
-        }
+        "zhipuai"
     }
 
     fn model(&self, model_id: &str) -> Result<Arc<dyn Model>, HyperError> {
@@ -162,15 +158,9 @@ impl Provider for ZaiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        let provider_name = if self.config.use_zhipuai {
-            "zhipuai"
-        } else {
-            "zai"
-        };
-
         // Return commonly used models
         Ok(vec![
-            ModelInfo::new("glm-4.7", provider_name)
+            ModelInfo::new("glm-4.7", "zhipuai")
                 .with_name("GLM-4.7")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -179,7 +169,7 @@ impl Provider for ZaiProvider {
                 ])
                 .with_context_window(128000)
                 .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-plus", provider_name)
+            ModelInfo::new("glm-4-plus", "zhipuai")
                 .with_name("GLM-4 Plus")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -188,17 +178,17 @@ impl Provider for ZaiProvider {
                 ])
                 .with_context_window(128000)
                 .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-air", provider_name)
+            ModelInfo::new("glm-4-air", "zhipuai")
                 .with_name("GLM-4 Air")
                 .with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling])
                 .with_context_window(128000)
                 .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-flash", provider_name)
+            ModelInfo::new("glm-4-flash", "zhipuai")
                 .with_name("GLM-4 Flash")
                 .with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling])
                 .with_context_window(128000)
                 .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-0520", provider_name)
+            ModelInfo::new("glm-4-0520", "zhipuai")
                 .with_name("GLM-4 0520")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -207,7 +197,7 @@ impl Provider for ZaiProvider {
                 ])
                 .with_context_window(128000)
                 .with_max_output_tokens(4096),
-            ModelInfo::new("glm-z1-air", provider_name)
+            ModelInfo::new("glm-z1-air", "zhipuai")
                 .with_name("GLM-Z1 Air")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -215,7 +205,7 @@ impl Provider for ZaiProvider {
                 ])
                 .with_context_window(32000)
                 .with_max_output_tokens(16384),
-            ModelInfo::new("glm-z1-airx", provider_name)
+            ModelInfo::new("glm-z1-airx", "zhipuai")
                 .with_name("GLM-Z1 AirX")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -223,7 +213,7 @@ impl Provider for ZaiProvider {
                 ])
                 .with_context_window(32000)
                 .with_max_output_tokens(16384),
-            ModelInfo::new("glm-z1-flash", provider_name)
+            ModelInfo::new("glm-z1-flash", "zhipuai")
                 .with_name("GLM-Z1 Flash")
                 .with_capabilities(vec![
                     Capability::TextGeneration,
@@ -310,10 +300,7 @@ impl Model for ZaiModel {
     }
 
     fn provider(&self) -> &str {
-        match &self.client {
-            ZaiClientWrapper::Zai(_) => "zai",
-            ZaiClientWrapper::ZhipuAi(_) => "zhipuai",
-        }
+        "zhipuai"
     }
 
     fn capabilities(&self) -> &[Capability] {
@@ -443,19 +430,13 @@ impl Model for ZaiModel {
                 .completions()
                 .create(params)
                 .await
-                .map_err(|e| HyperError::ProviderError {
-                    code: "zai_error".to_string(),
-                    message: e.to_string(),
-                })?,
+                .map_err(|e| map_zai_error(&e))?,
             ZaiClientWrapper::ZhipuAi(client) => client
                 .chat()
                 .completions()
                 .create(params)
                 .await
-                .map_err(|e| HyperError::ProviderError {
-                code: "zhipuai_error".to_string(),
-                message: e.to_string(),
-            })?,
+                .map_err(|e| map_zai_error(&e))?,
         };
 
         // Convert response
@@ -580,6 +561,64 @@ fn convert_zai_response(completion: zai::Completion) -> Result<GenerateResponse,
     })
 }
 
+/// Map Z.AI SDK errors to HyperError with proper classification.
+///
+/// This function analyzes error messages to determine the appropriate error type,
+/// distinguishing between retryable errors (rate limits) and non-retryable errors
+/// (quota exceeded, authentication failures, context window exceeded).
+fn map_zai_error(e: &zai::ZaiError) -> HyperError {
+    let message = e.to_string();
+    let lower_msg = message.to_lowercase();
+
+    // Check for rate limiting (retryable)
+    if lower_msg.contains("rate limit")
+        || lower_msg.contains("429")
+        || lower_msg.contains("too many requests")
+    {
+        return HyperError::RateLimitExceeded(message);
+    }
+
+    // Check for quota exceeded (not retryable - requires billing change)
+    if lower_msg.contains("quota")
+        || lower_msg.contains("insufficient")
+        || lower_msg.contains("balance")
+    {
+        return HyperError::QuotaExceeded(message);
+    }
+
+    // Check for context window exceeded
+    if (lower_msg.contains("context") && lower_msg.contains("length"))
+        || lower_msg.contains("token limit")
+        || lower_msg.contains("too long")
+    {
+        return HyperError::ContextWindowExceeded(message);
+    }
+
+    // Check for authentication failures
+    if lower_msg.contains("auth")
+        || lower_msg.contains("api key")
+        || lower_msg.contains("401")
+        || lower_msg.contains("unauthorized")
+        || lower_msg.contains("invalid key")
+    {
+        return HyperError::AuthenticationFailed(message);
+    }
+
+    // Check for invalid request
+    if lower_msg.contains("invalid")
+        || lower_msg.contains("400")
+        || lower_msg.contains("bad request")
+    {
+        return HyperError::InvalidRequest(message);
+    }
+
+    // Default to generic provider error
+    HyperError::ProviderError {
+        code: "zhipuai_error".to_string(),
+        message,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,7 +633,7 @@ mod tests {
 
         assert!(result.is_ok());
         let provider = result.unwrap();
-        assert_eq!(provider.name(), "zai");
+        assert_eq!(provider.name(), "zhipuai");
         assert_eq!(provider.api_key(), "zai-test-key");
     }
 

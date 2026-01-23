@@ -25,8 +25,6 @@ pub struct AnthropicOptions {
     pub cache_control: Option<CacheControl>,
     /// Metadata to include with the request.
     pub metadata: Option<AnthropicMetadata>,
-    /// Whether to send reasoning content back in responses.
-    pub send_reasoning: Option<bool>,
 }
 
 /// Metadata for Anthropic requests.
@@ -60,12 +58,6 @@ impl AnthropicOptions {
         self.metadata = Some(AnthropicMetadata {
             user_id: Some(user_id.into()),
         });
-        self
-    }
-
-    /// Set whether to send reasoning content back in responses.
-    pub fn with_send_reasoning(mut self, send: bool) -> Self {
-        self.send_reasoning = Some(send);
         self
     }
 

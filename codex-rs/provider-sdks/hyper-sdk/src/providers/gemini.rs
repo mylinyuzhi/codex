@@ -126,7 +126,6 @@ impl Provider for GeminiProvider {
     fn model(&self, model_id: &str) -> Result<Arc<dyn Model>, HyperError> {
         Ok(Arc::new(GeminiModel {
             model_id: model_id.to_string(),
-            config: self.config.clone(),
             sdk_client: self.sdk_client.clone(),
         }))
     }
@@ -250,8 +249,6 @@ impl From<ProviderConfig> for GeminiProviderBuilder {
 #[derive(Debug)]
 struct GeminiModel {
     model_id: String,
-    #[allow(dead_code)]
-    config: GeminiConfig,
     sdk_client: gem::Client,
 }
 

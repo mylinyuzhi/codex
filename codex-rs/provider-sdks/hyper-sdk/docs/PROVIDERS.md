@@ -9,8 +9,8 @@ This document describes the capabilities and configuration options for each prov
 | OpenAI | Yes | Yes | Yes | Yes | Yes | No |
 | Anthropic | Yes | Yes | Yes | Yes | No | Yes |
 | Gemini | Yes | Yes | Yes | Yes | Yes | Yes (thinking_level) |
-| Volcengine | Yes | No | Yes | Yes | No | Yes |
-| Z.AI | Yes | No | Yes | Yes | No | Yes |
+| Volcengine | Yes | No | No | Yes | No | Yes |
+| Z.AI | Yes | No | No | Yes | No | Yes |
 
 ## Provider-Specific Options
 
@@ -44,15 +44,13 @@ use hyper_sdk::AnthropicOptions;
 
 let opts = AnthropicOptions::new()
     .thinking_budget_tokens(8192)  // Extended thinking budget
-    .cache_control(true)           // Enable prompt caching
-    .send_reasoning(true);         // Include reasoning in response
+    .cache_control(true);          // Enable prompt caching
 ```
 
 **Configuration Fields:**
 - `thinking_budget_tokens`: Token budget for extended thinking
 - `cache_control`: Enable prompt caching for repeated requests
 - `metadata`: Request metadata for tracking
-- `send_reasoning`: Include thinking content in response
 
 **Models:**
 - Claude 3.5 Sonnet (claude-3-5-sonnet-20241022)
@@ -174,19 +172,21 @@ match result {
 
 ## Streaming Event Support
 
-| Event | OpenAI | Anthropic | Gemini | Volcengine | Z.AI |
-|-------|--------|-----------|--------|------------|------|
-| ResponseCreated | Yes | Yes | Yes | Yes | Yes |
-| TextDelta | Yes | Yes | Yes | Yes | Yes |
-| TextDone | Yes | Yes | Yes | Yes | Yes |
-| ThinkingDelta | No | Yes | Yes | Yes | Yes |
-| ThinkingDone | No | Yes | Yes | Yes | Yes |
-| ToolCallStart | Yes | Yes | Yes | Yes | Yes |
-| ToolCallDelta | Yes | Yes | No* | Yes | Yes |
-| ToolCallDone | Yes | Yes | Yes | Yes | Yes |
-| ResponseDone | Yes | Yes | Yes | Yes | Yes |
+| Event | OpenAI | Anthropic | Gemini |
+|-------|--------|-----------|--------|
+| ResponseCreated | Yes | Yes | Yes |
+| TextDelta | Yes | Yes | Yes |
+| TextDone | Yes | Yes | Yes |
+| ThinkingDelta | No | Yes | Yes |
+| ThinkingDone | No | Yes | Yes |
+| ToolCallStart | Yes | Yes | Yes |
+| ToolCallDelta | Yes | Yes | No* |
+| ToolCallDone | Yes | Yes | Yes |
+| ResponseDone | Yes | Yes | Yes |
 
 *Gemini sends complete tool calls in a single event rather than streaming deltas.
+
+**Note:** Volcengine and Z.AI do not currently support streaming. Use `generate()` for these providers.
 
 ## Usage Examples
 
@@ -231,7 +231,6 @@ let request = GenerateRequest::new(vec![
 ]).with_options(
     AnthropicOptions::new()
         .thinking_budget_tokens(8192)
-        .send_reasoning(true)
         .boxed()
 );
 
@@ -301,13 +300,12 @@ Each provider reads credentials from environment variables:
 ## Provider Selection
 
 ```rust
-use hyper_sdk::providers::{any_from_env, init_from_env};
+use hyper_sdk::{HyperClient, providers::any_from_env};
 
-// Auto-detect first available provider
-let (provider, default_model) = any_from_env()?;
+// Recommended: Use HyperClient for multi-provider setup
+let client = HyperClient::from_env()?;
+let model = client.model("openai", "gpt-4o")?;
 
-// Or initialize specific providers
-let providers = init_from_env();
-let openai = providers.get("openai");
-let anthropic = providers.get("anthropic");
+// Or auto-detect first available provider
+let provider = any_from_env()?;
 ```

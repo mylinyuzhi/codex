@@ -55,7 +55,7 @@ impl ZaiOptions {
 }
 
 impl ProviderMarker for ZaiOptions {
-    const PROVIDER_NAME: &'static str = "zai";
+    const PROVIDER_NAME: &'static str = "zhipuai";
 }
 
 impl TypedProviderOptions for ZaiOptions {}
