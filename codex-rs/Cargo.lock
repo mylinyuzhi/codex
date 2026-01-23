@@ -1985,6 +1985,7 @@ dependencies = [
  "futures",
  "google-genai",
  "http 1.3.1",
+ "hyper-sdk",
  "openai-sdk",
  "pretty_assertions",
  "regex-lite",
@@ -5972,6 +5973,35 @@ dependencies = [
  "tokio-rustls 0.26.2",
  "tower-service",
  "webpki-roots 1.0.2",
+]
+
+[[package]]
+name = "hyper-sdk"
+version = "0.0.0"
+dependencies = [
+ "anthropic-sdk",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "dotenvy",
+ "futures",
+ "google-genai",
+ "http 1.3.1",
+ "openai-sdk",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+ "volcengine-ark-sdk",
+ "wiremock",
+ "z-ai-sdk",
 ]
 
 [[package]]
