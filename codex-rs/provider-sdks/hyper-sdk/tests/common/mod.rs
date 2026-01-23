@@ -7,8 +7,8 @@
 pub mod config;
 pub mod fixtures;
 
-pub use config::load_test_config;
 pub use config::TestConfig;
+pub use config::load_test_config;
 pub use fixtures::*;
 
 use hyper_sdk::Model;
@@ -16,9 +16,7 @@ use hyper_sdk::Provider;
 use std::sync::Arc;
 
 /// Create a provider and model from test configuration.
-pub fn create_provider_and_model(
-    cfg: &TestConfig,
-) -> Option<(Arc<dyn Provider>, Arc<dyn Model>)> {
+pub fn create_provider_and_model(cfg: &TestConfig) -> Option<(Arc<dyn Provider>, Arc<dyn Model>)> {
     let provider: Arc<dyn Provider> = match cfg.provider.as_str() {
         "openai" => {
             let mut builder = hyper_sdk::OpenAIProvider::builder().api_key(&cfg.api_key);
@@ -118,10 +116,7 @@ macro_rules! require_provider {
             Some(cfg) if cfg.enabled => match $crate::common::create_provider_and_model(&cfg) {
                 Some((provider, model)) => (provider, model),
                 None => {
-                    eprintln!(
-                        "Skipping test: failed to create provider '{}'",
-                        $provider
-                    );
+                    eprintln!("Skipping test: failed to create provider '{}'", $provider);
                     return Ok(());
                 }
             },

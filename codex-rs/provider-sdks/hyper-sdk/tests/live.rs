@@ -227,6 +227,87 @@ async fn test_streaming_tools_anthropic() -> Result<()> {
 }
 
 // ============================================================================
+// Cross-Provider Conversation Tests
+// ============================================================================
+
+/// Macro to generate cross-provider test functions.
+macro_rules! cross_provider_test {
+    ($source:expr, $target:expr, $test_fn:path) => {{
+        let source_cfg = match common::load_test_config($source) {
+            Some(cfg) if cfg.enabled => cfg,
+            _ => {
+                eprintln!(
+                    "Skipping cross-provider test: source provider '{}' not configured",
+                    $source
+                );
+                return Ok(());
+            }
+        };
+        let target_cfg = match common::load_test_config($target) {
+            Some(cfg) if cfg.enabled => cfg,
+            _ => {
+                eprintln!(
+                    "Skipping cross-provider test: target provider '{}' not configured",
+                    $target
+                );
+                return Ok(());
+            }
+        };
+
+        let (_, source_model) = match common::create_provider_and_model(&source_cfg) {
+            Some(pair) => pair,
+            None => {
+                eprintln!("Skipping: failed to create source provider '{}'", $source);
+                return Ok(());
+            }
+        };
+        let (_, target_model) = match common::create_provider_and_model(&target_cfg) {
+            Some(pair) => pair,
+            None => {
+                eprintln!("Skipping: failed to create target provider '{}'", $target);
+                return Ok(());
+            }
+        };
+
+        $test_fn(&source_model, &target_model).await
+    }};
+}
+
+#[tokio::test]
+async fn test_cross_provider_openai_to_anthropic() -> Result<()> {
+    cross_provider_test!("openai", "anthropic", suite::cross_provider::run)
+}
+
+#[tokio::test]
+async fn test_cross_provider_anthropic_to_openai() -> Result<()> {
+    cross_provider_test!("anthropic", "openai", suite::cross_provider::run)
+}
+
+#[tokio::test]
+async fn test_cross_provider_openai_to_gemini() -> Result<()> {
+    cross_provider_test!("openai", "gemini", suite::cross_provider::run)
+}
+
+#[tokio::test]
+async fn test_cross_provider_gemini_to_anthropic() -> Result<()> {
+    cross_provider_test!("gemini", "anthropic", suite::cross_provider::run)
+}
+
+#[tokio::test]
+async fn test_cross_provider_with_thinking_anthropic_to_openai() -> Result<()> {
+    cross_provider_test!(
+        "anthropic",
+        "openai",
+        suite::cross_provider::run_with_thinking
+    )
+}
+
+#[tokio::test]
+async fn test_cross_provider_streaming_openai_to_anthropic() -> Result<()> {
+    cross_provider_test!("openai", "anthropic", suite::cross_provider::run_streaming)
+}
+
+// ============================================================================
 // Configuration Tests
 // ============================================================================
 

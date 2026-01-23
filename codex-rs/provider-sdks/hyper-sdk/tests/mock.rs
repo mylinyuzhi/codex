@@ -14,10 +14,15 @@
 
 use hyper_sdk::error::HyperError;
 use hyper_sdk::response::FinishReason;
-use hyper_sdk::stream::{StreamError, StreamEvent};
+use hyper_sdk::stream::StreamError;
+use hyper_sdk::stream::StreamEvent;
 use std::time::Duration;
-use wiremock::matchers::{header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 // ============================================================================
 // Mock OpenAI Provider Tests
@@ -269,7 +274,8 @@ mod mock_streaming {
     use futures::stream;
     use hyper_sdk::stream::StreamProcessor;
     use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     fn make_stream(
         events: Vec<StreamEvent>,
@@ -448,8 +454,8 @@ mod mock_streaming {
         // Create a processor with very short timeout
         let events = vec![StreamEvent::response_created("resp_1")];
 
-        let processor = StreamProcessor::new(make_stream(events))
-            .idle_timeout(Duration::from_millis(1)); // 1ms timeout
+        let processor =
+            StreamProcessor::new(make_stream(events)).idle_timeout(Duration::from_millis(1)); // 1ms timeout
 
         // After the stream ends, getting next would timeout
         // But since we have events, it should work initially
@@ -578,7 +584,7 @@ mod mock_streaming {
             StreamEvent::response_created("resp_1"),
             StreamEvent::text_delta(0, "Hello "),
             StreamEvent::text_delta(0, "\u{1F600}"), // Emoji
-            StreamEvent::text_delta(0, " 你好"),      // Chinese
+            StreamEvent::text_delta(0, " 你好"),     // Chinese
             StreamEvent::text_delta(0, " мир"),      // Cyrillic
             StreamEvent::response_done("resp_1", FinishReason::Stop),
         ];
@@ -844,7 +850,11 @@ mod error_mapping {
         ];
 
         for err in errors {
-            assert!(err.is_retryable(), "Network error should be retryable: {:?}", err);
+            assert!(
+                err.is_retryable(),
+                "Network error should be retryable: {:?}",
+                err
+            );
         }
     }
 
@@ -865,10 +875,705 @@ mod error_mapping {
 // Retry Mechanism Tests with Mock Server
 // ============================================================================
 
+// ============================================================================
+// Hook System Tests
+// ============================================================================
+
+mod hooks {
+    use async_trait::async_trait;
+    use hyper_sdk::error::HyperError;
+    use hyper_sdk::hooks::CrossProviderSanitizationHook;
+    use hyper_sdk::hooks::HookChain;
+    use hyper_sdk::hooks::HookContext;
+    use hyper_sdk::hooks::LoggingHook;
+    use hyper_sdk::hooks::RequestHook;
+    use hyper_sdk::hooks::ResponseHook;
+    use hyper_sdk::hooks::ResponseIdHook;
+    use hyper_sdk::hooks::StreamHook;
+    use hyper_sdk::hooks::UsageTrackingHook;
+    use hyper_sdk::messages::ContentBlock;
+    use hyper_sdk::messages::Message;
+    use hyper_sdk::request::GenerateRequest;
+    use hyper_sdk::response::FinishReason;
+    use hyper_sdk::response::GenerateResponse;
+    use hyper_sdk::response::TokenUsage;
+    use hyper_sdk::stream::StreamEvent;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicI32;
+    use std::sync::atomic::Ordering;
+
+    // =========================================================================
+    // Hook Chain Priority Tests
+    // =========================================================================
+
+    #[derive(Debug)]
+    struct PriorityTrackingHook {
+        name: String,
+        priority: i32,
+        order_tracker: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl PriorityTrackingHook {
+        fn new(name: &str, priority: i32, order_tracker: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                name: name.to_string(),
+                priority,
+                order_tracker,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RequestHook for PriorityTrackingHook {
+        async fn on_request(
+            &self,
+            _request: &mut GenerateRequest,
+            _context: &mut HookContext,
+        ) -> Result<(), HyperError> {
+            self.order_tracker.lock().unwrap().push(self.name.clone());
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            self.priority
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    #[async_trait]
+    impl ResponseHook for PriorityTrackingHook {
+        async fn on_response(
+            &self,
+            _response: &mut GenerateResponse,
+            _context: &HookContext,
+        ) -> Result<(), HyperError> {
+            self.order_tracker.lock().unwrap().push(self.name.clone());
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            self.priority
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    #[async_trait]
+    impl StreamHook for PriorityTrackingHook {
+        async fn on_event(
+            &self,
+            _event: &StreamEvent,
+            _context: &HookContext,
+        ) -> Result<(), HyperError> {
+            self.order_tracker.lock().unwrap().push(self.name.clone());
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            self.priority
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_executes_request_hooks_in_priority_order() {
+        let order_tracker = Arc::new(Mutex::new(Vec::new()));
+
+        let mut chain = HookChain::new();
+        // Add hooks in reverse priority order to test sorting
+        chain.add_request_hook(Arc::new(PriorityTrackingHook::new(
+            "last",
+            300,
+            order_tracker.clone(),
+        )));
+        chain.add_request_hook(Arc::new(PriorityTrackingHook::new(
+            "middle",
+            100,
+            order_tracker.clone(),
+        )));
+        chain.add_request_hook(Arc::new(PriorityTrackingHook::new(
+            "first",
+            10,
+            order_tracker.clone(),
+        )));
+
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context = HookContext::new();
+
+        chain
+            .run_request_hooks(&mut request, &mut context)
+            .await
+            .unwrap();
+
+        let order = order_tracker.lock().unwrap();
+        assert_eq!(*order, vec!["first", "middle", "last"]);
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_executes_response_hooks_in_priority_order() {
+        let order_tracker = Arc::new(Mutex::new(Vec::new()));
+
+        let mut chain = HookChain::new();
+        chain.add_response_hook(Arc::new(PriorityTrackingHook::new(
+            "late",
+            200,
+            order_tracker.clone(),
+        )));
+        chain.add_response_hook(Arc::new(PriorityTrackingHook::new(
+            "early",
+            50,
+            order_tracker.clone(),
+        )));
+
+        let mut response = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("test")])
+            .with_finish_reason(FinishReason::Stop);
+        let context = HookContext::with_provider("openai", "gpt-4o");
+
+        chain
+            .run_response_hooks(&mut response, &context)
+            .await
+            .unwrap();
+
+        let order = order_tracker.lock().unwrap();
+        assert_eq!(*order, vec!["early", "late"]);
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_executes_stream_hooks_in_priority_order() {
+        let order_tracker = Arc::new(Mutex::new(Vec::new()));
+
+        let mut chain = HookChain::new();
+        chain.add_stream_hook(Arc::new(PriorityTrackingHook::new(
+            "high",
+            500,
+            order_tracker.clone(),
+        )));
+        chain.add_stream_hook(Arc::new(PriorityTrackingHook::new(
+            "low",
+            25,
+            order_tracker.clone(),
+        )));
+
+        let event = StreamEvent::response_created("resp_1");
+        let context = HookContext::with_provider("openai", "gpt-4o");
+
+        chain.run_stream_hooks(&event, &context).await.unwrap();
+
+        let order = order_tracker.lock().unwrap();
+        assert_eq!(*order, vec!["low", "high"]);
+    }
+
+    // =========================================================================
+    // Built-in Hook Tests: ResponseIdHook
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_response_id_hook_injects_previous_response_id_for_openai() {
+        let hook = ResponseIdHook::new();
+
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context =
+            HookContext::with_provider("openai", "gpt-4o").previous_response_id("resp_prev_abc123");
+
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        // Verify OpenAI options were set
+        let options = request
+            .provider_options
+            .as_ref()
+            .and_then(|opts| {
+                hyper_sdk::options::downcast_options::<hyper_sdk::options::OpenAIOptions>(opts)
+            })
+            .expect("Should have OpenAI options");
+
+        assert_eq!(
+            options.previous_response_id,
+            Some("resp_prev_abc123".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_response_id_hook_does_not_override_existing() {
+        use hyper_sdk::options::OpenAIOptions;
+
+        let hook = ResponseIdHook::new();
+
+        // Pre-set options with different response ID
+        let mut request =
+            GenerateRequest::new(vec![Message::user("test")]).with_openai_options(OpenAIOptions {
+                previous_response_id: Some("existing_id".to_string()),
+                ..Default::default()
+            });
+
+        let mut context =
+            HookContext::with_provider("openai", "gpt-4o").previous_response_id("new_id");
+
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        // Should keep existing ID
+        let options = request
+            .provider_options
+            .as_ref()
+            .and_then(|opts| {
+                hyper_sdk::options::downcast_options::<hyper_sdk::options::OpenAIOptions>(opts)
+            })
+            .unwrap();
+
+        assert_eq!(
+            options.previous_response_id,
+            Some("existing_id".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_response_id_hook_priority() {
+        let hook = ResponseIdHook::new();
+        assert_eq!(hook.priority(), 10);
+        assert_eq!(hook.name(), "response_id");
+    }
+
+    // =========================================================================
+    // Built-in Hook Tests: LoggingHook
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_logging_hook_default_is_info_level() {
+        let hook = LoggingHook::default();
+        assert_eq!(RequestHook::name(&hook), "logging");
+
+        // Verify it runs without panicking
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context = HookContext::with_provider("openai", "gpt-4o");
+        hook.on_request(&mut request, &mut context).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_logging_hook_all_levels_work() {
+        let debug_hook = LoggingHook::debug();
+        let info_hook = LoggingHook::info();
+        let warn_hook = LoggingHook::warn();
+
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context = HookContext::with_provider("openai", "gpt-4o");
+
+        // All should work without error
+        debug_hook
+            .on_request(&mut request, &mut context)
+            .await
+            .unwrap();
+        info_hook
+            .on_request(&mut request, &mut context)
+            .await
+            .unwrap();
+        warn_hook
+            .on_request(&mut request, &mut context)
+            .await
+            .unwrap();
+
+        // Test response hook too
+        let mut response = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("test")])
+            .with_finish_reason(FinishReason::Stop);
+
+        debug_hook
+            .on_response(&mut response, &context)
+            .await
+            .unwrap();
+        info_hook
+            .on_response(&mut response, &context)
+            .await
+            .unwrap();
+        warn_hook
+            .on_response(&mut response, &context)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_logging_hook_stream_events() {
+        let hook = LoggingHook::debug();
+        let context = HookContext::with_provider("openai", "gpt-4o");
+
+        // Test various stream events
+        let events = vec![
+            StreamEvent::response_created("resp_1"),
+            StreamEvent::text_delta(0, "Hello"),
+            StreamEvent::response_done("resp_1", FinishReason::Stop),
+            StreamEvent::Error(hyper_sdk::stream::StreamError {
+                code: "error".to_string(),
+                message: "test error".to_string(),
+            }),
+        ];
+
+        for event in events {
+            hook.on_event(&event, &context).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_logging_hook_priority_is_zero() {
+        let hook = LoggingHook::info();
+        assert_eq!(<LoggingHook as RequestHook>::priority(&hook), 0);
+        assert_eq!(<LoggingHook as ResponseHook>::priority(&hook), 0);
+    }
+
+    // =========================================================================
+    // Built-in Hook Tests: UsageTrackingHook
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_usage_tracking_hook_accumulates_usage() {
+        let hook = UsageTrackingHook::new();
+        let context = HookContext::with_provider("openai", "gpt-4o");
+
+        // First response
+        let mut response1 = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("Hello")])
+            .with_usage(TokenUsage::new(100, 50))
+            .with_finish_reason(FinishReason::Stop);
+
+        hook.on_response(&mut response1, &context).await.unwrap();
+
+        // Second response
+        let mut response2 = GenerateResponse::new("resp_2", "gpt-4o")
+            .with_content(vec![ContentBlock::text("World")])
+            .with_usage(TokenUsage::new(80, 30))
+            .with_finish_reason(FinishReason::Stop);
+
+        hook.on_response(&mut response2, &context).await.unwrap();
+
+        // Check accumulated usage
+        let usage = hook.get_usage();
+        assert_eq!(usage.prompt_tokens, 180);
+        assert_eq!(usage.completion_tokens, 80);
+        assert_eq!(usage.total_tokens, 260);
+    }
+
+    #[tokio::test]
+    async fn test_usage_tracking_hook_handles_cache_and_reasoning_tokens() {
+        let hook = UsageTrackingHook::new();
+        let context = HookContext::with_provider("anthropic", "claude-3");
+
+        let mut response = GenerateResponse::new("msg_1", "claude-3")
+            .with_content(vec![ContentBlock::text("test")])
+            .with_usage(TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+                cache_read_tokens: Some(25),
+                cache_creation_tokens: Some(10),
+                reasoning_tokens: Some(15),
+            })
+            .with_finish_reason(FinishReason::Stop);
+
+        hook.on_response(&mut response, &context).await.unwrap();
+
+        let usage = hook.get_usage();
+        assert_eq!(usage.cache_read_tokens, Some(25));
+        assert_eq!(usage.cache_creation_tokens, Some(10));
+        assert_eq!(usage.reasoning_tokens, Some(15));
+    }
+
+    #[tokio::test]
+    async fn test_usage_tracking_hook_reset() {
+        let hook = UsageTrackingHook::new();
+        let context = HookContext::new();
+
+        let mut response = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("test")])
+            .with_usage(TokenUsage::new(100, 50))
+            .with_finish_reason(FinishReason::Stop);
+
+        hook.on_response(&mut response, &context).await.unwrap();
+        assert_eq!(hook.get_usage().total_tokens, 150);
+
+        hook.reset();
+        assert_eq!(hook.get_usage().total_tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn test_usage_tracking_hook_shared_counter() {
+        let shared = Arc::new(Mutex::new(TokenUsage::default()));
+        let hook1 = UsageTrackingHook::with_shared_usage(shared.clone());
+        let hook2 = UsageTrackingHook::with_shared_usage(shared);
+        let context = HookContext::new();
+
+        let mut response = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("test")])
+            .with_usage(TokenUsage::new(100, 50))
+            .with_finish_reason(FinishReason::Stop);
+
+        hook1.on_response(&mut response, &context).await.unwrap();
+
+        // Both hooks should see the same accumulated usage
+        assert_eq!(hook1.get_usage().total_tokens, 150);
+        assert_eq!(hook2.get_usage().total_tokens, 150);
+    }
+
+    #[tokio::test]
+    async fn test_usage_tracking_hook_priority() {
+        let hook = UsageTrackingHook::new();
+        assert_eq!(hook.priority(), 200); // Should run late
+        assert_eq!(hook.name(), "usage_tracking");
+    }
+
+    // =========================================================================
+    // Built-in Hook Tests: CrossProviderSanitizationHook
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_cross_provider_sanitization_strips_signatures_when_switching() {
+        let hook = CrossProviderSanitizationHook::new();
+
+        // Message from Anthropic with thinking signature
+        let anthropic_msg = Message::new(
+            hyper_sdk::messages::Role::Assistant,
+            vec![
+                ContentBlock::Thinking {
+                    content: "Let me think...".to_string(),
+                    signature: Some("anthropic_sig_xyz".to_string()),
+                },
+                ContentBlock::text("The answer is 42"),
+            ],
+        )
+        .with_source("anthropic", "claude-sonnet-4-20250514");
+
+        let mut request = GenerateRequest::new(vec![Message::user("Hello"), anthropic_msg]);
+
+        // Targeting OpenAI
+        let mut context = HookContext::with_provider("openai", "gpt-4o");
+
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        // Signature should be stripped
+        if let ContentBlock::Thinking { signature, .. } = &request.messages[1].content[0] {
+            assert!(
+                signature.is_none(),
+                "Signature should be stripped when switching providers"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cross_provider_sanitization_preserves_same_provider() {
+        let hook = CrossProviderSanitizationHook::new();
+
+        // Message from Anthropic
+        let anthropic_msg = Message::new(
+            hyper_sdk::messages::Role::Assistant,
+            vec![ContentBlock::Thinking {
+                content: "Thinking".to_string(),
+                signature: Some("sig_123".to_string()),
+            }],
+        )
+        .with_source("anthropic", "claude-sonnet-4-20250514");
+
+        let mut request = GenerateRequest::new(vec![Message::user("Hello"), anthropic_msg]);
+
+        // Still targeting Anthropic (same provider)
+        let mut context = HookContext::with_provider("anthropic", "claude-opus-4-20250514");
+
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        // Signature should be preserved for same provider
+        if let ContentBlock::Thinking { signature, .. } = &request.messages[1].content[0] {
+            assert!(
+                signature.is_some(),
+                "Signature should be preserved for same provider"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cross_provider_sanitization_skips_user_messages() {
+        let hook = CrossProviderSanitizationHook::new();
+
+        let mut request =
+            GenerateRequest::new(vec![Message::user("Hello"), Message::user("How are you?")]);
+
+        let mut context = HookContext::with_provider("openai", "gpt-4o");
+
+        // Should not panic or modify user messages
+        hook.on_request(&mut request, &mut context).await.unwrap();
+
+        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.messages[0].text(), "Hello");
+        assert_eq!(request.messages[1].text(), "How are you?");
+    }
+
+    #[tokio::test]
+    async fn test_cross_provider_sanitization_priority() {
+        let hook = CrossProviderSanitizationHook::new();
+        assert_eq!(hook.priority(), 5); // Very early
+        assert_eq!(hook.name(), "cross_provider_sanitization");
+    }
+
+    // =========================================================================
+    // Hook Chain Integration Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_hook_chain_with_builtin_hooks() {
+        let mut chain = HookChain::new();
+
+        // Add all built-in hooks
+        chain.add_request_hook(Arc::new(CrossProviderSanitizationHook::new()));
+        chain.add_request_hook(Arc::new(ResponseIdHook::new()));
+        chain.add_request_hook(Arc::new(LoggingHook::info()));
+
+        let usage_hook = Arc::new(UsageTrackingHook::new());
+        chain.add_response_hook(Arc::new(LoggingHook::info()));
+        chain.add_response_hook(usage_hook.clone());
+
+        // Run request hooks
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context =
+            HookContext::with_provider("openai", "gpt-4o").previous_response_id("resp_prev");
+
+        chain
+            .run_request_hooks(&mut request, &mut context)
+            .await
+            .unwrap();
+
+        // Verify ResponseIdHook ran
+        assert!(request.provider_options.is_some());
+
+        // Run response hooks
+        let mut response = GenerateResponse::new("resp_1", "gpt-4o")
+            .with_content(vec![ContentBlock::text("Hello")])
+            .with_usage(TokenUsage::new(10, 5))
+            .with_finish_reason(FinishReason::Stop);
+
+        chain
+            .run_response_hooks(&mut response, &context)
+            .await
+            .unwrap();
+
+        // Verify UsageTrackingHook ran
+        assert_eq!(usage_hook.get_usage().total_tokens, 15);
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_error_stops_execution() {
+        #[derive(Debug)]
+        struct FailingHook;
+
+        #[async_trait]
+        impl RequestHook for FailingHook {
+            async fn on_request(
+                &self,
+                _request: &mut GenerateRequest,
+                _context: &mut HookContext,
+            ) -> Result<(), HyperError> {
+                Err(HyperError::Internal("hook failed".to_string()))
+            }
+
+            fn priority(&self) -> i32 {
+                50
+            }
+
+            fn name(&self) -> &str {
+                "failing_hook"
+            }
+        }
+
+        let counter = Arc::new(AtomicI32::new(0));
+        let counter_clone = counter.clone();
+
+        #[derive(Debug)]
+        struct CountingHook {
+            counter: Arc<AtomicI32>,
+        }
+
+        #[async_trait]
+        impl RequestHook for CountingHook {
+            async fn on_request(
+                &self,
+                _request: &mut GenerateRequest,
+                _context: &mut HookContext,
+            ) -> Result<(), HyperError> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn priority(&self) -> i32 {
+                100 // After failing hook
+            }
+
+            fn name(&self) -> &str {
+                "counting_hook"
+            }
+        }
+
+        let mut chain = HookChain::new();
+        chain.add_request_hook(Arc::new(FailingHook));
+        chain.add_request_hook(Arc::new(CountingHook {
+            counter: counter_clone,
+        }));
+
+        let mut request = GenerateRequest::new(vec![Message::user("test")]);
+        let mut context = HookContext::new();
+
+        let result = chain.run_request_hooks(&mut request, &mut context).await;
+
+        // Should fail
+        assert!(result.is_err());
+        // CountingHook should not have run
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_clear() {
+        let mut chain = HookChain::new();
+        chain.add_request_hook(Arc::new(LoggingHook::info()));
+        chain.add_response_hook(Arc::new(LoggingHook::info()));
+        chain.add_stream_hook(Arc::new(LoggingHook::debug()));
+
+        assert!(chain.has_request_hooks());
+        assert!(chain.has_response_hooks());
+        assert!(chain.has_stream_hooks());
+
+        chain.clear();
+
+        assert!(!chain.has_request_hooks());
+        assert!(!chain.has_response_hooks());
+        assert!(!chain.has_stream_hooks());
+    }
+
+    #[tokio::test]
+    async fn test_hook_chain_counts() {
+        let mut chain = HookChain::new();
+
+        assert_eq!(chain.request_hook_count(), 0);
+        assert_eq!(chain.response_hook_count(), 0);
+        assert_eq!(chain.stream_hook_count(), 0);
+
+        chain.add_request_hook(Arc::new(LoggingHook::info()));
+        chain.add_request_hook(Arc::new(ResponseIdHook::new()));
+        chain.add_response_hook(Arc::new(UsageTrackingHook::new()));
+
+        assert_eq!(chain.request_hook_count(), 2);
+        assert_eq!(chain.response_hook_count(), 1);
+        assert_eq!(chain.stream_hook_count(), 0);
+    }
+}
+
 mod retry_with_mock {
     use super::*;
-    use hyper_sdk::retry::{RetryConfig, RetryExecutor};
-    use std::sync::atomic::{AtomicI32, Ordering};
+    use hyper_sdk::retry::RetryConfig;
+    use hyper_sdk::retry::RetryExecutor;
+    use std::sync::atomic::AtomicI32;
+    use std::sync::atomic::Ordering;
 
     #[tokio::test]
     async fn test_retry_on_rate_limit() {

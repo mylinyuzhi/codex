@@ -6,9 +6,9 @@ use anyhow::Result;
 use hyper_sdk::Model;
 use std::sync::Arc;
 
+use crate::common::TEST_RED_SQUARE_BASE64;
 use crate::common::extract_text;
 use crate::common::image_request;
-use crate::common::TEST_RED_SQUARE_BASE64;
 
 /// Test image understanding.
 ///

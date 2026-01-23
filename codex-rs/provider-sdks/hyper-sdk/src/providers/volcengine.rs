@@ -74,8 +74,11 @@ impl VolcengineProvider {
     ///
     /// Uses ARK_API_KEY and ARK_BASE_URL (optional).
     pub fn from_env() -> Result<Self, HyperError> {
-        let api_key = env::var("ARK_API_KEY")
-            .map_err(|_| HyperError::ConfigError("ARK_API_KEY not set".to_string()))?;
+        let api_key = env::var("ARK_API_KEY").map_err(|_| {
+            HyperError::ConfigError(
+                "Volcengine: ARK_API_KEY environment variable not set".to_string(),
+            )
+        })?;
 
         let base_url = env::var("ARK_BASE_URL")
             .unwrap_or_else(|_| "https://ark.cn-beijing.volces.com/api/v3".to_string());

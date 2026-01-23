@@ -104,7 +104,7 @@ impl ZaiProvider {
             (key, true)
         } else {
             return Err(HyperError::ConfigError(
-                "ZAI_API_KEY or ZHIPUAI_API_KEY not set".to_string(),
+                "Z.AI: ZAI_API_KEY or ZHIPUAI_API_KEY environment variable not set".to_string(),
             ));
         };
 

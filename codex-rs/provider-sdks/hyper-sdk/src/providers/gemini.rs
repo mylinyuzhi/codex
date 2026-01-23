@@ -85,7 +85,10 @@ impl GeminiProvider {
         let api_key = env::var("GOOGLE_API_KEY")
             .or_else(|_| env::var("GEMINI_API_KEY"))
             .map_err(|_| {
-                HyperError::ConfigError("GOOGLE_API_KEY or GEMINI_API_KEY not set".to_string())
+                HyperError::ConfigError(
+                    "Gemini: GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set"
+                        .to_string(),
+                )
             })?;
 
         let base_url = env::var("GOOGLE_BASE_URL")

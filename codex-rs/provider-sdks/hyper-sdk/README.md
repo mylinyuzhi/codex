@@ -237,6 +237,11 @@ cargo test -p hyper-sdk --test live test_streaming -- --test-threads=1
 cargo test -p hyper-sdk --test live test_basic_openai -- --test-threads=1
 ```
 
+**Why `--test-threads=1`?** Live tests must run sequentially because:
+1. Tests share provider API rate limits under a single API key
+2. Provider APIs may have per-key concurrent request limits
+3. Running tests in parallel can trigger rate limiting, causing flaky failures
+
 ### Test Categories
 
 | Category | Tests |

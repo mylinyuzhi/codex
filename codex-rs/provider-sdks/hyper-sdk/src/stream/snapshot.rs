@@ -35,6 +35,11 @@ pub struct StreamSnapshot {
     pub model: String,
 
     /// Accumulated text content.
+    ///
+    /// Note: This field grows unbounded during streaming. This is intentional because:
+    /// 1. Streaming responses are bounded by `max_tokens` in the request
+    /// 2. The entire response is needed to construct the final `GenerateResponse`
+    /// 3. Memory pressure should be managed at the application level (e.g., via request limits)
     pub text: String,
 
     /// Accumulated thinking content (for extended thinking models).
@@ -175,7 +180,18 @@ impl ToolCallSnapshot {
 
     /// Convert to a ToolCall (returns None if not complete or invalid JSON).
     pub fn to_tool_call(&self) -> ToolCall {
-        let args = self.parsed_arguments().unwrap_or(serde_json::Value::Null);
+        let args = match self.parsed_arguments() {
+            Some(value) => value,
+            None => {
+                tracing::debug!(
+                    tool_call_id = %self.id,
+                    tool_name = %self.name,
+                    arguments = %self.arguments,
+                    "Failed to parse tool call arguments, using null"
+                );
+                serde_json::Value::Null
+            }
+        };
         ToolCall::new(&self.id, &self.name, args)
     }
 }

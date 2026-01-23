@@ -324,8 +324,19 @@ impl StreamResponse {
 
             // Add tool call (if present)
             if let Some(tc) = self.state.tool_calls.get(&index) {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                let args: serde_json::Value = match serde_json::from_str(&tc.arguments) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        tracing::debug!(
+                            tool_call_id = %tc.id,
+                            tool_name = %tc.name,
+                            arguments = %tc.arguments,
+                            error = %err,
+                            "Failed to parse tool call arguments, using null"
+                        );
+                        serde_json::Value::Null
+                    }
+                };
                 content.push(ContentBlock::tool_use(&tc.id, &tc.name, args));
             }
         }

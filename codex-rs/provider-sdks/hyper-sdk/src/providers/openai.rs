@@ -86,8 +86,11 @@ impl OpenAIProvider {
     ///
     /// Uses OPENAI_API_KEY, OPENAI_BASE_URL (optional), and OPENAI_ORG_ID (optional).
     pub fn from_env() -> Result<Self, HyperError> {
-        let api_key = env::var("OPENAI_API_KEY")
-            .map_err(|_| HyperError::ConfigError("OPENAI_API_KEY not set".to_string()))?;
+        let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
+            HyperError::ConfigError(
+                "OpenAI: OPENAI_API_KEY environment variable not set".to_string(),
+            )
+        })?;
 
         let base_url =
             env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());

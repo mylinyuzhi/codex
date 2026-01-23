@@ -203,7 +203,8 @@ impl ProcessorState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::response::{FinishReason, TokenUsage};
+    use crate::response::FinishReason;
+    use crate::response::TokenUsage;
 
     #[test]
     fn test_tool_call_manager_lifecycle() {

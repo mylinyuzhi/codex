@@ -1,4 +1,22 @@
 //! Error types for hyper-sdk.
+//!
+//! # Error Chain Design
+//!
+//! hyper-sdk converts provider-specific errors into a unified `HyperError` type.
+//! Errors like `NetworkError` and `ParseError` store stringified messages rather
+//! than wrapping source errors directly. This is intentional for several reasons:
+//!
+//! 1. **Provider Independence**: Each provider SDK has different error types
+//!    (reqwest::Error, serde_json::Error, etc.). Storing strings allows uniform
+//!    handling without leaking provider-specific types.
+//!
+//! 2. **API Stability**: Wrapping source errors would expose internal dependencies,
+//!    making semver-compatible changes harder.
+//!
+//! 3. **Serialization**: String errors serialize cleanly for logging and debugging.
+//!
+//! The `From` implementations preserve error context by including the source error's
+//! Display output, which typically contains the full error chain information.
 
 use crate::capability::Capability;
 use std::time::Duration;
@@ -39,6 +57,9 @@ pub enum HyperError {
     InvalidRequest(String),
 
     /// Network or HTTP error.
+    ///
+    /// The string contains the source error's display output, preserving error chain info.
+    /// See module-level documentation for why we use strings instead of wrapping sources.
     #[error("network error: {0}")]
     NetworkError(String),
 
@@ -52,6 +73,9 @@ pub enum HyperError {
     },
 
     /// Failed to parse response from provider.
+    ///
+    /// The string contains the source error's display output, preserving error chain info.
+    /// See module-level documentation for why we use strings instead of wrapping sources.
     #[error("parse error: {0}")]
     ParseError(String),
 
@@ -388,17 +412,34 @@ mod tests {
             HyperError::QuotaExceeded("quota".into()),
         ];
         for err in other_errors {
-            assert_eq!(err.retry_delay(), None, "Non-Retryable should return None: {:?}", err);
+            assert_eq!(
+                err.retry_delay(),
+                None,
+                "Non-Retryable should return None: {:?}",
+                err
+            );
         }
     }
 
     #[test]
     fn test_parse_retry_after_edge_cases() {
         // Valid formats
-        assert_eq!(parse_retry_after("try again in 0s"), Some(Duration::from_secs(0)));
-        assert_eq!(parse_retry_after("try again in 0.5s"), Some(Duration::from_secs_f64(0.5)));
-        assert_eq!(parse_retry_after("TRY AGAIN IN 5S"), Some(Duration::from_secs(5)));
-        assert_eq!(parse_retry_after("  try again in 5s  "), Some(Duration::from_secs(5)));
+        assert_eq!(
+            parse_retry_after("try again in 0s"),
+            Some(Duration::from_secs(0))
+        );
+        assert_eq!(
+            parse_retry_after("try again in 0.5s"),
+            Some(Duration::from_secs_f64(0.5))
+        );
+        assert_eq!(
+            parse_retry_after("TRY AGAIN IN 5S"),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            parse_retry_after("  try again in 5s  "),
+            Some(Duration::from_secs(5))
+        );
 
         // Invalid formats
         assert_eq!(parse_retry_after("try again in -5s"), None); // Negative

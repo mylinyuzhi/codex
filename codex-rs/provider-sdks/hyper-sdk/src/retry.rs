@@ -20,8 +20,9 @@
 
 use crate::error::HyperError;
 use crate::telemetry::RequestTelemetry;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// Retry configuration with exponential backoff.
@@ -220,8 +221,8 @@ fn simple_random() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicI32;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicI32;
 
     #[tokio::test]
     async fn test_retry_success_first_attempt() {

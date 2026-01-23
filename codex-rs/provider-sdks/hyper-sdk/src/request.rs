@@ -47,6 +47,14 @@ pub struct GenerateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
     /// Provider-specific options.
+    ///
+    /// Skipped in serialization because:
+    /// 1. Options are provider-specific and not portable across providers
+    /// 2. Deserialization would require knowing the target provider type upfront
+    /// 3. Options may contain non-serializable types in the future
+    ///
+    /// For persistence, store the request parameters separately and reconstruct
+    /// the provider options when deserializing for a specific provider.
     #[serde(skip)]
     pub provider_options: Option<ProviderOptions>,
 }
@@ -613,8 +621,8 @@ mod tests {
     fn test_with_zai_options() {
         use crate::options::downcast_options;
 
-        let request =
-            GenerateRequest::from_text("Hello").with_zai_options(ZaiOptions::new().with_do_sample(true));
+        let request = GenerateRequest::from_text("Hello")
+            .with_zai_options(ZaiOptions::new().with_do_sample(true));
 
         assert!(request.provider_options.is_some());
         let opts = downcast_options::<ZaiOptions>(request.provider_options.as_ref().unwrap());
@@ -626,8 +634,8 @@ mod tests {
     fn test_with_provider_options_generic() {
         use crate::options::downcast_options;
 
-        let request =
-            GenerateRequest::from_text("Hello").with_provider_options(OpenAIOptions::new().with_seed(42));
+        let request = GenerateRequest::from_text("Hello")
+            .with_provider_options(OpenAIOptions::new().with_seed(42));
 
         assert!(request.provider_options.is_some());
         let opts = downcast_options::<OpenAIOptions>(request.provider_options.as_ref().unwrap());

@@ -80,8 +80,11 @@ impl AnthropicProvider {
     ///
     /// Uses ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL (optional).
     pub fn from_env() -> Result<Self, HyperError> {
-        let api_key = env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| HyperError::ConfigError("ANTHROPIC_API_KEY not set".to_string()))?;
+        let api_key = env::var("ANTHROPIC_API_KEY").map_err(|_| {
+            HyperError::ConfigError(
+                "Anthropic: ANTHROPIC_API_KEY environment variable not set".to_string(),
+            )
+        })?;
 
         let base_url = env::var("ANTHROPIC_BASE_URL")
             .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
