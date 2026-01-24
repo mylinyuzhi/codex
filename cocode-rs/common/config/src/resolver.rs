@@ -148,18 +148,17 @@ impl ConfigResolver {
         let provider_config = self
             .providers
             .get(provider_name)
-            .ok_or_else(|| ConfigError::ProviderNotFound(provider_name.to_string()))?;
+            .ok_or_else(|| ConfigError::provider_not_found(provider_name))?;
 
         // Resolve API key: env var takes precedence
         let api_key = self.resolve_api_key(provider_config).ok_or_else(|| {
             let env_hint = provider_config
                 .env_key
                 .as_ref()
-                .map(|k| format!(" (set {} or api_key in config)", k))
+                .map(|k| format!(" (set {k} or api_key in config)"))
                 .unwrap_or_default();
-            ConfigError::AuthenticationFailed(format!(
-                "API key not found for provider '{}'{}",
-                provider_name, env_hint
+            ConfigError::auth(format!(
+                "API key not found for provider '{provider_name}'{env_hint}"
             ))
         })?;
 
@@ -195,7 +194,7 @@ impl ConfigResolver {
     pub fn resolve_profile(&self, profile_name: &str) -> Result<&ProfileConfig, ConfigError> {
         self.profiles
             .get(profile_name)
-            .ok_or_else(|| ConfigError::ProfileNotFound(profile_name.to_string()))
+            .ok_or_else(|| ConfigError::profile_not_found(profile_name))
     }
 
     /// Get the default profile name.
@@ -401,9 +400,16 @@ mod tests {
 
     #[test]
     fn test_resolve_provider_not_found() {
+        use crate::error::NotFoundKind;
         let resolver = create_test_resolver();
         let result = resolver.resolve_provider("nonexistent");
-        assert!(matches!(result, Err(ConfigError::ProviderNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ConfigError::NotFound {
+                kind: NotFoundKind::Provider,
+                ..
+            })
+        ));
     }
 
     #[test]

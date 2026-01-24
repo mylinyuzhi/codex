@@ -65,10 +65,9 @@ impl ConfigLoader {
     pub fn ensure_dir(&self) -> Result<(), ConfigError> {
         if !self.config_dir.exists() {
             std::fs::create_dir_all(&self.config_dir).map_err(|e| {
-                ConfigError::Internal(format!(
-                    "Failed to create config directory {}: {}",
+                ConfigError::io(format!(
+                    "Failed to create config directory {}: {e}",
                     self.config_dir.display(),
-                    e
                 ))
             })?;
             debug!(path = %self.config_dir.display(), "Created config directory");
@@ -117,9 +116,8 @@ impl ConfigLoader {
             return Ok(T::default());
         }
 
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            ConfigError::Internal(format!("Failed to read {}: {}", path.display(), e))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ConfigError::io(format!("Failed to read {}: {e}", path.display())))?;
 
         // Handle empty files
         if content.trim().is_empty() {
@@ -127,9 +125,8 @@ impl ConfigLoader {
             return Ok(T::default());
         }
 
-        serde_json::from_str(&content).map_err(|e| {
-            ConfigError::Internal(format!("Failed to parse {}: {}", path.display(), e))
-        })
+        serde_json::from_str(&content)
+            .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))
     }
 
     /// Save a JSON file.
@@ -139,11 +136,10 @@ impl ConfigLoader {
         value: &T,
     ) -> Result<(), ConfigError> {
         let content = serde_json::to_string_pretty(value)
-            .map_err(|e| ConfigError::Internal(format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))?;
 
-        std::fs::write(path, content).map_err(|e| {
-            ConfigError::Internal(format!("Failed to write {}: {}", path.display(), e))
-        })?;
+        std::fs::write(path, content)
+            .map_err(|e| ConfigError::io(format!("Failed to write {}: {e}", path.display())))?;
 
         debug!(path = %path.display(), "Saved config file");
         Ok(())
@@ -366,6 +362,6 @@ mod tests {
         let result = loader.load_models();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ConfigError::Internal(_)));
+        assert!(matches!(err, ConfigError::Config { .. }));
     }
 }

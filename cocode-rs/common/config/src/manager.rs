@@ -131,7 +131,7 @@ impl ConfigManager {
         let resolver = self
             .resolver
             .read()
-            .map_err(|e| ConfigError::Internal(format!("Failed to acquire read lock: {}", e)))?;
+            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
         resolver.resolve_model_info(provider, model)
     }
 
@@ -140,7 +140,7 @@ impl ConfigManager {
         let resolver = self
             .resolver
             .read()
-            .map_err(|e| ConfigError::Internal(format!("Failed to acquire read lock: {}", e)))?;
+            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
         resolver.resolve_provider(provider)
     }
 
@@ -176,13 +176,13 @@ impl ConfigManager {
         let resolver = self
             .resolver
             .read()
-            .map_err(|e| ConfigError::Internal(format!("Failed to acquire read lock: {}", e)))?;
+            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
 
         // Check if provider is configured (either in config or built-in)
         if !resolver.has_provider(provider) {
             // Check built-in providers
             if builtin::get_provider_defaults(provider).is_none() {
-                return Err(ConfigError::ProviderNotFound(provider.to_string()));
+                return Err(ConfigError::provider_not_found(provider));
             }
         }
 
@@ -190,9 +190,10 @@ impl ConfigManager {
 
         // Update active state
         {
-            let mut active = self.active.write().map_err(|e| {
-                ConfigError::Internal(format!("Failed to acquire write lock: {}", e))
-            })?;
+            let mut active = self
+                .active
+                .write()
+                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
 
             active.provider = Some(provider.to_string());
             active.model = Some(model.to_string());
@@ -213,7 +214,7 @@ impl ConfigManager {
         let resolver = self
             .resolver
             .read()
-            .map_err(|e| ConfigError::Internal(format!("Failed to acquire read lock: {}", e)))?;
+            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
 
         let profile_config = resolver.resolve_profile(profile)?;
         let provider = profile_config.provider.clone();
@@ -224,9 +225,10 @@ impl ConfigManager {
 
         // Update active state
         {
-            let mut active = self.active.write().map_err(|e| {
-                ConfigError::Internal(format!("Failed to acquire write lock: {}", e))
-            })?;
+            let mut active = self
+                .active
+                .write()
+                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
 
             active.provider = Some(provider.clone());
             active.model = Some(model.clone());
@@ -255,16 +257,18 @@ impl ConfigManager {
         let new_resolver = ConfigResolver::new(loaded.models, loaded.providers, loaded.profiles);
 
         {
-            let mut resolver = self.resolver.write().map_err(|e| {
-                ConfigError::Internal(format!("Failed to acquire write lock: {}", e))
-            })?;
+            let mut resolver = self
+                .resolver
+                .write()
+                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
             *resolver = new_resolver;
         }
 
         {
-            let mut active = self.active.write().map_err(|e| {
-                ConfigError::Internal(format!("Failed to acquire write lock: {}", e))
-            })?;
+            let mut active = self
+                .active
+                .write()
+                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
             *active = loaded.active;
         }
 

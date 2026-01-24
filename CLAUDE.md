@@ -33,9 +33,60 @@ cd cocode-rs && cargo build                         # ❌ Avoid (stay in codex/)
 
 ### Error Handling
 
-**Use `anyhow::Result` for all cocode-rs crates:**
-- Provider SDKs, utilities, file-search, file-ignore → `anyhow::Result`
-- Use `thiserror` for custom error types when needed
+**Use `cocode-error` for cocode-rs core crates:**
+
+| Crate Category         | Error Type |
+|------------------------|------------|
+| common/                | `cocode-error` + custom error enum |
+| provider-sdks/, utils/ | `anyhow::Result` (避免反向依赖 common) |
+
+**Required pattern:**
+
+```rust
+use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use snafu::Snafu;
+
+#[stack_trace_debug]  // Must be BEFORE #[derive(Snafu)]
+#[derive(Snafu)]
+#[snafu(visibility(pub(crate)), module)]  // Hide snafu types
+pub enum MyError {
+    #[snafu(display("IO error: {message}"))]
+    Io {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+}
+
+// Library-agnostic public constructors
+impl MyError {
+    #[track_caller]
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::Io {
+            message: message.into(),
+            location: caller_location(),
+        }
+    }
+}
+
+impl ErrorExt for MyError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::Io { .. } => StatusCode::IoError,
+        }
+    }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
+```
+
+**Key rules:**
+- `#[stack_trace_debug]` BEFORE `#[derive(Snafu)]`
+- `#[snafu(visibility(pub(crate)), module)]` to hide snafu types
+- All variants must have `#[snafu(implicit)] location: Location`
+- Provide clean public constructors with `#[track_caller]`
+- Implement `ErrorExt` with appropriate `StatusCode`
+
+**Reference:** See `cocode-rs/common/error/README.md` for StatusCode categories.
 
 **For codex-rs reference (legacy):**
 - Core/business logic (core/, cli/, exec/, tui/, app-server/) → `CodexErr`

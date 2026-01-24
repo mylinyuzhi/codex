@@ -1,11 +1,11 @@
-# common-error
+# cocode-error
 
 Unified error utilities with status codes, retry semantics, and virtual stack traces.
 
 ## Quick Start
 
 ```rust
-use common_error::{ErrorExt, StatusCode, Location, stack_trace_debug};
+use cocode_error::{ErrorExt, StatusCode, Location, stack_trace_debug};
 use snafu::{ResultExt, Snafu};
 
 #[stack_trace_debug]  // Must be BEFORE #[derive(Snafu)]

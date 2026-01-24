@@ -1,54 +1,152 @@
 //! Error types for configuration management.
 
-use thiserror::Error;
+use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use snafu::Snafu;
+use std::any::Any;
+
+/// The kind of resource that was not found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotFoundKind {
+    Provider,
+    Model,
+    Profile,
+}
+
+impl std::fmt::Display for NotFoundKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider => write!(f, "Provider"),
+            Self::Model => write!(f, "Model"),
+            Self::Profile => write!(f, "Profile"),
+        }
+    }
+}
 
 /// Configuration error type.
-#[derive(Debug, Error)]
+#[stack_trace_debug]
+#[derive(Snafu)]
+#[snafu(visibility(pub(crate)), module)]
 pub enum ConfigError {
-    /// Home directory not found.
-    #[error("Home directory not found")]
-    HomeDirNotFound,
-
-    /// Configuration file not found.
-    #[error("Config file not found: {0}")]
-    FileNotFound(String),
-
-    /// Invalid JSON in configuration file.
-    #[error("Invalid JSON in {file}: {error}")]
-    InvalidJson {
-        /// The file path.
-        file: String,
-        /// The error message.
-        error: String,
+    /// I/O or system error.
+    #[snafu(display("IO error: {message}"))]
+    Io {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
     },
 
-    /// Provider not found.
-    #[error("Provider not found: {0}")]
-    ProviderNotFound(String),
+    /// Configuration parsing or validation error.
+    #[snafu(display("Config error in {file}: {message}"))]
+    Config {
+        file: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 
-    /// Model not found.
-    #[error("Model not found: {0}")]
-    ModelNotFound(String),
+    /// Resource not found.
+    #[snafu(display("{kind} not found: {name}"))]
+    NotFound {
+        kind: NotFoundKind,
+        name: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 
-    /// Profile not found.
-    #[error("Profile not found: {0}")]
-    ProfileNotFound(String),
+    /// Authentication failed.
+    #[snafu(display("Authentication failed: {message}"))]
+    Auth {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+}
 
-    /// Authentication failed (e.g., API key not found).
-    #[error("Authentication failed: {0}")]
-    AuthenticationFailed(String),
+/// Create a Location from the caller's position.
+#[track_caller]
+fn caller_location() -> Location {
+    let loc = std::panic::Location::caller();
+    Location::new(loc.file(), loc.line(), loc.column())
+}
 
-    /// Internal error (e.g., lock acquisition failure).
-    #[error("Internal error: {0}")]
-    Internal(String),
+/// Clean public constructors (library-agnostic API).
+impl ConfigError {
+    /// Create an IO error.
+    #[track_caller]
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::Io {
+            message: message.into(),
+            location: caller_location(),
+        }
+    }
 
-    /// IO error.
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    /// Create a config parsing error.
+    #[track_caller]
+    pub fn config(file: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Config {
+            file: file.into(),
+            message: message.into(),
+            location: caller_location(),
+        }
+    }
 
-    /// JSON serialization/deserialization error.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+    /// Create a provider not found error.
+    #[track_caller]
+    pub fn provider_not_found(name: impl Into<String>) -> Self {
+        Self::NotFound {
+            kind: NotFoundKind::Provider,
+            name: name.into(),
+            location: caller_location(),
+        }
+    }
+
+    /// Create a model not found error.
+    #[track_caller]
+    pub fn model_not_found(name: impl Into<String>) -> Self {
+        Self::NotFound {
+            kind: NotFoundKind::Model,
+            name: name.into(),
+            location: caller_location(),
+        }
+    }
+
+    /// Create a profile not found error.
+    #[track_caller]
+    pub fn profile_not_found(name: impl Into<String>) -> Self {
+        Self::NotFound {
+            kind: NotFoundKind::Profile,
+            name: name.into(),
+            location: caller_location(),
+        }
+    }
+
+    /// Create an authentication error.
+    #[track_caller]
+    pub fn auth(message: impl Into<String>) -> Self {
+        Self::Auth {
+            message: message.into(),
+            location: caller_location(),
+        }
+    }
+}
+
+impl ErrorExt for ConfigError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::Io { .. } => StatusCode::IoError,
+            Self::Config { .. } => StatusCode::InvalidConfig,
+            Self::NotFound { kind, .. } => match kind {
+                NotFoundKind::Provider => StatusCode::ProviderNotFound,
+                NotFoundKind::Model => StatusCode::ModelNotFound,
+                NotFoundKind::Profile => StatusCode::InvalidConfig,
+            },
+            Self::Auth { .. } => StatusCode::AuthenticationFailed,
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Result type alias for configuration operations.

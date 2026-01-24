@@ -36,7 +36,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal - common
-common-error = { path = "common/error" }
+cocode-error = { path = "common/error" }
 cocode-config = { path = "common/config" }
 
 # Internal - provider SDKs (keep original names)
