@@ -85,7 +85,12 @@
       "Bash(else)",
       "Bash(fi)",
       "Bash(for i in {1..5})",
-      "Bash(do cargo test -p codex-retrieval --lib -- event_emitter::tests)"
+      "Bash(do cargo test -p codex-retrieval --lib -- event_emitter::tests)",
+      "WebFetch(domain:greptime.cn)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:www.unwoundstack.com)",
+      "WebFetch(domain:users.rust-lang.org)",
+      "WebFetch(domain:greptimedb.rs)"
     ],
     "deny": [],
     "ask": []

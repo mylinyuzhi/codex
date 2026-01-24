@@ -4,101 +4,73 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-**Codex** - OpenAI's coding agent CLI. Rust workspace with 59+ crates in `codex-rs/`.
+**Cocode** - Multi-provider LLM SDK and utilities. Main development in `cocode-rs/` (20 crates).
 
 ```
 codex/
-├── codex-rs/      → Main Rust workspace (ALL development here)
+├── cocode-rs/     → Main Rust workspace (ALL development here) - 20 crates
+├── codex-rs/      → Legacy workspace (reference only) - 59+ crates
 ├── sdk2/          → Python Agent SDK (see sdk2/CLAUDE.md)
 ├── docs/          → User documentation
-└── AGENTS.md      → Rust/codex-rs specific rules (READ THIS)
+└── AGENTS.md      → Rust conventions (READ THIS)
 ```
 
 **IMPORTANT:** Read `AGENTS.md` for detailed Rust conventions. This file covers high-level architecture only.
+
+**Note:** `codex-rs/` is kept as reference for implementing similar features in `cocode-rs/`. Do not actively develop in `codex-rs/`.
 
 ## Critical Rules
 
 ### Working Directory
 
-**ALWAYS run cargo/just commands from `codex-rs/` directory:**
+**Run cargo commands from `codex/` directory using `--manifest-path`:**
 
 ```bash
-cd codex-rs && cargo build   # ✅ Correct
-cargo build                  # ❌ Wrong
+cargo build --manifest-path cocode-rs/Cargo.toml   # ✅ Correct
+cargo check -p hyper-sdk --manifest-path cocode-rs/Cargo.toml  # ✅ Correct
+cd cocode-rs && cargo build                         # ❌ Avoid (stay in codex/)
 ```
 
 ### Error Handling
 
-**ALWAYS use the correct error type:**
+**Use `anyhow::Result` for all cocode-rs crates:**
+- Provider SDKs, utilities, file-search, file-ignore → `anyhow::Result`
+- Use `thiserror` for custom error types when needed
+
+**For codex-rs reference (legacy):**
 - Core/business logic (core/, cli/, exec/, tui/, app-server/) → `CodexErr`
 - Utilities/MCP/tests (mcp-*/, utils/, tests/) → `anyhow::Result`
-
-Convert: `.map_err(|e| CodexErr::Fatal(e.to_string()))?`
 
 ### Pre-Commit Requirements
 
 **ALWAYS run before any commit:**
 
 ```bash
-just fmt                  # Format (auto, no approval)
-cargo build              # ⭐ REQUIRED - catches downstream issues
+cargo fmt --manifest-path cocode-rs/Cargo.toml    # Format (auto, no approval)
+cargo build --manifest-path cocode-rs/Cargo.toml  # ⭐ REQUIRED - catches downstream issues
 ```
 
-**If changed core/protocol, ALSO run (ask user first):**
+**If changed provider-sdks or core crates, ALSO run (ask user first):**
 
 ```bash
-cargo test --all-features
+cargo test --manifest-path cocode-rs/Cargo.toml --all-features
 ```
 
-### High Conflict Risk Files
+### Key Development Files (cocode-rs)
 
-**⚠️ These files have the highest upstream conflict risk - modify with extreme caution:**
+**Main development focus - hyper-sdk:**
 
-| File | Purpose | Risk |
-|------|---------|------|
-| `core/src/client.rs` | Model client, streaming logic | Very High |
-| `core/src/codex.rs` | Session management, submission loop | Very High |
+| File | Purpose |
+|------|---------|
+| `provider-sdks/hyper-sdk/src/client.rs` | Multi-provider HTTP client |
+| `provider-sdks/hyper-sdk/src/lib.rs` | SDK public API |
+| `provider-sdks/hyper-sdk/src/providers/` | Provider implementations |
+| `provider-sdks/hyper-sdk/src/config/` | Configuration types |
 
 **Strategy:**
-1. **Evaluate carefully** before any modification
-2. **Prefer `*_ext.rs` pattern** - put new logic in extension files
-3. **Minimize direct changes** - only add minimal integration calls (1-2 lines)
-4. **Keep upstream compatibility** as top priority
-
-**Existing extension files (follow this pattern):**
-- `client_ext.rs` - adapter integration
-- `codex_ext.rs` - plan mode handling
-- `client_ultrathink_ext.rs` - reasoning budget logic
-
-### Extension Pattern (Upstream Sync)
-
-**⚠️ CRITICAL: This repo syncs upstream regularly. Minimize conflicts by preferring extension files.**
-
-**PREFER `*_ext.rs` for new features to minimize modifications to existing files:**
-
-```bash
-# ❌ Avoid: Large modifications to existing file
-core/src/tools/spec.rs           # Adding 200+ lines → merge conflicts
-
-# ✅ Prefer: Extension pattern
-core/src/tools/spec_ext.rs       # Define/register/test new tool (200+ lines)
-core/src/tools/spec.rs           # Minimal integration call (1-2 lines)
-```
-
-**Pattern:**
-1. New functionality → `module_ext.rs` (bulk of code)
-2. Original file → minimal import/integration (1-2 lines)
-3. Tests and registration → in `module_ext.rs`
-
-**When to use:**
-- Adding new tools, handlers, features
-- Original file would need 20+ lines of changes
-- Code can be isolated and called from original
-
-**When NOT to use:**
-- Complete standalone features (e.g., `core/src/adapters/`)
-- Refactoring existing logic
-- Small fixes (< 10 lines)
+1. Keep provider implementations modular
+2. Use trait-based abstractions for provider differences
+3. Implement streaming support consistently across providers
 
 ### Code Conventions (from AGENTS.md)
 
@@ -123,349 +95,171 @@ core/src/tools/spec.rs           # Minimal integration call (1-2 lines)
 
 ## Architecture Quick Reference
 
-### Core Crates (59+ total)
+### cocode-rs Crates (20 total)
 
 ```
-codex-rs/
-├─ core/           → Business logic, conversation, tools (CodexErr)
-├─ protocol/       → Message types, shared structs (anyhow)
-├─ cli/            → Binary entry, arg parsing (CodexErr)
-├─ tui/            → Ratatui interface (CodexErr, see tui/styles.md)
-├─ tui2/           → Next-gen TUI with advanced features
-├─ exec/           → Headless mode (CodexErr)
-├─ app-server/     → HTTP server for IDE (CodexErr)
-├─ mcp-server/     → MCP server (anyhow)
-├─ utils/          → git, cache, pty, tokenizer (anyhow)
-├─ common/         → Config, model presets (anyhow)
-├─ codex-api/      → Multi-provider LLM API (Anthropic, Gemini, OpenAI, etc.)
-├─ retrieval/      → Code search (BM25 + vector + AST)
-├─ lsp/            → AI-friendly LSP client
-├─ sdk-protocol/   → Cross-language SDK types
-├─ cloud-tasks/    → Task scheduling and execution
-└─ provider-sdks/  → Anthropic, Google GenAI, Volcengine, Z.AI
+cocode-rs/
+├─ provider-sdks/
+│  ├─ hyper-sdk/      → Central multi-provider SDK (main development)
+│  ├─ anthropic/      → Anthropic API SDK
+│  ├─ openai/         → OpenAI API SDK
+│  ├─ google-genai/   → Google GenAI SDK
+│  ├─ volcengine-ark/ → Volcengine Ark SDK
+│  └─ z-ai/           → Z.AI (Zhipu) SDK
+├─ file-ignore/       → .gitignore-aware file filtering
+├─ file-search/       → Fuzzy file search (ripgrep-based)
+└─ utils/             → 14 utility crates
 ```
 
-### Core Agent Modules (in core/src/)
+### hyper-sdk Structure (Main Focus)
 
-| Module | Purpose | Key Types |
-|--------|---------|-----------|
-| `subagent/` | Child agent spawning (Task tool) | `AgentDefinition`, `TaskArgs`, `BackgroundTask` |
-| `system_reminder/` | Contextual XML injection | `SystemReminderOrchestrator`, `AttachmentGenerator` |
-| `compact_v2/` | Two-tier compaction (micro + full) | `CompactResult`, `CompactConfig` |
-| `thinking/` | Extended thinking/ultrathink | `ThinkingState`, `EffortResult` |
-| `plan_mode/` | Structured planning workflow | `PlanModeState`, slug generation |
-| `shell_background/` | Background shell execution | `BackgroundShellStore`, `ShellStatus` |
-| `spawn_task/` | Spawn task framework | `SpawnTask` trait, `SpawnTaskManager` |
-| `loop_driver/` | Iterative execution | `LoopDriver`, `LoopCondition` |
+| Module | Purpose |
+|--------|---------|
+| `src/client.rs` | Multi-provider HTTP client with streaming |
+| `src/lib.rs` | Public API exports |
+| `src/config/` | Provider configuration types |
+| `src/providers/` | Provider-specific implementations |
+| `docs/` | SDK documentation |
 
 ### Key Files for Navigation
 
 ```
-# Core
-core/src/error.rs                  → CodexErr definition
-core/src/codex_conversation.rs     → Main conversation flow
-core/src/tools/spec.rs             → Tool registration
-core/src/config/mod.rs             → Config schema
-protocol/src/protocol.rs           → SQ/EQ message types
+# hyper-sdk (main development)
+provider-sdks/hyper-sdk/src/lib.rs       → SDK public API
+provider-sdks/hyper-sdk/src/client.rs    → Multi-provider client
+provider-sdks/hyper-sdk/src/config/      → Configuration types
+provider-sdks/hyper-sdk/src/providers/   → Provider implementations
+provider-sdks/hyper-sdk/docs/            → Documentation
 
-# Adapters
-core/src/adapters/mod.rs           → ProviderAdapter trait, AdapterContext
-core/src/adapters/registry.rs      → Global adapter registry
-core/src/adapters/http.rs          → HTTP transport with streaming
-core/src/client_ext.rs             → Adapter integration entry point
+# Individual Provider SDKs
+provider-sdks/anthropic/src/lib.rs       → Anthropic SDK
+provider-sdks/openai/src/lib.rs          → OpenAI SDK
+provider-sdks/google-genai/src/lib.rs    → Google GenAI SDK
+provider-sdks/volcengine-ark/src/lib.rs  → Volcengine Ark SDK
+provider-sdks/z-ai/src/lib.rs            → Z.AI SDK
 
-# Core Agent Modules
-core/src/subagent/mod.rs           → Subagent orchestrator
-core/src/system_reminder/mod.rs    → System reminder injection
-core/src/compact_v2/mod.rs         → Two-tier compaction
-core/src/thinking/                 → Extended thinking
-core/src/plan_mode/mod.rs          → Plan mode workflow
-core/src/shell_background/         → Background shell
-core/src/spawn_task/mod.rs         → Spawn task framework
-core/src/loop_driver/mod.rs        → Loop driver
+# Utilities
+file-ignore/src/lib.rs                   → Gitignore filtering
+file-search/src/lib.rs                   → Fuzzy file search
+```
 
-# New Crates
-codex-api/src/lib.rs               → Multi-provider API
-retrieval/src/lib.rs               → Code retrieval
-sdk-protocol/src/lib.rs            → SDK protocol types
-provider-sdks/*/                   → Provider SDKs
-tui/styles.md                      → TUI styling guide
+### codex-rs Reference (Legacy - 59+ crates)
+
+For reference when implementing similar features in cocode-rs:
+
+```
+codex-rs/
+├─ core/           → Business logic, conversation, tools
+├─ protocol/       → Message types, shared structs
+├─ cli/            → Binary entry, arg parsing
+├─ tui/            → Ratatui interface
+├─ exec/           → Headless mode
+├─ codex-api/      → Multi-provider LLM API (reference for hyper-sdk)
+├─ retrieval/      → Code search (BM25 + vector + AST)
+└─ provider-sdks/  → Provider SDK implementations (reference)
 ```
 
 ## Development Workflow
 
-### Standard Iteration
+### Standard Iteration (from codex/ directory)
 
 ```bash
-cd codex-rs
-
 # 1. Make changes
+
 # 2. Format (auto)
-just fmt
+cargo fmt --manifest-path cocode-rs/Cargo.toml
 
 # 3. Quick check
-cargo check -p <crate>
+cargo check -p hyper-sdk --manifest-path cocode-rs/Cargo.toml
 
 # 4. Test
-cargo test -p <crate>
+cargo test -p hyper-sdk --manifest-path cocode-rs/Cargo.toml
 
 # 5. Fix lints (ask user first)
-just fix -p <crate>
+cargo clippy -p hyper-sdk --manifest-path cocode-rs/Cargo.toml --fix
 
 # 6. Pre-commit (REQUIRED)
-cargo build
+cargo build --manifest-path cocode-rs/Cargo.toml
 ```
 
 ### Common Commands
 
 ```bash
-just codex                 # Launch TUI
-just exec "prompt"         # Headless execution
-just tui                   # TUI explicitly
-just fmt                   # Format (no approval needed)
-just clippy                # Lint check
-just fix -p <crate>        # Fix lints (ask user)
-just mcp-server-run        # MCP server mode
+# Build and check (from codex/)
+cargo build --manifest-path cocode-rs/Cargo.toml
+cargo check -p hyper-sdk --manifest-path cocode-rs/Cargo.toml
+cargo test -p hyper-sdk --manifest-path cocode-rs/Cargo.toml
+cargo fmt --manifest-path cocode-rs/Cargo.toml
+cargo clippy --manifest-path cocode-rs/Cargo.toml
 
-cargo test -p <crate>                     # Test specific crate
-cargo test --all-features                 # Full suite (ask user)
-cargo insta pending-snapshots -p codex-tui # Check TUI snapshots
+# Test specific provider SDK
+cargo test -p anthropic-sdk --manifest-path cocode-rs/Cargo.toml
+cargo test -p openai-sdk --manifest-path cocode-rs/Cargo.toml
+
+# Full test suite (ask user first)
+cargo test --manifest-path cocode-rs/Cargo.toml --all-features
 ```
 
-## Adding New Tools
+## Adding New Provider Support (hyper-sdk)
 
 **Implementation steps:**
 
-1. `protocol/src/config_types.rs` → Config struct with `#[derive(Default)]` + `#[serde(default)]`
-2. `core/src/tools/my_tool.rs` → Handler (must be `Send + Sync`)
-3. `core/src/tools/spec.rs` → Register in `build_specs()`
-4. `core/src/config/mod.rs` → Add field to `Config`
-5. Tests using `anyhow`
+1. Create provider module in `provider-sdks/hyper-sdk/src/providers/`
+2. Implement provider-specific request/response transformations
+3. Add configuration types in `src/config/`
+4. Register provider in the client
+5. Add tests
 
-**If tool needs user notifications (optional):**
-
-1. `protocol/src/protocol.rs` → Add `EventMsg` variant
-2. **Update ALL matches** in: `mcp-server/src/codex_tool_runner.rs`, `exec/src/event_processor_with_human_output.rs`, `tui/src/chatwidget.rs`
-3. **Run `cargo build`** to catch missing arms
-
-**Batch error discovery (IMPORTANT):**
-
-```bash
-# Adding Config field breaks ALL test inits
-cargo check 2>&1 | tee errors.txt     # Find all at once
-rg "Config \{" core/src --type rust   # Locate all inits
-# Fix simultaneously (saves 70% time)
-```
-
-## Multi-Provider Adapters
-
-### Architecture
-
-```
-Config (adapter = "gpt_openapi")
-    ↓
-ModelClient::stream() [client.rs:159]
-    ↓ if provider.ext.adapter.is_some()
-client_ext::stream_with_adapter()
-    ↓
-AdapterHttpClient::stream_with_adapter() [http.rs]
-    ↓
-adapter.transform_request() → HTTP → adapter.transform_response_chunk()
-```
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `adapters/mod.rs` | `ProviderAdapter` trait, `AdapterContext`, `RequestContext` |
-| `adapters/registry.rs` | Global lazy registry, `get_adapter()`, `register_adapter()` |
-| `adapters/http.rs` | HTTP layer, SSE streaming, endpoint routing |
-| `adapters/gpt_openapi/gpt_adapter.rs` | OpenAI Responses API adapter |
-| `adapters/gpt_openapi/gemini_adapter.rs` | Google Gemini Chat API adapter |
-| `client_ext.rs` | Parameter resolution, adapter entry point |
-
-### Built-in Adapters
-
-| Adapter | Name | Wire API | Features |
-|---------|------|----------|----------|
-| GptAdapter | `"gpt_openapi"` | `responses` | SSE streaming, `previous_response_id` |
-| GeminiAdapter | `"gemini_openapi"` | `chat` | Thinking budgets, non-streaming only |
-
-### Configuration
-
-```toml
-[model_providers.my_provider]
-adapter = "gpt_openapi"           # Selects adapter
-wire_api = "responses"            # Must match adapter requirement
-base_url = "https://..."
-model_name = "gpt-4"              # REQUIRED when using adapter
-
-[model_providers.my_provider.adapter_config]
-custom_key = "value"              # Adapter-specific settings
-
-[model_providers.my_provider.model_parameters]
-temperature = 0.7                 # Sampling parameters
-```
-
-### Adding New Adapters
-
-1. Create `adapters/gpt_openapi/my_adapter.rs`:
-   - Implement `ProviderAdapter` trait (must be `Send + Sync`)
-   - Key methods: `name()`, `transform_request()`, `transform_response_chunk()`
-   - Validate wire_api in `validate_provider()`
-
-2. Export in `adapters/gpt_openapi/mod.rs`
-
-3. Register in `adapters/registry.rs`:
-   ```rust
-   registry.register(Arc::new(MyAdapter::new()));
-   ```
-
-4. **Tests: Keep minimal** - only test:
-   - Request transformation (1-2 cases)
-   - Response parsing (1 success, 1 error case)
-   - Config validation (1 valid, 1 invalid)
-
-### ProviderAdapter Trait (Key Methods)
-
-```rust
-trait ProviderAdapter: Send + Sync + Debug {
-    fn name(&self) -> &str;                    // Unique ID for registry
-    fn validate_provider(&self, ...) -> Result<()>;  // Check wire_api compatibility
-    fn transform_request(&self, prompt, context, provider) -> Result<JsonValue>;
-    fn transform_response_chunk(&self, chunk, ctx, provider) -> Result<Vec<ResponseEvent>>;
-    fn supports_previous_response_id(&self) -> bool;  // Conversation continuity
-}
-```
-
-### Error Types
-
-- Config mismatch (wrong wire_api) → `CodexErr::Fatal`
-- `context_length_exceeded` → `CodexErr::ContextWindowExceeded`
-- `insufficient_quota` → `CodexErr::QuotaExceeded`
-- `previous_response_not_found` → `CodexErr::PreviousResponseNotFound`
-
-## Multi-Provider API (codex-api)
-
-Unified LLM API abstraction supporting multiple providers.
-
-**Supported Providers:** Anthropic, Google Gemini, OpenAI, Volcengine Ark, Z.AI
-
-**Key Files:**
-- `codex-api/src/lib.rs` → Main API
-- `codex-api/src/adapters/` → Provider adapters
-- `codex-api/src/interceptors/` → Request interceptors
-
-**Architecture:** Adapter pattern with interceptors for provider-specific transformations.
-
-## Code Retrieval System (retrieval)
-
-Intelligent code search with multiple search backends.
-
-**Features:**
-- BM25 full-text search
-- Vector semantic search (fastembed)
-- AST-aware chunking (Go, Rust, Python, Java)
-- LanceDB vector storage + SQLite metadata
-
-**Key Files:**
-- `retrieval/src/lib.rs` → Main entry
-- `retrieval/src/indexer/` → Indexing pipeline
-- `retrieval/src/search/` → Search engines
-
-## Spawn Task Framework
-
-Long-running agent task execution with persistence.
-
-**Components:**
-- `SpawnTask` trait for task types (Agent, future Workflow)
-- `LoopDriver` for iterative execution
-- Git worktree support for isolation
-- Plan fork capability
-- Task persistence (`~/.codex/spawn-tasks/`)
-
-**Key Files:**
-- `core/src/spawn_task/mod.rs` → Framework traits
-- `core/src/spawn_task/manager.rs` → Task lifecycle
-- `core/src/loop_driver/` → Iteration control
+**Key traits to implement:**
+- Request transformation (messages → provider format)
+- Response streaming (SSE parsing)
+- Error mapping
 
 ## Testing Patterns
 
-### Integration Tests (core)
-
-Use `core_test_support::responses`:
-
-```rust
-let mock = responses::mount_sse_once(&server, responses::sse(vec![
-    responses::ev_response_created("resp-1"),
-    responses::ev_function_call(call_id, "shell", &args),
-])).await;
-
-codex.submit(Op::UserTurn { ... }).await?;
-
-let request = mock.single_request();
-assert_eq!(request.function_call_output(call_id), expected);
-```
-
-**Helpers:** `single_request()`, `requests()`, `body_json()`, `input()`, `function_call_output(id)`
-
-### Snapshot Tests (TUI)
+### Unit Tests
 
 ```bash
-cargo test -p codex-tui
-cargo insta pending-snapshots -p codex-tui
-cargo insta accept -p codex-tui  # Careful!
+# Test specific crate
+cargo test -p hyper-sdk --manifest-path cocode-rs/Cargo.toml
+
+# Test with specific feature
+cargo test -p hyper-sdk --manifest-path cocode-rs/Cargo.toml --features anthropic
 ```
 
-## TUI Development
+### Integration Tests
 
-**From tui/styles.md:**
-
-**NEVER:**
-- Use `.white()` (breaks theme)
-- Use `Span::styled` when `.dim()`, `.bold()`, `.cyan()` work
-
-**ALWAYS:**
-- Use Stylize helpers: `"text".dim()`, `"text".red()`, `url.cyan().underlined()`
-- Use `textwrap::wrap` for plain strings
-- Use `word_wrap_lines` (from `tui/src/wrapping.rs`) for ratatui `Line`
-- Use `pretty_assertions::assert_eq` in tests
+Place integration tests in `provider-sdks/hyper-sdk/tests/` directory.
 
 ## Common Pitfalls
 
 ```rust
 // ❌ Avoid
-cargo build                    // Not in codex-rs/
-let x: u32 = 42;              // Unsigned int
-format!("{}", var)            // Not inlined
-data.unwrap()                 // In non-test code
-"text".white()                // In TUI
-cargo check -p only           // Pre-commit
-// Add 200 lines to spec.rs   // Merge conflicts
-/// Long field docs with example configs  // Verbose
+cd cocode-rs && cargo build        // Stay in codex/ directory
+let x: u32 = 42;                   // Unsigned int
+format!("{}", var)                 // Not inlined
+data.unwrap()                      // In non-test code
+cargo check -p only                // Pre-commit needs full build
 
 // ✅ Prefer
-cd codex-rs && cargo build
+cargo build --manifest-path cocode-rs/Cargo.toml  // From codex/
 let x: i32 = 42;
 format!("{var}")
 data.expect("reason") or ?
-"text".dim()
 cargo build before commit
-// Use spec_ext.rs (1-2 lines in spec.rs)  // Minimal conflicts
-/// Brief field description (1-2 lines max)  // Concise
 ```
 
 ## Quality Check Levels
 
-1. **Iteration:** `cargo check -p <crate>` - fast feedback
-2. **Pre-commit:** `cargo build` - **MANDATORY** (catches all 59+ crates)
-3. **Core changes:** `cargo test --all-features` - ask user first
+1. **Iteration:** `cargo check -p <crate> --manifest-path cocode-rs/Cargo.toml` - fast feedback
+2. **Pre-commit:** `cargo build --manifest-path cocode-rs/Cargo.toml` - **MANDATORY**
+3. **Core changes:** `cargo test --manifest-path cocode-rs/Cargo.toml --all-features` - ask user first
 
 ## Documentation
 
 **User docs:** `docs/` (getting-started.md, config.md, sandbox.md)
-**Dev docs:** `AGENTS.md` (Rust rules), `tui/styles.md` (TUI styling)
-**Install:** `npm i -g @openai/codex` or `brew install --cask codex`
+**Dev docs:** `AGENTS.md` (Rust conventions)
+**SDK docs:** `cocode-rs/provider-sdks/hyper-sdk/docs/`
 
 ## Git Workflow
 
@@ -473,27 +267,29 @@ cargo build before commit
 
 When committing:
 1. Check `git status`, `git diff`, `git log` (for style)
-2. Run `cargo build` first
+2. Run `cargo build --manifest-path cocode-rs/Cargo.toml` first
 3. Follow repo commit message conventions
 
 ## Quick Reference
 
 ```bash
-# Essential (from codex-rs/)
-just fmt && cargo check -p <crate>  # Iteration
-cargo build                         # ⭐ Pre-commit REQUIRED
-just codex                          # Run TUI
-just exec "prompt"                  # Run headless
+# Essential (from codex/ directory)
+cargo fmt --manifest-path cocode-rs/Cargo.toml                    # Format
+cargo check -p hyper-sdk --manifest-path cocode-rs/Cargo.toml     # Quick check
+cargo build --manifest-path cocode-rs/Cargo.toml                  # ⭐ Pre-commit REQUIRED
+cargo test -p hyper-sdk --manifest-path cocode-rs/Cargo.toml      # Test
 
 # Avoid
 .unwrap()              # Use ? or .expect()
 u32/u64                # Use i32/i64
-.white()               # Use .dim(), .cyan(), etc.
-# Large file edits     # Prefer *_ext.rs pattern
-
-# Extension pattern (minimize upstream conflicts)
-# Large new feature → spec_ext.rs (bulk code) + spec.rs (1-2 line import)
-# Small fix (< 10L)  → Direct edit OK
+cd cocode-rs/          # Stay in codex/ directory
 ```
+
+## codex-rs Reference
+
+When implementing features in cocode-rs, refer to codex-rs for:
+- Multi-provider adapter patterns (`codex-rs/core/src/adapters/`)
+- Streaming response handling (`codex-rs/codex-api/`)
+- Provider SDK implementations (`codex-rs/provider-sdks/`)
 
 See `AGENTS.md` for complete Rust/testing conventions.
