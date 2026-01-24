@@ -2,8 +2,8 @@
 members = [
     "common/error",
     "common/config",
-    "file-ignore",
-    "file-search",
+    "utils/file-ignore",
+    "utils/file-search",
     "provider-sdks/anthropic",
     "provider-sdks/openai",
     "provider-sdks/volcengine-ark",
@@ -50,8 +50,8 @@ hyper-sdk = { path = "provider-sdks/hyper-sdk" }
 # Internal - utilities (renamed codex → cocode)
 cocode-async-utils = { path = "utils/async-utils" }
 cocode-keyring-store = { path = "utils/keyring-store" }
-cocode-file-ignore = { path = "file-ignore" }
-cocode-file-search = { path = "file-search" }
+cocode-file-ignore = { path = "utils/file-ignore" }
+cocode-file-search = { path = "utils/file-search" }
 cocode-git = { path = "utils/git" }
 cocode-utils-absolute-path = { path = "utils/absolute-path" }
 cocode-utils-cache = { path = "utils/cache" }
