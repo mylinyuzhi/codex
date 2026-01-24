@@ -1,4 +1,4 @@
-//! Model capability and reasoning effort types.
+//! Model capability types.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,16 +22,8 @@ pub enum Capability {
     ExtendedThinking,
     /// Structured output (JSON mode).
     StructuredOutput,
-}
-
-/// Reasoning effort level for models that support extended thinking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffort {
-    /// Low reasoning effort.
-    Low,
-    /// Medium reasoning effort.
-    Medium,
-    /// High reasoning effort.
-    High,
+    /// Reasoning summaries support.
+    ReasoningSummaries,
+    /// Parallel tool calls support.
+    ParallelToolCalls,
 }

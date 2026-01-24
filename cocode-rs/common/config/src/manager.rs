@@ -8,14 +8,14 @@ use crate::error::ConfigError;
 use crate::loader::ConfigLoader;
 use crate::resolver::ConfigResolver;
 use crate::types::ActiveState;
-use crate::types::ModelInfoConfig;
 use crate::types::ModelSummary;
-use crate::types::ProviderJsonConfig;
+use crate::types::ProviderConfig;
 use crate::types::ProviderSummary;
 use crate::types::ProviderType;
 use crate::types::ResolvedModelInfo;
 use crate::types::ResolvedProviderConfig;
 use crate::types::SessionConfigJson;
+use cocode_protocol::ModelInfo;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -88,7 +88,12 @@ impl ConfigManager {
         let config_path = loader.config_dir().to_path_buf();
         let loaded = loader.load_all()?;
 
-        let resolver = ConfigResolver::new(loaded.models, loaded.providers, loaded.profiles);
+        let resolver = ConfigResolver::with_config_dir(
+            loaded.models,
+            loaded.providers,
+            loaded.profiles,
+            &config_path,
+        );
 
         let active = loaded.active;
 
@@ -147,7 +152,7 @@ impl ConfigManager {
     /// Get the current active provider and model.
     ///
     /// Returns (provider, model) tuple. If not explicitly set, returns
-    /// the default profile's values or ("openai", "gpt-4o").
+    /// the default profile's values or ("openai", "gpt-5").
     pub fn current(&self) -> (String, String) {
         let active = self.active.read().unwrap();
 
@@ -165,7 +170,7 @@ impl ConfigManager {
         }
 
         // Fallback to built-in default
-        ("openai".to_string(), "gpt-4o".to_string())
+        ("openai".to_string(), "gpt-5".to_string())
     }
 
     /// Switch to a specific provider and model.
@@ -384,7 +389,7 @@ impl ConfigManager {
     }
 
     /// Get provider config by name.
-    pub fn get_provider_config(&self, name: &str) -> Option<ProviderJsonConfig> {
+    pub fn get_provider_config(&self, name: &str) -> Option<ProviderConfig> {
         let resolver = self.resolver.read().unwrap();
         resolver
             .get_provider_config(name)
@@ -393,7 +398,7 @@ impl ConfigManager {
     }
 
     /// Get model config by ID.
-    pub fn get_model_config(&self, id: &str) -> Option<ModelInfoConfig> {
+    pub fn get_model_config(&self, id: &str) -> Option<ModelInfo> {
         let resolver = self.resolver.read().unwrap();
         resolver
             .get_model_config(id)
@@ -405,13 +410,9 @@ impl ConfigManager {
 /// Suggest default models based on provider type.
 fn suggest_models_for_provider(provider_type: ProviderType) -> Vec<&'static str> {
     match provider_type {
-        ProviderType::Openai => vec!["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
-        ProviderType::Anthropic => vec![
-            "claude-sonnet-4-20250514",
-            "claude-opus-4-20250514",
-            "claude-3-5-sonnet-20241022",
-        ],
-        ProviderType::Gemini => vec!["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+        ProviderType::Openai => vec!["gpt-5", "gpt-5.2"],
+        ProviderType::Anthropic => vec!["claude-sonnet-4", "claude-opus-4"],
+        ProviderType::Gemini => vec!["gemini-3-pro", "gemini-3-flash"],
         ProviderType::Volcengine => vec!["deepseek-r1", "deepseek-chat"],
         ProviderType::Zai => vec!["glm-4-plus", "glm-4-flash"],
         ProviderType::OpenaiCompat => vec!["deepseek-chat", "qwen-plus"],
@@ -445,10 +446,10 @@ mod tests {
                     "name": "Test OpenAI",
                     "type": "openai",
                     "api_key": "test-key",
-                    "default_model": "gpt-4o",
+                    "default_model": "gpt-5",
                     "models": {
-                        "gpt-4o": {},
-                        "gpt-4o-mini": {}
+                        "gpt-5": {},
+                        "gpt-5-mini": {}
                     }
                 }
             }
@@ -461,11 +462,11 @@ mod tests {
             "profiles": {
                 "default": {
                     "provider": "test-openai",
-                    "model": "gpt-4o"
+                    "model": "gpt-5"
                 },
                 "fast": {
                     "provider": "test-openai",
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5-mini",
                     "session_config": {
                         "temperature": 0.5
                     }
@@ -490,7 +491,7 @@ mod tests {
         let manager = ConfigManager::empty();
         let (provider, model) = manager.current();
         assert_eq!(provider, "openai");
-        assert_eq!(model, "gpt-4o");
+        assert_eq!(model, "gpt-5");
     }
 
     #[test]
@@ -498,17 +499,17 @@ mod tests {
         let (_temp, manager) = create_test_manager();
         let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
-        assert_eq!(model, "gpt-4o");
+        assert_eq!(model, "gpt-5");
     }
 
     #[test]
     fn test_switch_provider_model() {
         let (_temp, manager) = create_test_manager();
 
-        manager.switch("test-openai", "gpt-4o-mini").unwrap();
+        manager.switch("test-openai", "gpt-5-mini").unwrap();
         let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
-        assert_eq!(model, "gpt-4o-mini");
+        assert_eq!(model, "gpt-5-mini");
     }
 
     #[test]
@@ -518,7 +519,7 @@ mod tests {
         manager.switch_profile("fast").unwrap();
         let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
-        assert_eq!(model, "gpt-4o-mini");
+        assert_eq!(model, "gpt-5-mini");
 
         // Should also have session config
         let session = manager.current_session_config();
@@ -537,10 +538,10 @@ mod tests {
     fn test_resolve_model_info() {
         let (_temp, manager) = create_test_manager();
 
-        let info = manager.resolve_model_info("test-openai", "gpt-4o").unwrap();
-        assert_eq!(info.id, "gpt-4o");
-        assert_eq!(info.display_name, "GPT-4o");
-        assert_eq!(info.context_window, 128000);
+        let info = manager.resolve_model_info("test-openai", "gpt-5").unwrap();
+        assert_eq!(info.id, "gpt-5");
+        assert_eq!(info.display_name, "GPT-5");
+        assert_eq!(info.context_window, 272000);
     }
 
     #[test]
@@ -582,7 +583,7 @@ mod tests {
             "profiles": {
                 "new-default": {
                     "provider": "test-openai",
-                    "model": "gpt-4o-mini"
+                    "model": "gpt-5-mini"
                 }
             }
         }"#;
@@ -607,21 +608,21 @@ mod tests {
         let (_temp, manager) = create_test_manager();
 
         // Built-in model
-        let config = manager.get_model_config("gpt-4o");
+        let config = manager.get_model_config("gpt-5");
         assert!(config.is_some());
-        assert_eq!(config.unwrap().display_name, Some("GPT-4o".to_string()));
+        assert_eq!(config.unwrap().display_name, Some("GPT-5".to_string()));
     }
 
     #[test]
     fn test_persist_active_state() {
         let (temp_dir, manager) = create_test_manager();
 
-        manager.switch("test-openai", "gpt-4o-mini").unwrap();
+        manager.switch("test-openai", "gpt-5-mini").unwrap();
 
         // Create new manager and verify state persisted
         let manager2 = ConfigManager::from_path(temp_dir.path()).unwrap();
         let (provider, model) = manager2.current();
         assert_eq!(provider, "test-openai");
-        assert_eq!(model, "gpt-4o-mini");
+        assert_eq!(model, "gpt-5-mini");
     }
 }

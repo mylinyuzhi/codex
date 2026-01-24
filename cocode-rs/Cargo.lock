@@ -504,6 +504,7 @@ name = "cocode-config"
 version = "0.0.0"
 dependencies = [
  "cocode-error",
+ "cocode-protocol",
  "dirs",
  "serde",
  "serde_json",
@@ -569,6 +570,15 @@ version = "0.0.0"
 dependencies = [
  "keyring",
  "tracing",
+]
+
+[[package]]
+name = "cocode-protocol"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strum",
 ]
 
 [[package]]

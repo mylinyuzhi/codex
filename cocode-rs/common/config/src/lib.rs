@@ -48,26 +48,32 @@
 //! ```
 
 pub mod builtin;
-pub mod capability;
 pub mod error;
 pub mod loader;
 pub mod manager;
 pub mod resolver;
 pub mod types;
 
-// Re-export main types
+// Re-export protocol types
+pub use cocode_protocol::Capability;
+pub use cocode_protocol::ConfigShellToolType;
+pub use cocode_protocol::ModelInfo;
+pub use cocode_protocol::ReasoningEffort;
+pub use cocode_protocol::TruncationMode;
+pub use cocode_protocol::TruncationPolicyConfig;
+
+// Re-export main config types
 pub use loader::ConfigLoader;
 pub use loader::DEFAULT_CONFIG_DIR;
 pub use loader::LoadedConfig;
 pub use manager::ConfigManager;
 pub use resolver::ConfigResolver;
 pub use types::ActiveState;
-pub use types::ModelInfoConfig;
 pub use types::ModelSummary;
 pub use types::ModelsFile;
 pub use types::ProfileConfig;
 pub use types::ProfilesFile;
-pub use types::ProviderJsonConfig;
+pub use types::ProviderConfig;
 pub use types::ProviderModelConfig;
 pub use types::ProviderSummary;
 pub use types::ProviderType;

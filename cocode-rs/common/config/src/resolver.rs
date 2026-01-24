@@ -10,27 +10,32 @@
 //! 5. Built-in defaults (compiled into binary)
 
 use crate::builtin;
-use crate::capability::Capability;
 use crate::error::ConfigError;
-use crate::types::ModelInfoConfig;
 use crate::types::ModelsFile;
 use crate::types::ProfileConfig;
 use crate::types::ProfilesFile;
-use crate::types::ProviderJsonConfig;
+use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
 use crate::types::ResolvedModelInfo;
 use crate::types::ResolvedProviderConfig;
+use cocode_protocol::Capability;
+use cocode_protocol::ModelInfo;
 use std::collections::HashMap;
 use std::env;
+use std::path::PathBuf;
 use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 /// Configuration resolver that merges layers of configuration.
 #[derive(Debug, Clone)]
 pub struct ConfigResolver {
-    pub(crate) models: HashMap<String, ModelInfoConfig>,
-    pub(crate) providers: HashMap<String, ProviderJsonConfig>,
+    pub(crate) models: HashMap<String, ModelInfo>,
+    pub(crate) providers: HashMap<String, ProviderConfig>,
     pub(crate) profiles: HashMap<String, ProfileConfig>,
     pub(crate) default_profile: Option<String>,
+    /// Config directory for resolving relative paths (e.g., base_instructions_file).
+    pub(crate) config_dir: Option<PathBuf>,
 }
 
 impl ConfigResolver {
@@ -45,6 +50,23 @@ impl ConfigResolver {
             providers: providers_file.providers,
             profiles: profiles_file.profiles,
             default_profile: profiles_file.default_profile,
+            config_dir: None,
+        }
+    }
+
+    /// Create a new resolver with a config directory.
+    pub fn with_config_dir(
+        models_file: ModelsFile,
+        providers_file: ProvidersFile,
+        profiles_file: ProfilesFile,
+        config_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            models: models_file.models,
+            providers: providers_file.providers,
+            profiles: profiles_file.profiles,
+            default_profile: profiles_file.default_profile,
+            config_dir: Some(config_dir.into()),
         }
     }
 
@@ -55,7 +77,13 @@ impl ConfigResolver {
             providers: HashMap::new(),
             profiles: HashMap::new(),
             default_profile: None,
+            config_dir: None,
         }
+    }
+
+    /// Set the config directory for resolving relative paths.
+    pub fn set_config_dir(&mut self, config_dir: impl Into<PathBuf>) {
+        self.config_dir = Some(config_dir.into());
     }
 
     /// Resolve model info by merging all configuration layers.
@@ -107,6 +135,9 @@ impl ConfigResolver {
             }
         }
 
+        // Resolve base_instructions: file takes precedence over inline
+        let base_instructions = self.resolve_base_instructions(&config);
+
         // Convert to resolved model info
         Ok(ResolvedModelInfo {
             id: model_id.to_string(),
@@ -121,10 +152,50 @@ impl ConfigResolver {
             auto_compact_token_limit: config.auto_compact_token_limit,
             effective_context_window_percent: config.effective_context_window_percent,
             default_reasoning_effort: config.default_reasoning_effort,
-            supports_reasoning_summaries: config.supports_reasoning_summaries.unwrap_or(false),
-            supports_parallel_tool_calls: config.supports_parallel_tool_calls.unwrap_or(false),
-            thinking_budget_default: config.thinking_budget_default,
+            supported_reasoning_levels: config.supported_reasoning_levels,
+            thinking_budget_default: config.thinking_budget,
+            base_instructions,
         })
+    }
+
+    /// Resolve base_instructions from inline string or file.
+    ///
+    /// If `base_instructions_file` is set and the file exists, load its content.
+    /// Otherwise, use the inline `base_instructions`.
+    fn resolve_base_instructions(&self, config: &ModelInfo) -> Option<String> {
+        // Try to load from file first if config_dir is set
+        if let (Some(file_path), Some(config_dir)) =
+            (&config.base_instructions_file, &self.config_dir)
+        {
+            let full_path = config_dir.join(file_path);
+            match std::fs::read_to_string(&full_path) {
+                Ok(content) => {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        // Log the overwrite if inline instructions were also set
+                        if config.base_instructions.is_some() {
+                            info!(
+                                file = %full_path.display(),
+                                "Loaded base_instructions from file (overwriting inline)"
+                            );
+                        } else {
+                            debug!(file = %full_path.display(), "Loaded base_instructions from file");
+                        }
+                        return Some(trimmed.to_string());
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        file = %full_path.display(),
+                        error = %e,
+                        "Failed to read base_instructions_file"
+                    );
+                }
+            }
+        }
+
+        // Fall back to inline instructions
+        config.base_instructions.clone()
     }
 
     /// Resolve a model alias to its canonical model ID.
@@ -175,7 +246,7 @@ impl ConfigResolver {
     }
 
     /// Resolve API key from env var or config.
-    fn resolve_api_key(&self, config: &ProviderJsonConfig) -> Option<String> {
+    fn resolve_api_key(&self, config: &ProviderConfig) -> Option<String> {
         // Try environment variable first
         if let Some(env_key) = &config.env_key {
             if let Ok(key) = env::var(env_key) {
@@ -231,12 +302,12 @@ impl ConfigResolver {
     }
 
     /// Get provider config by name (for inspection).
-    pub fn get_provider_config(&self, name: &str) -> Option<&ProviderJsonConfig> {
+    pub fn get_provider_config(&self, name: &str) -> Option<&ProviderConfig> {
         self.providers.get(name)
     }
 
     /// Get model config by ID (for inspection).
-    pub fn get_model_config(&self, id: &str) -> Option<&ModelInfoConfig> {
+    pub fn get_model_config(&self, id: &str) -> Option<&ModelInfo> {
         self.models.get(id)
     }
 }
@@ -251,7 +322,7 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(
             "test-model".to_string(),
-            ModelInfoConfig {
+            ModelInfo {
                 display_name: Some("Test Model".to_string()),
                 context_window: Some(8192),
                 max_output_tokens: Some(2048),
@@ -261,7 +332,7 @@ mod tests {
         );
         models.insert(
             "deepseek-r1".to_string(),
-            ModelInfoConfig {
+            ModelInfo {
                 display_name: Some("DeepSeek R1".to_string()),
                 context_window: Some(64000),
                 ..Default::default()
@@ -273,7 +344,7 @@ mod tests {
             "test-model".to_string(),
             ProviderModelConfig {
                 model_id: None,
-                model_info_override: Some(ModelInfoConfig {
+                model_info_override: Some(ModelInfo {
                     max_output_tokens: Some(4096), // Override
                     ..Default::default()
                 }),
@@ -283,7 +354,7 @@ mod tests {
             "ep-12345".to_string(),
             ProviderModelConfig {
                 model_id: Some("deepseek-r1".to_string()), // Alias
-                model_info_override: Some(ModelInfoConfig {
+                model_info_override: Some(ModelInfo {
                     context_window: Some(32000), // Override for this provider
                     ..Default::default()
                 }),
@@ -293,7 +364,7 @@ mod tests {
         let mut providers = HashMap::new();
         providers.insert(
             "test-provider".to_string(),
-            ProviderJsonConfig {
+            ProviderConfig {
                 name: "Test Provider".to_string(),
                 provider_type: ProviderType::Openai,
                 env_key: Some("TEST_API_KEY".to_string()),
@@ -322,6 +393,7 @@ mod tests {
             providers,
             profiles,
             default_profile: Some("default".to_string()),
+            config_dir: None,
         }
     }
 
@@ -458,5 +530,112 @@ mod tests {
         assert_eq!(info.id, "unknown-model");
         assert_eq!(info.display_name, "unknown-model"); // Falls back to ID
         assert_eq!(info.context_window, 4096); // Default
+    }
+
+    #[test]
+    fn test_base_instructions_from_file() {
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let instructions_content = "You are a helpful assistant.";
+        std::fs::write(
+            temp_dir.path().join("instructions.md"),
+            instructions_content,
+        )
+        .unwrap();
+
+        let mut models = HashMap::new();
+        models.insert(
+            "test-model".to_string(),
+            ModelInfo {
+                display_name: Some("Test Model".to_string()),
+                base_instructions_file: Some("instructions.md".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models,
+            providers: HashMap::new(),
+            profiles: HashMap::new(),
+            default_profile: None,
+            config_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        assert_eq!(
+            info.base_instructions,
+            Some(instructions_content.to_string())
+        );
+    }
+
+    #[test]
+    fn test_base_instructions_file_overrides_inline() {
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let file_content = "Instructions from file";
+        std::fs::write(temp_dir.path().join("instructions.md"), file_content).unwrap();
+
+        let mut models = HashMap::new();
+        models.insert(
+            "test-model".to_string(),
+            ModelInfo {
+                display_name: Some("Test Model".to_string()),
+                base_instructions: Some("Inline instructions".to_string()),
+                base_instructions_file: Some("instructions.md".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models,
+            providers: HashMap::new(),
+            profiles: HashMap::new(),
+            default_profile: None,
+            config_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        // File should take precedence over inline
+        assert_eq!(info.base_instructions, Some(file_content.to_string()));
+    }
+
+    #[test]
+    fn test_base_instructions_fallback_to_inline() {
+        let mut models = HashMap::new();
+        models.insert(
+            "test-model".to_string(),
+            ModelInfo {
+                display_name: Some("Test Model".to_string()),
+                base_instructions: Some("Inline instructions".to_string()),
+                base_instructions_file: Some("nonexistent.md".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models,
+            providers: HashMap::new(),
+            profiles: HashMap::new(),
+            default_profile: None,
+            config_dir: Some(PathBuf::from("/tmp")),
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        // Should fall back to inline when file doesn't exist
+        assert_eq!(
+            info.base_instructions,
+            Some("Inline instructions".to_string())
+        );
     }
 }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "common/error",
+    "common/protocol",
     "common/config",
     "utils/file-ignore",
     "utils/file-search",
@@ -37,6 +38,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal - common
 cocode-error = { path = "common/error" }
+cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
 
 # Internal - provider SDKs (keep original names)

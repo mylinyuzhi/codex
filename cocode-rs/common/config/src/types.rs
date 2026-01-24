@@ -7,8 +7,9 @@
 //! - `providers.json`: Provider access configuration with optional model overrides
 //! - `profiles.json`: Named configuration bundles for quick switching
 
-use crate::capability::Capability;
-use crate::capability::ReasoningEffort;
+use cocode_protocol::Capability;
+use cocode_protocol::ModelInfo;
+use cocode_protocol::ReasoningEffort;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ pub struct ModelsFile {
     pub version: String,
     /// Map of model ID to model configuration.
     #[serde(default)]
-    pub models: HashMap<String, ModelInfoConfig>,
+    pub models: HashMap<String, ModelInfo>,
 }
 
 /// Root structure for providers.json file.
@@ -32,7 +33,7 @@ pub struct ProvidersFile {
     pub version: String,
     /// Map of provider name to provider configuration.
     #[serde(default)]
-    pub providers: HashMap<String, ProviderJsonConfig>,
+    pub providers: HashMap<String, ProviderConfig>,
 }
 
 /// Root structure for profiles.json file.
@@ -71,136 +72,6 @@ pub struct ActiveState {
 
 fn default_version() -> String {
     "1.0".to_string()
-}
-
-/// Extended model info for configuration (extends existing ModelInfo).
-///
-/// All fields are optional to support partial configuration and merging.
-/// When resolving, values cascade from:
-/// 1. Provider-specific model override
-/// 2. User model config (models.json)
-/// 3. Built-in defaults
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ModelInfoConfig {
-    /// Human-readable display name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-
-    /// Model description.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    /// Maximum context window in tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<i64>,
-
-    /// Maximum output tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<i64>,
-
-    /// Capabilities this model supports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<Vec<Capability>>,
-
-    /// Token limit before auto-compaction triggers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_compact_token_limit: Option<i64>,
-
-    /// Effective context window as percentage (0-100).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effective_context_window_percent: Option<i32>,
-
-    /// Default reasoning effort level.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_reasoning_effort: Option<ReasoningEffort>,
-
-    /// Whether model supports reasoning summaries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supports_reasoning_summaries: Option<bool>,
-
-    /// Whether model supports parallel tool calls.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supports_parallel_tool_calls: Option<bool>,
-
-    /// Default thinking budget in tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_budget_default: Option<i32>,
-}
-
-impl ModelInfoConfig {
-    /// Create a new empty model info config.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the display name.
-    pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
-        self.display_name = Some(name.into());
-        self
-    }
-
-    /// Set the description.
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Set the context window size.
-    pub fn with_context_window(mut self, tokens: i64) -> Self {
-        self.context_window = Some(tokens);
-        self
-    }
-
-    /// Set the max output tokens.
-    pub fn with_max_output_tokens(mut self, tokens: i64) -> Self {
-        self.max_output_tokens = Some(tokens);
-        self
-    }
-
-    /// Set the capabilities.
-    pub fn with_capabilities(mut self, caps: Vec<Capability>) -> Self {
-        self.capabilities = Some(caps);
-        self
-    }
-
-    /// Merge another config into this one.
-    ///
-    /// Values from `other` override values in `self` only if they are Some.
-    pub fn merge_from(&mut self, other: &ModelInfoConfig) {
-        if other.display_name.is_some() {
-            self.display_name.clone_from(&other.display_name);
-        }
-        if other.description.is_some() {
-            self.description.clone_from(&other.description);
-        }
-        if other.context_window.is_some() {
-            self.context_window = other.context_window;
-        }
-        if other.max_output_tokens.is_some() {
-            self.max_output_tokens = other.max_output_tokens;
-        }
-        if other.capabilities.is_some() {
-            self.capabilities.clone_from(&other.capabilities);
-        }
-        if other.auto_compact_token_limit.is_some() {
-            self.auto_compact_token_limit = other.auto_compact_token_limit;
-        }
-        if other.effective_context_window_percent.is_some() {
-            self.effective_context_window_percent = other.effective_context_window_percent;
-        }
-        if other.default_reasoning_effort.is_some() {
-            self.default_reasoning_effort = other.default_reasoning_effort;
-        }
-        if other.supports_reasoning_summaries.is_some() {
-            self.supports_reasoning_summaries = other.supports_reasoning_summaries;
-        }
-        if other.supports_parallel_tool_calls.is_some() {
-            self.supports_parallel_tool_calls = other.supports_parallel_tool_calls;
-        }
-        if other.thinking_budget_default.is_some() {
-            self.thinking_budget_default = other.thinking_budget_default;
-        }
-    }
 }
 
 /// Provider type enumeration.
@@ -242,7 +113,7 @@ impl std::fmt::Display for ProviderType {
 
 /// Provider configuration from JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderJsonConfig {
+pub struct ProviderConfig {
     /// Human-readable provider name.
     pub name: String,
 
@@ -283,7 +154,7 @@ pub struct ProviderJsonConfig {
     pub extra: Option<serde_json::Value>,
 }
 
-impl Default for ProviderJsonConfig {
+impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -304,13 +175,12 @@ impl Default for ProviderJsonConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderModelConfig {
     /// Model ID alias (e.g., "ep-xxx" -> "deepseek-r1").
-    /// Maps the provider-specific model ID to a canonical model ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
 
     /// Override model info for this provider-model combination.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_info_override: Option<ModelInfoConfig>,
+    pub model_info_override: Option<ModelInfo>,
 }
 
 /// Profile for quick provider/model switching.
@@ -425,18 +295,28 @@ pub struct ResolvedModelInfo {
     pub effective_context_window_percent: Option<i32>,
     /// Default reasoning effort level.
     pub default_reasoning_effort: Option<ReasoningEffort>,
-    /// Whether model supports reasoning summaries.
-    pub supports_reasoning_summaries: bool,
-    /// Whether model supports parallel tool calls.
-    pub supports_parallel_tool_calls: bool,
+    /// Supported reasoning effort levels.
+    pub supported_reasoning_levels: Option<Vec<ReasoningEffort>>,
     /// Default thinking budget in tokens.
     pub thinking_budget_default: Option<i32>,
+    /// Base system instructions for this model.
+    pub base_instructions: Option<String>,
 }
 
 impl ResolvedModelInfo {
     /// Check if model has a specific capability.
     pub fn has_capability(&self, cap: Capability) -> bool {
         self.capabilities.contains(&cap)
+    }
+
+    /// Check if model supports reasoning summaries.
+    pub fn supports_reasoning_summaries(&self) -> bool {
+        self.capabilities.contains(&Capability::ReasoningSummaries)
+    }
+
+    /// Check if model supports parallel tool calls.
+    pub fn supports_parallel_tool_calls(&self) -> bool {
+        self.capabilities.contains(&Capability::ParallelToolCalls)
     }
 }
 
@@ -495,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_model_info_config_merge() {
-        let mut base = ModelInfoConfig {
+        let mut base = ModelInfo {
             display_name: Some("Base Model".to_string()),
             context_window: Some(4096),
             max_output_tokens: Some(1024),
@@ -503,9 +383,12 @@ mod tests {
             ..Default::default()
         };
 
-        let override_cfg = ModelInfoConfig {
+        let override_cfg = ModelInfo {
             context_window: Some(8192),
-            supports_parallel_tool_calls: Some(true),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::ParallelToolCalls,
+            ]),
             ..Default::default()
         };
 
@@ -514,7 +397,7 @@ mod tests {
         assert_eq!(base.display_name, Some("Base Model".to_string())); // Not overridden
         assert_eq!(base.context_window, Some(8192)); // Overridden
         assert_eq!(base.max_output_tokens, Some(1024)); // Not overridden
-        assert_eq!(base.supports_parallel_tool_calls, Some(true)); // New value
+        assert!(base.has_capability(Capability::ParallelToolCalls)); // New value
     }
 
     #[test]
@@ -605,5 +488,33 @@ mod tests {
         assert_eq!(json_config.max_tokens, Some(4096));
         assert_eq!(json_config.thinking_budget, Some(5000));
         assert_eq!(json_config.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn test_resolved_model_info_capability_methods() {
+        let info = ResolvedModelInfo {
+            id: "test".to_string(),
+            display_name: "Test".to_string(),
+            description: None,
+            provider: "test".to_string(),
+            context_window: 4096,
+            max_output_tokens: 1024,
+            capabilities: vec![
+                Capability::TextGeneration,
+                Capability::ReasoningSummaries,
+                Capability::ParallelToolCalls,
+            ],
+            auto_compact_token_limit: None,
+            effective_context_window_percent: None,
+            default_reasoning_effort: None,
+            supported_reasoning_levels: None,
+            thinking_budget_default: None,
+            base_instructions: None,
+        };
+
+        assert!(info.supports_reasoning_summaries());
+        assert!(info.supports_parallel_tool_calls());
+        assert!(info.has_capability(Capability::TextGeneration));
+        assert!(!info.has_capability(Capability::Vision));
     }
 }
