@@ -4,6 +4,7 @@ mod capability;
 mod info;
 mod reasoning;
 mod shell_type;
+mod tool;
 mod truncation;
 
 pub use capability::Capability;

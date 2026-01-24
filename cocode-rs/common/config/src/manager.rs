@@ -7,6 +7,8 @@ use crate::builtin;
 use crate::error::ConfigError;
 use crate::loader::ConfigLoader;
 use crate::resolver::ConfigResolver;
+use crate::toml_config::ConfigToml;
+use crate::toml_config::LoggingConfig;
 use crate::types::ActiveState;
 use crate::types::ModelSummary;
 use crate::types::ProviderConfig;
@@ -15,6 +17,7 @@ use crate::types::ProviderType;
 use crate::types::ResolvedModelInfo;
 use crate::types::ResolvedProviderConfig;
 use crate::types::SessionConfigJson;
+use cocode_protocol::Features;
 use cocode_protocol::ModelInfo;
 use std::path::Path;
 use std::path::PathBuf;
@@ -22,13 +25,27 @@ use std::sync::RwLock;
 use tracing::debug;
 use tracing::info;
 
+/// Runtime overrides for provider/model selection.
+///
+/// These take highest precedence in the layered resolution.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeOverrides {
+    /// Override provider name.
+    pub model_provider: Option<String>,
+    /// Override model ID.
+    pub model: Option<String>,
+    /// Override profile name.
+    pub profile: Option<String>,
+}
+
 /// Configuration manager for multi-provider setup.
 ///
 /// Provides thread-safe configuration management with:
-/// - Lazy loading from JSON files
+/// - Lazy loading from JSON and TOML files
 /// - Caching with manual reload
 /// - Runtime provider/model switching
 /// - Profile support for quick switching
+/// - Layered resolution: Runtime > TOML > Active JSON > Profile > Built-in
 ///
 /// # Example
 ///
@@ -61,8 +78,12 @@ pub struct ConfigManager {
     loader: ConfigLoader,
     /// Cached resolver.
     resolver: RwLock<ConfigResolver>,
-    /// Current active state.
+    /// Current active state (from active.json).
     active: RwLock<ActiveState>,
+    /// TOML configuration (from config.toml).
+    config_toml: RwLock<ConfigToml>,
+    /// Runtime overrides (highest precedence).
+    runtime_overrides: RwLock<RuntimeOverrides>,
 }
 
 impl ConfigManager {
@@ -96,6 +117,7 @@ impl ConfigManager {
         );
 
         let active = loaded.active;
+        let config_toml = loaded.config_toml;
 
         debug!(
             path = %config_path.display(),
@@ -107,6 +129,8 @@ impl ConfigManager {
             loader,
             resolver: RwLock::new(resolver),
             active: RwLock::new(active),
+            config_toml: RwLock::new(config_toml),
+            runtime_overrides: RwLock::new(RuntimeOverrides::default()),
         })
     }
 
@@ -119,6 +143,8 @@ impl ConfigManager {
             loader: ConfigLoader::from_path(""),
             resolver: RwLock::new(ConfigResolver::empty()),
             active: RwLock::new(ActiveState::default()),
+            config_toml: RwLock::new(ConfigToml::default()),
+            runtime_overrides: RwLock::new(RuntimeOverrides::default()),
         }
     }
 
@@ -151,17 +177,35 @@ impl ConfigManager {
 
     /// Get the current active provider and model.
     ///
-    /// Returns (provider, model) tuple. If not explicitly set, returns
-    /// the default profile's values or ("openai", "gpt-5").
+    /// Resolution order (highest to lowest precedence):
+    /// 1. Runtime overrides (set via `set_runtime_overrides()`)
+    /// 2. TOML config (`config.toml`)
+    /// 3. Active state (`active.json`)
+    /// 4. Default profile
+    /// 5. Built-in defaults ("openai", "gpt-5")
     pub fn current(&self) -> (String, String) {
-        let active = self.active.read().unwrap();
+        // 1. Check runtime overrides first
+        let runtime = self.runtime_overrides.read().unwrap();
+        if let (Some(provider), Some(model)) = (&runtime.model_provider, &runtime.model) {
+            return (provider.clone(), model.clone());
+        }
+        drop(runtime);
 
-        // If explicitly set, use those values
+        // 2. Check TOML config
+        let toml = self.config_toml.read().unwrap();
+        if let (Some(provider), Some(model)) = (&toml.model_provider, &toml.model) {
+            return (provider.clone(), model.clone());
+        }
+        drop(toml);
+
+        // 3. Check active state (from active.json)
+        let active = self.active.read().unwrap();
         if let (Some(provider), Some(model)) = (&active.provider, &active.model) {
             return (provider.clone(), model.clone());
         }
+        drop(active);
 
-        // Try default profile
+        // 4. Try default profile
         let resolver = self.resolver.read().unwrap();
         if let Some(profile_name) = resolver.default_profile() {
             if let Ok(profile) = resolver.resolve_profile(profile_name) {
@@ -169,8 +213,57 @@ impl ConfigManager {
             }
         }
 
-        // Fallback to built-in default
+        // 5. Fallback to built-in default
         ("openai".to_string(), "gpt-5".to_string())
+    }
+
+    /// Set runtime overrides for provider/model selection.
+    ///
+    /// Runtime overrides take the highest precedence in layered resolution.
+    pub fn set_runtime_overrides(&self, overrides: RuntimeOverrides) {
+        let mut runtime = self.runtime_overrides.write().unwrap();
+        *runtime = overrides;
+    }
+
+    /// Get the current runtime overrides.
+    pub fn runtime_overrides(&self) -> RuntimeOverrides {
+        self.runtime_overrides.read().unwrap().clone()
+    }
+
+    /// Get the TOML configuration.
+    pub fn config_toml(&self) -> ConfigToml {
+        self.config_toml.read().unwrap().clone()
+    }
+
+    /// Get the logging configuration from TOML.
+    ///
+    /// Returns `None` if no logging section is configured.
+    pub fn logging_config(&self) -> Option<LoggingConfig> {
+        self.config_toml.read().unwrap().logging.clone()
+    }
+
+    /// Get the current features configuration.
+    ///
+    /// Combines default features with TOML overrides.
+    pub fn features(&self) -> Features {
+        let toml = self.config_toml.read().unwrap();
+        if let Some(features_toml) = &toml.features {
+            features_toml.clone().into_features()
+        } else {
+            Features::with_defaults()
+        }
+    }
+
+    /// Check if a specific feature is enabled.
+    ///
+    /// Uses the layered features configuration.
+    pub fn is_feature_enabled(&self, feature: cocode_protocol::Feature) -> bool {
+        self.features().enabled(feature)
+    }
+
+    /// Get the model max output tokens from TOML config.
+    pub fn model_max_output_tokens(&self) -> Option<i32> {
+        self.config_toml.read().unwrap().model_max_output_tokens
     }
 
     /// Switch to a specific provider and model.
@@ -255,7 +348,8 @@ impl ConfigManager {
 
     /// Reload configuration from disk.
     ///
-    /// This reloads all configuration files and updates the cached state.
+    /// This reloads all configuration files (JSON and TOML) and updates the cached state.
+    /// Note: Runtime overrides are preserved across reloads.
     pub fn reload(&self) -> Result<(), ConfigError> {
         let loaded = self.loader.load_all()?;
 
@@ -275,6 +369,14 @@ impl ConfigManager {
                 .write()
                 .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
             *active = loaded.active;
+        }
+
+        {
+            let mut config_toml = self
+                .config_toml
+                .write()
+                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
+            *config_toml = loaded.config_toml;
         }
 
         info!("Reloaded configuration");
@@ -426,6 +528,8 @@ impl Clone for ConfigManager {
             loader: ConfigLoader::from_path(&self.config_path),
             resolver: RwLock::new(self.resolver.read().unwrap().clone()),
             active: RwLock::new(self.active.read().unwrap().clone()),
+            config_toml: RwLock::new(self.config_toml.read().unwrap().clone()),
+            runtime_overrides: RwLock::new(self.runtime_overrides.read().unwrap().clone()),
         }
     }
 }
