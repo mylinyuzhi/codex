@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Generic JSON‑Schema subset needed for our tool definitions
+/// Generic JSON‑Schema subset needed for our tool definitions.
+///
+/// Reserved for MCP tool schema support. Currently unused but will be needed
+/// when implementing tool parameter validation and schema generation.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum JsonSchema {
@@ -37,7 +41,10 @@ pub(crate) enum JsonSchema {
     },
 }
 
-/// Whether additional properties are allowed, and if so, any required schema
+/// Whether additional properties are allowed, and if so, any required schema.
+///
+/// Reserved for MCP tool schema support. See `JsonSchema` for details.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub(crate) enum AdditionalProperties {
@@ -45,12 +52,14 @@ pub(crate) enum AdditionalProperties {
     Schema(Box<JsonSchema>),
 }
 
+#[allow(dead_code)]
 impl From<bool> for AdditionalProperties {
     fn from(b: bool) -> Self {
         Self::Boolean(b)
     }
 }
 
+#[allow(dead_code)]
 impl From<JsonSchema> for AdditionalProperties {
     fn from(s: JsonSchema) -> Self {
         Self::Schema(Box::new(s))

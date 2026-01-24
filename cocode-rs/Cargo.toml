@@ -3,6 +3,7 @@ members = [
     "common/error",
     "common/protocol",
     "common/config",
+    "common/otel",
     "utils/file-ignore",
     "utils/file-search",
     "provider-sdks/anthropic",
@@ -40,6 +41,7 @@ license = "Apache-2.0"
 cocode-error = { path = "common/error" }
 cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
+cocode-otel = { path = "common/otel" }
 
 # Internal - provider SDKs (keep original names)
 anthropic-sdk = { path = "provider-sdks/anthropic" }
@@ -75,6 +77,7 @@ bytes = "1.10.1"
 chrono = "0.4.42"
 clap = "4"
 dotenvy = "0.15.7"
+eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
 http = "1.3.1"
@@ -86,6 +89,11 @@ log = "0.4"
 lru = "0.16.3"
 nucleo-matcher = "0.3.1"
 once_cell = "1.20.2"
+opentelemetry = "0.31.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry_sdk = "0.31.0"
 path-absolutize = "3.1.1"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4.1"
@@ -104,9 +112,11 @@ thiserror = "2.0.17"
 time = "0.3"
 tokio = "1"
 tokio-stream = "0.1.18"
+tonic = "0.12"
 tokio-util = "0.7"
 toml = "0.9.5"
 tracing = "0.1.43"
+tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 ts-rs = "11"
 uuid = "1"

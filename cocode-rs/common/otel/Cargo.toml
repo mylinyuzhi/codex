@@ -1,12 +1,12 @@
 [package]
-name = "codex-otel"
+name = "cocode-otel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
 doctest = false
-name = "codex_otel"
+name = "cocode_otel"
 path = "src/lib.rs"
 
 [lints]
@@ -21,10 +21,7 @@ disable-default-metrics-exporter = []
 
 [dependencies]
 chrono = { workspace = true }
-codex-app-server-protocol = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-api = { workspace = true }
-codex-protocol = { workspace = true }
+cocode-utils-absolute-path = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }
@@ -46,7 +43,7 @@ http = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum_macros = { workspace = true }
+strum = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

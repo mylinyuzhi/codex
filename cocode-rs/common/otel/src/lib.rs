@@ -13,10 +13,9 @@ use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
-use codex_protocol::ThreadId;
 use serde::Serialize;
 use std::time::Duration;
-use strum_macros::Display;
+use strum::Display;
 use tracing::Span;
 
 #[derive(Debug, Clone, Serialize, Display)]
@@ -28,7 +27,7 @@ pub enum ToolDecisionSource {
 
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
-    pub(crate) conversation_id: ThreadId,
+    pub(crate) conversation_id: String,
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,

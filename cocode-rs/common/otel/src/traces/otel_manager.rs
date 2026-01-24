@@ -1,17 +1,6 @@
 use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use codex_api::ResponseEvent;
-use codex_app_server_protocol::AuthMode;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
@@ -33,16 +22,17 @@ pub use crate::ToolDecisionSource;
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        conversation_id: ThreadId,
+        conversation_id: impl Into<String>,
         model: &str,
         slug: &str,
         account_id: Option<String>,
         account_email: Option<String>,
-        auth_mode: Option<AuthMode>,
+        auth_mode: Option<&str>,
         log_user_prompts: bool,
         terminal_type: String,
-        session_source: SessionSource,
+        session_source: &str,
     ) -> OtelManager {
+        let conversation_id = conversation_id.into();
         let session_span = trace_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
 
         if let Some(context) = traceparent_context_from_env() {
@@ -71,23 +61,20 @@ impl OtelManager {
         &self.session_span
     }
 
-    pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
-        handle_responses_span.record("otel.name", OtelManager::responses_type(event));
-
-        match event {
-            ResponseEvent::OutputItemDone(item) => {
-                handle_responses_span.record("from", "output_item_done");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
-                    handle_responses_span.record("tool_name", name.as_str());
-                }
-            }
-            ResponseEvent::OutputItemAdded(item) => {
-                handle_responses_span.record("from", "output_item_added");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
-                    handle_responses_span.record("tool_name", name.as_str());
-                }
-            }
-            _ => {}
+    /// Record a response event with type name and optional metadata.
+    pub fn record_response_event(
+        &self,
+        handle_responses_span: &Span,
+        event_type: &str,
+        from: Option<&str>,
+        tool_name: Option<&str>,
+    ) {
+        handle_responses_span.record("otel.name", event_type);
+        if let Some(from) = from {
+            handle_responses_span.record("from", from);
+        }
+        if let Some(tool_name) = tool_name {
+            handle_responses_span.record("tool_name", tool_name);
         }
     }
 
@@ -95,12 +82,12 @@ impl OtelManager {
     pub fn conversation_starts(
         &self,
         provider_name: &str,
-        reasoning_effort: Option<ReasoningEffort>,
-        reasoning_summary: ReasoningSummary,
+        reasoning_effort: Option<&str>,
+        reasoning_summary: &str,
         context_window: Option<i64>,
         auto_compact_token_limit: Option<i64>,
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        approval_policy: &str,
+        sandbox_policy: &str,
         mcp_servers: Vec<&str>,
         active_profile: Option<String>,
     ) {
@@ -117,7 +104,7 @@ impl OtelManager {
             model = %self.metadata.model,
             slug = %self.metadata.slug,
             provider_name = %provider_name,
-            reasoning_effort = reasoning_effort.map(|e| e.to_string()),
+            reasoning_effort = reasoning_effort,
             reasoning_summary = %reasoning_summary,
             context_window = context_window,
             auto_compact_token_limit = auto_compact_token_limit,
@@ -172,7 +159,8 @@ impl OtelManager {
         );
     }
 
-    pub fn log_sse_event<E>(
+    /// Log SSE event with optional validation callback for parsing response data.
+    pub fn log_sse_event_simple<E>(
         &self,
         response: &Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>,
         duration: Duration,
@@ -187,18 +175,6 @@ impl OtelManager {
                     match serde_json::from_str::<serde_json::Value>(&sse.data) {
                         Ok(error) if sse.event == "response.failed" => {
                             self.sse_event_failed(Some(&sse.event), duration, &error);
-                        }
-                        Ok(content) if sse.event == "response.output_item.done" => {
-                            match serde_json::from_value::<ResponseItem>(content) {
-                                Ok(_) => self.sse_event(&sse.event, duration),
-                                Err(_) => {
-                                    self.sse_event_failed(
-                                        Some(&sse.event),
-                                        duration,
-                                        &"failed to parse response.output_item.done",
-                                    );
-                                }
-                            };
                         }
                         Ok(_) => {
                             self.sse_event(&sse.event, duration);
@@ -276,7 +252,7 @@ impl OtelManager {
         }
     }
 
-    pub fn see_event_completed_failed<T>(&self, error: &T)
+    pub fn sse_event_completed_failed<T>(&self, error: &T)
     where
         T: Display,
     {
@@ -326,17 +302,10 @@ impl OtelManager {
         );
     }
 
-    pub fn user_prompt(&self, items: &[UserInput]) {
-        let prompt = items
-            .iter()
-            .flat_map(|item| match item {
-                UserInput::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<String>();
-
+    /// Log user prompt with content and length.
+    pub fn user_prompt(&self, prompt_text: &str, prompt_length: usize) {
         let prompt_to_log = if self.metadata.log_user_prompts {
-            prompt.as_str()
+            prompt_text
         } else {
             "[REDACTED]"
         };
@@ -353,16 +322,17 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
-            prompt_length = %prompt.chars().count(),
+            prompt_length = %prompt_length,
             prompt = %prompt_to_log,
         );
     }
 
+    /// Log tool decision with decision as string.
     pub fn tool_decision(
         &self,
         tool_name: &str,
         call_id: &str,
-        decision: &ReviewDecision,
+        decision: &str,
         source: ToolDecisionSource,
     ) {
         tracing::event!(
@@ -379,7 +349,7 @@ impl OtelManager {
             slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
-            decision = %decision.clone().to_string().to_lowercase(),
+            decision = %decision,
             source = %source.to_string(),
         );
     }
@@ -471,39 +441,6 @@ impl OtelManager {
             success = %success_str,
             output = %output,
         );
-    }
-
-    fn responses_type(event: &ResponseEvent) -> String {
-        match event {
-            ResponseEvent::Created => "created".into(),
-            ResponseEvent::OutputItemDone(item) => OtelManager::responses_item_type(item),
-            ResponseEvent::OutputItemAdded(item) => OtelManager::responses_item_type(item),
-            ResponseEvent::Completed { .. } => "completed".into(),
-            ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
-            ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
-            ResponseEvent::ReasoningContentDelta { .. } => "reasoning_content_delta".into(),
-            ResponseEvent::ReasoningSummaryPartAdded { .. } => {
-                "reasoning_summary_part_added".into()
-            }
-            ResponseEvent::RateLimits(_) => "rate_limits".into(),
-            ResponseEvent::ModelsEtag(_) => "models_etag".into(),
-        }
-    }
-
-    fn responses_item_type(item: &ResponseItem) -> String {
-        match item {
-            ResponseItem::Message { role, .. } => format!("message_from_{role}"),
-            ResponseItem::Reasoning { .. } => "reasoning".into(),
-            ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
-            ResponseItem::FunctionCall { .. } => "function_call".into(),
-            ResponseItem::FunctionCallOutput { .. } => "function_call_output".into(),
-            ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
-            ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
-            ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
-            ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
-            ResponseItem::Compaction { .. } => "compaction".into(),
-            ResponseItem::Other => "other".into(),
-        }
     }
 }
 

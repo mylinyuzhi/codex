@@ -127,7 +127,7 @@ impl OtelProvider {
     {
         self.logger.as_ref().map(|logger| {
             OpenTelemetryTracingBridge::new(logger).with_filter(
-                tracing_subscriber::filter::filter_fn(OtelProvider::codex_export_filter),
+                tracing_subscriber::filter::filter_fn(OtelProvider::otel_export_filter),
             )
         })
     }
@@ -143,8 +143,8 @@ impl OtelProvider {
         })
     }
 
-    pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-        meta.target().starts_with("codex_otel")
+    pub fn otel_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+        meta.target().starts_with("cocode_otel")
     }
 
     pub fn metrics(&self) -> Option<&MetricsClient> {

@@ -53,6 +53,19 @@ pub struct ConfigToml {
     pub features: Option<FeaturesToml>,
 }
 
+impl ConfigToml {
+    /// Resolve features to runtime type.
+    ///
+    /// Returns the configured features merged with defaults, or just defaults
+    /// if no features section is present.
+    pub fn resolve_features(&self) -> cocode_protocol::Features {
+        self.features
+            .clone()
+            .map(|f| f.into_features())
+            .unwrap_or_else(cocode_protocol::Features::with_defaults)
+    }
+}
+
 /// Logging configuration section.
 ///
 /// # Example
@@ -116,6 +129,18 @@ impl FeaturesToml {
     /// Check if any features are configured.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Validate feature keys and return any unknown keys.
+    ///
+    /// Returns a list of keys that don't match any known feature.
+    /// Can be used to warn users about typos in their config.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        self.entries
+            .keys()
+            .filter(|k| !cocode_protocol::is_known_feature_key(k))
+            .cloned()
+            .collect()
     }
 }
 
@@ -200,5 +225,54 @@ shell_tool = false
         assert!(config.level.is_none());
         assert!(config.location.is_none());
         assert!(config.target.is_none());
+    }
+
+    #[test]
+    fn test_config_toml_resolve_features_with_features() {
+        let mut entries = BTreeMap::new();
+        entries.insert("subagent".to_string(), true);
+
+        let config = ConfigToml {
+            features: Some(FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let features = config.resolve_features();
+        assert!(features.enabled(cocode_protocol::Feature::Subagent));
+    }
+
+    #[test]
+    fn test_config_toml_resolve_features_without_features() {
+        let config = ConfigToml::default();
+        let features = config.resolve_features();
+
+        // Should return defaults
+        assert!(features.enabled(cocode_protocol::Feature::ShellTool));
+        assert!(!features.enabled(cocode_protocol::Feature::Subagent));
+    }
+
+    #[test]
+    fn test_features_toml_unknown_keys_empty() {
+        let mut entries = BTreeMap::new();
+        entries.insert("subagent".to_string(), true);
+        entries.insert("shell_tool".to_string(), false);
+
+        let features = FeaturesToml { entries };
+        assert!(features.unknown_keys().is_empty());
+    }
+
+    #[test]
+    fn test_features_toml_unknown_keys_with_unknown() {
+        let mut entries = BTreeMap::new();
+        entries.insert("subagent".to_string(), true);
+        entries.insert("unknown_feature".to_string(), true);
+        entries.insert("another_unknown".to_string(), false);
+
+        let features = FeaturesToml { entries };
+        let unknown = features.unknown_keys();
+
+        assert_eq!(unknown.len(), 2);
+        assert!(unknown.contains(&"unknown_feature".to_string()));
+        assert!(unknown.contains(&"another_unknown".to_string()));
     }
 }
