@@ -4,6 +4,11 @@ members = [
     "common/protocol",
     "common/config",
     "common/otel",
+    "core/api",
+    "core/message",
+    "core/tools",
+    "core/context",
+    "core/prompt",
     "utils/file-ignore",
     "utils/file-search",
     "provider-sdks/anthropic",
@@ -49,6 +54,13 @@ cocode-error = { path = "common/error" }
 cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
 cocode-otel = { path = "common/otel" }
+
+# Internal - core
+cocode-api = { path = "core/api" }
+cocode-message = { path = "core/message" }
+cocode-tools = { path = "core/tools" }
+cocode-context = { path = "core/context" }
+cocode-prompt = { path = "core/prompt" }
 
 # Internal - provider SDKs (keep original names)
 anthropic-sdk = { path = "provider-sdks/anthropic" }
@@ -98,6 +110,7 @@ eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
 http = "1.3.1"
+humantime-serde = "1"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 keyring = "3"

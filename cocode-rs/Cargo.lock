@@ -1629,6 +1629,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-api"
+version = "0.0.0"
+dependencies = [
+ "cocode-error",
+ "cocode-protocol",
+ "futures",
+ "humantime-serde",
+ "hyper-sdk",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-apply-patch"
 version = "0.0.0"
 dependencies = [
@@ -1667,6 +1684,21 @@ dependencies = [
  "snafu",
  "snafu-virtstack",
  "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "cocode-context"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "cocode-error",
+ "cocode-protocol",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tokio",
  "tracing",
 ]
 
@@ -1766,6 +1798,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-message"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "cocode-api",
+ "cocode-protocol",
+ "hyper-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "cocode-otel"
 version = "0.0.0"
 dependencies = [
@@ -1791,9 +1837,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-prompt"
+version = "0.0.0"
+dependencies = [
+ "cocode-context",
+ "cocode-error",
+ "cocode-protocol",
+ "insta",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-protocol"
 version = "0.0.0"
 dependencies = [
+ "humantime-serde",
  "serde",
  "serde_json",
  "strum 0.27.2",
@@ -1920,6 +1982,33 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "uds_windows",
+]
+
+[[package]]
+name = "cocode-tools"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "cocode-apply-patch",
+ "cocode-error",
+ "cocode-file-ignore",
+ "cocode-file-search",
+ "cocode-message",
+ "cocode-protocol",
+ "cocode-shell-parser",
+ "globset",
+ "hyper-sdk",
+ "regex",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -4180,6 +4269,16 @@ name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
+name = "humantime-serde"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
+dependencies = [
+ "humantime",
+ "serde",
+]
 
 [[package]]
 name = "hyper"
