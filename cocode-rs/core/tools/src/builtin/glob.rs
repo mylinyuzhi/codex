@@ -1,5 +1,6 @@
 //! Glob tool for pattern-based file search.
 
+use super::prompts;
 use crate::context::ToolContext;
 use crate::error::{Result, ToolError};
 use crate::tool::Tool;
@@ -54,7 +55,7 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "Find files matching glob patterns"
+        prompts::GLOB_DESCRIPTION
     }
 
     fn input_schema(&self) -> Value {

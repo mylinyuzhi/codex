@@ -71,6 +71,14 @@ pub enum ToolError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Tool call rejected by a hook.
+    #[snafu(display("Hook rejected: {reason}"))]
+    HookRejected {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 /// Create a Location from the caller's position.
@@ -153,6 +161,15 @@ impl ToolError {
         }
     }
 
+    /// Create a hook rejected error.
+    #[track_caller]
+    pub fn hook_rejected(reason: impl Into<String>) -> Self {
+        Self::HookRejected {
+            reason: reason.into(),
+            location: caller_location(),
+        }
+    }
+
     /// Check if this is a retriable error.
     pub fn is_retriable(&self) -> bool {
         matches!(self, ToolError::Timeout { .. } | ToolError::Io { .. })
@@ -175,6 +192,7 @@ impl ErrorExt for ToolError {
             ToolError::Aborted { .. } => StatusCode::Cancelled,
             ToolError::Io { .. } => StatusCode::IoError,
             ToolError::Internal { .. } => StatusCode::Internal,
+            ToolError::HookRejected { .. } => StatusCode::PermissionDenied, // Hook rejection is a form of denial
         }
     }
 

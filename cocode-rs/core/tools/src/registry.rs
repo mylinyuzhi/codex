@@ -2,12 +2,22 @@
 //!
 //! This module provides [`ToolRegistry`] which manages the collection of
 //! available tools, including both built-in tools and MCP tools.
+//!
+//! ## MCP Tool Naming Convention
+//!
+//! MCP tools are registered with the naming convention `mcp__<server>__<tool>` to avoid
+//! name collisions between different MCP servers and built-in tools.
 
+use crate::mcp_tool::McpToolWrapper;
 use crate::tool::Tool;
+use cocode_mcp_types::Tool as McpToolDef;
+use cocode_rmcp_client::RmcpClient;
 use hyper_sdk::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use tracing::debug;
 
 /// Information about an MCP tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +73,10 @@ impl ToolRegistry {
         self.aliases.insert(alias, name);
     }
 
-    /// Register an MCP server's tools.
+    /// Register an MCP server's tools (info only, not executable).
+    ///
+    /// This registers the tool metadata but doesn't make them executable.
+    /// For executable MCP tools, use [`Self::register_mcp_tools_executable`].
     pub fn register_mcp_server(&mut self, server_name: &str, tools: Vec<McpToolInfo>) {
         for mut tool in tools {
             tool.server = server_name.to_string();
@@ -72,10 +85,71 @@ impl ToolRegistry {
         }
     }
 
+    /// Register MCP tools as executable tools using the Tool trait.
+    ///
+    /// This registers MCP tools with the `mcp__<server>__<tool>` naming convention
+    /// and makes them executable through the standard tool execution pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_name` - Name of the MCP server
+    /// * `tools` - Tool definitions from the MCP server
+    /// * `client` - Shared MCP client for executing tool calls (uses `Arc<RmcpClient>`
+    ///   not `Arc<Mutex<...>>` because RmcpClient has internal synchronization)
+    /// * `timeout` - Timeout for tool calls
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let client = Arc::new(rmcp_client);
+    /// registry.register_mcp_tools_executable(
+    ///     "filesystem",
+    ///     mcp_tools,
+    ///     client,
+    ///     Duration::from_secs(30),
+    /// );
+    /// ```
+    pub fn register_mcp_tools_executable(
+        &mut self,
+        server_name: &str,
+        tools: Vec<McpToolDef>,
+        client: Arc<RmcpClient>,
+        timeout: Duration,
+    ) {
+        for tool_def in tools {
+            let tool_name = tool_def.name.clone();
+            let wrapper =
+                McpToolWrapper::new(server_name.to_string(), tool_def, client.clone(), timeout);
+            let qualified_name = wrapper.qualified_name();
+
+            debug!(
+                server = %server_name,
+                tool = %tool_name,
+                qualified = %qualified_name,
+                "Registering MCP tool"
+            );
+
+            // Register as executable tool
+            self.tools.insert(qualified_name.clone(), Arc::new(wrapper));
+
+            // Also keep info in mcp_tools for metadata queries
+            self.mcp_tools.insert(
+                qualified_name,
+                McpToolInfo {
+                    server: server_name.to_string(),
+                    name: tool_name,
+                    description: None, // Could be added from tool_def if needed
+                    input_schema: serde_json::json!({}), // Simplified
+                },
+            );
+        }
+    }
+
     /// Unregister an MCP server's tools.
     pub fn unregister_mcp_server(&mut self, server_name: &str) {
         let prefix = format!("mcp__{server_name}_");
         self.mcp_tools.retain(|name, _| !name.starts_with(&prefix));
+        self.tools.retain(|name, _| !name.starts_with(&prefix));
     }
 
     /// Get a tool by name.

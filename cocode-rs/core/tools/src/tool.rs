@@ -80,6 +80,39 @@ pub trait Tool: Send + Sync {
         ConcurrencySafety::Safe
     }
 
+    /// Check if this tool is safe to run concurrently with the given input.
+    ///
+    /// Default delegates to static [`concurrency_safety`](Tool::concurrency_safety).
+    /// Override for tools like Bash where safety depends on the command
+    /// (e.g., read-only commands are safe for concurrent execution).
+    fn is_concurrency_safe_for(&self, _input: &Value) -> bool {
+        matches!(self.concurrency_safety(), ConcurrencySafety::Safe)
+    }
+
+    /// Whether this tool only reads state (never writes files/state).
+    ///
+    /// Used for plan mode filtering and permission decisions.
+    /// Default: `true` (safer default — most tools are read-only).
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    /// Maximum result size in characters before truncation.
+    ///
+    /// Default: 30,000 chars (matches Claude Code default).
+    /// Override for tools that produce larger output (e.g., Read: 100,000).
+    fn max_result_size_chars(&self) -> i32 {
+        30_000
+    }
+
+    /// Whether this tool is enabled in the current context.
+    ///
+    /// Default: always enabled. Override for feature-gated tools
+    /// (e.g., LSP requires LSP server, WebSearch requires API key).
+    fn is_enabled(&self, _ctx: &ToolContext) -> bool {
+        true
+    }
+
     /// Validate the input before execution.
     ///
     /// Default implementation checks against JSON schema.
@@ -233,6 +266,12 @@ mod tests {
         let tool = DummyTool;
         assert_eq!(tool.name(), "dummy");
         assert!(tool.is_concurrent_safe());
+        // New trait methods with defaults
+        assert!(tool.is_concurrency_safe_for(&serde_json::json!({})));
+        assert!(tool.is_read_only());
+        assert_eq!(tool.max_result_size_chars(), 30_000);
+        let ctx = ToolContext::new("call-1", "session-1", std::path::PathBuf::from("/tmp"));
+        assert!(tool.is_enabled(&ctx));
     }
 
     #[tokio::test]

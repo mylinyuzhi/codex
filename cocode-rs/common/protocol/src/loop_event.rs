@@ -342,31 +342,35 @@ pub struct RawStreamEvent {
 pub struct TokenUsage {
     /// Input tokens used.
     #[serde(default)]
-    pub input_tokens: i32,
+    pub input_tokens: i64,
     /// Output tokens used.
     #[serde(default)]
-    pub output_tokens: i32,
+    pub output_tokens: i64,
     /// Cache read tokens (if applicable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_tokens: Option<i32>,
+    pub cache_read_tokens: Option<i64>,
     /// Cache creation tokens (if applicable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_tokens: Option<i32>,
+    pub cache_creation_tokens: Option<i64>,
+    /// Reasoning tokens (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<i64>,
 }
 
 impl TokenUsage {
     /// Create a new TokenUsage.
-    pub fn new(input_tokens: i32, output_tokens: i32) -> Self {
+    pub fn new(input_tokens: i64, output_tokens: i64) -> Self {
         Self {
             input_tokens,
             output_tokens,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         }
     }
 
     /// Get total tokens used.
-    pub fn total(&self) -> i32 {
+    pub fn total(&self) -> i64 {
         self.input_tokens + self.output_tokens
     }
 }
@@ -541,8 +545,10 @@ pub struct McpServerInfo {
 pub enum HookEventType {
     /// Before a tool call.
     PreToolCall,
-    /// After a tool call.
+    /// After a successful tool call.
     PostToolCall,
+    /// After a failed tool call.
+    PostToolCallFailure,
     /// On session start.
     SessionStart,
     /// On session end.
@@ -557,6 +563,7 @@ impl HookEventType {
         match self {
             HookEventType::PreToolCall => "pre_tool_call",
             HookEventType::PostToolCall => "post_tool_call",
+            HookEventType::PostToolCallFailure => "post_tool_call_failure",
             HookEventType::SessionStart => "session_start",
             HookEventType::SessionEnd => "session_end",
             HookEventType::PromptSubmit => "prompt_submit",
@@ -589,9 +596,9 @@ mod tests {
     #[test]
     fn test_token_usage() {
         let usage = TokenUsage::new(100, 50);
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 50);
-        assert_eq!(usage.total(), 150);
+        assert_eq!(usage.input_tokens, 100i64);
+        assert_eq!(usage.output_tokens, 50i64);
+        assert_eq!(usage.total(), 150i64);
     }
 
     #[test]

@@ -64,10 +64,10 @@ pub struct MessageHistory {
     compacted_summary: Option<String>,
     /// Total input tokens used.
     #[serde(default)]
-    total_input_tokens: i32,
+    total_input_tokens: i64,
     /// Total output tokens used.
     #[serde(default)]
-    total_output_tokens: i32,
+    total_output_tokens: i64,
     /// Configuration.
     #[serde(default)]
     config: HistoryConfig,
@@ -144,6 +144,7 @@ impl MessageHistory {
             output_tokens: self.total_output_tokens,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         }
     }
 
@@ -230,6 +231,87 @@ impl MessageHistory {
         self.compacted_summary = None;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
+    }
+
+    /// Micro-compact: Clear old tool result content to save tokens.
+    ///
+    /// This removes the content of tool results in older turns while keeping
+    /// the most recent `keep_recent` tool results intact.
+    ///
+    /// Returns the number of tool results that were compacted.
+    pub fn micro_compact(&mut self, keep_recent: i32) -> i32 {
+        let mut compacted_count = 0;
+        let total_turns = self.turns.len();
+
+        // Count total tool calls across all turns
+        let total_tool_calls: i32 = self.turns.iter().map(|t| t.tool_calls.len() as i32).sum();
+
+        if total_tool_calls <= keep_recent {
+            return 0; // Nothing to compact
+        }
+
+        // Process turns from oldest to newest, clearing tool outputs
+        // until we've kept only the most recent `keep_recent` results
+        let mut kept = 0;
+        let skip_count = (total_tool_calls - keep_recent).max(0) as usize;
+        let mut processed = 0;
+
+        for turn in self.turns.iter_mut() {
+            for tool_call in turn.tool_calls.iter_mut() {
+                if processed < skip_count {
+                    // Clear this tool's output
+                    if tool_call.output.is_some() {
+                        tool_call.output = Some(cocode_protocol::ToolResultContent::Text(
+                            "[micro-compacted]".to_string(),
+                        ));
+                        compacted_count += 1;
+                    }
+                    processed += 1;
+                } else {
+                    kept += 1;
+                }
+            }
+        }
+
+        tracing::debug!(
+            total_turns,
+            total_tool_calls,
+            compacted_count,
+            kept,
+            "Micro-compaction complete"
+        );
+
+        compacted_count
+    }
+
+    /// Add a tool result to the current turn.
+    pub fn add_tool_result(
+        &mut self,
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        output: cocode_protocol::ToolResultContent,
+        is_error: bool,
+    ) {
+        if let Some(turn) = self.current_turn_mut() {
+            let mut tool_call =
+                crate::turn::TrackedToolCall::from_parts(call_id, name, serde_json::Value::Null);
+            if is_error {
+                match &output {
+                    cocode_protocol::ToolResultContent::Text(t) => tool_call.fail(t.clone()),
+                    cocode_protocol::ToolResultContent::Structured(v) => {
+                        tool_call.fail(v.to_string())
+                    }
+                }
+            } else {
+                tool_call.complete(output);
+            }
+            turn.add_tool_call(tool_call);
+        }
+    }
+
+    /// Get mutable access to turns (for adding tool results).
+    pub fn turns_mut(&mut self) -> &mut Vec<Turn> {
+        &mut self.turns
     }
 
     /// Get configuration.

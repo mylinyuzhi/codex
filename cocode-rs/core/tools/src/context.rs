@@ -6,9 +6,10 @@
 
 use cocode_protocol::{LoopEvent, PermissionMode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -51,11 +52,60 @@ impl ApprovalStore {
     }
 }
 
+/// State of a file that has been read.
+///
+/// Tracks content, timestamps, and access patterns for read-before-edit validation.
+#[derive(Debug, Clone)]
+pub struct FileReadState {
+    /// File content at time of read (None if partial or too large).
+    pub content: Option<String>,
+    /// When this read state was recorded.
+    pub timestamp: SystemTime,
+    /// File modification time at time of read.
+    pub file_mtime: Option<SystemTime>,
+    /// Line offset of the read (None if from start).
+    pub offset: Option<i32>,
+    /// Line limit of the read (None if no limit).
+    pub limit: Option<i32>,
+    /// Whether the entire file was read.
+    pub is_complete_read: bool,
+    /// Number of times this file has been accessed.
+    pub access_count: i32,
+}
+
+impl FileReadState {
+    /// Create a new read state for a complete file read.
+    pub fn complete(content: String, file_mtime: Option<SystemTime>) -> Self {
+        Self {
+            content: Some(content),
+            timestamp: SystemTime::now(),
+            file_mtime,
+            offset: None,
+            limit: None,
+            is_complete_read: true,
+            access_count: 1,
+        }
+    }
+
+    /// Create a new read state for a partial file read.
+    pub fn partial(offset: i32, limit: i32, file_mtime: Option<SystemTime>) -> Self {
+        Self {
+            content: None,
+            timestamp: SystemTime::now(),
+            file_mtime,
+            offset: Some(offset),
+            limit: Some(limit),
+            is_complete_read: false,
+            access_count: 1,
+        }
+    }
+}
+
 /// Tracks files that have been read or modified.
 #[derive(Debug, Clone, Default)]
 pub struct FileTracker {
-    /// Files that have been read.
-    read_files: HashSet<PathBuf>,
+    /// Files that have been read, with their read state.
+    read_files: HashMap<PathBuf, FileReadState>,
     /// Files that have been modified.
     modified_files: HashSet<PathBuf>,
 }
@@ -66,9 +116,31 @@ impl FileTracker {
         Self::default()
     }
 
-    /// Record a file read.
+    /// Record a file read (simple — backward-compatible).
     pub fn record_read(&mut self, path: impl Into<PathBuf>) {
-        self.read_files.insert(path.into());
+        let path = path.into();
+        if let Some(state) = self.read_files.get_mut(&path) {
+            state.access_count += 1;
+            state.timestamp = SystemTime::now();
+        } else {
+            self.read_files.insert(
+                path,
+                FileReadState {
+                    content: None,
+                    timestamp: SystemTime::now(),
+                    file_mtime: None,
+                    offset: None,
+                    limit: None,
+                    is_complete_read: false,
+                    access_count: 1,
+                },
+            );
+        }
+    }
+
+    /// Record a file read with full state.
+    pub fn record_read_with_state(&mut self, path: impl Into<PathBuf>, state: FileReadState) {
+        self.read_files.insert(path.into(), state);
     }
 
     /// Record a file modification.
@@ -78,7 +150,12 @@ impl FileTracker {
 
     /// Check if a file has been read.
     pub fn was_read(&self, path: &PathBuf) -> bool {
-        self.read_files.contains(path)
+        self.read_files.contains_key(path)
+    }
+
+    /// Get the read state for a file.
+    pub fn read_state(&self, path: &PathBuf) -> Option<&FileReadState> {
+        self.read_files.get(path)
     }
 
     /// Check if a file has been modified.
@@ -86,9 +163,9 @@ impl FileTracker {
         self.modified_files.contains(path)
     }
 
-    /// Get all read files.
-    pub fn read_files(&self) -> &HashSet<PathBuf> {
-        &self.read_files
+    /// Get all read file paths.
+    pub fn read_files(&self) -> Vec<&PathBuf> {
+        self.read_files.keys().collect()
     }
 
     /// Get all modified files.
@@ -100,20 +177,26 @@ impl FileTracker {
 /// Context for tool execution.
 ///
 /// This provides everything a tool needs during execution:
-/// - Call identification
-/// - Working directory
+/// - Call identification (call_id, turn_id, session_id, agent_id)
+/// - Working directory and additional directories
 /// - Permission mode and approvals
 /// - Event channel for progress updates
 /// - Cancellation support
-/// - File tracking
+/// - File tracking with content/timestamp validation
 #[derive(Clone)]
 pub struct ToolContext {
     /// Unique call ID for this execution.
     pub call_id: String,
     /// Session ID.
     pub session_id: String,
+    /// Turn ID for the current conversation turn.
+    pub turn_id: String,
+    /// Agent ID (set when running inside a sub-agent).
+    pub agent_id: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
+    /// Additional working directories (e.g., for multi-root workspaces).
+    pub additional_working_directories: Vec<PathBuf>,
     /// Permission mode for this execution.
     pub permission_mode: PermissionMode,
     /// Channel for emitting loop events.
@@ -132,7 +215,10 @@ impl ToolContext {
         Self {
             call_id: call_id.into(),
             session_id: session_id.into(),
+            turn_id: String::new(),
+            agent_id: None,
             cwd,
+            additional_working_directories: Vec::new(),
             permission_mode: PermissionMode::Default,
             event_tx: None,
             cancel_token: CancellationToken::new(),
@@ -168,6 +254,24 @@ impl ToolContext {
     /// Set the file tracker.
     pub fn with_file_tracker(mut self, tracker: Arc<Mutex<FileTracker>>) -> Self {
         self.file_tracker = tracker;
+        self
+    }
+
+    /// Set the turn ID.
+    pub fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
+        self.turn_id = turn_id.into();
+        self
+    }
+
+    /// Set the agent ID.
+    pub fn with_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// Set additional working directories.
+    pub fn with_additional_working_directories(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.additional_working_directories = dirs;
         self
     }
 
@@ -216,9 +320,21 @@ impl ToolContext {
         self.cancel_token.cancelled().await
     }
 
-    /// Record a file read.
+    /// Record a file read (simple — backward-compatible).
     pub async fn record_file_read(&self, path: impl Into<PathBuf>) {
         self.file_tracker.lock().await.record_read(path);
+    }
+
+    /// Record a file read with full state tracking.
+    pub async fn record_file_read_with_state(
+        &self,
+        path: impl Into<PathBuf>,
+        state: FileReadState,
+    ) {
+        self.file_tracker
+            .lock()
+            .await
+            .record_read_with_state(path, state);
     }
 
     /// Record a file modification.
@@ -229,6 +345,11 @@ impl ToolContext {
     /// Check if a file was read.
     pub async fn was_file_read(&self, path: &PathBuf) -> bool {
         self.file_tracker.lock().await.was_read(path)
+    }
+
+    /// Get the read state for a file.
+    pub async fn file_read_state(&self, path: &PathBuf) -> Option<FileReadState> {
+        self.file_tracker.lock().await.read_state(path).cloned()
     }
 
     /// Check if a file was modified.
@@ -273,6 +394,8 @@ impl std::fmt::Debug for ToolContext {
         f.debug_struct("ToolContext")
             .field("call_id", &self.call_id)
             .field("session_id", &self.session_id)
+            .field("turn_id", &self.turn_id)
+            .field("agent_id", &self.agent_id)
             .field("cwd", &self.cwd)
             .field("permission_mode", &self.permission_mode)
             .field("is_cancelled", &self.is_cancelled())
@@ -284,7 +407,10 @@ impl std::fmt::Debug for ToolContext {
 pub struct ToolContextBuilder {
     call_id: String,
     session_id: String,
+    turn_id: String,
+    agent_id: Option<String>,
     cwd: PathBuf,
+    additional_working_directories: Vec<PathBuf>,
     permission_mode: PermissionMode,
     event_tx: Option<mpsc::Sender<LoopEvent>>,
     cancel_token: CancellationToken,
@@ -298,7 +424,10 @@ impl ToolContextBuilder {
         Self {
             call_id: call_id.into(),
             session_id: session_id.into(),
+            turn_id: String::new(),
+            agent_id: None,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            additional_working_directories: Vec::new(),
             permission_mode: PermissionMode::Default,
             event_tx: None,
             cancel_token: CancellationToken::new(),
@@ -310,6 +439,24 @@ impl ToolContextBuilder {
     /// Set the working directory.
     pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = cwd.into();
+        self
+    }
+
+    /// Set the turn ID.
+    pub fn turn_id(mut self, turn_id: impl Into<String>) -> Self {
+        self.turn_id = turn_id.into();
+        self
+    }
+
+    /// Set the agent ID.
+    pub fn agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// Set additional working directories.
+    pub fn additional_working_directories(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.additional_working_directories = dirs;
         self
     }
 
@@ -348,7 +495,10 @@ impl ToolContextBuilder {
         ToolContext {
             call_id: self.call_id,
             session_id: self.session_id,
+            turn_id: self.turn_id,
+            agent_id: self.agent_id,
             cwd: self.cwd,
+            additional_working_directories: self.additional_working_directories,
             permission_mode: self.permission_mode,
             event_tx: self.event_tx,
             cancel_token: self.cancel_token,

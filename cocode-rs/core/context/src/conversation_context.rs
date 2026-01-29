@@ -3,7 +3,7 @@
 //! Combines environment info, budget, tool state, memory, and configuration
 //! into a single context value used by the prompt builder.
 
-use cocode_protocol::{CompactConfig, PermissionMode, SessionMemoryConfig, ThinkingConfig};
+use cocode_protocol::{CompactConfig, PermissionMode, SessionMemoryConfig, ThinkingLevel};
 use serde::{Deserialize, Serialize};
 
 use crate::budget::ContextBudget;
@@ -87,7 +87,7 @@ pub struct ConversationContext {
     /// Permission mode for the session.
     pub permission_mode: PermissionMode,
     /// Thinking/reasoning configuration.
-    pub thinking_config: Option<ThinkingConfig>,
+    pub thinking_level: Option<ThinkingLevel>,
     /// Compaction configuration.
     pub compact_config: CompactConfig,
     /// Session memory configuration.
@@ -128,7 +128,7 @@ pub struct ConversationContextBuilder {
     memory_files: Vec<MemoryFile>,
     injections: Vec<ContextInjection>,
     permission_mode: PermissionMode,
-    thinking_config: Option<ThinkingConfig>,
+    thinking_level: Option<ThinkingLevel>,
     compact_config: CompactConfig,
     session_memory_config: SessionMemoryConfig,
     subagent_type: Option<SubagentType>,
@@ -170,8 +170,8 @@ impl ConversationContextBuilder {
         self
     }
 
-    pub fn thinking_config(mut self, config: ThinkingConfig) -> Self {
-        self.thinking_config = Some(config);
+    pub fn thinking_level(mut self, config: ThinkingLevel) -> Self {
+        self.thinking_level = Some(config);
         self
     }
 
@@ -210,7 +210,7 @@ impl ConversationContextBuilder {
             memory_files: self.memory_files,
             injections: self.injections,
             permission_mode: self.permission_mode,
-            thinking_config: self.thinking_config,
+            thinking_level: self.thinking_level,
             compact_config: self.compact_config,
             session_memory_config: self.session_memory_config,
             subagent_type: self.subagent_type,

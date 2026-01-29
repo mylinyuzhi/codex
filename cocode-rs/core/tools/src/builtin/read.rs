@@ -1,5 +1,6 @@
 //! Read tool for reading file contents.
 
+use super::prompts;
 use crate::context::ToolContext;
 use crate::error::{Result, ToolError};
 use crate::tool::Tool;
@@ -53,7 +54,7 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read file contents from the local filesystem"
+        prompts::READ_DESCRIPTION
     }
 
     fn input_schema(&self) -> Value {
@@ -79,6 +80,10 @@ impl Tool for ReadTool {
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
         ConcurrencySafety::Safe
+    }
+
+    fn max_result_size_chars(&self) -> i32 {
+        100_000
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -113,6 +118,9 @@ impl Tool for ReadTool {
             )));
         }
 
+        // Get file modification time for tracking
+        let file_mtime = metadata.modified().ok();
+
         // Read file
         let content = fs::read_to_string(&path)
             .await
@@ -122,12 +130,13 @@ impl Tool for ReadTool {
         let lines: Vec<&str> = content.lines().collect();
         let start = offset.max(0) as usize;
         let end = (start + limit as usize).min(lines.len());
+        let is_complete = start == 0 && end >= lines.len();
 
-        // Format with line numbers
+        // Format with line numbers (cat -n format)
         let mut output = String::new();
         for (idx, line) in lines[start..end].iter().enumerate() {
             let line_num = start + idx + 1;
-            // Truncate long lines
+            // Truncate lines > 2000 characters
             let truncated = if line.len() > 2000 {
                 format!("{}...", &line[..2000])
             } else {
@@ -136,8 +145,14 @@ impl Tool for ReadTool {
             output.push_str(&format!("{:>6}\t{}\n", line_num, truncated));
         }
 
-        // Record file read
-        ctx.record_file_read(&path).await;
+        // Record file read with full state tracking
+        use crate::context::FileReadState;
+        let read_state = if is_complete {
+            FileReadState::complete(content.clone(), file_mtime)
+        } else {
+            FileReadState::partial(offset, limit, file_mtime)
+        };
+        ctx.record_file_read_with_state(&path, read_state).await;
 
         // Create output with file read modifier
         let mut result = ToolOutput::text(output);

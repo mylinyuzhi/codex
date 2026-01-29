@@ -225,6 +225,9 @@ impl Turn {
         if let Some(cache_creation) = usage.cache_creation_tokens {
             *self.usage.cache_creation_tokens.get_or_insert(0) += cache_creation;
         }
+        if let Some(reasoning) = usage.reasoning_tokens {
+            *self.usage.reasoning_tokens.get_or_insert(0) += reasoning;
+        }
     }
 
     /// Complete the turn.

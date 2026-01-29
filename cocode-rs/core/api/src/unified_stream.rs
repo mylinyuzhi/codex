@@ -4,29 +4,14 @@
 //! for both streaming and non-streaming API responses. The agent loop can use
 //! the same code path regardless of whether streaming is enabled.
 
-use crate::aggregation::AggregationState;
 use crate::error::{ApiError, Result};
 use cocode_protocol::TokenUsage as ProtocolUsage;
 use hyper_sdk::{
-    ContentBlock, FinishReason, GenerateResponse, StreamProcessor, StreamSnapshot, StreamUpdate,
+    ContentBlock, FinishReason, GenerateResponse, Message, ProviderMetadata, Role, StreamProcessor,
+    StreamSnapshot, StreamUpdate, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-
-/// Convert i64 to i32 with saturation and logging on overflow.
-pub(crate) fn saturating_i64_to_i32(value: i64, field: &str) -> i32 {
-    match i32::try_from(value) {
-        Ok(v) => v,
-        Err(_) => {
-            tracing::warn!(
-                field,
-                value,
-                "Token count exceeds i32::MAX, clamping to i32::MAX"
-            );
-            if value > 0 { i32::MAX } else { i32::MIN }
-        }
-    }
-}
 
 /// Type of result from the unified stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,8 +134,6 @@ enum UnifiedStreamInner {
     Streaming(StreamProcessor),
     /// Non-streaming mode with a single response.
     NonStreaming(Option<GenerateResponse>),
-    /// Already consumed.
-    Consumed,
 }
 
 /// Unified abstraction for streaming and non-streaming API responses.
@@ -161,7 +144,6 @@ enum UnifiedStreamInner {
 /// it yields a single result with all content.
 pub struct UnifiedStream {
     inner: UnifiedStreamInner,
-    state: AggregationState,
     event_tx: Option<mpsc::Sender<StreamUpdate>>,
 }
 
@@ -170,7 +152,6 @@ impl UnifiedStream {
     pub fn from_stream(processor: StreamProcessor) -> Self {
         Self {
             inner: UnifiedStreamInner::Streaming(processor),
-            state: AggregationState::new(),
             event_tx: None,
         }
     }
@@ -179,7 +160,6 @@ impl UnifiedStream {
     pub fn from_response(response: GenerateResponse) -> Self {
         Self {
             inner: UnifiedStreamInner::NonStreaming(Some(response)),
-            state: AggregationState::new(),
             event_tx: None,
         }
     }
@@ -194,47 +174,24 @@ impl UnifiedStream {
     ///
     /// Returns `None` when the stream is complete.
     pub async fn next(&mut self) -> Option<Result<StreamingQueryResult>> {
-        // Check what mode we're in without borrowing self.inner
-        let is_streaming = matches!(self.inner, UnifiedStreamInner::Streaming(_));
-        let is_non_streaming = matches!(self.inner, UnifiedStreamInner::NonStreaming(_));
-
-        if is_streaming {
-            // Process streaming - we need to take and put back the processor
-            let processor = match std::mem::replace(&mut self.inner, UnifiedStreamInner::Consumed) {
-                UnifiedStreamInner::Streaming(p) => p,
-                _ => unreachable!(),
-            };
-            let (result, processor) = self.process_streaming(processor).await;
-            if let Some(p) = processor {
-                self.inner = UnifiedStreamInner::Streaming(p);
+        match &mut self.inner {
+            UnifiedStreamInner::Streaming(processor) => {
+                Self::process_streaming_event(processor, &self.event_tx).await
             }
-            result
-        } else if is_non_streaming {
-            // Process non-streaming
-            let response = match std::mem::replace(&mut self.inner, UnifiedStreamInner::Consumed) {
-                UnifiedStreamInner::NonStreaming(r) => r,
-                _ => unreachable!(),
-            };
-            Self::process_non_streaming(response)
-        } else {
-            None
+            UnifiedStreamInner::NonStreaming(opt) => Self::process_non_streaming(opt.take()),
         }
     }
 
-    /// Process streaming events.
-    /// Returns the result and optionally the processor to put back.
-    async fn process_streaming(
-        &self,
-        mut processor: StreamProcessor,
-    ) -> (
-        Option<Result<StreamingQueryResult>>,
-        Option<StreamProcessor>,
-    ) {
+    /// Process streaming events from the processor.
+    async fn process_streaming_event(
+        processor: &mut StreamProcessor,
+        event_tx: &Option<mpsc::Sender<StreamUpdate>>,
+    ) -> Option<Result<StreamingQueryResult>> {
         loop {
             match processor.next().await {
                 Some(Ok((update, snapshot))) => {
                     // Send update to UI if configured
-                    if let Some(tx) = &self.event_tx {
+                    if let Some(tx) = event_tx {
                         if let Err(e) = tx.send(update.clone()).await {
                             tracing::debug!("Failed to send stream event to UI: {e}");
                         }
@@ -244,17 +201,14 @@ impl UnifiedStream {
                     let completed = Self::check_for_completed_content(&update);
 
                     if let Some(result) = completed {
-                        return (Some(Ok(result)), Some(processor));
+                        return Some(Ok(result));
                     }
 
                     // Check if stream is done
                     if snapshot.is_complete {
                         let usage = Self::convert_usage(&snapshot);
                         let finish_reason = snapshot.finish_reason.unwrap_or(FinishReason::Stop);
-                        return (
-                            Some(Ok(StreamingQueryResult::done(usage, finish_reason))),
-                            None,
-                        );
+                        return Some(Ok(StreamingQueryResult::done(usage, finish_reason)));
                     }
 
                     // Continue to next event for deltas
@@ -263,10 +217,10 @@ impl UnifiedStream {
                     }
                 }
                 Some(Err(e)) => {
-                    return (Some(Err(ApiError::from(e))), None);
+                    return Some(Err(ApiError::from(e)));
                 }
                 None => {
-                    return (None, None);
+                    return None;
                 }
             }
         }
@@ -275,14 +229,11 @@ impl UnifiedStream {
     /// Convert snapshot usage to protocol usage.
     fn convert_usage(snapshot: &StreamSnapshot) -> Option<ProtocolUsage> {
         snapshot.usage.as_ref().map(|u| ProtocolUsage {
-            input_tokens: saturating_i64_to_i32(u.prompt_tokens, "prompt_tokens"),
-            output_tokens: saturating_i64_to_i32(u.completion_tokens, "completion_tokens"),
-            cache_read_tokens: u
-                .cache_read_tokens
-                .map(|v| saturating_i64_to_i32(v, "cache_read_tokens")),
-            cache_creation_tokens: u
-                .cache_creation_tokens
-                .map(|v| saturating_i64_to_i32(v, "cache_creation_tokens")),
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+            cache_read_tokens: u.cache_read_tokens,
+            cache_creation_tokens: u.cache_creation_tokens,
+            reasoning_tokens: u.reasoning_tokens,
         })
     }
 
@@ -327,14 +278,11 @@ impl UnifiedStream {
 
         // Build usage
         let usage = response.usage.as_ref().map(|u| ProtocolUsage {
-            input_tokens: saturating_i64_to_i32(u.prompt_tokens, "prompt_tokens"),
-            output_tokens: saturating_i64_to_i32(u.completion_tokens, "completion_tokens"),
-            cache_read_tokens: u
-                .cache_read_tokens
-                .map(|v| saturating_i64_to_i32(v, "cache_read_tokens")),
-            cache_creation_tokens: u
-                .cache_creation_tokens
-                .map(|v| saturating_i64_to_i32(v, "cache_creation_tokens")),
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+            cache_read_tokens: u.cache_read_tokens,
+            cache_creation_tokens: u.cache_creation_tokens,
+            reasoning_tokens: u.reasoning_tokens,
         });
 
         // Return all content at once
@@ -346,16 +294,6 @@ impl UnifiedStream {
             usage,
             finish_reason: Some(response.finish_reason),
         }))
-    }
-
-    /// Get the current aggregation state.
-    pub fn state(&self) -> &AggregationState {
-        &self.state
-    }
-
-    /// Check if the stream is complete.
-    pub fn is_complete(&self) -> bool {
-        matches!(self.inner, UnifiedStreamInner::Consumed)
     }
 
     /// Collect all results into a single response.
@@ -400,8 +338,12 @@ impl UnifiedStream {
 
 impl std::fmt::Debug for UnifiedStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mode = match &self.inner {
+            UnifiedStreamInner::Streaming(_) => "Streaming",
+            UnifiedStreamInner::NonStreaming(_) => "NonStreaming",
+        };
         f.debug_struct("UnifiedStream")
-            .field("state", &self.state)
+            .field("mode", &mode)
             .finish_non_exhaustive()
     }
 }
@@ -450,6 +392,58 @@ impl CollectedResponse {
         self.content
             .iter()
             .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+    }
+
+    /// Convert to a Message for history management.
+    ///
+    /// Creates an assistant message with proper source metadata.
+    /// Use this when the agent loop manages history directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider name (e.g., "openai", "anthropic")
+    /// * `model` - Model name (e.g., "gpt-4o", "claude-sonnet-4")
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let collected = stream.collect().await?;
+    /// let msg = collected.into_message("anthropic", "claude-sonnet-4");
+    /// history.push(msg);
+    /// ```
+    pub fn into_message(self, provider: &str, model: &str) -> Message {
+        let mut msg = Message::new(Role::Assistant, self.content);
+        msg.metadata = ProviderMetadata::with_source(provider, model);
+        msg
+    }
+
+    /// Convert to GenerateResponse.
+    ///
+    /// Useful when you need the full response structure with ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Response ID
+    /// * `model` - Model name that generated the response
+    pub fn into_response(
+        self,
+        id: impl Into<String>,
+        model: impl Into<String>,
+    ) -> GenerateResponse {
+        GenerateResponse {
+            id: id.into(),
+            content: self.content,
+            finish_reason: self.finish_reason,
+            usage: self.usage.map(|u| TokenUsage {
+                prompt_tokens: u.input_tokens,
+                completion_tokens: u.output_tokens,
+                total_tokens: u.input_tokens + u.output_tokens,
+                cache_read_tokens: u.cache_read_tokens,
+                cache_creation_tokens: u.cache_creation_tokens,
+                reasoning_tokens: u.reasoning_tokens,
+            }),
+            model: model.into(),
+        }
     }
 }
 
@@ -534,5 +528,55 @@ mod tests {
 
         assert!(result.has_tool_calls());
         assert_eq!(result.tool_calls().len(), 1);
+    }
+
+    #[test]
+    fn test_collected_response_into_message() {
+        let collected = CollectedResponse {
+            content: vec![ContentBlock::text("Hello, world!")],
+            usage: Some(ProtocolUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
+            }),
+            finish_reason: FinishReason::Stop,
+        };
+
+        let msg = collected.into_message("anthropic", "claude-sonnet-4");
+
+        assert_eq!(msg.role, Role::Assistant);
+        assert_eq!(msg.text(), "Hello, world!");
+        assert_eq!(msg.source_provider(), Some("anthropic"));
+        assert_eq!(msg.source_model(), Some("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn test_collected_response_into_response() {
+        let collected = CollectedResponse {
+            content: vec![ContentBlock::text("Response text")],
+            usage: Some(ProtocolUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_tokens: Some(20),
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
+            }),
+            finish_reason: FinishReason::Stop,
+        };
+
+        let response = collected.into_response("resp_123", "gpt-4o");
+
+        assert_eq!(response.id, "resp_123");
+        assert_eq!(response.model, "gpt-4o");
+        assert_eq!(response.finish_reason, FinishReason::Stop);
+        assert_eq!(response.text(), "Response text");
+
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.total_tokens, 150);
+        assert_eq!(usage.cache_read_tokens, Some(20));
     }
 }

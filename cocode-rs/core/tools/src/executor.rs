@@ -2,21 +2,30 @@
 //!
 //! This module provides [`StreamingToolExecutor`] which manages tool execution
 //! during streaming, starting safe tools immediately and queuing unsafe tools.
+//!
+//! ## Hook Integration
+//!
+//! The executor supports hook execution at key lifecycle points:
+//! - **PreToolUse**: Called before tool validation, can reject or modify input
+//! - **PostToolUse**: Called after successful tool execution
+//! - **PostToolUseFailure**: Called when a tool execution fails
 
 use crate::context::{ApprovalStore, FileTracker, ToolContext, ToolContextBuilder};
 use crate::error::{Result, ToolError};
 use crate::registry::ToolRegistry;
+use cocode_hooks::{HookContext, HookEventType, HookRegistry, HookResult};
 use cocode_protocol::{
     AbortReason, ConcurrencySafety, LoopEvent, PermissionMode, ToolOutput, ValidationResult,
 };
 use hyper_sdk::ToolCall;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]
@@ -70,10 +79,18 @@ pub struct ToolExecutionResult {
 /// - Safe tools start immediately when their `ToolUse` block completes
 /// - Unsafe tools are queued and executed sequentially after message_stop
 ///
+/// ## Hook Integration
+///
+/// The executor supports hooks at key lifecycle points:
+/// - **PreToolUse**: Before validation, can reject or modify input
+/// - **PostToolUse**: After successful execution
+/// - **PostToolUseFailure**: After failed execution
+///
 /// # Example
 ///
 /// ```ignore
-/// let executor = StreamingToolExecutor::new(registry, config, event_tx);
+/// let executor = StreamingToolExecutor::new(registry, config, event_tx)
+///     .with_hooks(hooks);
 ///
 /// // During streaming - when content_block_stop for tool_use is received
 /// executor.on_tool_complete(tool_call, ctx.clone());
@@ -91,6 +108,8 @@ pub struct StreamingToolExecutor {
     cancel_token: CancellationToken,
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
+    /// Hook registry for pre/post tool hooks.
+    hooks: Option<Arc<HookRegistry>>,
     /// Active tool execution tasks.
     active_tasks: Arc<Mutex<HashMap<String, JoinHandle<ToolExecutionResult>>>>,
     /// Pending unsafe tools waiting for sequential execution.
@@ -113,6 +132,7 @@ impl StreamingToolExecutor {
             cancel_token: CancellationToken::new(),
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
+            hooks: None,
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_unsafe: Arc::new(Mutex::new(Vec::new())),
             completed_results: Arc::new(Mutex::new(Vec::new())),
@@ -122,6 +142,12 @@ impl StreamingToolExecutor {
     /// Set the cancellation token.
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
         self.cancel_token = token;
+        self
+    }
+
+    /// Set the hook registry for pre/post tool hooks.
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hooks = Some(hooks);
         self
     }
 
@@ -200,6 +226,26 @@ impl StreamingToolExecutor {
     async fn start_tool_execution(&self, tool_call: ToolCall) {
         let call_id = tool_call.id.clone();
         let name = tool_call.name.clone();
+        let original_input = tool_call.arguments.clone();
+
+        // Execute pre-hooks before starting the tool
+        let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
+            Ok(input) => input,
+            Err(reason) => {
+                // Pre-hook rejected the tool call
+                let result = Err(ToolError::hook_rejected(reason));
+                self.emit_completed(&call_id, &result).await;
+                self.completed_results
+                    .lock()
+                    .await
+                    .push(ToolExecutionResult {
+                        call_id,
+                        name,
+                        result,
+                    });
+                return;
+            }
+        };
 
         // Emit started event
         self.emit_event(LoopEvent::ToolUseStarted {
@@ -215,17 +261,51 @@ impl StreamingToolExecutor {
         let registry = self.registry.clone();
         let timeout_secs = self.config.default_timeout_secs;
 
+        // Create modified tool call with potentially modified input
+        let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
+
+        // Clone hooks for post-hook execution
+        let hooks = self.hooks.clone();
+        let session_id = self.config.session_id.clone();
+        let cwd = self.config.cwd.clone();
+
         // Spawn the execution task
         let handle = tokio::spawn(async move {
-            let result = execute_tool(&registry, tool_call.clone(), ctx, timeout_secs).await;
+            let result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+
+            // Execute post-hooks within the spawned task
+            if let Some(hooks) = hooks {
+                let is_error = result.is_err();
+                let event_type = if is_error {
+                    HookEventType::PostToolUseFailure
+                } else {
+                    HookEventType::PostToolUse
+                };
+
+                let hook_ctx =
+                    HookContext::new(event_type, session_id, cwd).with_tool(&name, modified_input);
+
+                let outcomes = hooks.execute(&hook_ctx).await;
+                for outcome in outcomes {
+                    if let HookResult::Reject { reason } = outcome.result {
+                        warn!(
+                            tool = %name,
+                            hook = %outcome.hook_name,
+                            reason = %reason,
+                            "Post-hook returned rejection (logged but result unchanged)"
+                        );
+                    }
+                }
+            }
+
             ToolExecutionResult {
-                call_id: tool_call.id,
-                name: tool_call.name,
+                call_id,
+                name,
                 result,
             }
         });
 
-        self.active_tasks.lock().await.insert(call_id, handle);
+        self.active_tasks.lock().await.insert(tool_call.id, handle);
     }
 
     /// Execute queued unsafe tools sequentially.
@@ -243,6 +323,26 @@ impl StreamingToolExecutor {
             let tool_call = pending_call.tool_call;
             let call_id = tool_call.id.clone();
             let name = tool_call.name.clone();
+            let original_input = tool_call.arguments.clone();
+
+            // Execute pre-hooks before starting the tool
+            let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
+                Ok(input) => input,
+                Err(reason) => {
+                    // Pre-hook rejected the tool call
+                    let result = Err(ToolError::hook_rejected(reason));
+                    self.emit_completed(&call_id, &result).await;
+                    self.completed_results
+                        .lock()
+                        .await
+                        .push(ToolExecutionResult {
+                            call_id,
+                            name,
+                            result,
+                        });
+                    continue;
+                }
+            };
 
             // Emit started event
             self.emit_event(LoopEvent::ToolUseStarted {
@@ -251,15 +351,21 @@ impl StreamingToolExecutor {
             })
             .await;
 
-            // Create context and execute
+            // Create context and execute with potentially modified input
             let ctx = self.create_context(&call_id);
+            let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
             let result = execute_tool(
                 &self.registry,
-                tool_call,
+                modified_tool_call,
                 ctx,
                 self.config.default_timeout_secs,
             )
             .await;
+
+            // Execute post-hooks
+            let is_error = result.is_err();
+            self.execute_post_hooks(&name, &modified_input, is_error)
+                .await;
 
             // Emit completed event
             self.emit_completed(&call_id, &result).await;
@@ -292,13 +398,17 @@ impl StreamingToolExecutor {
                 }
                 Err(e) => {
                     error!(call_id = %call_id, error = %e, "Task panicked");
+                    let result = Err(ToolError::internal(format!(
+                        "Tool execution task panicked (call_id: {call_id}): {e}"
+                    )));
+                    self.emit_completed(&call_id, &result).await;
                     self.completed_results
                         .lock()
                         .await
                         .push(ToolExecutionResult {
                             call_id: call_id.clone(),
-                            name: String::new(),
-                            result: Err(ToolError::internal(format!("Task panicked: {e}"))),
+                            name: format!("<panicked:{call_id}>"),
+                            result,
                         });
                 }
             }
@@ -391,6 +501,111 @@ impl StreamingToolExecutor {
             is_error,
         })
         .await;
+    }
+
+    /// Execute pre-tool-use hooks and return the (possibly modified) input.
+    ///
+    /// Returns `None` if the tool call should be rejected.
+    async fn execute_pre_hooks(
+        &self,
+        tool_name: &str,
+        input: Value,
+    ) -> std::result::Result<Value, String> {
+        let hooks = match &self.hooks {
+            Some(h) => h,
+            None => return Ok(input),
+        };
+
+        let ctx = HookContext::new(
+            HookEventType::PreToolUse,
+            self.config.session_id.clone(),
+            self.config.cwd.clone(),
+        )
+        .with_tool(tool_name, input.clone());
+
+        let outcomes = hooks.execute(&ctx).await;
+        let mut current_input = input;
+
+        for outcome in outcomes {
+            // Emit hook executed event
+            self.emit_event(LoopEvent::HookExecuted {
+                hook_type: cocode_protocol::HookEventType::PreToolCall,
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+
+            match outcome.result {
+                HookResult::Continue => {
+                    // Continue with current input
+                }
+                HookResult::Reject { reason } => {
+                    warn!(
+                        tool = %tool_name,
+                        hook = %outcome.hook_name,
+                        reason = %reason,
+                        "Tool call rejected by pre-hook"
+                    );
+                    return Err(reason);
+                }
+                HookResult::ModifyInput { new_input } => {
+                    debug!(
+                        tool = %tool_name,
+                        hook = %outcome.hook_name,
+                        "Tool input modified by pre-hook"
+                    );
+                    current_input = new_input;
+                }
+            }
+        }
+
+        Ok(current_input)
+    }
+
+    /// Execute post-tool-use hooks.
+    async fn execute_post_hooks(&self, tool_name: &str, input: &Value, is_error: bool) {
+        let hooks = match &self.hooks {
+            Some(h) => h,
+            None => return,
+        };
+
+        let event_type = if is_error {
+            HookEventType::PostToolUseFailure
+        } else {
+            HookEventType::PostToolUse
+        };
+
+        let ctx = HookContext::new(
+            event_type,
+            self.config.session_id.clone(),
+            self.config.cwd.clone(),
+        )
+        .with_tool(tool_name, input.clone());
+
+        let outcomes = hooks.execute(&ctx).await;
+
+        for outcome in outcomes {
+            let hook_type = if is_error {
+                cocode_protocol::HookEventType::PostToolCallFailure
+            } else {
+                cocode_protocol::HookEventType::PostToolCall
+            };
+
+            self.emit_event(LoopEvent::HookExecuted {
+                hook_type,
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+
+            // Post hooks can only continue or reject; rejection is logged but doesn't change the result
+            if let HookResult::Reject { reason } = outcome.result {
+                warn!(
+                    tool = %tool_name,
+                    hook = %outcome.hook_name,
+                    reason = %reason,
+                    "Post-hook returned rejection (logged but result unchanged)"
+                );
+            }
+        }
     }
 }
 

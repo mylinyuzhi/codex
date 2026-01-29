@@ -1,10 +1,10 @@
 //! cocode-tools - Tool execution layer for the agent system.
 //!
 //! This crate provides the tool system for the agent:
-//! - Tool trait with 5-stage pipeline
+//! - Tool trait with 5-stage pipeline and input-dependent concurrency
 //! - Tool registry (built-in + MCP)
 //! - Streaming tool executor
-//! - Built-in tools (Read, Glob, Grep)
+//! - 16 built-in tools aligned with Claude Code v2.1.7
 //!
 //! # Architecture
 //!
@@ -19,7 +19,9 @@
 //! │  - post_process()    │                     │                    │
 //! │  - cleanup()         │                     │                    │
 //! ├──────────────────────┴─────────────────────┴────────────────────┤
-//! │  Built-in Tools: Read, Glob, Grep                               │
+//! │  Built-in Tools (16): Read, Glob, Grep, Edit, Write, Bash,     │
+//! │  Task, TaskOutput, KillShell, TodoWrite, EnterPlanMode,         │
+//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill      │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -88,19 +90,21 @@
 //! - [`context`] - Execution context and approvals
 //! - [`registry`] - Tool registry management
 //! - [`executor`] - Streaming tool executor
-//! - [`builtin`] - Built-in tools (Read, Glob, Grep)
+//! - [`builtin`] - 16 built-in tools (Read, Glob, Grep, Edit, Write, Bash, Task, etc.)
 
 pub mod builtin;
 pub mod context;
 pub mod error;
 pub mod executor;
+pub mod mcp_tool;
 pub mod registry;
 pub mod tool;
 
 // Re-export main types at crate root
-pub use context::{ApprovalStore, FileTracker, ToolContext, ToolContextBuilder};
+pub use context::{ApprovalStore, FileReadState, FileTracker, ToolContext, ToolContextBuilder};
 pub use error::{Result, ToolError};
 pub use executor::{ExecutorConfig, StreamingToolExecutor, ToolExecutionResult};
+pub use mcp_tool::McpToolWrapper;
 pub use registry::{McpToolInfo, ToolRegistry};
 pub use tool::{Tool, ToolOutputExt};
 

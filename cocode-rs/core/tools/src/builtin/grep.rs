@@ -1,5 +1,6 @@
 //! Grep tool for content search with regex.
 
+use super::prompts;
 use crate::context::ToolContext;
 use crate::error::{Result, ToolError};
 use crate::tool::Tool;
@@ -76,7 +77,7 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search file contents using regex patterns"
+        prompts::GREP_DESCRIPTION
     }
 
     fn input_schema(&self) -> Value {
@@ -122,7 +123,19 @@ impl Tool for GrepTool {
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": "Limit output to first N results"
+                    "description": "Limit output to first N lines/entries. Defaults to 0 (unlimited). Works across all output modes."
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip first N lines/entries before applying head_limit. Defaults to 0."
+                },
+                "multiline": {
+                    "type": "boolean",
+                    "description": "Enable multiline mode where . matches newlines and patterns can span lines. Default: false."
+                },
+                "type": {
+                    "type": "string",
+                    "description": "File type to search (e.g., js, py, rust, go, java). More efficient than glob for standard file types."
                 }
             },
             "required": ["pattern"]
@@ -133,6 +146,10 @@ impl Tool for GrepTool {
         ConcurrencySafety::Safe
     }
 
+    fn max_result_size_chars(&self) -> i32 {
+        20_000
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let pattern_str = input["pattern"]
             .as_str()
@@ -140,6 +157,7 @@ impl Tool for GrepTool {
 
         let case_insensitive = input["-i"].as_bool().unwrap_or(false);
         let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
+        let multiline = input["multiline"].as_bool().unwrap_or(false);
 
         let context_after = input["-A"].as_i64().unwrap_or(0) as i32;
         let context_before = input["-B"].as_i64().unwrap_or(0) as i32;
@@ -152,6 +170,7 @@ impl Tool for GrepTool {
             .as_i64()
             .map(|n| n as i32)
             .unwrap_or(self.max_results);
+        let offset = input["offset"].as_i64().unwrap_or(0) as i32;
 
         let output_mode = match input["output_mode"].as_str() {
             Some("content") => OutputMode::Content,
@@ -165,19 +184,30 @@ impl Tool for GrepTool {
             .unwrap_or_else(|| ctx.cwd.clone());
 
         let file_glob = input["glob"].as_str();
+        let file_type = input["type"].as_str();
 
         // Build regex
-        let regex_pattern = if case_insensitive {
-            format!("(?i){}", pattern_str)
-        } else {
-            pattern_str.to_string()
-        };
+        let mut regex_pattern = String::new();
+        if multiline {
+            regex_pattern.push_str("(?s)");
+        }
+        if case_insensitive {
+            regex_pattern.push_str("(?i)");
+        }
+        regex_pattern.push_str(pattern_str);
 
         let regex = Regex::new(&regex_pattern)
             .map_err(|e| ToolError::invalid_input(format!("Invalid regex pattern: {e}")))?;
 
-        // Build file glob if provided
-        let file_matcher = file_glob
+        // Build file glob: use explicit glob, or derive from type parameter
+        let effective_glob = if file_glob.is_some() {
+            file_glob.map(String::from)
+        } else {
+            file_type.map(|t| format!("*.{}", type_to_extension(t)))
+        };
+
+        let file_matcher = effective_glob
+            .as_deref()
             .map(|g| {
                 Glob::new(g)
                     .map_err(|e| ToolError::invalid_input(format!("Invalid glob pattern: {e}")))
@@ -212,6 +242,7 @@ impl Tool for GrepTool {
         // Search files
         let mut results = Vec::new();
         let mut total_matches = 0;
+        let mut skipped = 0_i32;
 
         for file_path in &files {
             if ctx.is_cancelled() {
@@ -239,6 +270,12 @@ impl Tool for GrepTool {
             }
 
             if !file_matches.is_empty() {
+                // Apply offset: skip first N entries
+                if offset > 0 && skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+
                 match output_mode {
                     OutputMode::FilesWithMatches => {
                         results.push(file_path.display().to_string());
@@ -325,6 +362,40 @@ impl Tool for GrepTool {
                 Ok(ToolOutput::text(output))
             }
         }
+    }
+}
+
+/// Map a type name to a file extension for glob filtering.
+fn type_to_extension(type_name: &str) -> &str {
+    match type_name {
+        "js" | "javascript" => "js",
+        "ts" | "typescript" => "ts",
+        "tsx" => "tsx",
+        "jsx" => "jsx",
+        "py" | "python" => "py",
+        "rs" | "rust" => "rs",
+        "go" | "golang" => "go",
+        "java" => "java",
+        "c" => "c",
+        "cpp" | "c++" => "cpp",
+        "h" => "h",
+        "hpp" => "hpp",
+        "cs" | "csharp" => "cs",
+        "rb" | "ruby" => "rb",
+        "php" => "php",
+        "swift" => "swift",
+        "kt" | "kotlin" => "kt",
+        "scala" => "scala",
+        "sh" | "bash" | "shell" => "sh",
+        "yaml" | "yml" => "yml",
+        "json" => "json",
+        "toml" => "toml",
+        "xml" => "xml",
+        "html" => "html",
+        "css" => "css",
+        "sql" => "sql",
+        "md" | "markdown" => "md",
+        other => other,
     }
 }
 

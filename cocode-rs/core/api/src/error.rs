@@ -90,6 +90,14 @@ pub enum ApiError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Context window exceeded.
+    #[snafu(display("Context overflow: {message}"))]
+    ContextOverflow {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 /// Create a Location from the caller's position.
@@ -192,6 +200,30 @@ impl ApiError {
         }
     }
 
+    /// Create a context overflow error.
+    #[track_caller]
+    pub fn context_overflow(message: impl Into<String>) -> Self {
+        Self::ContextOverflow {
+            message: message.into(),
+            location: caller_location(),
+        }
+    }
+
+    /// Check if this is a context overflow error.
+    pub fn is_context_overflow(&self) -> bool {
+        matches!(self, ApiError::ContextOverflow { .. })
+    }
+
+    /// Check if this is a stream-related error that should trigger fallback.
+    ///
+    /// Returns true for errors where falling back to non-streaming mode might help.
+    pub fn is_stream_error(&self) -> bool {
+        matches!(
+            self,
+            ApiError::Stream { .. } | ApiError::StreamIdleTimeout { .. }
+        )
+    }
+
     /// Check if this error is retryable.
     pub fn is_retryable(&self) -> bool {
         matches!(
@@ -202,11 +234,6 @@ impl ApiError {
                 | ApiError::Stream { .. }
                 | ApiError::StreamIdleTimeout { .. }
         )
-    }
-
-    /// Check if this is an overload error that should trigger fallback.
-    pub fn should_fallback(&self) -> bool {
-        matches!(self, ApiError::Overloaded { .. })
     }
 
     /// Get retry delay hint if available.
@@ -233,6 +260,7 @@ impl ErrorExt for ApiError {
             ApiError::Provider { .. } => StatusCode::ProviderError,
             ApiError::RetriesExhausted { .. } => StatusCode::NetworkError,
             ApiError::Sdk { .. } => StatusCode::Internal,
+            ApiError::ContextOverflow { .. } => StatusCode::InvalidArguments,
         }
     }
 
@@ -253,6 +281,7 @@ impl From<hyper_sdk::HyperError> for ApiError {
                 let ms = delay.map(|d| d.as_millis() as i64).unwrap_or(1000);
                 ApiError::rate_limited(message, ms)
             }
+            HyperError::ContextWindowExceeded(msg) => ApiError::context_overflow(msg),
             HyperError::StreamError(msg) => ApiError::stream(msg),
             HyperError::StreamIdleTimeout(timeout) => ApiError::stream_idle_timeout(timeout),
             HyperError::InvalidRequest(msg) => ApiError::invalid_request(msg),
@@ -279,13 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn test_error_fallback() {
-        assert!(ApiError::overloaded("test").should_fallback());
-        assert!(!ApiError::network("test").should_fallback());
-        assert!(!ApiError::rate_limited("test", 1000).should_fallback());
-    }
-
-    #[test]
     fn test_retry_delay() {
         let err = ApiError::rate_limited("test", 5000);
         assert_eq!(err.retry_delay(), Some(Duration::from_millis(5000)));
@@ -308,5 +330,30 @@ mod tests {
             ApiError::rate_limited("test", 1000).status_code(),
             StatusCode::RateLimited
         );
+    }
+
+    #[test]
+    fn test_context_overflow() {
+        let err = ApiError::context_overflow("max context exceeded");
+        assert!(err.is_context_overflow());
+        assert!(!err.is_retryable());
+        assert_eq!(err.status_code(), StatusCode::InvalidArguments);
+    }
+
+    #[test]
+    fn test_is_stream_error() {
+        assert!(ApiError::stream("stream failed").is_stream_error());
+        assert!(ApiError::stream_idle_timeout(Duration::from_secs(30)).is_stream_error());
+        assert!(!ApiError::network("network error").is_stream_error());
+        assert!(!ApiError::rate_limited("rate limited", 1000).is_stream_error());
+        assert!(!ApiError::context_overflow("overflow").is_stream_error());
+    }
+
+    #[test]
+    fn test_from_hyper_error_context_overflow() {
+        let hyper_err =
+            hyper_sdk::HyperError::ContextWindowExceeded("Context too long".to_string());
+        let api_err: ApiError = hyper_err.into();
+        assert!(api_err.is_context_overflow());
     }
 }
