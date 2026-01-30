@@ -14,7 +14,7 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 
 /// Wrapper around an MCP tool that implements the [`Tool`] trait.
@@ -169,7 +169,10 @@ impl Tool for McpToolWrapper {
                     error = %e,
                     "MCP tool call failed"
                 );
-                ToolError::execution_failed(format!("MCP tool call failed: {e}"))
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("MCP tool call failed: {e}"),
+                }
+                .build()
             })?;
 
         self.convert_result(result)

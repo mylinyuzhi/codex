@@ -27,6 +27,24 @@ pub struct HistoryConfig {
     pub auto_compact: bool,
 }
 
+/// Metadata about a compaction boundary.
+///
+/// This marks where compaction occurred in the conversation history,
+/// helping distinguish between pre-compaction and post-compaction content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionBoundary {
+    /// Turn ID where compaction occurred.
+    pub turn_id: String,
+    /// Turn number at compaction time.
+    pub turn_number: i32,
+    /// Number of turns that were compacted.
+    pub turns_compacted: i32,
+    /// Estimated tokens saved by compaction.
+    pub tokens_saved: i32,
+    /// Timestamp of compaction (Unix milliseconds).
+    pub timestamp_ms: i64,
+}
+
 fn default_max_turns() -> i32 {
     100
 }
@@ -62,6 +80,9 @@ pub struct MessageHistory {
     /// Compacted summary of earlier turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     compacted_summary: Option<String>,
+    /// Compaction boundary marker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compaction_boundary: Option<CompactionBoundary>,
     /// Total input tokens used.
     #[serde(default)]
     total_input_tokens: i64,
@@ -86,6 +107,7 @@ impl MessageHistory {
             system_message: None,
             turns: Vec::new(),
             compacted_summary: None,
+            compaction_boundary: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
             config: HistoryConfig::default(),
@@ -208,7 +230,34 @@ impl MessageHistory {
     ///
     /// This method adjusts token accounting by deducting the tokens from
     /// removed turns to maintain accurate running totals.
-    pub fn apply_compaction(&mut self, summary: String, keep_turns: i32) {
+    ///
+    /// # Arguments
+    /// * `summary` - The compacted summary text
+    /// * `keep_turns` - Number of recent turns to keep
+    /// * `turn_id` - ID of the turn where compaction occurred
+    /// * `tokens_saved` - Estimated tokens saved by compaction
+    pub fn apply_compaction(
+        &mut self,
+        summary: String,
+        keep_turns: i32,
+        turn_id: impl Into<String>,
+        tokens_saved: i32,
+    ) {
+        let turns_compacted = self.turns.len().saturating_sub(keep_turns.max(1) as usize) as i32;
+        let turn_number = self.turn_count();
+
+        // Record the compaction boundary
+        self.compaction_boundary = Some(CompactionBoundary {
+            turn_id: turn_id.into(),
+            turn_number,
+            turns_compacted,
+            tokens_saved,
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        });
+
         self.compacted_summary = Some(summary);
 
         // Keep only the most recent turns
@@ -229,8 +278,19 @@ impl MessageHistory {
     pub fn clear(&mut self) {
         self.turns.clear();
         self.compacted_summary = None;
+        self.compaction_boundary = None;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
+    }
+
+    /// Get the compaction boundary (if any).
+    pub fn compaction_boundary(&self) -> Option<&CompactionBoundary> {
+        self.compaction_boundary.as_ref()
+    }
+
+    /// Get the compacted summary (if any).
+    pub fn compacted_summary(&self) -> Option<&str> {
+        self.compacted_summary.as_deref()
     }
 
     /// Micro-compact: Clear old tool result content to save tokens.
@@ -463,9 +523,17 @@ mod tests {
 
         assert_eq!(history.turn_count(), 10);
 
-        history.apply_compaction("Summary of turns 1-8".to_string(), 2);
+        history.apply_compaction("Summary of turns 1-8".to_string(), 2, "turn-10", 5000);
         assert_eq!(history.turn_count(), 2);
-        assert!(history.compacted_summary.is_some());
+        assert!(history.compacted_summary().is_some());
+
+        // Verify compaction boundary
+        let boundary = history.compaction_boundary().unwrap();
+        assert_eq!(boundary.turn_id, "turn-10");
+        assert_eq!(boundary.turn_number, 10);
+        assert_eq!(boundary.turns_compacted, 8);
+        assert_eq!(boundary.tokens_saved, 5000);
+        assert!(boundary.timestamp_ms > 0);
     }
 
     #[test]
@@ -503,10 +571,15 @@ mod tests {
     fn test_clear() {
         let mut history = MessageHistory::new();
         history.add_turn(make_turn(1));
-        history.apply_compaction("Summary".to_string(), 1);
+        history.apply_compaction("Summary".to_string(), 1, "turn-1", 100);
+
+        // Verify compaction was applied
+        assert!(history.compacted_summary().is_some());
+        assert!(history.compaction_boundary().is_some());
 
         history.clear();
         assert_eq!(history.turn_count(), 0);
-        assert!(history.compacted_summary.is_none());
+        assert!(history.compacted_summary().is_none());
+        assert!(history.compaction_boundary().is_none());
     }
 }

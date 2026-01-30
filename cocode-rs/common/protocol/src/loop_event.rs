@@ -180,19 +180,37 @@ pub enum LoopEvent {
     },
 
     // ========== Compaction ==========
-    /// Compaction has started.
+    /// Context usage warning - above warning threshold but below auto-compact.
+    ContextUsageWarning {
+        /// Current estimated tokens.
+        estimated_tokens: i32,
+        /// Warning threshold.
+        warning_threshold: i32,
+        /// Percentage of context remaining.
+        percent_left: f64,
+    },
+    /// Full compaction has started.
     CompactionStarted,
-    /// Compaction has completed.
+    /// Full compaction has completed.
     CompactionCompleted {
         /// Number of messages removed.
         removed_messages: i32,
         /// Tokens in the summary.
         summary_tokens: i32,
     },
+    /// Micro-compaction has started.
+    MicroCompactionStarted {
+        /// Number of candidates identified.
+        candidates: i32,
+        /// Potential tokens to save.
+        potential_savings: i32,
+    },
     /// Micro-compaction was applied to tool results.
     MicroCompactionApplied {
         /// Number of results compacted.
         removed_results: i32,
+        /// Tokens saved by compaction.
+        tokens_saved: i32,
     },
     /// Session memory compaction was applied.
     SessionMemoryCompactApplied {
@@ -200,6 +218,31 @@ pub enum LoopEvent {
         saved_tokens: i32,
         /// Tokens in the summary.
         summary_tokens: i32,
+    },
+    /// Compaction was skipped due to a hook rejection.
+    CompactionSkippedByHook {
+        /// Name of the hook that rejected compaction.
+        hook_name: String,
+        /// Reason provided by the hook.
+        reason: String,
+    },
+    /// Compaction is being retried after a failure.
+    CompactionRetry {
+        /// Current attempt number (1-indexed).
+        attempt: i32,
+        /// Maximum retry attempts allowed.
+        max_attempts: i32,
+        /// Delay before retry in milliseconds.
+        delay_ms: i32,
+        /// Reason for the retry.
+        reason: String,
+    },
+    /// Compaction failed after all retries exhausted.
+    CompactionFailed {
+        /// Total attempts made.
+        attempts: i32,
+        /// Last error message.
+        error: String,
     },
 
     // ========== Model Fallback ==========
@@ -555,6 +598,8 @@ pub enum HookEventType {
     SessionEnd,
     /// On user prompt submit.
     PromptSubmit,
+    /// Before context compaction.
+    PreCompact,
 }
 
 impl HookEventType {
@@ -567,6 +612,7 @@ impl HookEventType {
             HookEventType::SessionStart => "session_start",
             HookEventType::SessionEnd => "session_end",
             HookEventType::PromptSubmit => "prompt_submit",
+            HookEventType::PreCompact => "pre_compact",
         }
     }
 }
@@ -616,6 +662,80 @@ mod tests {
         assert_eq!(HookEventType::PreToolCall.as_str(), "pre_tool_call");
         assert_eq!(HookEventType::PostToolCall.as_str(), "post_tool_call");
         assert_eq!(HookEventType::SessionStart.as_str(), "session_start");
+        assert_eq!(HookEventType::PreCompact.as_str(), "pre_compact");
+    }
+
+    #[test]
+    fn test_compaction_skipped_by_hook_event() {
+        let event = LoopEvent::CompactionSkippedByHook {
+            hook_name: "save-work-first".to_string(),
+            reason: "Unsaved changes detected".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_skipped_by_hook"));
+        assert!(json.contains("save-work-first"));
+        assert!(json.contains("Unsaved changes detected"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionSkippedByHook { hook_name, reason } => {
+                assert_eq!(hook_name, "save-work-first");
+                assert_eq!(reason, "Unsaved changes detected");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_retry_event() {
+        let event = LoopEvent::CompactionRetry {
+            attempt: 1,
+            max_attempts: 3,
+            delay_ms: 1000,
+            reason: "API timeout".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_retry"));
+        assert!(json.contains("API timeout"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            } => {
+                assert_eq!(attempt, 1);
+                assert_eq!(max_attempts, 3);
+                assert_eq!(delay_ms, 1000);
+                assert_eq!(reason, "API timeout");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_failed_event() {
+        let event = LoopEvent::CompactionFailed {
+            attempts: 3,
+            error: "All retries exhausted".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_failed"));
+        assert!(json.contains("All retries exhausted"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionFailed { attempts, error } => {
+                assert_eq!(attempts, 3);
+                assert_eq!(error, "All retries exhausted");
+            }
+            _ => panic!("Wrong event type"),
+        }
     }
 
     #[test]
@@ -674,5 +794,124 @@ mod tests {
 
         let parsed: McpStartupStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, McpStartupStatus::Ready);
+    }
+
+    #[test]
+    fn test_context_usage_warning_event() {
+        let event = LoopEvent::ContextUsageWarning {
+            estimated_tokens: 150000,
+            warning_threshold: 140000,
+            percent_left: 0.25,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("context_usage_warning"));
+        assert!(json.contains("150000"));
+        assert!(json.contains("0.25"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::ContextUsageWarning {
+                estimated_tokens,
+                warning_threshold,
+                percent_left,
+            } => {
+                assert_eq!(estimated_tokens, 150000);
+                assert_eq!(warning_threshold, 140000);
+                assert!((percent_left - 0.25).abs() < f64::EPSILON);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_micro_compaction_started_event() {
+        let event = LoopEvent::MicroCompactionStarted {
+            candidates: 5,
+            potential_savings: 25000,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("micro_compaction_started"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::MicroCompactionStarted {
+                candidates,
+                potential_savings,
+            } => {
+                assert_eq!(candidates, 5);
+                assert_eq!(potential_savings, 25000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_micro_compaction_applied_event() {
+        let event = LoopEvent::MicroCompactionApplied {
+            removed_results: 3,
+            tokens_saved: 15000,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("micro_compaction_applied"));
+        assert!(json.contains("tokens_saved"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::MicroCompactionApplied {
+                removed_results,
+                tokens_saved,
+            } => {
+                assert_eq!(removed_results, 3);
+                assert_eq!(tokens_saved, 15000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_events_serde() {
+        // Test CompactionStarted
+        let event = LoopEvent::CompactionStarted;
+        let json = serde_json::to_string(&event).unwrap();
+        let _: LoopEvent = serde_json::from_str(&json).unwrap();
+
+        // Test CompactionCompleted
+        let event = LoopEvent::CompactionCompleted {
+            removed_messages: 10,
+            summary_tokens: 2000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionCompleted {
+                removed_messages,
+                summary_tokens,
+            } => {
+                assert_eq!(removed_messages, 10);
+                assert_eq!(summary_tokens, 2000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryCompactApplied
+        let event = LoopEvent::SessionMemoryCompactApplied {
+            saved_tokens: 50000,
+            summary_tokens: 3000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryCompactApplied {
+                saved_tokens,
+                summary_tokens,
+            } => {
+                assert_eq!(saved_tokens, 50000);
+                assert_eq!(summary_tokens, 3000);
+            }
+            _ => panic!("Wrong event type"),
+        }
     }
 }

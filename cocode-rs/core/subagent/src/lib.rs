@@ -11,6 +11,6 @@ pub use background::BackgroundAgent;
 pub use context::ChildToolUseContext;
 pub use definition::AgentDefinition;
 pub use filter::filter_tools_for_agent;
-pub use manager::{AgentInstance, AgentStatus, SubagentManager};
+pub use manager::{AgentExecuteFn, AgentInstance, AgentStatus, SpawnResult, SubagentManager};
 pub use spawn::SpawnInput;
 pub use transcript::TranscriptRecorder;

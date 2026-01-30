@@ -8,10 +8,52 @@ use cocode_protocol::{LoopEvent, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
+
+/// Input for spawning a subagent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentInput {
+    /// The agent type to spawn.
+    pub agent_type: String,
+    /// The task prompt for the agent.
+    pub prompt: String,
+    /// Optional model override.
+    pub model: Option<String>,
+    /// Optional turn limit override.
+    pub max_turns: Option<i32>,
+    /// Whether to run in background.
+    pub run_in_background: bool,
+    /// Optional tool filter override.
+    pub allowed_tools: Option<Vec<String>>,
+}
+
+/// Result of spawning a subagent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentResult {
+    /// The unique agent ID.
+    pub agent_id: String,
+    /// The agent output (foreground only).
+    pub output: Option<String>,
+    /// Background agent output file path.
+    pub output_file: Option<PathBuf>,
+}
+
+/// Type alias for the agent spawn callback function.
+///
+/// This callback is provided by the executor layer to enable tools
+/// to spawn subagents without creating circular dependencies.
+pub type SpawnAgentFn = Arc<
+    dyn Fn(
+            SpawnAgentInput,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<SpawnAgentResult>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Stored approvals for tools.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -183,6 +225,7 @@ impl FileTracker {
 /// - Event channel for progress updates
 /// - Cancellation support
 /// - File tracking with content/timestamp validation
+/// - Subagent spawning capability
 #[derive(Clone)]
 pub struct ToolContext {
     /// Unique call ID for this execution.
@@ -207,6 +250,8 @@ pub struct ToolContext {
     pub approval_store: Arc<Mutex<ApprovalStore>>,
     /// File tracker.
     pub file_tracker: Arc<Mutex<FileTracker>>,
+    /// Optional callback for spawning subagents.
+    pub spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl ToolContext {
@@ -224,6 +269,7 @@ impl ToolContext {
             cancel_token: CancellationToken::new(),
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
+            spawn_agent_fn: None,
         }
     }
 
@@ -273,6 +319,28 @@ impl ToolContext {
     pub fn with_additional_working_directories(mut self, dirs: Vec<PathBuf>) -> Self {
         self.additional_working_directories = dirs;
         self
+    }
+
+    /// Set the spawn agent callback.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Spawn a subagent using the configured callback.
+    ///
+    /// Returns an error if no spawn callback is configured.
+    pub async fn spawn_agent(&self, input: SpawnAgentInput) -> anyhow::Result<SpawnAgentResult> {
+        let spawn_fn = self
+            .spawn_agent_fn
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No spawn_agent_fn configured"))?;
+        spawn_fn(input).await
+    }
+
+    /// Check if agent spawning is available.
+    pub fn can_spawn_agent(&self) -> bool {
+        self.spawn_agent_fn.is_some()
     }
 
     /// Emit a loop event.
@@ -416,6 +484,7 @@ pub struct ToolContextBuilder {
     cancel_token: CancellationToken,
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl ToolContextBuilder {
@@ -433,6 +502,7 @@ impl ToolContextBuilder {
             cancel_token: CancellationToken::new(),
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
+            spawn_agent_fn: None,
         }
     }
 
@@ -490,6 +560,12 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the spawn agent callback.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -504,6 +580,7 @@ impl ToolContextBuilder {
             cancel_token: self.cancel_token,
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
+            spawn_agent_fn: self.spawn_agent_fn,
         }
     }
 }

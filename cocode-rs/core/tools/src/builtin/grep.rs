@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ToolOutput};
@@ -151,9 +151,12 @@ impl Tool for GrepTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let pattern_str = input["pattern"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("pattern must be a string"))?;
+        let pattern_str = input["pattern"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "pattern must be a string",
+            }
+            .build()
+        })?;
 
         let case_insensitive = input["-i"].as_bool().unwrap_or(false);
         let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
@@ -196,8 +199,12 @@ impl Tool for GrepTool {
         }
         regex_pattern.push_str(pattern_str);
 
-        let regex = Regex::new(&regex_pattern)
-            .map_err(|e| ToolError::invalid_input(format!("Invalid regex pattern: {e}")))?;
+        let regex = Regex::new(&regex_pattern).map_err(|e| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: format!("Invalid regex pattern: {e}"),
+            }
+            .build()
+        })?;
 
         // Build file glob: use explicit glob, or derive from type parameter
         let effective_glob = if file_glob.is_some() {
@@ -210,7 +217,12 @@ impl Tool for GrepTool {
             .as_deref()
             .map(|g| {
                 Glob::new(g)
-                    .map_err(|e| ToolError::invalid_input(format!("Invalid glob pattern: {e}")))
+                    .map_err(|e| {
+                        crate::error::tool_error::InvalidInputSnafu {
+                            message: format!("Invalid glob pattern: {e}"),
+                        }
+                        .build()
+                    })
                     .map(|glob| glob.compile_matcher())
             })
             .transpose()?;

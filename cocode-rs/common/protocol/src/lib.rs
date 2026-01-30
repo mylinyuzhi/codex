@@ -111,11 +111,28 @@ pub use tracking::QueryTracking;
 // Extended config types
 pub use attachment_config::AttachmentConfig;
 pub use compact_config::CompactConfig;
-pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
-pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;
+// Session memory constants
 pub use compact_config::DEFAULT_EXTRACTION_COOLDOWN_SECS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MAX_TOKENS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MIN_TOKENS;
+// Context restoration constants
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;
+pub use compact_config::DEFAULT_MAX_TOKENS_PER_FILE;
+// Threshold control constants
+pub use compact_config::DEFAULT_ERROR_THRESHOLD_OFFSET;
+pub use compact_config::DEFAULT_MIN_BLOCKING_OFFSET;
+pub use compact_config::DEFAULT_MIN_TOKENS_TO_PRESERVE;
+pub use compact_config::DEFAULT_WARNING_THRESHOLD_OFFSET;
+// Micro-compact constants
+pub use compact_config::DEFAULT_MICRO_COMPACT_MIN_SAVINGS;
+pub use compact_config::DEFAULT_MICRO_COMPACT_THRESHOLD;
+pub use compact_config::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP;
+// Full compact constants
+pub use compact_config::DEFAULT_MAX_COMPACT_OUTPUT_TOKENS;
+pub use compact_config::DEFAULT_MAX_SUMMARY_RETRIES;
+pub use compact_config::DEFAULT_TOKEN_SAFETY_MARGIN;
+pub use compact_config::DEFAULT_TOKENS_PER_IMAGE;
 pub use path_config::PathConfig;
 pub use plan_config::DEFAULT_PLAN_AGENT_COUNT;
 pub use plan_config::DEFAULT_PLAN_EXPLORE_AGENT_COUNT;

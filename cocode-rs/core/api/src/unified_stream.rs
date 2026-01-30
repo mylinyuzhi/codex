@@ -322,7 +322,10 @@ impl UnifiedStream {
                     break;
                 }
                 QueryResultType::Error => {
-                    return Err(ApiError::stream(result.error.unwrap_or_default()));
+                    return Err(crate::error::api_error::StreamSnafu {
+                        message: result.error.unwrap_or_default(),
+                    }
+                    .build());
                 }
                 _ => {}
             }

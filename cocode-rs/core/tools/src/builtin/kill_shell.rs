@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ToolOutput};
@@ -56,9 +56,12 @@ impl Tool for KillShellTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let task_id = input["task_id"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("task_id must be a string"))?;
+        let task_id = input["task_id"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "task_id must be a string",
+            }
+            .build()
+        })?;
 
         ctx.emit_progress(format!("Stopping task {task_id}")).await;
 

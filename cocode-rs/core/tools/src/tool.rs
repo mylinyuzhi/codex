@@ -254,9 +254,12 @@ mod tests {
             input: Value,
             _ctx: &mut ToolContext,
         ) -> Result<ToolOutput, ToolError> {
-            let message = input["message"]
-                .as_str()
-                .ok_or_else(|| ToolError::invalid_input("message must be a string"))?;
+            let message = input["message"].as_str().ok_or_else(|| {
+                crate::error::tool_error::InvalidInputSnafu {
+                    message: "message must be a string",
+                }
+                .build()
+            })?;
             Ok(ToolOutput::text(format!("Received: {message}")))
         }
     }

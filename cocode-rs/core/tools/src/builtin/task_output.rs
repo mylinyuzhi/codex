@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ToolOutput};
@@ -62,9 +62,12 @@ impl Tool for TaskOutputTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let task_id = input["task_id"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("task_id must be a string"))?;
+        let task_id = input["task_id"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "task_id must be a string",
+            }
+            .build()
+        })?;
         let _block = input["block"].as_bool().unwrap_or(true);
         let _timeout_ms = input["timeout"].as_i64().unwrap_or(30_000);
 

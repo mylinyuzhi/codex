@@ -194,9 +194,12 @@ impl ConversationContextBuilder {
     ///
     /// Returns `Err` if required fields are missing.
     pub fn build(self) -> crate::error::Result<ConversationContext> {
-        let environment = self
-            .environment
-            .ok_or_else(|| crate::error::ContextError::build_error("environment is required"))?;
+        let environment = self.environment.ok_or_else(|| {
+            crate::error::context_error::BuildSnafu {
+                message: "environment is required",
+            }
+            .build()
+        })?;
 
         let budget = self.budget.unwrap_or_else(|| {
             ContextBudget::new(environment.context_window, environment.output_token_limit)

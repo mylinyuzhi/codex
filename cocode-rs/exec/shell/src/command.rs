@@ -17,6 +17,9 @@ pub struct CommandResult {
     pub duration_ms: i64,
     /// Whether the output was truncated due to size limits.
     pub truncated: bool,
+    /// New working directory after command execution (if changed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_cwd: Option<PathBuf>,
 }
 
 impl CommandResult {
@@ -57,6 +60,7 @@ mod tests {
             stderr: String::new(),
             duration_ms: 100,
             truncated: false,
+            new_cwd: None,
         };
         assert!(result.success());
     }
@@ -69,6 +73,7 @@ mod tests {
             stderr: "error".to_string(),
             duration_ms: 50,
             truncated: false,
+            new_cwd: None,
         };
         assert!(!result.success());
     }
@@ -81,6 +86,7 @@ mod tests {
             stderr: String::new(),
             duration_ms: 200,
             truncated: true,
+            new_cwd: None,
         };
         assert!(result.truncated);
         assert!(result.success());
@@ -123,6 +129,7 @@ mod tests {
             stderr: "warn".to_string(),
             duration_ms: 1234,
             truncated: false,
+            new_cwd: Some(PathBuf::from("/home/user")),
         };
 
         let json = serde_json::to_string(&result).expect("serialize");
@@ -132,5 +139,22 @@ mod tests {
         assert_eq!(parsed.stderr, result.stderr);
         assert_eq!(parsed.duration_ms, result.duration_ms);
         assert_eq!(parsed.truncated, result.truncated);
+        assert_eq!(parsed.new_cwd, result.new_cwd);
+    }
+
+    #[test]
+    fn test_command_result_new_cwd_skipped_when_none() {
+        let result = CommandResult {
+            exit_code: 0,
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            duration_ms: 10,
+            truncated: false,
+            new_cwd: None,
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        // new_cwd should not appear in JSON when None
+        assert!(!json.contains("new_cwd"));
     }
 }

@@ -101,7 +101,10 @@ pub mod registry;
 pub mod tool;
 
 // Re-export main types at crate root
-pub use context::{ApprovalStore, FileReadState, FileTracker, ToolContext, ToolContextBuilder};
+pub use context::{
+    ApprovalStore, FileReadState, FileTracker, SpawnAgentFn, SpawnAgentInput, SpawnAgentResult,
+    ToolContext, ToolContextBuilder,
+};
 pub use error::{Result, ToolError};
 pub use executor::{ExecutorConfig, StreamingToolExecutor, ToolExecutionResult};
 pub use mcp_tool::McpToolWrapper;

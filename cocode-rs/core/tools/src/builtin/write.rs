@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ContextModifier, ToolOutput};
@@ -63,22 +63,31 @@ impl Tool for WriteTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let file_path = input["file_path"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("file_path must be a string"))?;
-        let content = input["content"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("content must be a string"))?;
+        let file_path = input["file_path"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "file_path must be a string",
+            }
+            .build()
+        })?;
+        let content = input["content"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "content must be a string",
+            }
+            .build()
+        })?;
 
         let path = ctx.resolve_path(file_path);
 
         // If file exists, must have been read first
         if path.exists() {
             if !ctx.was_file_read(&path).await {
-                return Err(ToolError::execution_failed(format!(
-                    "Existing file must be read before overwriting: {}. Use the Read tool first.",
-                    path.display()
-                )));
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!(
+                        "Existing file must be read before overwriting: {}. Use the Read tool first.",
+                        path.display()
+                    ),
+                }
+                .build());
             }
 
             // Check file_mtime hasn't changed since last read (detect external modifications)
@@ -90,10 +99,13 @@ impl Tool for WriteTool {
                 if let (Some(read_mtime), Some(curr_mtime)) = (read_state.file_mtime, current_mtime)
                 {
                     if curr_mtime > read_mtime {
-                        return Err(ToolError::execution_failed(format!(
-                            "File has been modified externally since last read: {}. Read the file again before writing.",
-                            path.display()
-                        )));
+                        return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                            message: format!(
+                                "File has been modified externally since last read: {}. Read the file again before writing.",
+                                path.display()
+                            ),
+                        }
+                        .build());
                     }
                 }
             }
@@ -103,15 +115,21 @@ impl Tool for WriteTool {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await.map_err(|e| {
-                    ToolError::execution_failed(format!("Failed to create directory: {e}"))
+                    crate::error::tool_error::ExecutionFailedSnafu {
+                        message: format!("Failed to create directory: {e}"),
+                    }
+                    .build()
                 })?;
             }
         }
 
         // Write file
-        fs::write(&path, content)
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("Failed to write file: {e}")))?;
+        fs::write(&path, content).await.map_err(|e| {
+            crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!("Failed to write file: {e}"),
+            }
+            .build()
+        })?;
 
         // Track modification and update read state with new content/mtime
         ctx.record_file_modified(&path).await;

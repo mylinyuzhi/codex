@@ -11,7 +11,7 @@
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
 use crate::context::{ApprovalStore, FileTracker, ToolContext, ToolContextBuilder};
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::registry::ToolRegistry;
 use cocode_hooks::{HookContext, HookEventType, HookRegistry, HookResult};
 use cocode_protocol::{
@@ -233,7 +233,7 @@ impl StreamingToolExecutor {
             Ok(input) => input,
             Err(reason) => {
                 // Pre-hook rejected the tool call
-                let result = Err(ToolError::hook_rejected(reason));
+                let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
                 self.emit_completed(&call_id, &result).await;
                 self.completed_results
                     .lock()
@@ -330,7 +330,8 @@ impl StreamingToolExecutor {
                 Ok(input) => input,
                 Err(reason) => {
                     // Pre-hook rejected the tool call
-                    let result = Err(ToolError::hook_rejected(reason));
+                    let result =
+                        Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
                     self.emit_completed(&call_id, &result).await;
                     self.completed_results
                         .lock()
@@ -398,9 +399,10 @@ impl StreamingToolExecutor {
                 }
                 Err(e) => {
                     error!(call_id = %call_id, error = %e, "Task panicked");
-                    let result = Err(ToolError::internal(format!(
-                        "Tool execution task panicked (call_id: {call_id}): {e}"
-                    )));
+                    let result = Err(crate::error::tool_error::InternalSnafu {
+                        message: format!("Tool execution task panicked (call_id: {call_id}): {e}"),
+                    }
+                    .build());
                     self.emit_completed(&call_id, &result).await;
                     self.completed_results
                         .lock()
@@ -625,7 +627,7 @@ async fn execute_tool(
     .await
     {
         Ok(result) => result,
-        Err(_) => Err(ToolError::timeout(timeout_secs)),
+        Err(_) => Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build()),
     }
 }
 
@@ -641,13 +643,16 @@ async fn execute_tool_inner(
     // Get the tool
     let tool = registry
         .get(name)
-        .ok_or_else(|| ToolError::not_found(name))?;
+        .ok_or_else(|| crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build())?;
 
     // Validate input
     let validation = tool.validate(&input).await;
     if let ValidationResult::Invalid { errors } = validation {
         let error_msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        return Err(ToolError::invalid_input(error_msgs.join(", ")));
+        return Err(crate::error::tool_error::InvalidInputSnafu {
+            message: error_msgs.join(", "),
+        }
+        .build());
     }
 
     // Check permission
@@ -655,14 +660,19 @@ async fn execute_tool_inner(
     match permission {
         cocode_protocol::PermissionResult::Allowed => {}
         cocode_protocol::PermissionResult::Denied { reason } => {
-            return Err(ToolError::permission_denied(reason));
+            return Err(
+                crate::error::tool_error::PermissionDeniedSnafu { message: reason }.build(),
+            );
         }
         cocode_protocol::PermissionResult::NeedsApproval { request } => {
             // Approval flow not yet implemented - deny with informative message
-            return Err(ToolError::permission_denied(format!(
-                "Tool '{}' requires approval: {}. Approval flow not yet implemented.",
-                name, request.description
-            )));
+            return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                message: format!(
+                    "Tool '{}' requires approval: {}. Approval flow not yet implemented.",
+                    name, request.description
+                ),
+            }
+            .build());
         }
     }
 

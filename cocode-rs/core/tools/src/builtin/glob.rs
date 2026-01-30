@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ToolOutput};
@@ -80,9 +80,12 @@ impl Tool for GlobTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let pattern = input["pattern"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("pattern must be a string"))?;
+        let pattern = input["pattern"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "pattern must be a string",
+            }
+            .build()
+        })?;
 
         let search_path = input["path"]
             .as_str()
@@ -91,21 +94,28 @@ impl Tool for GlobTool {
 
         // Validate search path
         if !search_path.exists() {
-            return Err(ToolError::execution_failed(format!(
-                "Directory not found: {}",
-                search_path.display()
-            )));
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!("Directory not found: {}", search_path.display()),
+            }
+            .build());
         }
 
         // Build glob matcher
-        let glob = Glob::new(pattern)
-            .map_err(|e| ToolError::invalid_input(format!("Invalid glob pattern: {e}")))?;
+        let glob = Glob::new(pattern).map_err(|e| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: format!("Invalid glob pattern: {e}"),
+            }
+            .build()
+        })?;
 
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
-        let glob_set = glob_builder
+        let glob_set = glob_builder.build().map_err(|e| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: format!("Failed to build glob set: {e}"),
+            }
             .build()
-            .map_err(|e| ToolError::invalid_input(format!("Failed to build glob set: {e}")))?;
+        })?;
 
         // Walk directory and collect matches
         let mut matches = Vec::new();

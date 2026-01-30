@@ -45,7 +45,7 @@ pub fn print_session_start(session_id: &str, model: &str, provider: &str) {
 }
 
 /// Print turn completion summary.
-pub fn print_turn_summary(input_tokens: i32, output_tokens: i32) {
+pub fn print_turn_summary(input_tokens: i64, output_tokens: i64) {
     println!();
     println!("[Tokens: {input_tokens} in / {output_tokens} out]");
 }

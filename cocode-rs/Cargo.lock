@@ -2099,12 +2099,17 @@ dependencies = [
 name = "cocode-shell"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "cocode-protocol",
+ "dirs 6.0.0",
+ "libc",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "which",
 ]
 
 [[package]]
@@ -2161,6 +2166,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -2169,6 +2175,7 @@ dependencies = [
 name = "cocode-tools"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "cocode-apply-patch",
  "cocode-error",

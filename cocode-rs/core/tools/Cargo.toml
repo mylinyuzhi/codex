@@ -28,6 +28,7 @@ globset.workspace = true
 walkdir.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

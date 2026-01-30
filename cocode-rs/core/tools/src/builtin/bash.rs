@@ -2,7 +2,7 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::{ConcurrencySafety, ToolOutput};
@@ -127,9 +127,12 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let command = input["command"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("command must be a string"))?;
+        let command = input["command"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "command must be a string",
+            }
+            .build()
+        })?;
 
         let timeout_ms = input["timeout"]
             .as_i64()
@@ -171,12 +174,13 @@ impl Tool for BashTool {
         let output = match result {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
-                return Err(ToolError::execution_failed(format!(
-                    "Failed to execute command: {e}"
-                )));
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to execute command: {e}"),
+                }
+                .build());
             }
             Err(_) => {
-                return Err(ToolError::timeout(timeout_secs));
+                return Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build());
             }
         };
 

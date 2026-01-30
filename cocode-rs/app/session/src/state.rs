@@ -47,12 +47,10 @@ impl TurnResult {
         Self {
             final_text: result.final_text.clone(),
             turns_completed: result.turns_completed,
-            usage: TokenUsage {
-                input_tokens: result.total_input_tokens,
-                output_tokens: result.total_output_tokens,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-            },
+            usage: TokenUsage::new(
+                result.total_input_tokens as i64,
+                result.total_output_tokens as i64,
+            ),
             has_pending_tools: false,
             is_complete: true,
         }
@@ -113,6 +111,9 @@ pub struct SessionState {
     /// API client for model inference.
     api_client: ApiClient,
 
+    /// Model for inference.
+    model: Arc<dyn hyper_sdk::Model>,
+
     /// Cancellation token for graceful shutdown.
     cancel_token: CancellationToken,
 
@@ -157,8 +158,9 @@ impl SessionState {
             .and_then(|m| m.info.context_window)
             .unwrap_or(200_000) as i32;
 
-        // Create API client
-        let api_client = Self::create_api_client(&provider_info, &session.model)?;
+        // Create API client and model
+        let (api_client, model) =
+            Self::create_api_client_and_model(&provider_info, &session.model)?;
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
@@ -183,6 +185,7 @@ impl SessionState {
             hook_registry: Arc::new(hook_registry),
             skills,
             api_client,
+            model,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
@@ -192,11 +195,13 @@ impl SessionState {
         })
     }
 
-    /// Create an API client from provider info and model.
-    fn create_api_client(
+    /// Create an API client and model from provider info.
+    ///
+    /// Returns both the model-agnostic ApiClient and the provider-specific Model.
+    fn create_api_client_and_model(
         provider_info: &cocode_protocol::ProviderInfo,
         model: &str,
-    ) -> anyhow::Result<ApiClient> {
+    ) -> anyhow::Result<(ApiClient, Arc<dyn hyper_sdk::Model>)> {
         use hyper_sdk::providers::{
             anthropic::AnthropicConfig, gemini::GeminiConfig, openai::OpenAIConfig,
             volcengine::VolcengineConfig, zai::ZaiConfig,
@@ -278,7 +283,7 @@ impl SessionState {
             }
         };
 
-        Ok(ApiClient::new(model))
+        Ok((ApiClient::new(), model))
     }
 
     /// Run a single turn with the given user input.
@@ -328,6 +333,7 @@ impl SessionState {
         // Build and run the agent loop
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
+            .model(self.model.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())
@@ -490,12 +496,7 @@ mod tests {
         let turn = TurnResult {
             final_text: "test".to_string(),
             turns_completed: 5,
-            usage: TokenUsage {
-                input_tokens: 100,
-                output_tokens: 50,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-            },
+            usage: TokenUsage::new(100, 50),
             has_pending_tools: false,
             is_complete: true,
         };
