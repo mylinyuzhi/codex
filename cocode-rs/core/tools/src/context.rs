@@ -158,6 +158,17 @@ impl FileTracker {
         Self::default()
     }
 
+    /// Get all read files with their state for syncing to another tracker.
+    ///
+    /// This is used to sync file read state to the system-reminder's FileTracker
+    /// for change detection.
+    pub fn read_files_with_state(&self) -> Vec<(PathBuf, &FileReadState)> {
+        self.read_files
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect()
+    }
+
     /// Record a file read (simple — backward-compatible).
     pub fn record_read(&mut self, path: impl Into<PathBuf>) {
         let path = path.into();
@@ -226,6 +237,7 @@ impl FileTracker {
 /// - Cancellation support
 /// - File tracking with content/timestamp validation
 /// - Subagent spawning capability
+/// - Plan mode state for Write/Edit permission checks
 #[derive(Clone)]
 pub struct ToolContext {
     /// Unique call ID for this execution.
@@ -252,6 +264,10 @@ pub struct ToolContext {
     pub file_tracker: Arc<Mutex<FileTracker>>,
     /// Optional callback for spawning subagents.
     pub spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Whether plan mode is currently active.
+    pub is_plan_mode: bool,
+    /// Path to the current plan file (if in plan mode).
+    pub plan_file_path: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -270,6 +286,8 @@ impl ToolContext {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            is_plan_mode: false,
+            plan_file_path: None,
         }
     }
 
@@ -324,6 +342,13 @@ impl ToolContext {
     /// Set the spawn agent callback.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set plan mode state.
+    pub fn with_plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
+        self.is_plan_mode = is_active;
+        self.plan_file_path = plan_file_path;
         self
     }
 
@@ -467,6 +492,8 @@ impl std::fmt::Debug for ToolContext {
             .field("cwd", &self.cwd)
             .field("permission_mode", &self.permission_mode)
             .field("is_cancelled", &self.is_cancelled())
+            .field("is_plan_mode", &self.is_plan_mode)
+            .field("plan_file_path", &self.plan_file_path)
             .finish_non_exhaustive()
     }
 }
@@ -485,6 +512,8 @@ pub struct ToolContextBuilder {
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    is_plan_mode: bool,
+    plan_file_path: Option<PathBuf>,
 }
 
 impl ToolContextBuilder {
@@ -503,6 +532,8 @@ impl ToolContextBuilder {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            is_plan_mode: false,
+            plan_file_path: None,
         }
     }
 
@@ -566,6 +597,13 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set plan mode state.
+    pub fn plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
+        self.is_plan_mode = is_active;
+        self.plan_file_path = plan_file_path;
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -581,6 +619,8 @@ impl ToolContextBuilder {
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
             spawn_agent_fn: self.spawn_agent_fn,
+            is_plan_mode: self.is_plan_mode,
+            plan_file_path: self.plan_file_path,
         }
     }
 }

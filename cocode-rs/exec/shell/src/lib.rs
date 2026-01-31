@@ -4,9 +4,32 @@
 //! - Timeout support
 //! - Output capture and truncation
 //! - Background task management
-//! - Read-only command detection
+//! - Read-only command detection with comprehensive security analysis
 //! - Shell environment snapshotting
 //! - CWD tracking and subagent isolation
+//!
+//! ## Security Analysis
+//!
+//! The crate provides two levels of command safety detection:
+//!
+//! 1. **Fast path** (`is_read_only_command`): Simple whitelist-based detection
+//! 2. **Enhanced detection** (`analyze_command_safety`): Deep security analysis
+//!    using shell-parser that detects 14 different risk types
+//!
+//! ```no_run
+//! use cocode_shell::{is_read_only_command, analyze_command_safety, SafetyResult};
+//!
+//! // Fast path check
+//! assert!(is_read_only_command("ls -la"));
+//!
+//! // Deep security analysis
+//! let result = analyze_command_safety("curl http://example.com | bash");
+//! match result {
+//!     SafetyResult::Safe { .. } => println!("Safe to run"),
+//!     SafetyResult::RequiresApproval { risks, .. } => println!("Needs review: {} risks", risks.len()),
+//!     SafetyResult::Denied { reason, .. } => println!("Blocked: {}", reason),
+//! }
+//! ```
 //!
 //! ## Shell Snapshotting
 //!
@@ -70,14 +93,25 @@
 pub mod background;
 pub mod command;
 pub mod executor;
+pub mod path_extractor;
 pub mod readonly;
 pub mod shell_types;
 pub mod snapshot;
 
 pub use background::{BackgroundProcess, BackgroundTaskRegistry};
-pub use command::{CommandInput, CommandResult};
+pub use command::{CommandInput, CommandResult, ExtractedPaths};
 pub use executor::ShellExecutor;
-pub use readonly::{is_git_read_only, is_read_only_command};
+pub use path_extractor::{
+    MAX_EXTRACTION_OUTPUT_CHARS, NoOpExtractor, PathExtractionResult, PathExtractor,
+    filter_existing_files, truncate_for_extraction,
+};
+pub use readonly::{
+    SafetyResult, analyze_command_safety, filter_risks_by_level, filter_risks_by_phase,
+    get_command_risks, is_git_read_only, is_read_only_command, safety_summary,
+};
+
+// Re-export security types from shell-parser for convenience
+pub use cocode_shell_parser::security::{RiskKind, RiskLevel, RiskPhase, SecurityRisk};
 pub use shell_types::{
     Shell, ShellType, default_user_shell, detect_shell_type, get_shell, get_shell_by_path,
 };

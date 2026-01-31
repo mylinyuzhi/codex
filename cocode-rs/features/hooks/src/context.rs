@@ -2,6 +2,7 @@
 //!
 //! Provides all information available to a hook at execution time.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,11 @@ pub struct HookContext {
 
     /// The working directory for the session.
     pub working_dir: PathBuf,
+
+    /// Additional metadata for the hook execution.
+    /// Used to pass extra context like "source" = "compact" for post-compact hooks.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl HookContext {
@@ -42,6 +48,7 @@ impl HookContext {
             tool_input: None,
             session_id,
             working_dir,
+            metadata: HashMap::new(),
         }
     }
 
@@ -72,6 +79,17 @@ impl HookContext {
     pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
         self.working_dir = working_dir;
         self
+    }
+
+    /// Adds a metadata key-value pair and returns `self` for chaining.
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Gets a metadata value by key.
+    pub fn get_metadata(&self, key: &str) -> Option<&str> {
+        self.metadata.get(key).map(String::as_str)
     }
 }
 

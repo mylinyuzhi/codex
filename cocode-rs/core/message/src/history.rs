@@ -43,6 +43,21 @@ pub struct CompactionBoundary {
     pub tokens_saved: i32,
     /// Timestamp of compaction (Unix milliseconds).
     pub timestamp_ms: i64,
+    /// Trigger type for the compaction.
+    #[serde(default)]
+    pub trigger: cocode_protocol::CompactTrigger,
+    /// Pre-compaction token count.
+    #[serde(default)]
+    pub pre_tokens: i32,
+    /// Post-compaction token count.
+    #[serde(default)]
+    pub post_tokens: Option<i32>,
+    /// Path to full transcript file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<std::path::PathBuf>,
+    /// Whether recent messages were preserved verbatim.
+    #[serde(default)]
+    pub recent_messages_preserved: bool,
 }
 
 fn default_max_turns() -> i32 {
@@ -208,6 +223,17 @@ impl MessageHistory {
         estimate_tokens(&messages)
     }
 
+    /// Get messages as JSON values for compaction calculations.
+    ///
+    /// This is used by the keep window algorithm which operates on
+    /// JSON message structures rather than typed Message objects.
+    pub fn messages_for_api_json(&self) -> Vec<serde_json::Value> {
+        self.messages_for_api()
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect()
+    }
+
     /// Check if compaction is needed.
     pub fn needs_compaction(&self) -> bool {
         if !self.config.auto_compact {
@@ -243,6 +269,44 @@ impl MessageHistory {
         turn_id: impl Into<String>,
         tokens_saved: i32,
     ) {
+        self.apply_compaction_with_metadata(
+            summary,
+            keep_turns,
+            turn_id,
+            tokens_saved,
+            cocode_protocol::CompactTrigger::Auto,
+            0,
+            None,
+            false,
+        );
+    }
+
+    /// Set compacted summary with full metadata.
+    ///
+    /// Extended version of `apply_compaction` that includes additional metadata
+    /// for compact boundary tracking.
+    ///
+    /// # Arguments
+    /// * `summary` - The compacted summary text
+    /// * `keep_turns` - Number of recent turns to keep
+    /// * `turn_id` - ID of the turn where compaction occurred
+    /// * `tokens_saved` - Estimated tokens saved by compaction
+    /// * `trigger` - Trigger type (auto or manual)
+    /// * `pre_tokens` - Token count before compaction
+    /// * `transcript_path` - Optional path to full transcript file
+    /// * `recent_messages_preserved` - Whether recent messages were kept verbatim
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_compaction_with_metadata(
+        &mut self,
+        summary: String,
+        keep_turns: i32,
+        turn_id: impl Into<String>,
+        tokens_saved: i32,
+        trigger: cocode_protocol::CompactTrigger,
+        pre_tokens: i32,
+        transcript_path: Option<std::path::PathBuf>,
+        recent_messages_preserved: bool,
+    ) {
         let turns_compacted = self.turns.len().saturating_sub(keep_turns.max(1) as usize) as i32;
         let turn_number = self.turn_count();
 
@@ -256,6 +320,11 @@ impl MessageHistory {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0),
+            trigger,
+            pre_tokens,
+            post_tokens: None, // Will be set after compaction completes
+            transcript_path,
+            recent_messages_preserved,
         });
 
         self.compacted_summary = Some(summary);
@@ -271,6 +340,13 @@ impl MessageHistory {
             }
 
             self.turns = self.turns.split_off(self.turns.len() - keep);
+        }
+    }
+
+    /// Update the compaction boundary with post-compaction token count.
+    pub fn update_boundary_post_tokens(&mut self, post_tokens: i32) {
+        if let Some(boundary) = &mut self.compaction_boundary {
+            boundary.post_tokens = Some(post_tokens);
         }
     }
 

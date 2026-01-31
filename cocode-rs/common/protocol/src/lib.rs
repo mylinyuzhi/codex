@@ -79,15 +79,23 @@ pub use loop_config::StallRecovery;
 pub use loop_event::AbortReason;
 pub use loop_event::AgentProgress;
 pub use loop_event::ApiErrorInfo;
+pub use loop_event::AttachmentType;
+pub use loop_event::CompactBoundaryMetadata;
+pub use loop_event::CompactTelemetry;
+pub use loop_event::CompactTrigger;
+pub use loop_event::HookAdditionalContext;
 pub use loop_event::HookEventType;
 pub use loop_event::LoopError;
 pub use loop_event::LoopEvent;
 pub use loop_event::McpServerInfo;
 pub use loop_event::McpStartupStatus;
+pub use loop_event::MemoryAttachment;
+pub use loop_event::PersistedToolResult;
 pub use loop_event::RawStreamEvent;
 pub use loop_event::RetryInfo;
 pub use loop_event::TaskProgress;
 pub use loop_event::TaskType;
+pub use loop_event::TokenBreakdown;
 pub use loop_event::TokenUsage;
 pub use loop_event::TombstonedMessage;
 pub use loop_event::ToolProgressInfo;
@@ -111,10 +119,23 @@ pub use tracking::QueryTracking;
 // Extended config types
 pub use attachment_config::AttachmentConfig;
 pub use compact_config::CompactConfig;
+pub use compact_config::FileRestorationConfig;
+pub use compact_config::KeepWindowConfig;
+pub use compact_config::SessionMemoryExtractionConfig;
+// Keep window constants
+pub use compact_config::DEFAULT_EXCLUDED_PATTERNS;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MAX_TOKENS;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MIN_TEXT_MESSAGES;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MIN_TOKENS;
 // Session memory constants
 pub use compact_config::DEFAULT_EXTRACTION_COOLDOWN_SECS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MAX_TOKENS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MIN_TOKENS;
+// Session memory extraction agent constants
+pub use compact_config::DEFAULT_EXTRACTION_MAX_SUMMARY_TOKENS;
+pub use compact_config::DEFAULT_EXTRACTION_MIN_TOKENS_BETWEEN;
+pub use compact_config::DEFAULT_EXTRACTION_MIN_TOKENS_TO_INIT;
+pub use compact_config::DEFAULT_EXTRACTION_TOOL_CALLS_BETWEEN;
 // Context restoration constants
 pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
 pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;

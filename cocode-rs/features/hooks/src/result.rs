@@ -13,6 +13,13 @@ pub enum HookResult {
     /// Continue normal execution (hook did not intervene).
     Continue,
 
+    /// Continue with additional context (e.g., from SessionStart hooks after compact).
+    ContinueWithContext {
+        /// Additional context to inject into the conversation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_context: Option<String>,
+    },
+
     /// Reject the current action.
     Reject {
         /// Human-readable reason for rejection.
@@ -77,6 +84,40 @@ mod tests {
             assert_eq!(new_input["modified"], true);
         } else {
             panic!("Expected ModifyInput");
+        }
+    }
+
+    #[test]
+    fn test_continue_with_context_serde() {
+        let result = HookResult::ContinueWithContext {
+            additional_context: Some("Extra context from hook".to_string()),
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(json.contains("continue_with_context"));
+        assert!(json.contains("Extra context from hook"));
+
+        let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+        if let HookResult::ContinueWithContext { additional_context } = parsed {
+            assert_eq!(
+                additional_context,
+                Some("Extra context from hook".to_string())
+            );
+        } else {
+            panic!("Expected ContinueWithContext");
+        }
+    }
+
+    #[test]
+    fn test_continue_with_context_none() {
+        let result = HookResult::ContinueWithContext {
+            additional_context: None,
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+        if let HookResult::ContinueWithContext { additional_context } = parsed {
+            assert!(additional_context.is_none());
+        } else {
+            panic!("Expected ContinueWithContext");
         }
     }
 

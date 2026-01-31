@@ -76,6 +76,55 @@ pub const DEFAULT_TOKEN_SAFETY_MARGIN: f64 = 1.3333333333333333;
 pub const DEFAULT_TOKENS_PER_IMAGE: i32 = 1334;
 
 // ============================================================================
+// Session Memory Extraction Constants (for background extraction agent)
+// ============================================================================
+
+/// Minimum tokens accumulated before first extraction (default: 5,000).
+pub const DEFAULT_EXTRACTION_MIN_TOKENS_TO_INIT: i32 = 5000;
+
+/// Minimum tokens between extractions (default: 5,000).
+pub const DEFAULT_EXTRACTION_MIN_TOKENS_BETWEEN: i32 = 5000;
+
+/// Minimum tool calls between extractions (default: 10).
+pub const DEFAULT_EXTRACTION_TOOL_CALLS_BETWEEN: i32 = 10;
+
+/// Maximum tokens for the summary (default: 4,000).
+pub const DEFAULT_EXTRACTION_MAX_SUMMARY_TOKENS: i32 = 4000;
+
+// ============================================================================
+// Keep Window Constants (for token-based message retention)
+// ============================================================================
+
+/// Minimum tokens to keep in the "keep window" after compaction.
+pub const DEFAULT_KEEP_WINDOW_MIN_TOKENS: i32 = 10000;
+
+/// Minimum text messages to keep (ensures recent context is preserved).
+pub const DEFAULT_KEEP_WINDOW_MIN_TEXT_MESSAGES: i32 = 5;
+
+/// Maximum tokens in the keep window (prevents keeping too much).
+pub const DEFAULT_KEEP_WINDOW_MAX_TOKENS: i32 = 40000;
+
+// ============================================================================
+// File Restoration Exclusion Patterns
+// ============================================================================
+
+/// Default patterns to exclude from file restoration after compaction.
+pub const DEFAULT_EXCLUDED_PATTERNS: &[&str] = &[
+    // Agent transcript files
+    "*.jsonl",
+    "**/transcript*.json",
+    // Plan mode files
+    "**/plan.md",
+    "**/plan-*.md",
+    // Instruction files
+    "**/CLAUDE.md",
+    "**/AGENTS.md",
+    // Session memory files
+    "**/summary.md",
+    "**/session-memory/*",
+];
+
+// ============================================================================
 // CompactConfig
 // ============================================================================
 
@@ -232,6 +281,432 @@ pub struct CompactConfig {
     /// Token estimate for images.
     #[serde(default = "default_tokens_per_image")]
     pub tokens_per_image: i32,
+
+    // ========================================================================
+    // Keep Window Configuration
+    // ========================================================================
+    /// Keep window configuration for token-based message retention.
+    #[serde(default)]
+    pub keep_window: KeepWindowConfig,
+
+    // ========================================================================
+    // File Restoration Configuration
+    // ========================================================================
+    /// File restoration configuration with exclusion patterns.
+    #[serde(default)]
+    pub file_restoration: FileRestorationConfig,
+
+    // ========================================================================
+    // Session Memory Extraction Configuration
+    // ========================================================================
+    /// Background session memory extraction agent configuration.
+    #[serde(default)]
+    pub session_memory_extraction: SessionMemoryExtractionConfig,
+}
+
+// ============================================================================
+// KeepWindowConfig
+// ============================================================================
+
+/// Configuration for token-based message retention during compaction.
+///
+/// The "keep window" determines which recent messages are preserved verbatim
+/// after compaction, based on token counts rather than simple message counts.
+///
+/// This mirrors Claude Code's `calculateKeepStartIndex()` logic which ensures:
+/// 1. At least `min_tokens` worth of recent messages are kept
+/// 2. At least `min_text_messages` text messages are kept
+/// 3. No more than `max_tokens` worth of messages are kept
+/// 4. Tool use/result pairs are kept together
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct KeepWindowConfig {
+    /// Minimum tokens to keep in the window (default: 10,000).
+    #[serde(default = "default_keep_window_min_tokens")]
+    pub min_tokens: i32,
+
+    /// Minimum text messages to keep (default: 5).
+    #[serde(default = "default_keep_window_min_text_messages")]
+    pub min_text_messages: i32,
+
+    /// Maximum tokens in the keep window (default: 40,000).
+    #[serde(default = "default_keep_window_max_tokens")]
+    pub max_tokens: i32,
+}
+
+impl Default for KeepWindowConfig {
+    fn default() -> Self {
+        Self {
+            min_tokens: DEFAULT_KEEP_WINDOW_MIN_TOKENS,
+            min_text_messages: DEFAULT_KEEP_WINDOW_MIN_TEXT_MESSAGES,
+            max_tokens: DEFAULT_KEEP_WINDOW_MAX_TOKENS,
+        }
+    }
+}
+
+impl KeepWindowConfig {
+    /// Validate configuration values.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.min_tokens < 0 {
+            return Err(format!(
+                "keep_window.min_tokens must be >= 0, got {}",
+                self.min_tokens
+            ));
+        }
+        if self.min_text_messages < 0 {
+            return Err(format!(
+                "keep_window.min_text_messages must be >= 0, got {}",
+                self.min_text_messages
+            ));
+        }
+        if self.max_tokens < self.min_tokens {
+            return Err(format!(
+                "keep_window.max_tokens ({}) must be >= min_tokens ({})",
+                self.max_tokens, self.min_tokens
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// SessionMemoryExtractionConfig
+// ============================================================================
+
+/// Configuration for background session memory extraction agent.
+///
+/// The extraction agent runs asynchronously during normal conversation to
+/// proactively update the session memory (summary.md). This enables "zero API
+/// cost" compaction at critical moments because a cached summary is available.
+///
+/// # Trigger Conditions
+///
+/// Extraction is triggered when ALL of the following are true:
+/// - Not currently compacting
+/// - Either:
+///   - First extraction: `min_tokens_to_init` tokens accumulated
+///   - Subsequent: `min_tokens_between` tokens AND `tool_calls_between` tool calls
+///     since last extraction, AND cooldown elapsed
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "session_memory_extraction": {
+///     "enabled": true,
+///     "min_tokens_to_init": 5000,
+///     "min_tokens_between": 5000,
+///     "tool_calls_between": 10,
+///     "cooldown_secs": 60,
+///     "max_summary_tokens": 4000
+///   }
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SessionMemoryExtractionConfig {
+    /// Enable background extraction agent.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Minimum tokens accumulated before first extraction (default: 5,000).
+    #[serde(default = "default_extraction_min_tokens_to_init")]
+    pub min_tokens_to_init: i32,
+
+    /// Minimum tokens between extractions (default: 5,000).
+    #[serde(default = "default_extraction_min_tokens_between")]
+    pub min_tokens_between: i32,
+
+    /// Minimum tool calls between extractions (default: 10).
+    #[serde(default = "default_extraction_tool_calls_between")]
+    pub tool_calls_between: i32,
+
+    /// Cooldown between extractions in seconds (default: 60).
+    #[serde(default = "default_extraction_cooldown_secs")]
+    pub cooldown_secs: i32,
+
+    /// Maximum tokens for the summary (default: 4,000).
+    #[serde(default = "default_extraction_max_summary_tokens")]
+    pub max_summary_tokens: i32,
+}
+
+impl Default for SessionMemoryExtractionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_tokens_to_init: DEFAULT_EXTRACTION_MIN_TOKENS_TO_INIT,
+            min_tokens_between: DEFAULT_EXTRACTION_MIN_TOKENS_BETWEEN,
+            tool_calls_between: DEFAULT_EXTRACTION_TOOL_CALLS_BETWEEN,
+            cooldown_secs: DEFAULT_EXTRACTION_COOLDOWN_SECS,
+            max_summary_tokens: DEFAULT_EXTRACTION_MAX_SUMMARY_TOKENS,
+        }
+    }
+}
+
+impl SessionMemoryExtractionConfig {
+    /// Load configuration with environment variable overrides.
+    ///
+    /// Supported environment variables:
+    /// - `COCODE_ENABLE_SESSION_MEMORY`: Enable/disable background extraction (true/false)
+    /// - `COCODE_EXTRACTION_MIN_TOKENS`: Override min_tokens_to_init and min_tokens_between
+    /// - `COCODE_EXTRACTION_TOOL_CALLS`: Override tool_calls_between
+    /// - `COCODE_EXTRACTION_COOLDOWN`: Override cooldown_secs
+    /// - `COCODE_EXTRACTION_MAX_TOKENS`: Override max_summary_tokens
+    pub fn with_env_overrides(mut self) -> Self {
+        // COCODE_ENABLE_SESSION_MEMORY - master toggle
+        if let Ok(val) = std::env::var("COCODE_ENABLE_SESSION_MEMORY") {
+            if let Ok(enabled) = val.parse::<bool>() {
+                self.enabled = enabled;
+            }
+        }
+
+        // COCODE_EXTRACTION_MIN_TOKENS - trigger threshold
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MIN_TOKENS") {
+            if let Ok(tokens) = val.parse::<i32>() {
+                self.min_tokens_to_init = tokens;
+                self.min_tokens_between = tokens;
+            }
+        }
+
+        // COCODE_EXTRACTION_TOOL_CALLS - tool call threshold
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_TOOL_CALLS") {
+            if let Ok(calls) = val.parse::<i32>() {
+                self.tool_calls_between = calls;
+            }
+        }
+
+        // COCODE_EXTRACTION_COOLDOWN - cooldown seconds
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_COOLDOWN") {
+            if let Ok(secs) = val.parse::<i32>() {
+                self.cooldown_secs = secs;
+            }
+        }
+
+        // COCODE_EXTRACTION_MAX_TOKENS - max summary tokens
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MAX_TOKENS") {
+            if let Ok(tokens) = val.parse::<i32>() {
+                self.max_summary_tokens = tokens;
+            }
+        }
+
+        self
+    }
+
+    /// Validate configuration values.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.min_tokens_to_init < 0 {
+            return Err(format!(
+                "session_memory_extraction.min_tokens_to_init must be >= 0, got {}",
+                self.min_tokens_to_init
+            ));
+        }
+        if self.min_tokens_between < 0 {
+            return Err(format!(
+                "session_memory_extraction.min_tokens_between must be >= 0, got {}",
+                self.min_tokens_between
+            ));
+        }
+        if self.tool_calls_between < 0 {
+            return Err(format!(
+                "session_memory_extraction.tool_calls_between must be >= 0, got {}",
+                self.tool_calls_between
+            ));
+        }
+        if self.cooldown_secs < 0 {
+            return Err(format!(
+                "session_memory_extraction.cooldown_secs must be >= 0, got {}",
+                self.cooldown_secs
+            ));
+        }
+        if self.max_summary_tokens < 0 {
+            return Err(format!(
+                "session_memory_extraction.max_summary_tokens must be >= 0, got {}",
+                self.max_summary_tokens
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_extraction_min_tokens_to_init() -> i32 {
+    DEFAULT_EXTRACTION_MIN_TOKENS_TO_INIT
+}
+
+fn default_extraction_min_tokens_between() -> i32 {
+    DEFAULT_EXTRACTION_MIN_TOKENS_BETWEEN
+}
+
+fn default_extraction_tool_calls_between() -> i32 {
+    DEFAULT_EXTRACTION_TOOL_CALLS_BETWEEN
+}
+
+fn default_extraction_max_summary_tokens() -> i32 {
+    DEFAULT_EXTRACTION_MAX_SUMMARY_TOKENS
+}
+
+// ============================================================================
+// FileRestorationConfig
+// ============================================================================
+
+/// Configuration for file restoration after compaction.
+///
+/// Controls which files are restored and how much content is included
+/// in the restored context after compaction.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct FileRestorationConfig {
+    /// Maximum number of files to restore (default: 5).
+    #[serde(default = "default_context_restore_max_files")]
+    pub max_files: i32,
+
+    /// Maximum tokens per file (default: 5,000).
+    #[serde(default = "default_max_tokens_per_file")]
+    pub max_tokens_per_file: i32,
+
+    /// Total token budget for restoration (default: 50,000).
+    #[serde(default = "default_context_restore_budget")]
+    pub total_token_budget: i32,
+
+    /// Glob patterns to exclude from restoration.
+    #[serde(default = "default_excluded_patterns_vec")]
+    pub excluded_patterns: Vec<String>,
+
+    /// Whether to sort files by last access time (most recent first).
+    #[serde(default = "default_sort_by_access")]
+    pub sort_by_access_time: bool,
+}
+
+impl Default for FileRestorationConfig {
+    fn default() -> Self {
+        Self {
+            max_files: DEFAULT_CONTEXT_RESTORE_MAX_FILES,
+            max_tokens_per_file: DEFAULT_MAX_TOKENS_PER_FILE,
+            total_token_budget: DEFAULT_CONTEXT_RESTORE_BUDGET,
+            excluded_patterns: default_excluded_patterns_vec(),
+            sort_by_access_time: true,
+        }
+    }
+}
+
+impl FileRestorationConfig {
+    /// Check if a file path should be excluded from restoration.
+    pub fn should_exclude(&self, path: &str) -> bool {
+        for pattern in &self.excluded_patterns {
+            if Self::matches_glob(pattern, path) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Simple glob matching (supports * and ** patterns).
+    fn matches_glob(pattern: &str, path: &str) -> bool {
+        // Handle ** (match any path segment)
+        if pattern.contains("**") {
+            let parts: Vec<&str> = pattern.split("**").collect();
+            if parts.len() == 2 {
+                let prefix = parts[0].trim_end_matches('/');
+                let suffix = parts[1].trim_start_matches('/');
+
+                // Check prefix
+                if !prefix.is_empty() && !path.starts_with(prefix) {
+                    return false;
+                }
+
+                // Handle suffix patterns with wildcards (like "plan-*.md")
+                if !suffix.is_empty() {
+                    return Self::matches_suffix_pattern(suffix, path);
+                }
+
+                // Empty suffix means match anything
+                return true;
+            }
+        }
+
+        // Handle simple * wildcard
+        if pattern.starts_with('*') && !pattern.contains('/') {
+            // *.ext pattern - match file extension
+            let ext = &pattern[1..];
+            return path.ends_with(ext);
+        }
+
+        // Handle pattern with * in the middle (like "plan-*.md")
+        if pattern.contains('*') && !pattern.contains('/') {
+            return Self::matches_suffix_pattern(pattern, path);
+        }
+
+        // Exact match
+        path == pattern || path.ends_with(&format!("/{}", pattern))
+    }
+
+    /// Match a suffix pattern that may contain wildcards against a path.
+    fn matches_suffix_pattern(suffix_pattern: &str, path: &str) -> bool {
+        // Get the filename from the path
+        let filename = path.rsplit('/').next().unwrap_or(path);
+
+        // Handle patterns like "plan-*.md"
+        if let Some(star_pos) = suffix_pattern.find('*') {
+            let prefix = &suffix_pattern[..star_pos];
+            let suffix = &suffix_pattern[star_pos + 1..];
+
+            // Check if filename matches prefix*suffix pattern
+            if filename.starts_with(prefix) && filename.ends_with(suffix) {
+                // Make sure prefix + suffix don't overlap
+                return filename.len() >= prefix.len() + suffix.len();
+            }
+            return false;
+        }
+
+        // No wildcard - exact filename match
+        filename == suffix_pattern || path.ends_with(&format!("/{}", suffix_pattern))
+    }
+
+    /// Validate configuration values.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_files < 0 {
+            return Err(format!(
+                "file_restoration.max_files must be >= 0, got {}",
+                self.max_files
+            ));
+        }
+        if self.max_tokens_per_file < 0 {
+            return Err(format!(
+                "file_restoration.max_tokens_per_file must be >= 0, got {}",
+                self.max_tokens_per_file
+            ));
+        }
+        if self.total_token_budget < 0 {
+            return Err(format!(
+                "file_restoration.total_token_budget must be >= 0, got {}",
+                self.total_token_budget
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_keep_window_min_tokens() -> i32 {
+    DEFAULT_KEEP_WINDOW_MIN_TOKENS
+}
+
+fn default_keep_window_min_text_messages() -> i32 {
+    DEFAULT_KEEP_WINDOW_MIN_TEXT_MESSAGES
+}
+
+fn default_keep_window_max_tokens() -> i32 {
+    DEFAULT_KEEP_WINDOW_MAX_TOKENS
+}
+
+fn default_excluded_patterns_vec() -> Vec<String> {
+    DEFAULT_EXCLUDED_PATTERNS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_sort_by_access() -> bool {
+    true
 }
 
 impl Default for CompactConfig {
@@ -266,6 +741,12 @@ impl Default for CompactConfig {
             max_compact_output_tokens: DEFAULT_MAX_COMPACT_OUTPUT_TOKENS,
             token_safety_margin: DEFAULT_TOKEN_SAFETY_MARGIN,
             tokens_per_image: DEFAULT_TOKENS_PER_IMAGE,
+            // Keep window
+            keep_window: KeepWindowConfig::default(),
+            // File restoration
+            file_restoration: FileRestorationConfig::default(),
+            // Session memory extraction
+            session_memory_extraction: SessionMemoryExtractionConfig::default(),
         }
     }
 }
@@ -405,7 +886,17 @@ impl CompactConfig {
             ));
         }
 
+        // Validate nested configs
+        self.keep_window.validate()?;
+        self.file_restoration.validate()?;
+        self.session_memory_extraction.validate()?;
+
         Ok(())
+    }
+
+    /// Check if session memory extraction is enabled.
+    pub fn is_session_memory_extraction_enabled(&self) -> bool {
+        !self.disable_compact && self.session_memory_extraction.enabled
     }
 }
 

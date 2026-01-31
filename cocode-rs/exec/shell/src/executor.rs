@@ -8,7 +8,8 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, Notify};
 
 use crate::background::{BackgroundProcess, BackgroundTaskRegistry};
-use crate::command::CommandResult;
+use crate::command::{CommandResult, ExtractedPaths};
+use crate::path_extractor::{PathExtractor, filter_existing_files, truncate_for_extraction};
 use crate::shell_types::{Shell, default_user_shell};
 use crate::snapshot::{ShellSnapshot, SnapshotConfig};
 
@@ -43,7 +44,13 @@ const CWD_MARKER_END: &str = "__COCODE_CWD_END__";
 /// ```sh
 /// export COCODE_DISABLE_SHELL_SNAPSHOT=1
 /// ```
-#[derive(Debug, Clone)]
+///
+/// ## Path Extraction
+///
+/// When a path extractor is configured (via `with_path_extractor`), the executor
+/// can extract file paths from command output for fast model pre-reading.
+/// Use `execute_with_extraction` to enable this feature.
+#[derive(Clone)]
 pub struct ShellExecutor {
     /// Default timeout for command execution in seconds.
     pub default_timeout_secs: i64,
@@ -55,6 +62,21 @@ pub struct ShellExecutor {
     shell: Option<Shell>,
     /// Whether snapshot was initialized.
     snapshot_initialized: bool,
+    /// Optional path extractor for extracting file paths from command output.
+    path_extractor: Option<Arc<dyn PathExtractor>>,
+}
+
+impl std::fmt::Debug for ShellExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellExecutor")
+            .field("default_timeout_secs", &self.default_timeout_secs)
+            .field("cwd", &self.cwd)
+            .field("background_registry", &self.background_registry)
+            .field("shell", &self.shell)
+            .field("snapshot_initialized", &self.snapshot_initialized)
+            .field("path_extractor", &self.path_extractor.is_some())
+            .finish()
+    }
 }
 
 impl ShellExecutor {
@@ -69,6 +91,7 @@ impl ShellExecutor {
             background_registry: BackgroundTaskRegistry::new(),
             shell: None,
             snapshot_initialized: false,
+            path_extractor: None,
         }
     }
 
@@ -82,12 +105,43 @@ impl ShellExecutor {
             background_registry: BackgroundTaskRegistry::new(),
             shell: Some(shell),
             snapshot_initialized: false,
+            path_extractor: None,
         }
     }
 
     /// Creates a new executor with the user's default shell.
     pub fn with_default_shell(cwd: PathBuf) -> Self {
         Self::with_shell(cwd, default_user_shell())
+    }
+
+    /// Sets the path extractor for extracting file paths from command output.
+    ///
+    /// When a path extractor is configured, `execute_with_extraction()` can
+    /// analyze command output to find file paths for fast model pre-reading.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cocode_shell::{ShellExecutor, NoOpExtractor};
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    ///
+    /// let executor = ShellExecutor::new(PathBuf::from("/project"))
+    ///     .with_path_extractor(Arc::new(NoOpExtractor));
+    /// ```
+    pub fn with_path_extractor(mut self, extractor: Arc<dyn PathExtractor>) -> Self {
+        self.path_extractor = Some(extractor);
+        self
+    }
+
+    /// Returns the configured path extractor, if any.
+    pub fn path_extractor(&self) -> Option<&Arc<dyn PathExtractor>> {
+        self.path_extractor.as_ref()
+    }
+
+    /// Returns true if a path extractor is configured and enabled.
+    pub fn has_path_extractor(&self) -> bool {
+        self.path_extractor.as_ref().is_some_and(|e| e.is_enabled())
     }
 
     /// Starts asynchronous shell snapshotting.
@@ -177,6 +231,7 @@ impl ShellExecutor {
             background_registry: BackgroundTaskRegistry::new(), // Independent registry
             shell: self.shell.clone(), // Share shell config (Arc snapshot is shared)
             snapshot_initialized: self.snapshot_initialized,
+            path_extractor: self.path_extractor.clone(), // Share path extractor
         }
     }
 
@@ -232,6 +287,7 @@ impl ShellExecutor {
                 duration_ms,
                 truncated: false,
                 new_cwd: None,
+                extracted_paths: None,
             },
         }
     }
@@ -247,6 +303,96 @@ impl ShellExecutor {
         timeout_secs: i64,
     ) -> CommandResult {
         let result = self.execute(command, timeout_secs).await;
+
+        // Update internal CWD if command succeeded and CWD changed
+        if result.exit_code == 0 {
+            if let Some(ref new_cwd) = result.new_cwd {
+                if new_cwd.exists() && new_cwd != &self.cwd {
+                    tracing::debug!(
+                        "CWD changed: {} -> {}",
+                        self.cwd.display(),
+                        new_cwd.display()
+                    );
+                    self.cwd = new_cwd.clone();
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Executes a command and extracts file paths from output.
+    ///
+    /// This combines command execution with path extraction for fast model pre-reading.
+    /// If a path extractor is configured and the command succeeds, file paths are
+    /// extracted from the output for preloading.
+    ///
+    /// The output is truncated to 2000 characters for extraction efficiency
+    /// (matching Claude Code's behavior).
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The shell command to execute
+    /// * `timeout_secs` - Timeout in seconds (0 uses default)
+    ///
+    /// # Returns
+    ///
+    /// A `CommandResult` with `extracted_paths` populated if extraction was performed.
+    pub async fn execute_with_extraction(&self, command: &str, timeout_secs: i64) -> CommandResult {
+        let mut result = self.execute(command, timeout_secs).await;
+
+        // Only extract paths if command succeeded and extractor is available
+        if result.exit_code == 0 && self.has_path_extractor() {
+            if let Some(ref extractor) = self.path_extractor {
+                let extraction_start = Instant::now();
+
+                // Truncate output for extraction efficiency
+                let output_for_extraction = truncate_for_extraction(&result.stdout);
+
+                match extractor
+                    .extract_paths(command, output_for_extraction, &self.cwd)
+                    .await
+                {
+                    Ok(extraction_result) => {
+                        // Filter to only existing files
+                        let existing_paths =
+                            filter_existing_files(extraction_result.paths, &self.cwd);
+
+                        let extraction_ms = extraction_start.elapsed().as_millis() as i64;
+
+                        if !existing_paths.is_empty() {
+                            tracing::debug!(
+                                "Extracted {} file paths from command output in {}ms",
+                                existing_paths.len(),
+                                extraction_ms
+                            );
+                        }
+
+                        result.extracted_paths =
+                            Some(ExtractedPaths::new(existing_paths, extraction_ms));
+                    }
+                    Err(e) => {
+                        // Log warning but don't fail the command
+                        tracing::warn!("Path extraction failed: {e}");
+                        result.extracted_paths = Some(ExtractedPaths::not_attempted());
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Executes a command with both CWD tracking and path extraction.
+    ///
+    /// Combines the functionality of `execute_with_cwd_tracking` and
+    /// `execute_with_extraction` for main agent use cases.
+    pub async fn execute_with_cwd_tracking_and_extraction(
+        &mut self,
+        command: &str,
+        timeout_secs: i64,
+    ) -> CommandResult {
+        let result = self.execute_with_extraction(command, timeout_secs).await;
 
         // Update internal CWD if command succeeded and CWD changed
         if result.exit_code == 0 {
@@ -418,6 +564,7 @@ impl ShellExecutor {
                     duration_ms: 0,
                     truncated: false,
                     new_cwd: None,
+                    extracted_paths: None,
                 };
             }
         };
@@ -432,6 +579,7 @@ impl ShellExecutor {
                     duration_ms: 0,
                     truncated: false,
                     new_cwd: None,
+                    extracted_paths: None,
                 };
             }
         };
@@ -450,6 +598,7 @@ impl ShellExecutor {
             duration_ms: 0, // Will be set by caller
             truncated: truncated_stdout || truncated_stderr,
             new_cwd,
+            extracted_paths: None,
         }
     }
 }
@@ -1031,5 +1180,164 @@ mod tests {
             cwd_str.contains(tmp_str) || tmp_str.contains(cwd_str),
             "execute_for_subagent should not track CWD changes"
         );
+    }
+
+    // ==========================================================================
+    // Path Extraction Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_has_path_extractor_default() {
+        let executor = ShellExecutor::new(std::env::temp_dir());
+        assert!(!executor.has_path_extractor());
+        assert!(executor.path_extractor().is_none());
+    }
+
+    #[test]
+    fn test_with_path_extractor_noop() {
+        use crate::path_extractor::NoOpExtractor;
+
+        let executor =
+            ShellExecutor::new(std::env::temp_dir()).with_path_extractor(Arc::new(NoOpExtractor));
+
+        // NoOpExtractor is not enabled, so has_path_extractor returns false
+        assert!(!executor.has_path_extractor());
+        // But path_extractor() returns Some
+        assert!(executor.path_extractor().is_some());
+    }
+
+    /// Mock extractor that returns predefined paths.
+    struct MockExtractor {
+        paths: Vec<PathBuf>,
+    }
+
+    impl MockExtractor {
+        fn new(paths: Vec<PathBuf>) -> Self {
+            Self { paths }
+        }
+    }
+
+    impl crate::path_extractor::PathExtractor for MockExtractor {
+        fn extract_paths<'a>(
+            &'a self,
+            _command: &'a str,
+            _output: &'a str,
+            _cwd: &'a Path,
+        ) -> crate::path_extractor::BoxFuture<
+            'a,
+            anyhow::Result<crate::path_extractor::PathExtractionResult>,
+        > {
+            let paths = self.paths.clone();
+            Box::pin(async move { Ok(crate::path_extractor::PathExtractionResult::new(paths, 10)) })
+        }
+
+        fn is_enabled(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_extraction_no_extractor() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let executor = ShellExecutor::new(tmp.path().to_path_buf());
+
+        let result = executor.execute_with_extraction("echo hello", 10).await;
+
+        assert_eq!(result.exit_code, 0);
+        // No extractor configured, so extracted_paths should be None
+        assert!(result.extracted_paths.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_extraction_filters_nonexistent() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+
+        // Create one file that exists
+        let existing_file = tmp.path().join("exists.txt");
+        std::fs::write(&existing_file, "test").expect("write file");
+
+        // Mock extractor returns both existing and non-existing files
+        let mock_extractor = MockExtractor::new(vec![
+            existing_file.clone(),
+            tmp.path().join("does_not_exist.txt"),
+        ]);
+
+        let executor = ShellExecutor::new(tmp.path().to_path_buf())
+            .with_path_extractor(Arc::new(mock_extractor));
+
+        let result = executor.execute_with_extraction("echo hello", 10).await;
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.extracted_paths.is_some());
+
+        let extracted = result.extracted_paths.expect("extracted_paths");
+        assert!(extracted.extraction_attempted);
+        // Only the existing file should be in the result
+        assert_eq!(extracted.paths.len(), 1);
+        assert_eq!(extracted.paths[0], existing_file);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_extraction_failed_command() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let mock_extractor = MockExtractor::new(vec![PathBuf::from("/some/file")]);
+
+        let executor = ShellExecutor::new(tmp.path().to_path_buf())
+            .with_path_extractor(Arc::new(mock_extractor));
+
+        // Command that fails
+        let result = executor.execute_with_extraction("exit 1", 10).await;
+
+        assert_ne!(result.exit_code, 0);
+        // Should not extract paths for failed commands
+        assert!(result.extracted_paths.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_cwd_tracking_and_extraction() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let subdir = tmp.path().join("subdir");
+        std::fs::create_dir(&subdir).expect("create subdir");
+
+        // Create a file in subdir
+        let test_file = subdir.join("test.txt");
+        std::fs::write(&test_file, "test").expect("write file");
+
+        let mock_extractor = MockExtractor::new(vec![test_file.clone()]);
+
+        let mut executor = ShellExecutor::new(tmp.path().to_path_buf())
+            .with_path_extractor(Arc::new(mock_extractor));
+
+        // Execute with both CWD tracking and extraction
+        let result = executor
+            .execute_with_cwd_tracking_and_extraction("cd subdir && pwd", 10)
+            .await;
+
+        assert_eq!(result.exit_code, 0);
+
+        // CWD should be updated
+        assert!(
+            executor.cwd().ends_with("subdir"),
+            "CWD should be updated to subdir, got: {}",
+            executor.cwd().display()
+        );
+
+        // Paths should be extracted
+        assert!(result.extracted_paths.is_some());
+        let extracted = result.extracted_paths.expect("extracted_paths");
+        assert_eq!(extracted.paths.len(), 1);
+    }
+
+    #[test]
+    fn test_fork_for_subagent_shares_path_extractor() {
+        use crate::path_extractor::NoOpExtractor;
+
+        let main_executor =
+            ShellExecutor::new(std::env::temp_dir()).with_path_extractor(Arc::new(NoOpExtractor));
+
+        let subagent_executor = main_executor.fork_for_subagent(std::env::temp_dir());
+
+        // Subagent should share the path extractor
+        assert!(subagent_executor.path_extractor().is_some());
     }
 }

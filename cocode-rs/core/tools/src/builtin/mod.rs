@@ -17,6 +17,10 @@
 //! - [`WebFetchTool`] - Fetch and process web content
 //! - [`WebSearchTool`] - Search the web
 //! - [`SkillTool`] - Execute named skills (slash commands)
+//!
+//! ## Utilities
+//!
+//! - [`path_extraction::LlmPathExtractor`] - LLM-based file path extraction from command output
 
 mod prompts;
 
@@ -28,6 +32,7 @@ mod exit_plan_mode;
 mod glob;
 mod grep;
 mod kill_shell;
+pub mod path_extraction;
 mod read;
 mod skill;
 mod task;

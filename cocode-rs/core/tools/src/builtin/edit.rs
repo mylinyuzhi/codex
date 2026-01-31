@@ -5,6 +5,7 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_plan_mode::is_safe_file;
 use cocode_protocol::{ConcurrencySafety, ContextModifier, ToolOutput};
 use serde_json::Value;
 use tokio::fs;
@@ -100,6 +101,19 @@ impl Tool for EditTool {
         }
 
         let path = ctx.resolve_path(file_path);
+
+        // Plan mode check: only allow edits to the plan file
+        if ctx.is_plan_mode {
+            if !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!(
+                        "Plan mode: cannot edit '{}'. Only the plan file can be modified during plan mode.",
+                        path.display()
+                    ),
+                }
+                .build());
+            }
+        }
 
         // Verify file was read first
         if !ctx.was_file_read(&path).await {
@@ -302,5 +316,73 @@ mod tests {
         let tool = EditTool::new();
         assert_eq!(tool.name(), "Edit");
         assert!(!tool.is_concurrent_safe());
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_blocks_non_plan_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "Hello World").unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+        let plan_file = PathBuf::from("/tmp/plan.md");
+
+        let tool = EditTool::new();
+        let mut ctx = make_context().with_plan_mode(true, Some(plan_file));
+        ctx.record_file_read(file.path()).await;
+
+        let input = serde_json::json!({
+            "file_path": path,
+            "old_string": "World",
+            "new_string": "Rust"
+        });
+
+        let result = tool.execute(input, &mut ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Plan mode"));
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_allows_plan_file() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let plan_file = dir.path().join("plan.md");
+        std::fs::write(&plan_file, "# Plan\n\nold content").unwrap();
+
+        let tool = EditTool::new();
+        let mut ctx = make_context().with_plan_mode(true, Some(plan_file.clone()));
+        ctx.record_file_read(&plan_file).await;
+
+        let input = serde_json::json!({
+            "file_path": plan_file.to_str().unwrap(),
+            "old_string": "old content",
+            "new_string": "new content"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let content = std::fs::read_to_string(&plan_file).unwrap();
+        assert!(content.contains("new content"));
+    }
+
+    #[tokio::test]
+    async fn test_non_plan_mode_allows_any_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "Hello World").unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+
+        let tool = EditTool::new();
+        // is_plan_mode = false (default)
+        let mut ctx = make_context();
+        ctx.record_file_read(file.path()).await;
+
+        let input = serde_json::json!({
+            "file_path": path,
+            "old_string": "World",
+            "new_string": "Rust"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
     }
 }

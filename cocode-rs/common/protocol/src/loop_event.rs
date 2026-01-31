@@ -3,6 +3,7 @@
 //! These events allow consumers to observe the progress of the agent's
 //! execution without being coupled to implementation details.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,6 +11,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ApprovalRequest;
+
+// ============================================================================
+// Compaction Types (defined before LoopEvent to avoid forward references)
+// ============================================================================
+
+/// Trigger type for compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactTrigger {
+    /// Automatic compaction based on token thresholds.
+    #[default]
+    Auto,
+    /// Manual compaction triggered by user.
+    Manual,
+}
+
+impl CompactTrigger {
+    /// Get the trigger as a string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CompactTrigger::Auto => "auto",
+            CompactTrigger::Manual => "manual",
+        }
+    }
+}
+
+impl std::fmt::Display for CompactTrigger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 /// Events emitted during loop execution.
 ///
@@ -243,6 +275,62 @@ pub enum LoopEvent {
         attempts: i32,
         /// Last error message.
         error: String,
+    },
+    /// Memory attachments were cleared during compaction.
+    MemoryAttachmentsCleared {
+        /// UUIDs of cleared memory attachments.
+        cleared_uuids: Vec<String>,
+        /// Total tokens reclaimed.
+        tokens_reclaimed: i32,
+    },
+    /// SessionStart hooks were executed after compaction.
+    PostCompactHooksExecuted {
+        /// Number of hooks that ran.
+        hooks_executed: i32,
+        /// Additional context provided by hooks.
+        additional_context_count: i32,
+    },
+    /// Compact boundary marker was inserted.
+    CompactBoundaryInserted {
+        /// Trigger type (auto or manual).
+        trigger: CompactTrigger,
+        /// Tokens before compaction.
+        pre_tokens: i32,
+        /// Tokens after compaction.
+        post_tokens: i32,
+    },
+    /// Invoked skills were restored after compaction.
+    InvokedSkillsRestored {
+        /// Skills that were restored.
+        skills: Vec<String>,
+    },
+
+    // ========== Session Memory Extraction ==========
+    /// Background session memory extraction has started.
+    ///
+    /// The extraction agent runs asynchronously during normal conversation to
+    /// proactively update the session memory (summary.md).
+    SessionMemoryExtractionStarted {
+        /// Current token count in the conversation.
+        current_tokens: i32,
+        /// Number of tool calls since the last extraction.
+        tool_calls_since: i32,
+    },
+    /// Background session memory extraction has completed successfully.
+    SessionMemoryExtractionCompleted {
+        /// Tokens in the new summary.
+        summary_tokens: i32,
+        /// ID of the last message that was summarized.
+        last_summarized_id: String,
+        /// Total number of messages that were summarized.
+        messages_summarized: i32,
+    },
+    /// Background session memory extraction failed.
+    SessionMemoryExtractionFailed {
+        /// Error message describing the failure.
+        error: String,
+        /// Number of attempts made before giving up.
+        attempts: i32,
     },
 
     // ========== Model Fallback ==========
@@ -635,6 +723,184 @@ pub struct LoopError {
     pub recoverable: bool,
 }
 
+// ============================================================================
+// Additional Compaction Types
+// ============================================================================
+
+/// Memory attachment information for tracking during compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAttachment {
+    /// Unique identifier for this attachment.
+    pub uuid: String,
+    /// Type of attachment (e.g., "memory", "file", "tool_result").
+    pub attachment_type: AttachmentType,
+    /// Token count for this attachment.
+    pub token_count: i32,
+    /// Whether this attachment has been cleared.
+    #[serde(default)]
+    pub cleared: bool,
+}
+
+/// Type of attachment in the conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentType {
+    /// Memory attachment (session memory, context).
+    Memory,
+    /// File content attachment.
+    File,
+    /// Tool result attachment.
+    ToolResult,
+    /// Skill attachment.
+    Skill,
+    /// Task status attachment.
+    TaskStatus,
+    /// Hook output attachment.
+    HookOutput,
+    /// System reminder attachment.
+    SystemReminder,
+    /// Other attachment type.
+    Other(String),
+}
+
+impl AttachmentType {
+    /// Get the attachment type as a string.
+    pub fn as_str(&self) -> &str {
+        match self {
+            AttachmentType::Memory => "memory",
+            AttachmentType::File => "file",
+            AttachmentType::ToolResult => "tool_result",
+            AttachmentType::Skill => "skill",
+            AttachmentType::TaskStatus => "task_status",
+            AttachmentType::HookOutput => "hook_output",
+            AttachmentType::SystemReminder => "system_reminder",
+            AttachmentType::Other(s) => s,
+        }
+    }
+}
+
+/// Compact telemetry data for analytics and monitoring.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompactTelemetry {
+    /// Tokens before compaction.
+    pub pre_tokens: i32,
+    /// Tokens after compaction.
+    pub post_tokens: i32,
+    /// Cache read tokens used.
+    #[serde(default)]
+    pub cache_read_tokens: i32,
+    /// Cache creation tokens used.
+    #[serde(default)]
+    pub cache_creation_tokens: i32,
+    /// Token breakdown by category.
+    #[serde(default)]
+    pub token_breakdown: TokenBreakdown,
+    /// Compaction trigger type.
+    pub trigger: Option<CompactTrigger>,
+    /// Whether streaming was used for summarization.
+    #[serde(default)]
+    pub has_started_streaming: bool,
+    /// Number of retry attempts made.
+    #[serde(default)]
+    pub retry_attempts: i32,
+}
+
+/// Token breakdown for telemetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenBreakdown {
+    /// Total tokens.
+    #[serde(default)]
+    pub total_tokens: i32,
+    /// Human message tokens.
+    #[serde(default)]
+    pub human_message_tokens: i32,
+    /// Human message percentage.
+    #[serde(default)]
+    pub human_message_pct: f64,
+    /// Assistant message tokens.
+    #[serde(default)]
+    pub assistant_message_tokens: i32,
+    /// Assistant message percentage.
+    #[serde(default)]
+    pub assistant_message_pct: f64,
+    /// Local command output tokens.
+    #[serde(default)]
+    pub local_command_output_tokens: i32,
+    /// Local command output percentage.
+    #[serde(default)]
+    pub local_command_output_pct: f64,
+    /// Attachment token counts by type.
+    #[serde(default)]
+    pub attachment_tokens: HashMap<String, i32>,
+    /// Tool request tokens by tool name.
+    #[serde(default)]
+    pub tool_request_tokens: HashMap<String, i32>,
+    /// Tool result tokens by tool name.
+    #[serde(default)]
+    pub tool_result_tokens: HashMap<String, i32>,
+    /// Tokens from duplicate file reads.
+    #[serde(default)]
+    pub duplicate_read_tokens: i32,
+    /// Count of duplicate file reads.
+    #[serde(default)]
+    pub duplicate_read_file_count: i32,
+}
+
+/// Compact boundary marker metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactBoundaryMetadata {
+    /// Trigger type for this compaction.
+    pub trigger: CompactTrigger,
+    /// Tokens before compaction.
+    pub pre_tokens: i32,
+    /// Tokens after compaction.
+    #[serde(default)]
+    pub post_tokens: Option<i32>,
+    /// Transcript file path for full history.
+    #[serde(default)]
+    pub transcript_path: Option<PathBuf>,
+    /// Whether recent messages were preserved verbatim.
+    #[serde(default)]
+    pub recent_messages_preserved: bool,
+}
+
+/// Hook additional context from post-compact hooks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookAdditionalContext {
+    /// Content provided by the hook.
+    pub content: String,
+    /// Name of the hook that provided the context.
+    pub hook_name: String,
+    /// Whether to suppress output in the UI.
+    #[serde(default)]
+    pub suppress_output: bool,
+}
+
+/// Persisted tool result reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedToolResult {
+    /// Path to the persisted file.
+    pub path: PathBuf,
+    /// Original size in bytes.
+    pub original_size: i64,
+    /// Original token count.
+    pub original_tokens: i32,
+    /// Tool use ID.
+    pub tool_use_id: String,
+}
+
+impl PersistedToolResult {
+    /// Format as XML reference for injection into messages.
+    pub fn to_xml_reference(&self) -> String {
+        format!(
+            "<persisted-output path=\"{}\" original_size=\"{}\" original_tokens=\"{}\" />",
+            self.path.display(),
+            self.original_size,
+            self.original_tokens
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,6 +1176,66 @@ mod tests {
             } => {
                 assert_eq!(saved_tokens, 50000);
                 assert_eq!(summary_tokens, 3000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_session_memory_extraction_events() {
+        // Test SessionMemoryExtractionStarted
+        let event = LoopEvent::SessionMemoryExtractionStarted {
+            current_tokens: 50000,
+            tool_calls_since: 15,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_started"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionStarted {
+                current_tokens,
+                tool_calls_since,
+            } => {
+                assert_eq!(current_tokens, 50000);
+                assert_eq!(tool_calls_since, 15);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryExtractionCompleted
+        let event = LoopEvent::SessionMemoryExtractionCompleted {
+            summary_tokens: 3000,
+            last_summarized_id: "msg-abc123".to_string(),
+            messages_summarized: 25,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_completed"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionCompleted {
+                summary_tokens,
+                last_summarized_id,
+                messages_summarized,
+            } => {
+                assert_eq!(summary_tokens, 3000);
+                assert_eq!(last_summarized_id, "msg-abc123");
+                assert_eq!(messages_summarized, 25);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryExtractionFailed
+        let event = LoopEvent::SessionMemoryExtractionFailed {
+            error: "API timeout".to_string(),
+            attempts: 2,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_failed"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionFailed { error, attempts } => {
+                assert_eq!(error, "API timeout");
+                assert_eq!(attempts, 2);
             }
             _ => panic!("Wrong event type"),
         }

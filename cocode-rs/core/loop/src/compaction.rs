@@ -28,13 +28,17 @@
 //! - Edit, Write - file operation confirmations
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // Re-export commonly used types and constants from protocol for convenience
 pub use cocode_protocol::CompactConfig;
+pub use cocode_protocol::{
+    CompactBoundaryMetadata, CompactTelemetry, CompactTrigger, FileRestorationConfig,
+    HookAdditionalContext, KeepWindowConfig, MemoryAttachment, PersistedToolResult, TokenBreakdown,
+};
 
 // Backwards-compatible re-exports with old names
 pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET as CONTEXT_RESTORATION_BUDGET;
@@ -119,6 +123,14 @@ pub struct SessionMemoryConfig {
     #[serde(default = "default_session_memory_enabled")]
     pub enabled: bool,
 
+    /// Whether session memory compact (Tier 1) is enabled.
+    ///
+    /// When false, always falls back to full LLM compact even if
+    /// a cached summary.md is available. Can be controlled via
+    /// `COCODE_ENABLE_SM_COMPACT` environment variable.
+    #[serde(default = "default_true")]
+    pub enable_sm_compact: bool,
+
     /// Path to the session memory file (summary.md).
     #[serde(default)]
     pub summary_path: Option<PathBuf>,
@@ -136,6 +148,10 @@ fn default_session_memory_enabled() -> bool {
     false
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_session_memory_min_savings() -> i32 {
     10_000
 }
@@ -144,10 +160,26 @@ impl Default for SessionMemoryConfig {
     fn default() -> Self {
         Self {
             enabled: default_session_memory_enabled(),
+            enable_sm_compact: true,
             summary_path: None,
             min_savings_tokens: default_session_memory_min_savings(),
             last_summarized_id: None,
         }
+    }
+}
+
+impl SessionMemoryConfig {
+    /// Load configuration with environment variable overrides.
+    ///
+    /// Supported environment variables:
+    /// - `COCODE_ENABLE_SM_COMPACT`: Enable/disable session memory compact (true/false)
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Ok(val) = std::env::var("COCODE_ENABLE_SM_COMPACT") {
+            if let Ok(enabled) = val.parse::<bool>() {
+                self.enable_sm_compact = enabled;
+            }
+        }
+        self
     }
 }
 
@@ -168,6 +200,26 @@ pub struct CompactionResult {
 
     /// Tokens saved by this compaction.
     pub tokens_saved: i32,
+
+    /// Trigger type for this compaction.
+    #[serde(default)]
+    pub trigger: CompactTrigger,
+
+    /// Telemetry data for this compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<CompactTelemetry>,
+
+    /// Compact boundary metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_metadata: Option<CompactBoundaryMetadata>,
+
+    /// Post-compact hook output contexts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hook_contexts: Vec<HookAdditionalContext>,
+
+    /// Transcript path for full conversation history reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<PathBuf>,
 }
 
 /// Which compaction tier was used.
@@ -192,6 +244,24 @@ pub struct ContextRestoration {
     pub plan: Option<String>,
     /// Active skills.
     pub skills: Vec<String>,
+    /// Recently invoked skills to restore after compaction.
+    pub invoked_skills: Vec<InvokedSkillRestoration>,
+    /// Background task status attachments.
+    pub task_status: Option<TaskStatusRestoration>,
+    /// Memory attachments that were preserved.
+    pub memory_attachments: Vec<MemoryAttachment>,
+}
+
+/// A recently invoked skill for restoration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvokedSkillRestoration {
+    /// Skill name.
+    pub name: String,
+    /// When the skill was last invoked.
+    pub last_invoked_turn: i32,
+    /// Skill arguments (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
 }
 
 /// A file to restore after compaction.
@@ -205,6 +275,8 @@ pub struct FileRestoration {
     pub priority: i32,
     /// Estimated token count.
     pub tokens: i32,
+    /// Last access timestamp (Unix milliseconds) for access-time sorting.
+    pub last_accessed: i64,
 }
 
 /// Task status for restoration after compaction.
@@ -279,6 +351,50 @@ impl TaskStatusRestoration {
         }
 
         Self::default()
+    }
+}
+
+impl InvokedSkillRestoration {
+    /// Extract invoked skills from a sequence of tool calls.
+    ///
+    /// Looks for "Skill" tool invocations and extracts skill names and arguments.
+    /// Returns a list of unique skills with their most recent invocation turn.
+    pub fn from_tool_calls(
+        tool_calls: &[(String, serde_json::Value, i32)], // (name, input, turn_number)
+    ) -> Vec<Self> {
+        use std::collections::HashMap;
+
+        // Track skills by name, keeping the most recent invocation
+        let mut skills: HashMap<String, Self> = HashMap::new();
+
+        for (name, input, turn_number) in tool_calls {
+            if name == "Skill" {
+                // Extract skill name from input
+                if let Some(skill_name) = input.get("skill").and_then(|v| v.as_str()) {
+                    let args = input.get("args").and_then(|v| v.as_str()).map(String::from);
+
+                    // Update or insert the skill, keeping the most recent invocation
+                    let entry = skills
+                        .entry(skill_name.to_string())
+                        .or_insert_with(|| Self {
+                            name: skill_name.to_string(),
+                            last_invoked_turn: *turn_number,
+                            args: args.clone(),
+                        });
+
+                    // Update to most recent invocation
+                    if *turn_number > entry.last_invoked_turn {
+                        entry.last_invoked_turn = *turn_number;
+                        entry.args = args;
+                    }
+                }
+            }
+        }
+
+        // Convert to Vec and sort by last invoked turn (most recent first)
+        let mut result: Vec<Self> = skills.into_values().collect();
+        result.sort_by(|a, b| b.last_invoked_turn.cmp(&a.last_invoked_turn));
+        result
     }
 }
 
@@ -359,6 +475,262 @@ impl ThresholdStatus {
 }
 
 // ============================================================================
+// Keep Window Calculation
+// ============================================================================
+
+/// Information about a message for keep window calculation.
+#[derive(Debug, Clone)]
+pub struct MessageInfo {
+    /// Index in the message array.
+    pub index: i32,
+    /// Estimated token count.
+    pub tokens: i32,
+    /// Role of the message (user, assistant, tool, etc.).
+    pub role: String,
+    /// Whether this is a tool_use message.
+    pub is_tool_use: bool,
+    /// Whether this is a tool_result message.
+    pub is_tool_result: bool,
+    /// Tool use ID (for pairing tool_use/tool_result).
+    pub tool_use_id: Option<String>,
+}
+
+/// Result of keep window calculation.
+#[derive(Debug, Clone)]
+pub struct KeepWindowResult {
+    /// Index of the first message to keep (0-indexed from original array).
+    pub keep_start_index: i32,
+    /// Number of messages to keep.
+    pub messages_to_keep: i32,
+    /// Total tokens in the keep window.
+    pub keep_tokens: i32,
+    /// Number of text messages in the keep window.
+    pub text_messages_kept: i32,
+}
+
+/// Calculate the starting index for messages to keep during compaction.
+///
+/// This implements Claude Code's `calculateKeepStartIndex()` algorithm:
+/// 1. Backscan from the end of the message array
+/// 2. Accumulate tokens until we meet minimum requirements
+/// 3. Ensure tool_use/tool_result pairs stay together
+/// 4. Don't exceed maximum token limit
+///
+/// # Arguments
+/// * `messages` - Array of messages with token estimates
+/// * `config` - Keep window configuration
+///
+/// # Returns
+/// `KeepWindowResult` containing the start index and statistics
+pub fn calculate_keep_start_index(
+    messages: &[serde_json::Value],
+    config: &KeepWindowConfig,
+) -> KeepWindowResult {
+    if messages.is_empty() {
+        return KeepWindowResult {
+            keep_start_index: 0,
+            messages_to_keep: 0,
+            keep_tokens: 0,
+            text_messages_kept: 0,
+        };
+    }
+
+    // Collect message info
+    let infos: Vec<MessageInfo> = messages
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let is_tool_use = role == "assistant"
+                && msg
+                    .get("content")
+                    .map(|c| {
+                        if let Some(arr) = c.as_array() {
+                            arr.iter()
+                                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+
+            let is_tool_result = role == "tool" || role == "tool_result";
+
+            let tool_use_id = msg
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            // Estimate tokens from content length (~4 chars per token)
+            let content_len = msg
+                .get("content")
+                .and_then(|v| {
+                    if let Some(s) = v.as_str() {
+                        Some(s.len())
+                    } else if let Some(arr) = v.as_array() {
+                        // Sum up content block lengths
+                        Some(
+                            arr.iter()
+                                .map(|b| {
+                                    b.get("text")
+                                        .or_else(|| b.get("content"))
+                                        .and_then(|t| t.as_str())
+                                        .map_or(0, |s| s.len())
+                                })
+                                .sum(),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let tokens = (content_len / 4) as i32;
+
+            MessageInfo {
+                index: i as i32,
+                tokens,
+                role,
+                is_tool_use,
+                is_tool_result,
+                tool_use_id,
+            }
+        })
+        .collect();
+
+    // Backscan from end to find keep boundary
+    let mut keep_tokens = 0;
+    let mut text_messages_kept = 0;
+    let mut keep_start_index = infos.len() as i32;
+    let mut tool_use_ids_to_include: HashSet<String> = HashSet::new();
+
+    for info in infos.iter().rev() {
+        // Check if we've met minimum requirements AND haven't exceeded max
+        let meets_min_tokens = keep_tokens >= config.min_tokens;
+        let meets_min_messages = text_messages_kept >= config.min_text_messages;
+        let at_max_tokens = keep_tokens >= config.max_tokens;
+
+        // Stop if we've met all minimums and hit max, UNLESS we need to include
+        // a tool_use that pairs with an already-included tool_result
+        if (meets_min_tokens && meets_min_messages) || at_max_tokens {
+            // Check if we need to include this message for tool pairing
+            if let Some(ref id) = info.tool_use_id {
+                if !tool_use_ids_to_include.contains(id) {
+                    // We don't need this tool message, stop here
+                    break;
+                }
+            } else if info.is_tool_use {
+                // Tool use without an ID we're looking for, stop
+                break;
+            } else {
+                // Regular message, stop
+                break;
+            }
+        }
+
+        // Include this message
+        keep_start_index = info.index;
+        keep_tokens += info.tokens;
+
+        // Count text messages (user or assistant without tool use)
+        if (info.role == "user" || info.role == "assistant") && !info.is_tool_use {
+            text_messages_kept += 1;
+        }
+
+        // Track tool_result IDs so we include their matching tool_use
+        if info.is_tool_result {
+            if let Some(ref id) = info.tool_use_id {
+                tool_use_ids_to_include.insert(id.clone());
+            }
+        }
+
+        // Remove tool_use ID from set when we include the tool_use
+        if info.is_tool_use {
+            if let Some(ref id) = info.tool_use_id {
+                tool_use_ids_to_include.remove(id);
+            }
+        }
+    }
+
+    let messages_to_keep = (infos.len() as i32) - keep_start_index;
+
+    debug!(
+        keep_start_index,
+        messages_to_keep,
+        keep_tokens,
+        text_messages_kept,
+        min_tokens = config.min_tokens,
+        min_messages = config.min_text_messages,
+        max_tokens = config.max_tokens,
+        "Keep window calculated"
+    );
+
+    KeepWindowResult {
+        keep_start_index,
+        messages_to_keep,
+        keep_tokens,
+        text_messages_kept,
+    }
+}
+
+/// Map a message index back to turn count for compaction.
+///
+/// Given the `keep_start_index` from [`calculate_keep_start_index()`], this
+/// function converts it to a turn count that can be used with the turn-based
+/// `MessageHistory::apply_compaction()` method.
+///
+/// The cocode-rs architecture uses a turn-based structure (`Vec<Turn>`) where
+/// each turn contains a user message, an optional assistant message, and
+/// potentially multiple tool call results. This function bridges the gap
+/// between the message-level keep window calculation and the turn-based
+/// compaction.
+///
+/// # Algorithm
+///
+/// We count backwards through the messages to find which turn contains the
+/// `keep_start_index`. Each turn produces approximately:
+/// - 1 user message
+/// - 1 assistant message (optional)
+/// - N tool results (variable)
+///
+/// # Arguments
+/// * `turns_len` - Total number of turns in the history
+/// * `messages` - The flattened message array
+/// * `keep_start_index` - The index returned by `calculate_keep_start_index()`
+///
+/// # Returns
+/// The number of turns to keep from the end of the turn list.
+pub fn map_message_index_to_keep_turns(
+    turns_len: i32,
+    messages: &[serde_json::Value],
+    keep_start_index: i32,
+) -> i32 {
+    if turns_len == 0 || messages.is_empty() {
+        return 0;
+    }
+
+    let total_messages = messages.len() as i32;
+    if keep_start_index >= total_messages {
+        return 0;
+    }
+
+    let messages_to_keep = total_messages - keep_start_index;
+
+    // Count messages per turn to get a more accurate estimate
+    // Average ~3 messages per turn (user + assistant + avg tool results)
+    // But ensure we keep at least 1 turn and don't exceed total turns
+    let avg_messages_per_turn = (total_messages as f64 / turns_len as f64).max(1.0);
+    let estimated_turns = (messages_to_keep as f64 / avg_messages_per_turn).ceil() as i32;
+
+    // Clamp to valid range: at least 1, at most turns_len
+    estimated_turns.clamp(1, turns_len)
+}
+
+// ============================================================================
 // Micro-Compact Execution
 // ============================================================================
 
@@ -373,12 +745,18 @@ pub struct MicroCompactResult {
     pub compacted_ids: Vec<String>,
     /// UUIDs of memory attachments that were cleared.
     pub cleared_memory_uuids: Vec<String>,
-    /// File paths that were persisted.
+    /// Persisted tool results with full metadata.
+    pub persisted_results: Vec<PersistedToolResult>,
+    /// File paths that were persisted (legacy compatibility).
     pub persisted_files: Vec<PathBuf>,
     /// File paths from Read tool results that were compacted.
     ///
     /// The caller can use this to clean up file state tracking (readFileState).
     pub cleared_file_paths: Vec<PathBuf>,
+    /// Token breakdown for telemetry.
+    pub token_breakdown: Option<TokenBreakdown>,
+    /// Trigger type for this compaction.
+    pub trigger: CompactTrigger,
 }
 
 /// Information about a tool result candidate for micro-compaction.
@@ -483,11 +861,33 @@ pub fn execute_micro_compact(
         "Starting micro-compaction"
     );
 
-    // Phase 4: Memory attachment cleanup (placeholder - would clear memory UUIDs)
-    let cleared_memory_uuids = Vec::new();
+    // Phase 4: Memory attachment cleanup
+    // Track memory attachments that need to be cleared to prevent duplication
+    let mut cleared_memory_uuids: Vec<String> = Vec::new();
+    for msg in messages.iter() {
+        // Check for memory attachment type messages
+        if let Some(msg_type) = msg.get("type").and_then(|t| t.as_str()) {
+            if msg_type == "attachment" {
+                if let Some(attachment) = msg.get("attachment") {
+                    if let Some(att_type) = attachment.get("type").and_then(|t| t.as_str()) {
+                        if att_type == "memory" {
+                            // Extract UUID and mark for clearing
+                            if let Some(uuid) = msg.get("uuid").and_then(|u| u.as_str()) {
+                                if !cleared_memory_uuids.contains(&uuid.to_string()) {
+                                    cleared_memory_uuids.push(uuid.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Phase 5: Content replacement
     let mut result = MicroCompactResult::default();
+    result.trigger = CompactTrigger::Auto; // Micro-compact is always auto-triggered
+
     for candidate in candidates_to_compact {
         let msg = &mut messages[candidate.index as usize];
 
@@ -497,6 +897,7 @@ pub fn execute_micro_compact(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let original_size = original_content.len() as i64;
 
         // Phase 6 prep: Track file paths from Read tool results for readFileState cleanup
         // The caller can use these paths to update their file state tracking
@@ -516,34 +917,60 @@ pub fn execute_micro_compact(
             }
         }
 
-        // Persist large results if directory provided
-        if let Some(dir) = persist_dir {
+        // Persist large results if directory provided and content is large enough
+        // Large is defined as > 1000 tokens (approximately 4000 chars)
+        let should_persist = original_content.len() > 4000 && persist_dir.is_some();
+
+        let replacement_content = if let (Some(dir), true) = (persist_dir, should_persist) {
             if let Some(ref tool_use_id) = candidate.tool_use_id {
-                let file_path = dir.join(format!("tool-results/{tool_use_id}.txt"));
+                let file_path = dir.join(format!("temp/tool-results/{tool_use_id}.txt"));
                 if let Some(parent) = file_path.parent() {
-                    if std::fs::create_dir_all(parent).is_ok() {
-                        if std::fs::write(&file_path, &original_content).is_ok() {
-                            result.persisted_files.push(file_path);
+                    match std::fs::create_dir_all(parent) {
+                        Ok(()) => {
+                            if std::fs::write(&file_path, &original_content).is_ok() {
+                                // Create persisted result metadata
+                                let persisted = PersistedToolResult {
+                                    path: file_path.clone(),
+                                    original_size,
+                                    original_tokens: candidate.token_count,
+                                    tool_use_id: tool_use_id.clone(),
+                                };
+                                let xml_ref = persisted.to_xml_reference();
+                                result.persisted_results.push(persisted);
+                                result.persisted_files.push(file_path);
+                                xml_ref
+                            } else {
+                                warn!(
+                                    tool_use_id,
+                                    path = ?file_path,
+                                    "Failed to persist tool result"
+                                );
+                                generate_preview(&original_content)
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                tool_use_id,
+                                path = ?parent,
+                                error = %e,
+                                "Failed to create directory for tool result"
+                            );
+                            generate_preview(&original_content)
                         }
                     }
+                } else {
+                    generate_preview(&original_content)
                 }
+            } else {
+                generate_preview(&original_content)
             }
-        }
-
-        // Generate preview + replacement marker
-        let preview = if original_content.len() > CONTENT_PREVIEW_LENGTH {
-            format!(
-                "{}...\n\n{}",
-                &original_content[..CONTENT_PREVIEW_LENGTH],
-                CLEARED_CONTENT_MARKER
-            )
         } else {
-            CLEARED_CONTENT_MARKER.to_string()
+            generate_preview(&original_content)
         };
 
         // Replace content
         if let Some(content) = msg.get_mut("content") {
-            *content = serde_json::Value::String(preview);
+            *content = serde_json::Value::String(replacement_content);
         }
 
         result.compacted_count += 1;
@@ -567,6 +994,22 @@ pub fn execute_micro_compact(
     );
 
     Some(result)
+}
+
+/// Generate a preview of content with the cleared marker.
+///
+/// If the content is longer than `CONTENT_PREVIEW_LENGTH`, it is truncated
+/// and the cleared marker is appended. Otherwise, just the marker is returned.
+fn generate_preview(original_content: &str) -> String {
+    if original_content.len() > CONTENT_PREVIEW_LENGTH {
+        format!(
+            "{}...\n\n{}",
+            &original_content[..CONTENT_PREVIEW_LENGTH],
+            CLEARED_CONTENT_MARKER
+        )
+    } else {
+        CLEARED_CONTENT_MARKER.to_string()
+    }
 }
 
 /// Collect information about all tool result messages.
@@ -927,8 +1370,41 @@ pub fn build_context_restoration(
     skills: Vec<String>,
     budget: i32,
 ) -> ContextRestoration {
+    build_context_restoration_with_config(
+        files,
+        todos,
+        plan,
+        skills,
+        &FileRestorationConfig {
+            max_files: CONTEXT_RESTORATION_MAX_FILES,
+            max_tokens_per_file: cocode_protocol::DEFAULT_MAX_TOKENS_PER_FILE,
+            total_token_budget: budget,
+            excluded_patterns: vec![],
+            sort_by_access_time: false, // Default to priority-based sorting
+        },
+    )
+}
+
+/// Build context restoration items with full configuration.
+///
+/// This is the extended version that supports file exclusion patterns,
+/// access-time sorting, and per-file token limits.
+///
+/// # Arguments
+/// * `files` - Files to potentially restore (with last_accessed timestamps)
+/// * `todos` - Todo list state to restore
+/// * `plan` - Plan mode state to restore
+/// * `skills` - Active skills to restore
+/// * `config` - File restoration configuration with exclusion rules
+pub fn build_context_restoration_with_config(
+    files: Vec<FileRestoration>,
+    todos: Option<String>,
+    plan: Option<String>,
+    skills: Vec<String>,
+    config: &FileRestorationConfig,
+) -> ContextRestoration {
     let mut result = ContextRestoration::default();
-    let mut remaining = budget;
+    let mut remaining = config.total_token_budget;
 
     // Priority 1: Plan mode state (if active)
     if let Some(p) = plan {
@@ -957,19 +1433,59 @@ pub fn build_context_restoration(
         }
     }
 
-    // Priority 4: Files (sorted by priority, limited by max files)
-    let mut sorted_files = files;
-    sorted_files.sort_by(|a, b| b.priority.cmp(&a.priority));
-
-    for file in sorted_files
+    // Priority 4: Files (with exclusion, sorting, and limits)
+    // First, filter out excluded files
+    let mut eligible_files: Vec<FileRestoration> = files
         .into_iter()
-        .take(CONTEXT_RESTORATION_MAX_FILES as usize)
-    {
+        .filter(|f| {
+            let path_str = f.path.to_string_lossy();
+            !config.should_exclude(&path_str)
+        })
+        .collect();
+
+    // Sort files: by access time if configured, otherwise by priority
+    if config.sort_by_access_time {
+        // Sort by last_accessed descending (most recent first)
+        eligible_files.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    } else {
+        // Sort by priority descending (higher priority first)
+        eligible_files.sort_by(|a, b| b.priority.cmp(&a.priority));
+    }
+
+    // Add files up to limits
+    let mut files_added = 0;
+    for mut file in eligible_files {
+        if files_added >= config.max_files {
+            break;
+        }
+
+        // Truncate file content if it exceeds per-file limit
+        if file.tokens > config.max_tokens_per_file {
+            // Calculate approximate character limit (~4 chars per token)
+            let char_limit = (config.max_tokens_per_file * 4) as usize;
+            if file.content.len() > char_limit {
+                file.content = format!(
+                    "{}...\n[Truncated: {} more tokens]",
+                    &file.content[..char_limit.min(file.content.len())],
+                    file.tokens - config.max_tokens_per_file
+                );
+                file.tokens = config.max_tokens_per_file;
+            }
+        }
+
         if file.tokens <= remaining {
             remaining -= file.tokens;
             result.files.push(file);
+            files_added += 1;
         }
     }
+
+    debug!(
+        files_restored = result.files.len(),
+        budget_used = config.total_token_budget - remaining,
+        budget_remaining = remaining,
+        "Context restoration built"
+    );
 
     result
 }
@@ -1015,6 +1531,225 @@ pub fn format_restoration_message(restoration: &ContextRestoration) -> String {
             parts.join("\n\n")
         )
     }
+}
+
+// ============================================================================
+// Summary Formatting with Transcript Reference
+// ============================================================================
+
+/// Format a compact summary with continuation message and transcript reference.
+///
+/// This creates a summary that:
+/// 1. Indicates the session is continued from a previous conversation
+/// 2. Includes the transcript path for full history reference
+/// 3. Notes whether recent messages were preserved
+///
+/// # Arguments
+/// * `summary` - The LLM-generated summary content
+/// * `transcript_path` - Optional path to the full transcript file
+/// * `recent_messages_preserved` - Whether recent messages were kept verbatim
+/// * `pre_tokens` - Token count before compaction
+pub fn format_summary_with_transcript(
+    summary: &str,
+    transcript_path: Option<&PathBuf>,
+    recent_messages_preserved: bool,
+    pre_tokens: i32,
+) -> String {
+    let mut parts = Vec::new();
+
+    // Add continuation header
+    parts.push(
+        "This session is being continued from a previous conversation that was compacted to save context space.".to_string()
+    );
+
+    // Add token info
+    parts.push(format!(
+        "The original conversation contained approximately {} tokens.",
+        pre_tokens
+    ));
+
+    // Add transcript path reference if available
+    if let Some(path) = transcript_path {
+        parts.push(format!(
+            "\nIf you need specific details from the conversation history (like exact code snippets, error messages, or content that was generated), read the full transcript at: {}",
+            path.display()
+        ));
+    }
+
+    // Note about preserved messages
+    if recent_messages_preserved {
+        parts.push("\nRecent messages are preserved verbatim below the summary.".to_string());
+    }
+
+    // Add separator and summary
+    parts.push("\n---\n".to_string());
+    parts.push(summary.to_string());
+
+    parts.join("\n")
+}
+
+/// Create an invoked skills attachment for restoration after compaction.
+///
+/// This creates a formatted attachment listing recently invoked skills
+/// that should be restored to maintain context.
+pub fn create_invoked_skills_attachment(
+    invoked_skills: &[InvokedSkillRestoration],
+) -> Option<String> {
+    if invoked_skills.is_empty() {
+        return None;
+    }
+
+    let skills_list: Vec<String> = invoked_skills
+        .iter()
+        .map(|s| {
+            if let Some(args) = &s.args {
+                format!(
+                    "- {} (args: {}, last used turn {})",
+                    s.name, args, s.last_invoked_turn
+                )
+            } else {
+                format!("- {} (last used turn {})", s.name, s.last_invoked_turn)
+            }
+        })
+        .collect();
+
+    Some(format!(
+        "<invoked_skills>\nRecently invoked skills:\n{}\n</invoked_skills>",
+        skills_list.join("\n")
+    ))
+}
+
+/// Create a compact boundary message with metadata.
+///
+/// This message marks where compaction occurred and includes metadata
+/// about the trigger and token counts.
+pub fn create_compact_boundary_message(metadata: &CompactBoundaryMetadata) -> String {
+    let mut content = "Conversation compacted.".to_string();
+
+    content.push_str(&format!(
+        "\nTrigger: {}\nTokens before: {}",
+        metadata.trigger.as_str(),
+        metadata.pre_tokens
+    ));
+
+    if let Some(post) = metadata.post_tokens {
+        content.push_str(&format!("\nTokens after: {}", post));
+    }
+
+    if let Some(path) = &metadata.transcript_path {
+        content.push_str(&format!("\nFull transcript: {}", path.display()));
+    }
+
+    if metadata.recent_messages_preserved {
+        content.push_str("\nRecent messages preserved verbatim.");
+    }
+
+    content
+}
+
+/// Wrap hook additional context as a formatted message.
+///
+/// Creates the hook_additional_context message format used for
+/// post-compact SessionStart hook results.
+pub fn wrap_hook_additional_context(contexts: &[HookAdditionalContext]) -> Option<String> {
+    if contexts.is_empty() {
+        return None;
+    }
+
+    let formatted: Vec<String> = contexts
+        .iter()
+        .filter(|c| !c.suppress_output)
+        .map(|c| {
+            format!(
+                "<hook_context name=\"{}\">\n{}\n</hook_context>",
+                c.hook_name, c.content
+            )
+        })
+        .collect();
+
+    if formatted.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "<hook_additional_context>\n{}\n</hook_additional_context>",
+        formatted.join("\n\n")
+    ))
+}
+
+/// Build token breakdown for telemetry.
+///
+/// Analyzes messages to calculate token distribution by category.
+pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
+    let mut breakdown = TokenBreakdown::default();
+    let mut tool_request_tokens: HashMap<String, i32> = HashMap::new();
+    let mut tool_result_tokens: HashMap<String, i32> = HashMap::new();
+
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let content_len = msg
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map_or(0, |s| s.len());
+        let tokens = (content_len / 4) as i32;
+
+        breakdown.total_tokens += tokens;
+
+        match role {
+            "user" | "human" => {
+                breakdown.human_message_tokens += tokens;
+            }
+            "assistant" => {
+                breakdown.assistant_message_tokens += tokens;
+            }
+            "tool" | "tool_result" => {
+                // Track by tool name
+                if let Some(name) = msg.get("name").and_then(|v| v.as_str()) {
+                    *tool_result_tokens.entry(name.to_string()).or_insert(0) += tokens;
+                }
+                breakdown.local_command_output_tokens += tokens;
+            }
+            _ => {}
+        }
+
+        // Check for tool use blocks in assistant messages
+        if role == "assistant" {
+            if let Some(content) = msg.get("content") {
+                if let Some(arr) = content.as_array() {
+                    for block in arr {
+                        if let Some(block_type) = block.get("type").and_then(|t| t.as_str()) {
+                            if block_type == "tool_use" {
+                                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                                    let input_len = block
+                                        .get("input")
+                                        .map(|i| i.to_string().len())
+                                        .unwrap_or(0);
+                                    let input_tokens = (input_len / 4) as i32;
+                                    *tool_request_tokens.entry(name.to_string()).or_insert(0) +=
+                                        input_tokens;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Calculate percentages
+    if breakdown.total_tokens > 0 {
+        breakdown.human_message_pct =
+            breakdown.human_message_tokens as f64 / breakdown.total_tokens as f64 * 100.0;
+        breakdown.assistant_message_pct =
+            breakdown.assistant_message_tokens as f64 / breakdown.total_tokens as f64 * 100.0;
+        breakdown.local_command_output_pct =
+            breakdown.local_command_output_tokens as f64 / breakdown.total_tokens as f64 * 100.0;
+    }
+
+    breakdown.tool_request_tokens = tool_request_tokens;
+    breakdown.tool_result_tokens = tool_result_tokens;
+
+    breakdown
 }
 
 #[cfg(test)]
@@ -1125,12 +1860,14 @@ mod tests {
                 content: "fn main() {}".to_string(),
                 priority: 10,
                 tokens: 100,
+                last_accessed: 2000,
             },
             FileRestoration {
                 path: PathBuf::from("/test/file2.rs"),
                 content: "struct Foo {}".to_string(),
                 priority: 5,
                 tokens: 50,
+                last_accessed: 1000,
             },
         ];
 
@@ -1150,6 +1887,7 @@ mod tests {
             content: "x".repeat(10000),
             priority: 10,
             tokens: 2500,
+            last_accessed: 1000,
         }];
 
         // Budget too small for the file
@@ -1173,6 +1911,7 @@ mod tests {
             content: "fn main() {}".to_string(),
             priority: 1,
             tokens: 10,
+            last_accessed: 1000,
         });
 
         let msg = format_restoration_message(&restoration);
@@ -1800,5 +2539,479 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&test_path);
+    }
+
+    // ========================================================================
+    // Phase 3: New Compact Feature Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_summary_with_transcript() {
+        let summary = "## Summary\nUser worked on fixing a bug.";
+        let transcript_path = PathBuf::from("/tmp/session-123.jsonl");
+
+        let formatted =
+            format_summary_with_transcript(summary, Some(&transcript_path), true, 50000);
+
+        assert!(formatted.contains("session is being continued"));
+        assert!(formatted.contains("50000 tokens"));
+        assert!(formatted.contains("/tmp/session-123.jsonl"));
+        assert!(formatted.contains("Recent messages are preserved"));
+        assert!(formatted.contains("## Summary"));
+    }
+
+    #[test]
+    fn test_format_summary_without_transcript() {
+        let summary = "## Summary\nUser worked on a feature.";
+
+        let formatted = format_summary_with_transcript(summary, None, false, 30000);
+
+        assert!(formatted.contains("session is being continued"));
+        assert!(formatted.contains("30000 tokens"));
+        assert!(!formatted.contains("transcript at"));
+        assert!(!formatted.contains("Recent messages are preserved"));
+    }
+
+    #[test]
+    fn test_create_invoked_skills_attachment() {
+        let skills = vec![
+            InvokedSkillRestoration {
+                name: "commit".to_string(),
+                last_invoked_turn: 5,
+                args: Some("-m 'fix bug'".to_string()),
+            },
+            InvokedSkillRestoration {
+                name: "review-pr".to_string(),
+                last_invoked_turn: 3,
+                args: None,
+            },
+        ];
+
+        let attachment = create_invoked_skills_attachment(&skills);
+        assert!(attachment.is_some());
+
+        let content = attachment.unwrap();
+        assert!(content.contains("<invoked_skills>"));
+        assert!(content.contains("commit"));
+        assert!(content.contains("-m 'fix bug'"));
+        assert!(content.contains("review-pr"));
+        assert!(content.contains("turn 5"));
+        assert!(content.contains("turn 3"));
+    }
+
+    #[test]
+    fn test_create_invoked_skills_attachment_empty() {
+        let skills: Vec<InvokedSkillRestoration> = vec![];
+        let attachment = create_invoked_skills_attachment(&skills);
+        assert!(attachment.is_none());
+    }
+
+    #[test]
+    fn test_create_compact_boundary_message() {
+        let metadata = CompactBoundaryMetadata {
+            trigger: CompactTrigger::Auto,
+            pre_tokens: 180000,
+            post_tokens: Some(50000),
+            transcript_path: Some(PathBuf::from("/home/user/.claude/session.jsonl")),
+            recent_messages_preserved: true,
+        };
+
+        let message = create_compact_boundary_message(&metadata);
+
+        assert!(message.contains("Conversation compacted"));
+        assert!(message.contains("Trigger: auto"));
+        assert!(message.contains("Tokens before: 180000"));
+        assert!(message.contains("Tokens after: 50000"));
+        assert!(message.contains("session.jsonl"));
+        assert!(message.contains("Recent messages preserved"));
+    }
+
+    #[test]
+    fn test_create_compact_boundary_message_manual() {
+        let metadata = CompactBoundaryMetadata {
+            trigger: CompactTrigger::Manual,
+            pre_tokens: 100000,
+            post_tokens: None,
+            transcript_path: None,
+            recent_messages_preserved: false,
+        };
+
+        let message = create_compact_boundary_message(&metadata);
+
+        assert!(message.contains("Trigger: manual"));
+        assert!(message.contains("Tokens before: 100000"));
+        assert!(!message.contains("Tokens after"));
+        assert!(!message.contains("transcript"));
+    }
+
+    #[test]
+    fn test_wrap_hook_additional_context() {
+        let contexts = vec![
+            HookAdditionalContext {
+                content: "Context from hook 1".to_string(),
+                hook_name: "env-loader".to_string(),
+                suppress_output: false,
+            },
+            HookAdditionalContext {
+                content: "Context from hook 2".to_string(),
+                hook_name: "config-reader".to_string(),
+                suppress_output: false,
+            },
+        ];
+
+        let wrapped = wrap_hook_additional_context(&contexts);
+        assert!(wrapped.is_some());
+
+        let content = wrapped.unwrap();
+        assert!(content.contains("<hook_additional_context>"));
+        assert!(content.contains("env-loader"));
+        assert!(content.contains("config-reader"));
+        assert!(content.contains("Context from hook 1"));
+        assert!(content.contains("Context from hook 2"));
+    }
+
+    #[test]
+    fn test_wrap_hook_additional_context_suppressed() {
+        let contexts = vec![HookAdditionalContext {
+            content: "Should not appear".to_string(),
+            hook_name: "silent-hook".to_string(),
+            suppress_output: true,
+        }];
+
+        let wrapped = wrap_hook_additional_context(&contexts);
+        assert!(wrapped.is_none());
+    }
+
+    #[test]
+    fn test_wrap_hook_additional_context_empty() {
+        let contexts: Vec<HookAdditionalContext> = vec![];
+        let wrapped = wrap_hook_additional_context(&contexts);
+        assert!(wrapped.is_none());
+    }
+
+    #[test]
+    fn test_build_token_breakdown() {
+        let messages = vec![
+            serde_json::json!({"role": "user", "content": "Hello, can you help me?"}),
+            serde_json::json!({"role": "assistant", "content": "Sure, I'd be happy to help you."}),
+            serde_json::json!({
+                "role": "tool",
+                "name": "Read",
+                "content": "File contents here..."
+            }),
+            serde_json::json!({"role": "user", "content": "Thanks!"}),
+        ];
+
+        let breakdown = build_token_breakdown(&messages);
+
+        assert!(breakdown.total_tokens > 0);
+        assert!(breakdown.human_message_tokens > 0);
+        assert!(breakdown.assistant_message_tokens > 0);
+        assert!(breakdown.local_command_output_tokens > 0);
+        assert!(breakdown.human_message_pct > 0.0);
+        assert!(breakdown.assistant_message_pct > 0.0);
+        assert!(breakdown.tool_result_tokens.contains_key("Read"));
+    }
+
+    #[test]
+    fn test_build_token_breakdown_empty() {
+        let messages: Vec<serde_json::Value> = vec![];
+        let breakdown = build_token_breakdown(&messages);
+
+        assert_eq!(breakdown.total_tokens, 0);
+        assert_eq!(breakdown.human_message_tokens, 0);
+        assert_eq!(breakdown.assistant_message_tokens, 0);
+    }
+
+    #[test]
+    fn test_compact_trigger_default() {
+        let trigger = CompactTrigger::default();
+        assert_eq!(trigger, CompactTrigger::Auto);
+    }
+
+    #[test]
+    fn test_compact_trigger_display() {
+        assert_eq!(CompactTrigger::Auto.to_string(), "auto");
+        assert_eq!(CompactTrigger::Manual.to_string(), "manual");
+    }
+
+    #[test]
+    fn test_persisted_tool_result_xml() {
+        let persisted = PersistedToolResult {
+            path: PathBuf::from("/tmp/tool-results/call-123.txt"),
+            original_size: 50000,
+            original_tokens: 12500,
+            tool_use_id: "call-123".to_string(),
+        };
+
+        let xml = persisted.to_xml_reference();
+        assert!(xml.contains("persisted-output"));
+        assert!(xml.contains("/tmp/tool-results/call-123.txt"));
+        assert!(xml.contains("50000"));
+        assert!(xml.contains("12500"));
+    }
+
+    #[test]
+    fn test_invoked_skill_restoration_serde() {
+        let skill = InvokedSkillRestoration {
+            name: "test-skill".to_string(),
+            last_invoked_turn: 10,
+            args: Some("--verbose".to_string()),
+        };
+
+        let json = serde_json::to_string(&skill).unwrap();
+        let parsed: InvokedSkillRestoration = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.name, "test-skill");
+        assert_eq!(parsed.last_invoked_turn, 10);
+        assert_eq!(parsed.args, Some("--verbose".to_string()));
+    }
+
+    #[test]
+    fn test_invoked_skill_restoration_from_tool_calls() {
+        let tool_calls = vec![
+            (
+                "Skill".to_string(),
+                serde_json::json!({"skill": "commit", "args": "-m 'fix bug'"}),
+                5,
+            ),
+            (
+                "Read".to_string(), // Non-skill tool, should be ignored
+                serde_json::json!({"path": "/test.rs"}),
+                6,
+            ),
+            (
+                "Skill".to_string(),
+                serde_json::json!({"skill": "review-pr", "args": "123"}),
+                7,
+            ),
+            (
+                "Skill".to_string(), // Same skill again, more recent
+                serde_json::json!({"skill": "commit", "args": "-m 'final fix'"}),
+                10,
+            ),
+        ];
+
+        let skills = InvokedSkillRestoration::from_tool_calls(&tool_calls);
+
+        assert_eq!(skills.len(), 2);
+        // Most recent first (turn 10, then turn 7)
+        assert_eq!(skills[0].name, "commit");
+        assert_eq!(skills[0].last_invoked_turn, 10);
+        assert_eq!(skills[0].args, Some("-m 'final fix'".to_string()));
+
+        assert_eq!(skills[1].name, "review-pr");
+        assert_eq!(skills[1].last_invoked_turn, 7);
+        assert_eq!(skills[1].args, Some("123".to_string()));
+    }
+
+    #[test]
+    fn test_invoked_skill_restoration_from_tool_calls_empty() {
+        let tool_calls: Vec<(String, serde_json::Value, i32)> = vec![];
+        let skills = InvokedSkillRestoration::from_tool_calls(&tool_calls);
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_invoked_skill_restoration_from_tool_calls_no_skills() {
+        let tool_calls = vec![
+            (
+                "Read".to_string(),
+                serde_json::json!({"path": "/test.rs"}),
+                1,
+            ),
+            ("Bash".to_string(), serde_json::json!({"command": "ls"}), 2),
+        ];
+
+        let skills = InvokedSkillRestoration::from_tool_calls(&tool_calls);
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_micro_compact_result_trigger() {
+        let mut result = MicroCompactResult::default();
+        assert_eq!(result.trigger, CompactTrigger::Auto);
+
+        result.trigger = CompactTrigger::Manual;
+        assert_eq!(result.trigger, CompactTrigger::Manual);
+    }
+
+    // ========================================================================
+    // Keep Window Calculation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_calculate_keep_start_index_empty() {
+        let messages: Vec<serde_json::Value> = vec![];
+        let config = KeepWindowConfig::default();
+
+        let result = calculate_keep_start_index(&messages, &config);
+
+        assert_eq!(result.keep_start_index, 0);
+        assert_eq!(result.messages_to_keep, 0);
+        assert_eq!(result.keep_tokens, 0);
+        assert_eq!(result.text_messages_kept, 0);
+    }
+
+    #[test]
+    fn test_calculate_keep_start_index_few_messages() {
+        // Create a few small messages
+        let messages = vec![
+            serde_json::json!({"role": "user", "content": "Hello"}),
+            serde_json::json!({"role": "assistant", "content": "Hi there!"}),
+            serde_json::json!({"role": "user", "content": "How are you?"}),
+        ];
+
+        let config = KeepWindowConfig {
+            min_tokens: 100,
+            min_text_messages: 2,
+            max_tokens: 10000,
+        };
+
+        let result = calculate_keep_start_index(&messages, &config);
+
+        // With small messages, should keep all to meet min requirements
+        assert_eq!(result.keep_start_index, 0);
+        assert_eq!(result.messages_to_keep, 3);
+        assert_eq!(result.text_messages_kept, 3);
+    }
+
+    #[test]
+    fn test_calculate_keep_start_index_many_messages() {
+        // Create many messages where we should only keep some
+        let mut messages = Vec::new();
+        for i in 0..20 {
+            // Each message is ~1000 chars = ~250 tokens
+            let content = "x".repeat(1000);
+            if i % 2 == 0 {
+                messages.push(serde_json::json!({"role": "user", "content": content}));
+            } else {
+                messages.push(serde_json::json!({"role": "assistant", "content": content}));
+            }
+        }
+
+        let config = KeepWindowConfig {
+            min_tokens: 500, // 2 messages worth
+            min_text_messages: 3,
+            max_tokens: 2000, // 8 messages worth
+        };
+
+        let result = calculate_keep_start_index(&messages, &config);
+
+        // Should keep some recent messages but not all
+        assert!(result.messages_to_keep > 0);
+        assert!(result.messages_to_keep < 20);
+        assert!(result.keep_tokens <= config.max_tokens);
+        assert!(result.text_messages_kept >= config.min_text_messages);
+    }
+
+    #[test]
+    fn test_calculate_keep_start_index_with_tool_pairs() {
+        // Tool result followed by user message - tool_use should be included
+        let messages = vec![
+            serde_json::json!({"role": "user", "content": "Read the file"}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tool-1", "name": "Read"}],
+                "tool_use_id": "tool-1"
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_use_id": "tool-1",
+                "content": "File contents here..."
+            }),
+            serde_json::json!({"role": "assistant", "content": "Here is the file content."}),
+            serde_json::json!({"role": "user", "content": "Thanks!"}),
+        ];
+
+        let config = KeepWindowConfig {
+            min_tokens: 10,
+            min_text_messages: 2,
+            max_tokens: 5000,
+        };
+
+        let result = calculate_keep_start_index(&messages, &config);
+
+        // Should include the tool pair together
+        assert!(result.messages_to_keep >= 2);
+    }
+
+    #[test]
+    fn test_calculate_keep_start_index_max_tokens_limit() {
+        // Create messages that would exceed max if all kept
+        let mut messages = Vec::new();
+        for i in 0..10 {
+            // Each message is ~4000 chars = ~1000 tokens
+            let content = "y".repeat(4000);
+            if i % 2 == 0 {
+                messages.push(serde_json::json!({"role": "user", "content": content}));
+            } else {
+                messages.push(serde_json::json!({"role": "assistant", "content": content}));
+            }
+        }
+
+        let config = KeepWindowConfig {
+            min_tokens: 500,
+            min_text_messages: 2,
+            max_tokens: 3000, // Only allow ~3 messages
+        };
+
+        let result = calculate_keep_start_index(&messages, &config);
+
+        // Should be limited by max_tokens
+        assert!(result.keep_tokens <= config.max_tokens);
+    }
+
+    #[test]
+    fn test_keep_window_config_validate() {
+        let valid_config = KeepWindowConfig::default();
+        assert!(valid_config.validate().is_ok());
+
+        let invalid_config = KeepWindowConfig {
+            min_tokens: -1,
+            ..Default::default()
+        };
+        assert!(invalid_config.validate().is_err());
+
+        let invalid_config2 = KeepWindowConfig {
+            min_tokens: 50000,
+            max_tokens: 10000, // max < min
+            ..Default::default()
+        };
+        assert!(invalid_config2.validate().is_err());
+    }
+
+    #[test]
+    fn test_file_restoration_config_should_exclude() {
+        let config = FileRestorationConfig::default();
+
+        // Should exclude transcript files
+        assert!(config.should_exclude("session-123.jsonl"));
+        assert!(config.should_exclude("/path/to/transcript.jsonl"));
+
+        // Should exclude CLAUDE.md
+        assert!(config.should_exclude("CLAUDE.md"));
+        assert!(config.should_exclude("/project/CLAUDE.md"));
+
+        // Should exclude plan files
+        assert!(config.should_exclude("plan.md"));
+        assert!(config.should_exclude("/path/plan-v2.md"));
+
+        // Should NOT exclude regular files
+        assert!(!config.should_exclude("main.rs"));
+        assert!(!config.should_exclude("/src/lib.rs"));
+        assert!(!config.should_exclude("README.md"));
+    }
+
+    #[test]
+    fn test_file_restoration_config_validate() {
+        let valid_config = FileRestorationConfig::default();
+        assert!(valid_config.validate().is_ok());
+
+        let invalid_config = FileRestorationConfig {
+            max_files: -1,
+            ..Default::default()
+        };
+        assert!(invalid_config.validate().is_err());
     }
 }

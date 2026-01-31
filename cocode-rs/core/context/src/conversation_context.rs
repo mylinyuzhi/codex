@@ -94,6 +94,8 @@ pub struct ConversationContext {
     pub session_memory_config: SessionMemoryConfig,
     /// Subagent type (if this is a subagent).
     pub subagent_type: Option<SubagentType>,
+    /// Path to the conversation transcript file.
+    pub transcript_path: Option<std::path::PathBuf>,
 }
 
 impl ConversationContext {
@@ -132,6 +134,7 @@ pub struct ConversationContextBuilder {
     compact_config: CompactConfig,
     session_memory_config: SessionMemoryConfig,
     subagent_type: Option<SubagentType>,
+    transcript_path: Option<std::path::PathBuf>,
 }
 
 impl ConversationContextBuilder {
@@ -190,6 +193,11 @@ impl ConversationContextBuilder {
         self
     }
 
+    pub fn transcript_path(mut self, path: std::path::PathBuf) -> Self {
+        self.transcript_path = Some(path);
+        self
+    }
+
     /// Build the [`ConversationContext`].
     ///
     /// Returns `Err` if required fields are missing.
@@ -217,6 +225,7 @@ impl ConversationContextBuilder {
             compact_config: self.compact_config,
             session_memory_config: self.session_memory_config,
             subagent_type: self.subagent_type,
+            transcript_path: self.transcript_path,
         })
     }
 }

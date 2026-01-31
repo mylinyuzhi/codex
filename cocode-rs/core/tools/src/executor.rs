@@ -40,6 +40,10 @@ pub struct ExecutorConfig {
     pub permission_mode: PermissionMode,
     /// Default timeout for tool execution (seconds).
     pub default_timeout_secs: i64,
+    /// Whether plan mode is currently active.
+    pub is_plan_mode: bool,
+    /// Path to the current plan file (if in plan mode).
+    pub plan_file_path: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -50,6 +54,8 @@ impl Default for ExecutorConfig {
             session_id: String::new(),
             permission_mode: PermissionMode::Default,
             default_timeout_secs: 120,
+            is_plan_mode: false,
+            plan_file_path: None,
         }
     }
 }
@@ -475,6 +481,7 @@ impl StreamingToolExecutor {
             .cancel_token(self.cancel_token.clone())
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
+            .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
             .build()
     }
 
@@ -537,7 +544,7 @@ impl StreamingToolExecutor {
             .await;
 
             match outcome.result {
-                HookResult::Continue => {
+                HookResult::Continue | HookResult::ContinueWithContext { .. } => {
                     // Continue with current input
                 }
                 HookResult::Reject { reason } => {
