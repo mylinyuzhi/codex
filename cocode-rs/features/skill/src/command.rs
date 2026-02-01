@@ -26,6 +26,11 @@ pub struct SkillPromptCommand {
     /// Optional list of tools the skill is allowed to use.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+
+    /// Optional interface with hook definitions.
+    /// Populated from SKILL.toml when hooks are defined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<crate::interface::SkillInterface>,
 }
 
 impl fmt::Display for SkillPromptCommand {
@@ -94,6 +99,7 @@ mod tests {
             description: "Generate a commit message".to_string(),
             prompt: "Analyze the diff...".to_string(),
             allowed_tools: None,
+            interface: None,
         };
         assert_eq!(cmd.to_string(), "/commit - Generate a commit message");
     }
@@ -122,6 +128,7 @@ mod tests {
             description: "A test skill".to_string(),
             prompt: "Do something".to_string(),
             allowed_tools: Some(vec!["read".to_string(), "write".to_string()]),
+            interface: None,
         };
         let json = serde_json::to_string(&cmd).expect("serialize");
         let deserialized: SkillPromptCommand = serde_json::from_str(&json).expect("deserialize");

@@ -163,5 +163,7 @@ pub use plan_config::MAX_AGENT_COUNT;
 pub use plan_config::MIN_AGENT_COUNT;
 pub use plan_config::PlanModeConfig;
 pub use thinking::ThinkingLevel;
+pub use tool_config::DEFAULT_MAX_RESULT_SIZE;
 pub use tool_config::DEFAULT_MAX_TOOL_CONCURRENCY;
+pub use tool_config::DEFAULT_RESULT_PREVIEW_SIZE;
 pub use tool_config::ToolConfig;

@@ -562,20 +562,26 @@ impl SessionState {
     /// Returns the provider-specific options needed to configure thinking
     /// for the current session's provider, or None if no thinking is configured.
     ///
+    /// Note: If `model_info` is None, default ModelInfo is used, which means
+    /// no reasoning_summary or include_thoughts overrides will be applied.
+    ///
     /// # Example
     ///
     /// ```ignore
-    /// // Get options for main role
-    /// if let Some(opts) = state.build_thinking_options(ModelRole::Main) {
+    /// // Get options for main role with model info
+    /// if let Some(opts) = state.build_thinking_options(ModelRole::Main, Some(&model_info)) {
     ///     request = request.provider_options(opts);
     /// }
     /// ```
     pub fn build_thinking_options(
         &self,
         role: ModelRole,
+        model_info: Option<&cocode_protocol::ModelInfo>,
     ) -> Option<hyper_sdk::options::ProviderOptions> {
         let thinking_level = self.thinking_level(role)?;
-        thinking_convert::to_provider_options(thinking_level, self.provider_type)
+        let default_model_info = cocode_protocol::ModelInfo::default();
+        let model_info = model_info.unwrap_or(&default_model_info);
+        thinking_convert::to_provider_options(thinking_level, model_info, self.provider_type)
     }
 }
 

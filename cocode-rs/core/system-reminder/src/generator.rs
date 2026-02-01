@@ -179,6 +179,64 @@ impl std::fmt::Display for TodoStatus {
     }
 }
 
+/// Information about a delegated agent.
+#[derive(Debug, Clone)]
+pub struct DelegatedAgentInfo {
+    /// Agent identifier.
+    pub agent_id: String,
+    /// Agent type (e.g., "Explore", "Plan").
+    pub agent_type: String,
+    /// Current status.
+    pub status: String,
+    /// Brief description of what the agent is doing.
+    pub description: String,
+}
+
+/// Token usage statistics.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsageStats {
+    /// Input tokens consumed.
+    pub input_tokens: i64,
+    /// Output tokens generated.
+    pub output_tokens: i64,
+    /// Cache read tokens (if applicable).
+    pub cache_read_tokens: i64,
+    /// Cache write tokens (if applicable).
+    pub cache_write_tokens: i64,
+    /// Total tokens used in session.
+    pub total_session_tokens: i64,
+    /// Context window capacity.
+    pub context_capacity: i64,
+    /// Percentage of context used.
+    pub context_usage_percent: f64,
+}
+
+/// Budget information.
+#[derive(Debug, Clone)]
+pub struct BudgetInfo {
+    /// Total budget in USD.
+    pub total_usd: f64,
+    /// Used budget in USD.
+    pub used_usd: f64,
+    /// Remaining budget in USD.
+    pub remaining_usd: f64,
+    /// Whether budget is low (< 10% remaining).
+    pub is_low: bool,
+}
+
+/// Collaboration notification from another agent.
+#[derive(Debug, Clone)]
+pub struct CollabNotification {
+    /// Source agent identifier.
+    pub from_agent: String,
+    /// Notification type (e.g., "completed", "needs_input", "error").
+    pub notification_type: String,
+    /// Notification message.
+    pub message: String,
+    /// Turn when notification was received.
+    pub received_turn: i32,
+}
+
 /// Context passed to generators during execution.
 ///
 /// This provides all the runtime state needed for generators to
@@ -246,6 +304,28 @@ pub struct GeneratorContext<'a> {
     // === Extension data ===
     /// Additional data that generators can use.
     pub extension_data: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
+
+    // === Delegate mode state ===
+    /// Whether delegate mode is active.
+    pub is_delegate_mode: bool,
+    /// Whether exiting delegate mode this turn.
+    pub delegate_mode_exiting: bool,
+    /// Information about delegated agents.
+    pub delegated_agents: Vec<DelegatedAgentInfo>,
+
+    // === Token/budget tracking ===
+    /// Token usage statistics.
+    pub token_usage: Option<TokenUsageStats>,
+    /// Budget information.
+    pub budget: Option<BudgetInfo>,
+
+    // === Collaboration notifications ===
+    /// Pending collaboration notifications from other agents.
+    pub collab_notifications: Vec<CollabNotification>,
+
+    // === Global state flags ===
+    /// Whether plan mode exit is pending (triggers one-time exit instructions).
+    pub plan_mode_exit_pending: bool,
 }
 
 impl<'a> GeneratorContext<'a> {
@@ -287,6 +367,29 @@ impl<'a> GeneratorContext<'a> {
             .iter()
             .filter(|t| t.status == TodoStatus::InProgress)
     }
+
+    /// Check if delegate mode is active.
+    pub fn in_delegate_mode(&self) -> bool {
+        self.is_delegate_mode
+    }
+
+    /// Check if there are pending collaboration notifications.
+    pub fn has_collab_notifications(&self) -> bool {
+        !self.collab_notifications.is_empty()
+    }
+
+    /// Check if context usage is high (> 80%).
+    pub fn is_context_usage_high(&self) -> bool {
+        self.token_usage
+            .as_ref()
+            .map(|t| t.context_usage_percent > 80.0)
+            .unwrap_or(false)
+    }
+
+    /// Check if budget is low (< 10% remaining).
+    pub fn is_budget_low(&self) -> bool {
+        self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
+    }
 }
 
 /// Builder for [`GeneratorContext`].
@@ -313,6 +416,14 @@ pub struct GeneratorContextBuilder<'a> {
     todos: Vec<TodoItem>,
     nested_memory_triggers: HashSet<PathBuf>,
     extension_data: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
+    // New fields
+    is_delegate_mode: bool,
+    delegate_mode_exiting: bool,
+    delegated_agents: Vec<DelegatedAgentInfo>,
+    token_usage: Option<TokenUsageStats>,
+    budget: Option<BudgetInfo>,
+    collab_notifications: Vec<CollabNotification>,
+    plan_mode_exit_pending: bool,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -421,6 +532,41 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn is_delegate_mode(mut self, is_delegate: bool) -> Self {
+        self.is_delegate_mode = is_delegate;
+        self
+    }
+
+    pub fn delegate_mode_exiting(mut self, exiting: bool) -> Self {
+        self.delegate_mode_exiting = exiting;
+        self
+    }
+
+    pub fn delegated_agents(mut self, agents: Vec<DelegatedAgentInfo>) -> Self {
+        self.delegated_agents = agents;
+        self
+    }
+
+    pub fn token_usage(mut self, usage: TokenUsageStats) -> Self {
+        self.token_usage = Some(usage);
+        self
+    }
+
+    pub fn budget(mut self, budget: BudgetInfo) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    pub fn collab_notifications(mut self, notifications: Vec<CollabNotification>) -> Self {
+        self.collab_notifications = notifications;
+        self
+    }
+
+    pub fn plan_mode_exit_pending(mut self, pending: bool) -> Self {
+        self.plan_mode_exit_pending = pending;
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -449,6 +595,14 @@ impl<'a> GeneratorContextBuilder<'a> {
             todos: self.todos,
             nested_memory_triggers: self.nested_memory_triggers,
             extension_data: self.extension_data,
+            // New fields
+            is_delegate_mode: self.is_delegate_mode,
+            delegate_mode_exiting: self.delegate_mode_exiting,
+            delegated_agents: self.delegated_agents,
+            token_usage: self.token_usage,
+            budget: self.budget,
+            collab_notifications: self.collab_notifications,
+            plan_mode_exit_pending: self.plan_mode_exit_pending,
         }
     }
 }

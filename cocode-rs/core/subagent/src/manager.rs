@@ -276,35 +276,116 @@ impl SubagentManager {
             };
             self.agents.insert(agent_id.clone(), instance);
 
+            // Register for background signal (Ctrl+B support)
+            let bg_signal_rx = crate::signal::register_backgroundable_agent(agent_id.clone());
+
             // Execute the agent if we have an execute function
             let output = if let Some(execute_fn) = &self.execute_fn {
-                match execute_fn(
+                let execute_future = execute_fn(
                     input.agent_type.clone(),
-                    input.prompt,
-                    model,
+                    input.prompt.clone(),
+                    model.clone(),
                     max_turns,
-                    filtered_tools,
-                    cancel_token,
-                )
-                .await
-                {
-                    Ok(result) => {
-                        // Update instance status
-                        if let Some(instance) = self.agents.get_mut(&agent_id) {
-                            instance.status = AgentStatus::Completed;
-                            instance.output = Some(result.clone());
+                    filtered_tools.clone(),
+                    cancel_token.clone(),
+                );
+
+                // Use select! to handle both normal completion and background signal
+                tokio::select! {
+                    result = execute_future => {
+                        // Normal completion - unregister from background signals
+                        crate::signal::unregister_backgroundable_agent(&agent_id);
+
+                        match result {
+                            Ok(result) => {
+                                if let Some(instance) = self.agents.get_mut(&agent_id) {
+                                    instance.status = AgentStatus::Completed;
+                                    instance.output = Some(result.clone());
+                                }
+                                Some(result)
+                            }
+                            Err(e) => {
+                                if let Some(instance) = self.agents.get_mut(&agent_id) {
+                                    instance.status = AgentStatus::Failed;
+                                }
+                                return Err(e);
+                            }
                         }
-                        Some(result)
                     }
-                    Err(e) => {
+                    _ = bg_signal_rx => {
+                        // Background signal received - transition to background
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            "Agent transitioned to background via signal"
+                        );
+
+                        // Create output file for background results
+                        let output_file = self.output_dir.join(format!("{agent_id}.jsonl"));
+
+                        // Update instance to background status
                         if let Some(instance) = self.agents.get_mut(&agent_id) {
-                            instance.status = AgentStatus::Failed;
+                            instance.status = AgentStatus::Backgrounded;
+                            instance.output_file = Some(output_file.clone());
                         }
-                        return Err(e);
+
+                        // Spawn background task to continue execution
+                        let execute_fn = execute_fn.clone();
+                        let agent_id_clone = agent_id.clone();
+                        let agent_type = input.agent_type.clone();
+                        let prompt = input.prompt.clone();
+                        let output_file_clone = output_file.clone();
+
+                        tokio::spawn(async move {
+                            let result = execute_fn(
+                                agent_type,
+                                prompt,
+                                model,
+                                max_turns,
+                                filtered_tools,
+                                cancel_token,
+                            )
+                            .await;
+
+                            // Write result to output file
+                            let entry = match &result {
+                                Ok(output) => serde_json::json!({
+                                    "status": "completed",
+                                    "agent_id": agent_id_clone,
+                                    "output": output,
+                                    "transitioned_from_foreground": true
+                                }),
+                                Err(e) => serde_json::json!({
+                                    "status": "failed",
+                                    "agent_id": agent_id_clone,
+                                    "error": e.to_string(),
+                                    "transitioned_from_foreground": true
+                                }),
+                            };
+                            if let Err(e) = tokio::fs::write(
+                                &output_file_clone,
+                                serde_json::to_string_pretty(&entry).unwrap_or_default(),
+                            )
+                            .await
+                            {
+                                tracing::error!(error = %e, "Failed to write agent output");
+                            }
+                        });
+
+                        let bg_agent = BackgroundAgent {
+                            agent_id: agent_id.clone(),
+                            output_file,
+                        };
+
+                        return Ok(SpawnResult {
+                            agent_id,
+                            output: None,
+                            background: Some(bg_agent),
+                        });
                     }
                 }
             } else {
-                // No execute function - return stub
+                // No execute function - return stub (no background signal handling)
+                crate::signal::unregister_backgroundable_agent(&agent_id);
                 tracing::warn!(
                     agent_id = %agent_id,
                     "No execute_fn configured, returning stub response"

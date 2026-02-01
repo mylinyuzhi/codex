@@ -9,7 +9,10 @@ mod session;
 mod ui;
 
 pub use session::{ChatMessage, MessageRole, SessionState, ToolExecution, ToolStatus};
-pub use ui::{FocusTarget, InputState, Overlay, StreamingState, UiState};
+pub use ui::{
+    FocusTarget, InputState, ModelPickerOverlay, Overlay, PermissionOverlay, StreamingState,
+    UiState,
+};
 
 use cocode_protocol::{ReasoningEffort, ThinkingLevel};
 

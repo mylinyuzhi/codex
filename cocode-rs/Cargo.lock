@@ -1845,6 +1845,7 @@ dependencies = [
  "cocode-plan-mode",
  "cocode-prompt",
  "cocode-protocol",
+ "cocode-skill",
  "cocode-system-reminder",
  "cocode-tools",
  "hyper-sdk",
@@ -1955,9 +1956,11 @@ dependencies = [
 name = "cocode-plugin"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "cocode-error",
  "cocode-hooks",
  "cocode-skill",
+ "cocode-subagent",
  "dirs 6.0.0",
  "serde",
  "serde_json",
@@ -2202,6 +2205,7 @@ dependencies = [
  "anyhow",
  "cocode-protocol",
  "cocode-tools",
+ "once_cell",
  "serde",
  "serde_json",
  "tokio",
@@ -2249,6 +2253,7 @@ dependencies = [
  "cocode-rmcp-client",
  "cocode-shell",
  "cocode-shell-parser",
+ "cocode-skill",
  "globset",
  "hyper-sdk",
  "regex",

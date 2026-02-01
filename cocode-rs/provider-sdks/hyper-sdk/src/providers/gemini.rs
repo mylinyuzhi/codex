@@ -341,8 +341,8 @@ impl Model for GeminiModel {
 /// Build Gemini thinking config from request.
 ///
 /// Combines the unified `thinking_config` from GenerateRequest with
-/// provider-specific `GeminiOptions.thinking_level` to produce a
-/// google_genai ThinkingConfig.
+/// provider-specific `GeminiOptions.thinking_level` and `include_thoughts`
+/// to produce a google_genai ThinkingConfig.
 ///
 /// Priority:
 /// 1. Provider-specific GeminiOptions.thinking_level (if set)
@@ -359,7 +359,11 @@ fn build_gemini_thinking_config(request: &GenerateRequest) -> Option<gem::types:
                     ThinkingLevel::Medium => gem::types::ThinkingLevel::Medium,
                     ThinkingLevel::High => gem::types::ThinkingLevel::High,
                 };
-                return Some(gem::types::ThinkingConfig::with_level(gem_level));
+                let mut config = gem::types::ThinkingConfig::with_level(gem_level);
+                // Apply include_thoughts if set (default true when thinking is enabled)
+                let include = gem_opts.include_thoughts.unwrap_or(true);
+                config.include_thoughts = Some(include);
+                return Some(config);
             }
         }
     }

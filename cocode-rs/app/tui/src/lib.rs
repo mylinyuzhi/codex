@@ -7,8 +7,8 @@
 //!
 //! - **Model**: Application state ([`state::AppState`])
 //! - **Message**: Events that trigger state changes ([`event::TuiEvent`])
-//! - **Update**: Pure functions that update state based on messages
-//! - **View**: Renders state to terminal using ratatui widgets
+//! - **Update**: Pure functions that update state based on messages ([`update`])
+//! - **View**: Renders state to terminal using ratatui widgets ([`render`])
 //!
 //! ## Key Features
 //!
@@ -21,24 +21,32 @@
 //! ## Example
 //!
 //! ```ignore
-//! use cocode_tui::Tui;
+//! use cocode_tui::{App, AppConfig, create_channels};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let tui = Tui::new()?;
-//!     tui.run().await
+//!     let (agent_tx, agent_rx, command_tx, command_rx) = create_channels(32);
+//!     let config = AppConfig::default();
+//!     let mut app = App::new(agent_rx, command_tx, config)?;
+//!     app.run().await
 //! }
 //! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::unwrap_used)]
 
+pub mod app;
+pub mod command;
 pub mod event;
+pub mod render;
 pub mod state;
 pub mod terminal;
+pub mod update;
 pub mod widgets;
 
 // Re-export commonly used types
+pub use app::{App, AppConfig, create_channels};
+pub use command::UserCommand;
 pub use event::{TuiCommand, TuiEvent};
 pub use state::{AppState, FocusTarget, Overlay, RunningState};
 pub use terminal::{Tui, restore_terminal, setup_terminal};

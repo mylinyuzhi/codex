@@ -2,16 +2,19 @@
 //!
 //! The registry tracks loaded plugins and provides access to their contributions.
 
+use crate::command::PluginCommand;
 use crate::contribution::PluginContribution;
 #[cfg(test)]
 use crate::error::PluginError;
 use crate::error::Result;
 use crate::error::plugin_error::AlreadyRegisteredSnafu;
 use crate::loader::LoadedPlugin;
+use crate::mcp::McpServerConfig;
 use crate::scope::PluginScope;
 
 use cocode_hooks::{HookDefinition, HookRegistry};
 use cocode_skill::{SkillManager, SkillPromptCommand};
+use cocode_subagent::{AgentDefinition, SubagentManager};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -133,6 +136,66 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Get all agent contributions.
+    pub fn agent_contributions(&self) -> Vec<(&AgentDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Agent {
+                        definition,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((definition, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all command contributions.
+    pub fn command_contributions(&self) -> Vec<(&PluginCommand, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Command {
+                        command,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((command, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all MCP server contributions.
+    pub fn mcp_server_contributions(&self) -> Vec<(&McpServerConfig, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::McpServer {
+                        config,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((config, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Apply all skill contributions to a skill manager.
     pub fn apply_skills_to(&self, manager: &mut SkillManager) {
         let skills = self.skill_contributions();
@@ -168,6 +231,26 @@ impl PluginRegistry {
 
         if count > 0 {
             info!(count = count, "Applied hooks from plugins");
+        }
+    }
+
+    /// Apply all agent contributions to a subagent manager.
+    pub fn apply_agents_to(&self, manager: &mut SubagentManager) {
+        let agents = self.agent_contributions();
+        let count = agents.len();
+
+        for (definition, plugin_name) in agents {
+            debug!(
+                agent = %definition.name,
+                agent_type = %definition.agent_type,
+                plugin = %plugin_name,
+                "Applying agent from plugin"
+            );
+            manager.register_agent_type(definition.clone());
+        }
+
+        if count > 0 {
+            info!(count = count, "Applied agents from plugins");
         }
     }
 

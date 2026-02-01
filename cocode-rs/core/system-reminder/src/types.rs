@@ -72,12 +72,16 @@ pub enum AttachmentType {
     PlanModeFileReference,
     /// Periodic reminder to use update_plan tool.
     PlanToolReminder,
+    /// Plan mode exit instructions (one-time after approval).
+    PlanModeExit,
     /// User-defined critical instructions.
     CriticalInstruction,
     /// Auto-discovered CLAUDE.md and rules files.
     NestedMemory,
 
     // === MainAgentOnly tier ===
+    /// Available skills for the Skill tool.
+    AvailableSkills,
     /// Background shell task status.
     BackgroundTask,
     /// LSP diagnostic injection.
@@ -86,6 +90,12 @@ pub enum AttachmentType {
     OutputStyle,
     /// Task/todo list context.
     TodoReminders,
+    /// Delegate mode instructions.
+    DelegateMode,
+    /// Collaboration notifications from other agents.
+    CollabNotifications,
+    /// Plan verification reminder during implementation.
+    PlanVerification,
 
     // === UserPrompt tier ===
     /// Files mentioned via @file syntax.
@@ -124,11 +134,16 @@ impl AttachmentType {
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
             | AttachmentType::PlanToolReminder
+            | AttachmentType::PlanModeExit
             | AttachmentType::CriticalInstruction
             | AttachmentType::NestedMemory
+            | AttachmentType::AvailableSkills
             | AttachmentType::BackgroundTask
             | AttachmentType::OutputStyle
             | AttachmentType::TodoReminders
+            | AttachmentType::DelegateMode
+            | AttachmentType::CollabNotifications
+            | AttachmentType::PlanVerification
             | AttachmentType::AtMentionedFiles
             | AttachmentType::AgentMentions
             | AttachmentType::AsyncHookResponse
@@ -156,14 +171,19 @@ impl AttachmentType {
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
             | AttachmentType::PlanToolReminder
+            | AttachmentType::PlanModeExit
             | AttachmentType::CriticalInstruction
             | AttachmentType::NestedMemory => ReminderTier::Core,
 
             // MainAgentOnly tier
-            AttachmentType::BackgroundTask
+            AttachmentType::AvailableSkills
+            | AttachmentType::BackgroundTask
             | AttachmentType::LspDiagnostics
             | AttachmentType::OutputStyle
             | AttachmentType::TodoReminders
+            | AttachmentType::DelegateMode
+            | AttachmentType::CollabNotifications
+            | AttachmentType::PlanVerification
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
@@ -188,12 +208,17 @@ impl AttachmentType {
             AttachmentType::PlanModeApproved => "plan_mode_approved",
             AttachmentType::PlanModeFileReference => "plan_mode_file_reference",
             AttachmentType::PlanToolReminder => "plan_tool_reminder",
+            AttachmentType::PlanModeExit => "plan_mode_exit",
             AttachmentType::CriticalInstruction => "critical_instruction",
             AttachmentType::NestedMemory => "nested_memory",
+            AttachmentType::AvailableSkills => "available_skills",
             AttachmentType::BackgroundTask => "background_task",
             AttachmentType::LspDiagnostics => "lsp_diagnostics",
             AttachmentType::OutputStyle => "output_style",
             AttachmentType::TodoReminders => "todo_reminders",
+            AttachmentType::DelegateMode => "delegate_mode",
+            AttachmentType::CollabNotifications => "collab_notifications",
+            AttachmentType::PlanVerification => "plan_verification",
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
             AttachmentType::AsyncHookResponse => "async_hook_response",

@@ -12,12 +12,13 @@ use cocode_protocol::{
     AutoCompactTracking, CompactConfig, HookEventType, LoopConfig, LoopEvent, QueryTracking,
     TokenUsage, ToolResultContent,
 };
+use cocode_skill::SkillManager;
 use cocode_system_reminder::{
     FileTracker, GeneratorContext, SystemReminderConfig, SystemReminderOrchestrator,
     combine_reminders,
     generators::{
-        ASYNC_HOOK_RESPONSES_KEY, AsyncHookResponseInfo, HOOK_BLOCKING_KEY, HOOK_CONTEXT_KEY,
-        HookBlockingInfo, HookContextInfo,
+        ASYNC_HOOK_RESPONSES_KEY, AVAILABLE_SKILLS_KEY, AsyncHookResponseInfo, HOOK_BLOCKING_KEY,
+        HOOK_CONTEXT_KEY, HookBlockingInfo, HookContextInfo, SkillInfo,
     },
 };
 use cocode_tools::{
@@ -117,6 +118,10 @@ pub struct AgentLoop {
     // Subagent spawning
     /// Optional callback for spawning subagents (used by Task tool).
     spawn_agent_fn: Option<SpawnAgentFn>,
+
+    // Skill system
+    /// Optional skill manager for loading and executing skills.
+    skill_manager: Option<Arc<SkillManager>>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -138,6 +143,7 @@ pub struct AgentLoopBuilder {
     is_subagent: bool,
     plan_mode_state: Option<PlanModeState>,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    skill_manager: Option<Arc<SkillManager>>,
 }
 
 impl AgentLoopBuilder {
@@ -161,6 +167,7 @@ impl AgentLoopBuilder {
             is_subagent: false,
             plan_mode_state: None,
             spawn_agent_fn: None,
+            skill_manager: None,
         }
     }
 
@@ -258,6 +265,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the skill manager for loading and executing skills.
+    pub fn skill_manager(mut self, manager: Arc<SkillManager>) -> Self {
+        self.skill_manager = Some(manager);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
@@ -303,6 +316,7 @@ impl AgentLoopBuilder {
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
             spawn_agent_fn: self.spawn_agent_fn,
+            skill_manager: self.skill_manager,
         }
     }
 }
@@ -522,6 +536,21 @@ impl AgentLoop {
             gen_ctx_builder = gen_ctx_builder.extension(HOOK_CONTEXT_KEY, context_hooks);
         }
 
+        // Add available skills to generator context for system reminders
+        if let Some(ref sm) = self.skill_manager {
+            let skill_infos: Vec<SkillInfo> = sm
+                .all()
+                .map(|skill| SkillInfo {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                })
+                .collect();
+
+            if !skill_infos.is_empty() {
+                gen_ctx_builder = gen_ctx_builder.extension(AVAILABLE_SKILLS_KEY, skill_infos);
+            }
+        }
+
         let gen_ctx = gen_ctx_builder.build();
 
         let reminders = self.reminder_orchestrator.generate_all(&gen_ctx).await;
@@ -573,6 +602,11 @@ impl AgentLoop {
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             executor = executor.with_spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Add skill_manager if available for Skill tool
+        if let Some(ref sm) = self.skill_manager {
+            executor = executor.with_skill_manager(sm.clone());
         }
 
         // ── STEP 9: Main API streaming loop with retry ──

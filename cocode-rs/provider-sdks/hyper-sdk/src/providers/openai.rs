@@ -287,7 +287,19 @@ impl Model for OpenAIModel {
                     params = params.previous_response_id(prev_id);
                 }
                 if let Some(effort) = &openai_opts.reasoning_effort {
-                    params = params.reasoning(convert_reasoning_effort_to_oai(effort));
+                    let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
+                    // Apply reasoning summary if set
+                    if let Some(summary) = &openai_opts.reasoning_summary {
+                        if let Some(summary_str) = convert_reasoning_summary_to_string(summary) {
+                            reasoning_config = reasoning_config.with_summary(summary_str);
+                        }
+                    }
+                    params = params.reasoning(reasoning_config);
+                }
+                // Include encrypted content if requested
+                if openai_opts.include_encrypted_content == Some(true) {
+                    params =
+                        params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
                 }
             }
         }
@@ -385,7 +397,19 @@ impl Model for OpenAIModel {
                     params = params.previous_response_id(prev_id);
                 }
                 if let Some(effort) = &openai_opts.reasoning_effort {
-                    params = params.reasoning(convert_reasoning_effort_to_oai(effort));
+                    let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
+                    // Apply reasoning summary if set
+                    if let Some(summary) = &openai_opts.reasoning_summary {
+                        if let Some(summary_str) = convert_reasoning_summary_to_string(summary) {
+                            reasoning_config = reasoning_config.with_summary(summary_str);
+                        }
+                    }
+                    params = params.reasoning(reasoning_config);
+                }
+                // Include encrypted content if requested
+                if openai_opts.include_encrypted_content == Some(true) {
+                    params =
+                        params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
                 }
             }
         }
@@ -495,6 +519,18 @@ fn convert_reasoning_effort_to_oai(
         crate::options::openai::ReasoningEffort::High => oai::ReasoningEffort::High,
     };
     oai::ReasoningConfig::with_effort(oai_effort)
+}
+
+fn convert_reasoning_summary_to_string(
+    summary: &crate::options::openai::ReasoningSummary,
+) -> Option<String> {
+    use crate::options::openai::ReasoningSummary;
+    match summary {
+        ReasoningSummary::None => None, // No summary requested
+        ReasoningSummary::Auto => Some("auto".to_string()),
+        ReasoningSummary::Concise => Some("concise".to_string()),
+        ReasoningSummary::Detailed => Some("detailed".to_string()),
+    }
 }
 
 fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, HyperError> {

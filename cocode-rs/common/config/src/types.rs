@@ -285,7 +285,7 @@ impl ProviderModelEntry {
 /// Resolved model info with all layers merged.
 #[derive(Debug, Clone)]
 pub struct ResolvedModelInfo {
-    /// The model identifier.
+    /// The model identifier (slug).
     pub id: String,
     /// Human-readable name.
     pub display_name: String,
@@ -315,8 +315,12 @@ pub struct ResolvedModelInfo {
     pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
     /// Whether to include thoughts in response.
     pub include_thoughts: Option<bool>,
+    /// Reasoning summary level for OpenAI o1/o3 models.
+    pub reasoning_summary: Option<cocode_protocol::model::ReasoningSummary>,
     /// Base system instructions for this model.
     pub base_instructions: Option<String>,
+    /// Extra provider-specific parameters (pass-through to SDKs).
+    pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ResolvedModelInfo {
@@ -565,7 +569,9 @@ mod tests {
             default_thinking_level: None,
             supported_thinking_levels: None,
             include_thoughts: None,
+            reasoning_summary: None,
             base_instructions: None,
+            extra: None,
         };
 
         assert!(info.supports_reasoning_summaries());

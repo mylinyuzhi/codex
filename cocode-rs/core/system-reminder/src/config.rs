@@ -51,6 +51,8 @@ pub struct AttachmentSettings {
     pub plan_mode_enter: bool,
     /// Enable plan tool reminder.
     pub plan_tool_reminder: bool,
+    /// Enable plan mode exit instructions.
+    pub plan_mode_exit: bool,
     /// Enable changed files detection.
     pub changed_files: bool,
     /// Enable background task status.
@@ -59,6 +61,8 @@ pub struct AttachmentSettings {
     pub lsp_diagnostics: bool,
     /// Enable nested memory (CLAUDE.md discovery).
     pub nested_memory: bool,
+    /// Enable available skills listing.
+    pub available_skills: bool,
     /// Enable @file mentioned files.
     pub at_mentioned_files: bool,
     /// Enable @agent mentions.
@@ -67,6 +71,14 @@ pub struct AttachmentSettings {
     pub output_style: bool,
     /// Enable todo/task reminders.
     pub todo_reminders: bool,
+    /// Enable delegate mode instructions.
+    pub delegate_mode: bool,
+    /// Enable collaboration notifications.
+    pub collab_notifications: bool,
+    /// Enable plan verification reminders.
+    pub plan_verification: bool,
+    /// Enable token usage display.
+    pub token_usage: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -78,14 +90,20 @@ impl Default for AttachmentSettings {
             critical_instruction: true,
             plan_mode_enter: true,
             plan_tool_reminder: true,
+            plan_mode_exit: true,
             changed_files: true,
             background_task: true,
             lsp_diagnostics: true,
             nested_memory: true,
+            available_skills: true,
             at_mentioned_files: true,
             agent_mentions: true,
             output_style: true,
             todo_reminders: true,
+            delegate_mode: true,
+            collab_notifications: true,
+            plan_verification: true,
+            token_usage: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

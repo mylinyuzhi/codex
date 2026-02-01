@@ -18,6 +18,7 @@ cocode-file-ignore.workspace = true
 cocode-file-search.workspace = true
 cocode-plan-mode.workspace = true
 cocode-lsp.workspace = true
+cocode-skill.workspace = true
 hyper-sdk.workspace = true
 async-trait.workspace = true
 schemars.workspace = true

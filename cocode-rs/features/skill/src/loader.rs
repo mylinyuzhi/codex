@@ -110,12 +110,17 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
     // Determine source based on relationship to root
     let source = determine_source(skill_dir, root);
 
+    // Check if skill has hooks
+    let has_hooks = interface.hooks.as_ref().is_some_and(|h| !h.is_empty());
+
     SkillLoadOutcome::Success {
         skill: SkillPromptCommand {
-            name: interface.name,
-            description: interface.description,
+            name: interface.name.clone(),
+            description: interface.description.clone(),
             prompt,
-            allowed_tools: interface.allowed_tools,
+            allowed_tools: interface.allowed_tools.clone(),
+            // Only keep interface if it has hooks (to save memory)
+            interface: if has_hooks { Some(interface) } else { None },
         },
         source,
     }

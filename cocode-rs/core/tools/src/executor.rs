@@ -13,6 +13,7 @@
 use crate::context::{ApprovalStore, FileTracker, SpawnAgentFn, ToolContext, ToolContextBuilder};
 use crate::error::Result;
 use crate::registry::ToolRegistry;
+use crate::result_persistence;
 use cocode_hooks::{AsyncHookTracker, HookContext, HookEventType, HookRegistry, HookResult};
 use cocode_protocol::{
     AbortReason, ConcurrencySafety, LoopEvent, PermissionMode, ToolOutput, ValidationResult,
@@ -45,6 +46,13 @@ pub struct ExecutorConfig {
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
+    /// Session directory for storing large tool results.
+    ///
+    /// When set, tool results exceeding the configured size threshold are
+    /// persisted to `{session_dir}/tool-results/{call_id}.txt`.
+    pub session_dir: Option<PathBuf>,
+    /// Tool configuration for result persistence thresholds.
+    pub tool_config: cocode_protocol::ToolConfig,
 }
 
 impl Default for ExecutorConfig {
@@ -57,6 +65,8 @@ impl Default for ExecutorConfig {
             default_timeout_secs: 120,
             is_plan_mode: false,
             plan_file_path: None,
+            session_dir: None,
+            tool_config: cocode_protocol::ToolConfig::default(),
         }
     }
 }
@@ -129,6 +139,8 @@ pub struct StreamingToolExecutor {
     background_registry: BackgroundTaskRegistry,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional skill manager for the Skill tool.
+    skill_manager: Option<Arc<cocode_skill::SkillManager>>,
 }
 
 impl StreamingToolExecutor {
@@ -152,6 +164,7 @@ impl StreamingToolExecutor {
             completed_results: Arc::new(Mutex::new(Vec::new())),
             background_registry: BackgroundTaskRegistry::new(),
             spawn_agent_fn: None,
+            skill_manager: None,
         }
     }
 
@@ -194,6 +207,14 @@ impl StreamingToolExecutor {
     /// Set a custom async hook tracker.
     pub fn with_async_hook_tracker(mut self, tracker: Arc<AsyncHookTracker>) -> Self {
         self.async_hook_tracker = tracker;
+        self
+    }
+
+    /// Set the skill manager for the Skill tool.
+    pub fn with_skill_manager(mut self, manager: Arc<cocode_skill::SkillManager>) -> Self {
+        // Store in a way that can be passed to tool context
+        // Note: The actual wiring happens in create_context
+        self.skill_manager = Some(manager);
         self
     }
 
@@ -343,9 +364,26 @@ impl StreamingToolExecutor {
         let session_id = self.config.session_id.clone();
         let cwd = self.config.cwd.clone();
 
+        // Clone persistence config for result handling
+        let session_dir = self.config.session_dir.clone();
+        let tool_config = self.config.tool_config.clone();
+        let call_id_for_persistence = call_id.clone();
+
         // Spawn the execution task
         let handle = tokio::spawn(async move {
-            let result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+            let mut result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+
+            // Apply large result persistence if configured
+            if let (Ok(output), Some(dir)) = (&result, &session_dir) {
+                let persisted = result_persistence::persist_if_needed(
+                    output.clone(),
+                    &call_id_for_persistence,
+                    dir,
+                    &tool_config,
+                )
+                .await;
+                result = Ok(persisted);
+            }
 
             // Execute post-hooks within the spawned task
             if let Some(hooks) = hooks {
@@ -429,13 +467,25 @@ impl StreamingToolExecutor {
             // Create context and execute with potentially modified input
             let ctx = self.create_context(&call_id);
             let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
-            let result = execute_tool(
+            let mut result = execute_tool(
                 &self.registry,
                 modified_tool_call,
                 ctx,
                 self.config.default_timeout_secs,
             )
             .await;
+
+            // Apply large result persistence if configured
+            if let (Ok(output), Some(dir)) = (&result, &self.config.session_dir) {
+                let persisted = result_persistence::persist_if_needed(
+                    output.clone(),
+                    &call_id,
+                    dir,
+                    &self.config.tool_config,
+                )
+                .await;
+                result = Ok(persisted);
+            }
 
             // Execute post-hooks
             let is_error = result.is_err();
@@ -555,6 +605,16 @@ impl StreamingToolExecutor {
         // Add spawn_agent_fn if available
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Add skill_manager if available
+        if let Some(ref sm) = self.skill_manager {
+            builder = builder.skill_manager(sm.clone());
+        }
+
+        // Add session_dir if available
+        if let Some(ref dir) = self.config.session_dir {
+            builder = builder.session_dir(dir.clone());
         }
 
         builder.build()

@@ -13,9 +13,11 @@ use tracing::{debug, warn};
 use crate::config::SystemReminderConfig;
 use crate::generator::{AttachmentGenerator, GeneratorContext};
 use crate::generators::{
-    ChangedFilesGenerator, LspDiagnosticsGenerator, NestedMemoryGenerator,
-    PlanModeApprovedGenerator, PlanModeEnterGenerator, PlanToolReminderGenerator,
-    TodoRemindersGenerator,
+    AvailableSkillsGenerator, ChangedFilesGenerator, CollabNotificationsGenerator,
+    DelegateModeGenerator, LspDiagnosticsGenerator, NestedMemoryGenerator,
+    PlanModeApprovedGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
+    PlanToolReminderGenerator, PlanVerificationGenerator, TodoRemindersGenerator,
+    TokenUsageGenerator, UnifiedTasksGenerator,
 };
 use crate::throttle::ThrottleManager;
 use crate::types::{ReminderTier, SystemReminder};
@@ -73,11 +75,18 @@ impl SystemReminderOrchestrator {
             Arc::new(ChangedFilesGenerator),
             Arc::new(PlanModeEnterGenerator),
             Arc::new(PlanModeApprovedGenerator),
+            Arc::new(PlanModeExitGenerator),
             Arc::new(PlanToolReminderGenerator),
             Arc::new(NestedMemoryGenerator),
             // MainAgentOnly tier
+            Arc::new(AvailableSkillsGenerator),
             Arc::new(LspDiagnosticsGenerator),
             Arc::new(TodoRemindersGenerator),
+            Arc::new(UnifiedTasksGenerator),
+            Arc::new(DelegateModeGenerator),
+            Arc::new(CollabNotificationsGenerator),
+            Arc::new(PlanVerificationGenerator),
+            Arc::new(TokenUsageGenerator),
         ]
     }
 

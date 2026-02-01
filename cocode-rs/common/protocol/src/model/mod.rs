@@ -18,6 +18,7 @@ pub use model_roles::ModelRoles;
 pub use model_spec::ModelSpec;
 pub use model_spec::ModelSpecParseError;
 pub use reasoning::ReasoningEffort;
+pub use reasoning::ReasoningSummary;
 pub use reasoning::nearest_effort;
 pub use role_selection::RoleSelection;
 pub use role_selection::RoleSelections;

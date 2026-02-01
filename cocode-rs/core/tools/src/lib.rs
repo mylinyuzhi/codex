@@ -98,6 +98,7 @@ pub mod error;
 pub mod executor;
 pub mod mcp_tool;
 pub mod registry;
+pub mod result_persistence;
 pub mod tool;
 
 // Re-export main types at crate root

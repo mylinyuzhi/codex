@@ -214,10 +214,13 @@ pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecuti
     let skill = manager.get(name)?;
 
     // Build the prompt, potentially incorporating arguments
-    let prompt = if args.is_empty() {
+    // If prompt contains $ARGUMENTS placeholder, replace it; otherwise append args
+    let prompt = if skill.prompt.contains("$ARGUMENTS") {
+        skill.prompt.replace("$ARGUMENTS", args)
+    } else if args.is_empty() {
         skill.prompt.clone()
     } else {
-        // Append arguments to the prompt
+        // Append arguments to the prompt (fallback)
         format!("{}\n\nArguments: {}", skill.prompt, args)
     };
 
@@ -239,6 +242,7 @@ mod tests {
             description: format!("{name} description"),
             prompt: prompt.to_string(),
             allowed_tools: None,
+            interface: None,
         }
     }
 
@@ -299,5 +303,25 @@ mod tests {
     fn test_execute_skill_not_found() {
         let manager = SkillManager::new();
         assert!(execute_skill(&manager, "/nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_execute_skill_with_arguments_placeholder() {
+        let mut manager = SkillManager::new();
+        manager.register(SkillPromptCommand {
+            name: "review".to_string(),
+            description: "Review PR".to_string(),
+            prompt: "Review PR #$ARGUMENTS".to_string(),
+            allowed_tools: None,
+            interface: None,
+        });
+
+        // With placeholder and args
+        let result = execute_skill(&manager, "/review 123").unwrap();
+        assert_eq!(result.prompt, "Review PR #123");
+
+        // With placeholder but no args (placeholder becomes empty)
+        let result = execute_skill(&manager, "/review").unwrap();
+        assert_eq!(result.prompt, "Review PR #");
     }
 }
