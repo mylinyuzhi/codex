@@ -13,6 +13,8 @@ pub use session::MessageRole;
 pub use session::SessionState;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
+pub use ui::FileSuggestionItem;
+pub use ui::FileSuggestionState;
 pub use ui::FocusTarget;
 pub use ui::InputState;
 pub use ui::ModelPickerOverlay;

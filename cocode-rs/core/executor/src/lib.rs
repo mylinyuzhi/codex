@@ -1,6 +1,7 @@
 mod background;
 mod base;
 pub mod coordinator;
+pub mod error;
 pub mod iterative;
 
 pub use background::BackgroundExecution;
@@ -13,6 +14,8 @@ pub use coordinator::manager::AgentCoordinator;
 pub use coordinator::manager::CoordinatedAgent;
 pub use coordinator::manager::CoordinatorExecuteFn;
 pub use coordinator::manager::SpawnConfig;
+pub use error::ExecutorError;
+pub use error::Result;
 pub use iterative::condition::IterationCondition;
 pub use iterative::context::IterationContext;
 pub use iterative::context::IterationRecord;

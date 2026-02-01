@@ -18,6 +18,7 @@ use super::TuiCommand;
 ///
 /// * `key` - The key event to handle
 /// * `has_overlay` - Whether an overlay (e.g., permission prompt) is active
+/// * `has_file_suggestions` - Whether file suggestions are being displayed
 ///
 /// # Returns
 ///
@@ -35,6 +36,55 @@ pub fn handle_key_event(key: KeyEvent, has_overlay: bool) -> Option<TuiCommand> 
 
     // Handle input editing keys
     handle_input_key(key)
+}
+
+/// Handle a key event with file suggestion state.
+///
+/// When file suggestions are active, some keys are redirected to
+/// suggestion navigation.
+pub fn handle_key_event_with_suggestions(
+    key: KeyEvent,
+    has_overlay: bool,
+    has_file_suggestions: bool,
+) -> Option<TuiCommand> {
+    // Handle overlay-specific keys first
+    if has_overlay {
+        return handle_overlay_key(key);
+    }
+
+    // Handle file suggestion navigation
+    if has_file_suggestions {
+        if let Some(cmd) = handle_suggestion_key(key) {
+            return Some(cmd);
+        }
+    }
+
+    // Handle global shortcuts (with modifiers)
+    if let Some(cmd) = handle_global_key(key) {
+        return Some(cmd);
+    }
+
+    // Handle input editing keys
+    handle_input_key(key)
+}
+
+/// Handle keys for file suggestion navigation.
+fn handle_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
+    match (key.modifiers, key.code) {
+        // Navigate suggestions
+        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSuggestion),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSuggestion),
+
+        // Accept suggestion
+        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSuggestion),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSuggestion),
+
+        // Dismiss suggestions
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSuggestions),
+
+        // Other keys pass through to normal handling
+        _ => None,
+    }
 }
 
 /// Handle keys when an overlay (permission prompt, model picker) is active.

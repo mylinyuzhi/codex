@@ -10,8 +10,10 @@ use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
 use crate::event::TuiCommand;
+use crate::file_search::FileSearchEvent;
 use crate::state::AppState;
 use crate::state::ChatMessage;
+use crate::state::FileSuggestionItem;
 use crate::state::FocusTarget;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
@@ -244,6 +246,31 @@ pub async fn handle_command(
             }
         }
 
+        // ========== File Autocomplete ==========
+        TuiCommand::SelectNextSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.file_suggestions {
+                suggestions.move_down();
+            }
+        }
+        TuiCommand::SelectPrevSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.file_suggestions {
+                suggestions.move_up();
+            }
+        }
+        TuiCommand::AcceptSuggestion => {
+            if let Some(suggestions) = state.ui.file_suggestions.take() {
+                if let Some(selected) = suggestions.selected_suggestion() {
+                    state
+                        .ui
+                        .input
+                        .insert_selected_path(suggestions.start_pos, &selected.path);
+                }
+            }
+        }
+        TuiCommand::DismissSuggestions => {
+            state.ui.clear_file_suggestions();
+        }
+
         // ========== External Editor ==========
         TuiCommand::OpenExternalEditor => {
             // TODO: Implement external editor support
@@ -299,6 +326,37 @@ fn handle_history_down(state: &mut AppState) {
             state.ui.input.history_index = None;
         }
         None => {}
+    }
+}
+
+/// Handle a file search event.
+///
+/// This function processes results from the file search manager
+/// and updates the autocomplete suggestions.
+pub fn handle_file_search_event(state: &mut AppState, event: FileSearchEvent) {
+    match event {
+        FileSearchEvent::SearchResult {
+            query,
+            start_pos: _,
+            suggestions,
+        } => {
+            // Only update if we're still showing suggestions for this query
+            if let Some(ref current) = state.ui.file_suggestions {
+                if current.query == query {
+                    let items: Vec<FileSuggestionItem> = suggestions
+                        .into_iter()
+                        .map(|s| FileSuggestionItem {
+                            path: s.path,
+                            display_text: s.display_text,
+                            score: s.score,
+                            match_indices: s.match_indices,
+                            is_directory: s.is_directory,
+                        })
+                        .collect();
+                    state.ui.update_file_suggestions(items);
+                }
+            }
+        }
     }
 }
 

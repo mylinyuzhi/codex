@@ -12,6 +12,7 @@ use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
 use cocode_protocol::LoopEvent;
+use cocode_tools::SpawnAgentFn;
 use cocode_tools::ToolRegistry;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -72,6 +73,9 @@ pub struct AgentExecutor {
 
     /// Cancellation token for graceful shutdown.
     cancel_token: CancellationToken,
+
+    /// Optional callback for spawning subagents (used by Task tool).
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl AgentExecutor {
@@ -88,6 +92,7 @@ impl AgentExecutor {
             hooks: Arc::new(HookRegistry::new()),
             config,
             cancel_token: CancellationToken::new(),
+            spawn_agent_fn: None,
         }
     }
 
@@ -115,6 +120,12 @@ impl AgentExecutor {
     /// Set the cancellation token.
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
         self.cancel_token = token;
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
         self
     }
 
@@ -187,7 +198,7 @@ impl AgentExecutor {
         };
 
         // Build and run the agent loop
-        let mut loop_instance = AgentLoop::builder()
+        let mut builder = AgentLoop::builder()
             .api_client(self.api_client.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
@@ -196,8 +207,14 @@ impl AgentExecutor {
             .compaction_config(CompactionConfig::default())
             .hooks(self.hooks.clone())
             .event_tx(event_tx)
-            .cancel_token(self.cancel_token.clone())
-            .build();
+            .cancel_token(self.cancel_token.clone());
+
+        // Add spawn_agent_fn if available for Task tool
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        let mut loop_instance = builder.build();
 
         let result = loop_instance.run(prompt).await?;
 
@@ -231,6 +248,7 @@ pub struct ExecutorBuilder {
     hooks: Option<Arc<HookRegistry>>,
     config: ExecutorConfig,
     cancel_token: CancellationToken,
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl ExecutorBuilder {
@@ -242,6 +260,7 @@ impl ExecutorBuilder {
             hooks: None,
             config: ExecutorConfig::default(),
             cancel_token: CancellationToken::new(),
+            spawn_agent_fn: None,
         }
     }
 
@@ -311,6 +330,12 @@ impl ExecutorBuilder {
         self
     }
 
+    /// Set the spawn agent callback for the Task tool.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
     /// Build the executor.
     ///
     /// # Panics
@@ -327,6 +352,7 @@ impl ExecutorBuilder {
         }
 
         executor.cancel_token = self.cancel_token;
+        executor.spawn_agent_fn = self.spawn_agent_fn;
         executor
     }
 }
@@ -358,6 +384,7 @@ mod tests {
         assert!(builder.api_client.is_none());
         assert!(builder.tool_registry.is_none());
         assert!(builder.hooks.is_none());
+        assert!(builder.spawn_agent_fn.is_none());
     }
 
     #[test]

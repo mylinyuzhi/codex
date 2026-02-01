@@ -103,6 +103,8 @@ pub enum AttachmentType {
     AtMentionedFiles,
     /// Agent invocations via @agent-type syntax.
     AgentMentions,
+    /// Skill invoked by user (skill prompt content injection).
+    InvokedSkills,
 
     // === Hook-related (MainAgentOnly tier) ===
     /// Background hook completed and returned additional context.
@@ -147,6 +149,7 @@ impl AttachmentType {
             | AttachmentType::PlanVerification
             | AttachmentType::AtMentionedFiles
             | AttachmentType::AgentMentions
+            | AttachmentType::InvokedSkills
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
@@ -195,9 +198,9 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
-            AttachmentType::AtMentionedFiles | AttachmentType::AgentMentions => {
-                ReminderTier::UserPrompt
-            }
+            AttachmentType::AtMentionedFiles
+            | AttachmentType::AgentMentions
+            | AttachmentType::InvokedSkills => ReminderTier::UserPrompt,
         }
     }
 
@@ -222,6 +225,7 @@ impl AttachmentType {
             AttachmentType::PlanVerification => "plan_verification",
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
+            AttachmentType::InvokedSkills => "invoked_skills",
             AttachmentType::AsyncHookResponse => "async_hook_response",
             AttachmentType::HookBlockingError => "hook_blocking_error",
             AttachmentType::HookAdditionalContext => "hook_additional_context",

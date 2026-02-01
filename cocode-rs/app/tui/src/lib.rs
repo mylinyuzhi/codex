@@ -38,6 +38,7 @@
 pub mod app;
 pub mod command;
 pub mod event;
+pub mod file_search;
 pub mod render;
 pub mod state;
 pub mod terminal;
@@ -58,6 +59,11 @@ pub use state::RunningState;
 pub use terminal::Tui;
 pub use terminal::restore_terminal;
 pub use terminal::setup_terminal;
+
+// File search for autocomplete
+pub use file_search::FileSearchEvent;
+pub use file_search::FileSearchManager;
+pub use file_search::create_file_search_channel;
 
 #[cfg(test)]
 mod tests {

@@ -22,6 +22,9 @@ pub struct UiState {
 
     /// Streaming content state.
     pub streaming: Option<StreamingState>,
+
+    /// File autocomplete state (shown when typing @path).
+    pub file_suggestions: Option<FileSuggestionState>,
 }
 
 impl UiState {
@@ -56,6 +59,28 @@ impl UiState {
     pub fn append_streaming_thinking(&mut self, delta: &str) {
         if let Some(ref mut streaming) = self.streaming {
             streaming.thinking.push_str(delta);
+        }
+    }
+
+    /// Check if file suggestions are active.
+    pub fn has_file_suggestions(&self) -> bool {
+        self.file_suggestions.is_some()
+    }
+
+    /// Start showing file suggestions.
+    pub fn start_file_suggestions(&mut self, query: String, start_pos: i32) {
+        self.file_suggestions = Some(FileSuggestionState::new(query, start_pos));
+    }
+
+    /// Clear file suggestions.
+    pub fn clear_file_suggestions(&mut self) {
+        self.file_suggestions = None;
+    }
+
+    /// Update file suggestions with search results.
+    pub fn update_file_suggestions(&mut self, suggestions: Vec<FileSuggestionItem>) {
+        if let Some(ref mut state) = self.file_suggestions {
+            state.update_suggestions(suggestions);
         }
     }
 }
@@ -161,6 +186,78 @@ impl InputState {
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.cursor = self.text.len() as i32;
+    }
+
+    /// Detect an @mention at or before the cursor and return the query.
+    ///
+    /// Returns `Some((start_pos, query))` if there's an @mention being typed,
+    /// where `start_pos` is the position of the @ character and `query` is
+    /// the text after @.
+    ///
+    /// An @mention is detected when:
+    /// - There's an @ character before the cursor
+    /// - The @ is either at the start or preceded by whitespace
+    /// - There's no space between @ and the cursor
+    pub fn current_at_token(&self) -> Option<(i32, String)> {
+        let text = &self.text;
+        let cursor = self.cursor as usize;
+
+        if cursor == 0 || text.is_empty() {
+            return None;
+        }
+
+        // Look backwards from cursor for @
+        let before_cursor = &text[..cursor.min(text.len())];
+
+        // Find the last @ before cursor that isn't followed by a space
+        let mut at_pos = None;
+        for (i, c) in before_cursor.char_indices().rev() {
+            if c == ' ' || c == '\n' || c == '\t' {
+                // Hit whitespace without finding @, no active mention
+                break;
+            }
+            if c == '@' {
+                // Check if @ is at start or preceded by whitespace
+                if i == 0 {
+                    at_pos = Some(i);
+                } else {
+                    let prev_char = before_cursor[..i].chars().last();
+                    if prev_char.is_some_and(|c| c.is_whitespace()) {
+                        at_pos = Some(i);
+                    }
+                }
+                break;
+            }
+        }
+
+        at_pos.map(|pos| {
+            let query = before_cursor[pos + 1..].to_string();
+            (pos as i32, query)
+        })
+    }
+
+    /// Insert a selected file path, replacing the current @query.
+    ///
+    /// The `start_pos` is the position of the @ character, and `path` is
+    /// the path to insert (without the @).
+    pub fn insert_selected_path(&mut self, start_pos: i32, path: &str) {
+        let start = start_pos as usize;
+        let cursor = self.cursor as usize;
+
+        if start >= self.text.len() || cursor > self.text.len() {
+            return;
+        }
+
+        // Build new text: before @ + @path + after cursor
+        let before = &self.text[..start];
+        let after = &self.text[cursor..];
+        let new_text = format!("{before}@{path} {after}");
+
+        // Calculate new cursor position: after the inserted path and space
+        let new_cursor = start + 1 + path.len() + 1;
+
+        self.text = new_text;
+        self.cursor = new_cursor as i32;
     }
 }
 
@@ -295,6 +392,79 @@ impl StreamingState {
     }
 }
 
+/// State for file autocomplete suggestions.
+#[derive(Debug, Clone)]
+pub struct FileSuggestionState {
+    /// The query extracted from @mention (without the @).
+    pub query: String,
+    /// Start position of the @mention in the input text.
+    pub start_pos: i32,
+    /// Current suggestions.
+    pub suggestions: Vec<FileSuggestionItem>,
+    /// Currently selected index in the dropdown.
+    pub selected: i32,
+    /// Whether a search is currently in progress.
+    pub loading: bool,
+}
+
+impl FileSuggestionState {
+    /// Create a new file suggestion state.
+    pub fn new(query: String, start_pos: i32) -> Self {
+        Self {
+            query,
+            start_pos,
+            suggestions: Vec::new(),
+            selected: 0,
+            loading: true,
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = (self.suggestions.len() as i32).saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the currently selected suggestion.
+    pub fn selected_suggestion(&self) -> Option<&FileSuggestionItem> {
+        self.suggestions.get(self.selected as usize)
+    }
+
+    /// Update suggestions from search results.
+    pub fn update_suggestions(&mut self, suggestions: Vec<FileSuggestionItem>) {
+        self.suggestions = suggestions;
+        self.loading = false;
+        // Reset selection if out of bounds
+        if self.selected >= self.suggestions.len() as i32 {
+            self.selected = 0;
+        }
+    }
+}
+
+/// A single file suggestion item for display.
+#[derive(Debug, Clone)]
+pub struct FileSuggestionItem {
+    /// The file path (relative).
+    pub path: String,
+    /// Display text (may differ from path, e.g., with trailing / for dirs).
+    pub display_text: String,
+    /// Relevance score (higher = better match).
+    pub score: u32,
+    /// Character indices that matched the query (for highlighting).
+    pub match_indices: Vec<i32>,
+    /// Whether this is a directory.
+    pub is_directory: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +542,98 @@ mod tests {
     #[test]
     fn test_focus_target_default() {
         assert_eq!(FocusTarget::default(), FocusTarget::Input);
+    }
+
+    #[test]
+    fn test_current_at_token_simple() {
+        let mut input = InputState::default();
+        input.set_text("@src/main");
+
+        let result = input.current_at_token();
+        assert_eq!(result, Some((0, "src/main".to_string())));
+    }
+
+    #[test]
+    fn test_current_at_token_mid_text() {
+        let mut input = InputState::default();
+        input.set_text("read @src/lib.rs please");
+        input.cursor = 16; // After "@src/lib.rs"
+
+        let result = input.current_at_token();
+        assert_eq!(result, Some((5, "src/lib.rs".to_string())));
+    }
+
+    #[test]
+    fn test_current_at_token_no_mention() {
+        let mut input = InputState::default();
+        input.set_text("no mention here");
+
+        let result = input.current_at_token();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_current_at_token_after_space() {
+        let mut input = InputState::default();
+        input.set_text("@file completed ");
+        input.cursor = 16; // After space
+
+        let result = input.current_at_token();
+        assert_eq!(result, None); // Space breaks the mention
+    }
+
+    #[test]
+    fn test_insert_selected_path() {
+        let mut input = InputState::default();
+        input.set_text("read @src/ please");
+        input.cursor = 10; // After "@src/"
+
+        input.insert_selected_path(5, "src/main.rs");
+
+        assert_eq!(input.text(), "read @src/main.rs  please");
+        assert_eq!(input.cursor, 18); // After "@src/main.rs "
+    }
+
+    #[test]
+    fn test_file_suggestion_state() {
+        let mut state = FileSuggestionState::new("src/".to_string(), 5);
+
+        assert!(state.loading);
+        assert!(state.suggestions.is_empty());
+        assert_eq!(state.selected, 0);
+
+        // Add suggestions
+        state.update_suggestions(vec![
+            FileSuggestionItem {
+                path: "src/main.rs".to_string(),
+                display_text: "src/main.rs".to_string(),
+                score: 100,
+                match_indices: vec![],
+                is_directory: false,
+            },
+            FileSuggestionItem {
+                path: "src/lib.rs".to_string(),
+                display_text: "src/lib.rs".to_string(),
+                score: 90,
+                match_indices: vec![],
+                is_directory: false,
+            },
+        ]);
+
+        assert!(!state.loading);
+        assert_eq!(state.suggestions.len(), 2);
+
+        // Navigate
+        state.move_down();
+        assert_eq!(state.selected, 1);
+
+        state.move_down(); // Should not go past last
+        assert_eq!(state.selected, 1);
+
+        state.move_up();
+        assert_eq!(state.selected, 0);
+
+        state.move_up(); // Should not go negative
+        assert_eq!(state.selected, 0);
     }
 }

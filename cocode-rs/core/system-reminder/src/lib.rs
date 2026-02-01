@@ -62,6 +62,7 @@ pub mod generator;
 pub mod generators;
 pub mod inject;
 pub mod orchestrator;
+pub mod parsing;
 pub mod throttle;
 pub mod types;
 pub mod xml;
@@ -87,6 +88,14 @@ pub use types::XmlTag;
 pub use xml::extract_system_reminder;
 pub use xml::wrap_system_reminder;
 pub use xml::wrap_with_tag;
+
+// Parsing utilities
+pub use parsing::AgentMention;
+pub use parsing::FileMention;
+pub use parsing::ParsedMentions;
+pub use parsing::parse_agent_mentions;
+pub use parsing::parse_file_mentions;
+pub use parsing::parse_mentions;
 
 /// Prelude module for convenient imports.
 pub mod prelude {

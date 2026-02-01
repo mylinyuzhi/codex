@@ -37,6 +37,9 @@ pub async fn run_tui(title: Option<String>, config: &ConfigManager) -> anyhow::R
         .map(|m| m.id.clone())
         .collect::<Vec<_>>();
 
+    // Get working directory
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
     // Create TUI config
     let tui_config = AppConfig {
         model: model_name.clone(),
@@ -45,6 +48,7 @@ pub async fn run_tui(title: Option<String>, config: &ConfigManager) -> anyhow::R
         } else {
             available_models
         },
+        cwd: cwd.clone(),
     };
 
     // Create channels for TUI-Agent communication
@@ -62,6 +66,7 @@ pub async fn run_tui(title: Option<String>, config: &ConfigManager) -> anyhow::R
         provider_name,
         model_name,
         title,
+        cwd,
     ));
 
     // Run the TUI (blocks until exit)
@@ -81,11 +86,9 @@ async fn run_agent_driver(
     provider_name: String,
     model_name: String,
     title: Option<String>,
+    working_dir: PathBuf,
 ) {
     info!("Agent driver started");
-
-    // Get working directory
-    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Get provider type
     let provider_type = config

@@ -1752,8 +1752,11 @@ name = "cocode-executor"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cocode-api",
  "cocode-context",
+ "cocode-error",
+ "cocode-git",
  "cocode-hooks",
  "cocode-loop",
  "cocode-protocol",
@@ -1762,6 +1765,9 @@ dependencies = [
  "hyper-sdk",
  "serde",
  "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2232,6 +2238,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "snafu-virtstack",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",
@@ -2278,6 +2285,7 @@ version = "0.0.0"
 dependencies = [
  "cocode-config",
  "cocode-error",
+ "cocode-file-search",
  "cocode-loop",
  "cocode-protocol",
  "crossterm",

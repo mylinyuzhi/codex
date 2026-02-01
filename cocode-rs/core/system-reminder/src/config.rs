@@ -22,6 +22,9 @@ pub struct SystemReminderConfig {
     /// Nested memory configuration.
     pub nested_memory: NestedMemoryConfig,
 
+    /// @mentioned files configuration.
+    pub at_mentioned_files: AtMentionedFilesConfig,
+
     /// User-defined critical instruction (injected every turn).
     pub critical_instruction: Option<String>,
 
@@ -36,6 +39,7 @@ impl Default for SystemReminderConfig {
             timeout_ms: 1000,
             attachments: AttachmentSettings::default(),
             nested_memory: NestedMemoryConfig::default(),
+            at_mentioned_files: AtMentionedFilesConfig::default(),
             critical_instruction: None,
             output_style: OutputStyleConfig::default(),
         }
@@ -68,6 +72,8 @@ pub struct AttachmentSettings {
     pub at_mentioned_files: bool,
     /// Enable @agent mentions.
     pub agent_mentions: bool,
+    /// Enable invoked skills injection.
+    pub invoked_skills: bool,
     /// Enable output style instructions.
     pub output_style: bool,
     /// Enable todo/task reminders.
@@ -99,6 +105,7 @@ impl Default for AttachmentSettings {
             available_skills: true,
             at_mentioned_files: true,
             agent_mentions: true,
+            invoked_skills: true,
             output_style: true,
             todo_reminders: true,
             delegate_mode: true,
@@ -153,6 +160,31 @@ impl Default for NestedMemoryConfig {
                 "AGENTS.md".to_string(),
                 ".claude/settings.json".to_string(),
             ],
+        }
+    }
+}
+
+/// Configuration for @mentioned files.
+///
+/// Controls limits for file content injection when users use @file mentions.
+/// Aligns with Claude Code's Read tool limits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AtMentionedFilesConfig {
+    /// Maximum file size in bytes (default: 100KB, matches codex-rs).
+    pub max_file_size: i64,
+    /// Maximum number of lines to read (default: 2000, matches Read tool).
+    pub max_lines: i32,
+    /// Maximum line length before truncation (default: 2000 chars).
+    pub max_line_length: i32,
+}
+
+impl Default for AtMentionedFilesConfig {
+    fn default() -> Self {
+        Self {
+            max_file_size: 100 * 1024, // 100KB (codex-rs default)
+            max_lines: 2000,           // Read tool default
+            max_line_length: 2000,     // Read tool default
         }
     }
 }
@@ -222,5 +254,13 @@ mod tests {
         assert_eq!(config.max_lines, 3000);
         assert_eq!(config.max_import_depth, 5);
         assert!(config.patterns.contains(&"CLAUDE.md".to_string()));
+    }
+
+    #[test]
+    fn test_at_mentioned_files_defaults() {
+        let config = AtMentionedFilesConfig::default();
+        assert_eq!(config.max_file_size, 100 * 1024); // 100KB
+        assert_eq!(config.max_lines, 2000);
+        assert_eq!(config.max_line_length, 2000);
     }
 }

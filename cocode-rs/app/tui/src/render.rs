@@ -21,6 +21,7 @@ use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::Overlay;
 use crate::widgets::ChatWidget;
+use crate::widgets::FileSuggestionPopup;
 use crate::widgets::InputWidget;
 use crate::widgets::StatusBar;
 use crate::widgets::ToolPanel;
@@ -108,6 +109,13 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState) {
         .focused(state.ui.focus == FocusTarget::Input)
         .placeholder("Type a message... (Enter to send, Shift+Enter for newline)");
     frame.render_widget(input, chunks[1]);
+
+    // File suggestion popup (if active)
+    if let Some(ref suggestions) = state.ui.file_suggestions {
+        let popup = FileSuggestionPopup::new(suggestions);
+        let popup_area = popup.calculate_area(chunks[1], area.height);
+        frame.render_widget(popup, popup_area);
+    }
 }
 
 /// Render the tools panel.

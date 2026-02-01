@@ -1,6 +1,6 @@
 //! Built-in tools for the agent.
 //!
-//! This module provides the standard set of 17 built-in tools:
+//! This module provides the standard set of 18 built-in tools:
 //! - [`ReadTool`] - Read file contents
 //! - [`GlobTool`] - Pattern-based file search
 //! - [`GrepTool`] - Content search with regex
@@ -18,6 +18,7 @@
 //! - [`WebSearchTool`] - Search the web
 //! - [`SkillTool`] - Execute named skills (slash commands)
 //! - [`LspTool`] - Language Server Protocol operations (feature-gated)
+//! - [`ApplyPatchTool`] - Apply multi-file patches (optional, for GPT-5)
 //!
 //! ## Utilities
 //!
@@ -25,6 +26,7 @@
 
 mod prompts;
 
+mod apply_patch;
 mod ask_user_question;
 mod bash;
 mod edit;
@@ -44,6 +46,7 @@ mod web_fetch;
 mod web_search;
 mod write;
 
+pub use apply_patch::ApplyPatchTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use edit::EditTool;
@@ -63,9 +66,21 @@ pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 
 use crate::registry::ToolRegistry;
+use cocode_protocol::ToolConfig;
 
 /// Register all built-in tools with a registry.
+///
+/// By default, registers all standard tools. If `tool_config` specifies an
+/// `apply_patch_tool_type`, the ApplyPatch tool is registered with that mode.
 pub fn register_builtin_tools(registry: &mut ToolRegistry) {
+    register_builtin_tools_with_config(registry, &ToolConfig::default());
+}
+
+/// Register all built-in tools with a registry, using the provided config.
+///
+/// If `tool_config.apply_patch_tool_type` is set, the ApplyPatch tool is
+/// registered with the specified mode. Otherwise, only the Edit tool is used.
+pub fn register_builtin_tools_with_config(registry: &mut ToolRegistry, tool_config: &ToolConfig) {
     registry.register(ReadTool::new());
     registry.register(GlobTool::new());
     registry.register(GrepTool::new());
@@ -83,6 +98,11 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(WebSearchTool::new());
     registry.register(SkillTool::new());
     registry.register(LspTool::new());
+
+    // Conditionally register apply_patch tool based on config
+    if let Some(apply_patch_type) = tool_config.apply_patch_tool_type {
+        registry.register(ApplyPatchTool::new(apply_patch_type));
+    }
 }
 
 /// Get a list of built-in tool names.
@@ -105,5 +125,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "WebSearch",
         "Skill",
         "Lsp",
+        "apply_patch",
     ]
 }

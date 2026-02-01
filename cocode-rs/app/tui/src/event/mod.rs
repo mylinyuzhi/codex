@@ -12,6 +12,7 @@ mod stream;
 
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
+pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
 use cocode_protocol::LoopEvent;
@@ -111,6 +112,19 @@ pub enum TuiCommand {
     /// Move focus to the previous element.
     FocusPrevious,
 
+    // ========== File Autocomplete ==========
+    /// Select next file suggestion.
+    SelectNextSuggestion,
+
+    /// Select previous file suggestion.
+    SelectPrevSuggestion,
+
+    /// Accept the current file suggestion.
+    AcceptSuggestion,
+
+    /// Dismiss file suggestions.
+    DismissSuggestions,
+
     // ========== Editing ==========
     /// Insert a character at the cursor.
     InsertChar(char),
@@ -168,6 +182,10 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::CycleThinkingLevel => write!(f, "Cycle Thinking Level"),
             TuiCommand::CycleModel => write!(f, "Cycle Model"),
             TuiCommand::ShowModelPicker => write!(f, "Show Model Picker"),
+            TuiCommand::SelectNextSuggestion => write!(f, "Select Next Suggestion"),
+            TuiCommand::SelectPrevSuggestion => write!(f, "Select Previous Suggestion"),
+            TuiCommand::AcceptSuggestion => write!(f, "Accept Suggestion"),
+            TuiCommand::DismissSuggestions => write!(f, "Dismiss Suggestions"),
             TuiCommand::SubmitInput => write!(f, "Submit Input"),
             TuiCommand::Interrupt => write!(f, "Interrupt"),
             TuiCommand::ClearScreen => write!(f, "Clear Screen"),

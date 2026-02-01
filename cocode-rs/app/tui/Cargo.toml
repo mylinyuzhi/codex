@@ -20,6 +20,9 @@ cocode-protocol = { workspace = true }
 cocode-error = { workspace = true }
 cocode-config = { workspace = true }
 
+# Internal - utils
+cocode-file-search = { workspace = true }
+
 # Internal - core
 cocode-loop = { workspace = true }
 

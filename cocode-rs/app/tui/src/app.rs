@@ -4,6 +4,7 @@
 //! managing the event loop, state updates, and rendering.
 
 use std::io;
+use std::path::PathBuf;
 
 use cocode_protocol::LoopEvent;
 use futures::StreamExt;
@@ -11,12 +12,16 @@ use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
 use crate::event::TuiEvent;
-use crate::event::handle_key_event;
+use crate::event::handle_key_event_with_suggestions;
+use crate::file_search::FileSearchEvent;
+use crate::file_search::FileSearchManager;
+use crate::file_search::create_file_search_channel;
 use crate::render::render;
 use crate::state::AppState;
 use crate::terminal::Tui;
 use crate::update::handle_agent_event;
 use crate::update::handle_command;
+use crate::update::handle_file_search_event;
 
 /// Configuration for the TUI application.
 #[derive(Debug, Clone)]
@@ -25,6 +30,8 @@ pub struct AppConfig {
     pub model: String,
     /// Available models for the model picker.
     pub available_models: Vec<String>,
+    /// Working directory for file search.
+    pub cwd: PathBuf,
 }
 
 impl Default for AppConfig {
@@ -36,6 +43,7 @@ impl Default for AppConfig {
                 "claude-opus-4-20250514".to_string(),
                 "claude-haiku-3-5-20241022".to_string(),
             ],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 }
@@ -58,6 +66,10 @@ pub struct App {
     command_tx: mpsc::Sender<UserCommand>,
     /// Available models for the picker.
     available_models: Vec<String>,
+    /// File search manager for @mention autocomplete.
+    file_search: FileSearchManager,
+    /// Receiver for file search events.
+    file_search_rx: mpsc::Receiver<FileSearchEvent>,
 }
 
 impl App {
@@ -80,12 +92,18 @@ impl App {
         let tui = Tui::new()?;
         let state = AppState::with_model(&config.model);
 
+        // Create file search manager
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(config.cwd, file_search_tx);
+
         Ok(Self {
             tui,
             state,
             agent_rx,
             command_tx,
             available_models: config.available_models,
+            file_search,
+            file_search_rx,
         })
     }
 
@@ -96,12 +114,17 @@ impl App {
         agent_rx: mpsc::Receiver<LoopEvent>,
         command_tx: mpsc::Sender<UserCommand>,
     ) -> Self {
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
+
         Self {
             tui,
             state: AppState::new(),
             agent_rx,
             command_tx,
             available_models: vec![],
+            file_search,
+            file_search_rx,
         }
     }
 
@@ -125,6 +148,7 @@ impl App {
     /// This method blocks until the application exits. It handles:
     /// - Terminal events (keyboard, mouse, resize)
     /// - Agent events from the core loop
+    /// - File search events for autocomplete
     /// - Periodic tick events for animations
     ///
     /// # Errors
@@ -139,6 +163,9 @@ impl App {
         // Initial render
         self.render()?;
 
+        // Trigger initial file index refresh
+        self.file_search.refresh_index();
+
         loop {
             tokio::select! {
                 // Handle TUI events (keyboard, tick, draw)
@@ -148,6 +175,11 @@ impl App {
                 // Handle agent events
                 Some(loop_event) = self.agent_rx.recv() => {
                     self.handle_loop_event(loop_event);
+                    self.render()?;
+                }
+                // Handle file search results
+                Some(search_event) = self.file_search_rx.recv() => {
+                    handle_file_search_event(&mut self.state, search_event);
                     self.render()?;
                 }
             }
@@ -167,9 +199,18 @@ impl App {
     async fn handle_tui_event(&mut self, event: TuiEvent) -> io::Result<()> {
         match event {
             TuiEvent::Key(key) => {
-                if let Some(cmd) = handle_key_event(key, self.state.has_overlay()) {
+                let has_overlay = self.state.has_overlay();
+                let has_suggestions = self.state.ui.has_file_suggestions();
+
+                if let Some(cmd) =
+                    handle_key_event_with_suggestions(key, has_overlay, has_suggestions)
+                {
                     self.handle_command_internal(cmd).await;
                 }
+
+                // Check for @mention after input changes
+                self.check_at_mention();
+
                 self.render()?;
             }
             TuiEvent::Mouse(_mouse) => {
@@ -195,6 +236,8 @@ impl App {
                 for c in text.chars() {
                     self.state.ui.input.insert_char(c);
                 }
+                // Check for @mention after paste
+                self.check_at_mention();
                 self.render()?;
             }
             TuiEvent::Agent(loop_event) => {
@@ -207,6 +250,21 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Check for @mention in input and trigger file search if needed.
+    fn check_at_mention(&mut self) {
+        if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
+            // Start or update file suggestions
+            self.state
+                .ui
+                .start_file_suggestions(query.clone(), start_pos);
+            self.file_search.on_query(query, start_pos);
+        } else {
+            // No @mention, clear suggestions
+            self.state.ui.clear_file_suggestions();
+            self.file_search.cancel();
+        }
     }
 
     /// Handle a TUI command internally.
