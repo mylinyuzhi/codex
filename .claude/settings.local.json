@@ -90,7 +90,8 @@
       "WebFetch(domain:dev.to)",
       "WebFetch(domain:www.unwoundstack.com)",
       "WebFetch(domain:users.rust-lang.org)",
-      "WebFetch(domain:greptimedb.rs)"
+      "WebFetch(domain:greptimedb.rs)",
+      "WebFetch(domain:ratatui.rs)"
     ],
     "deny": [],
     "ask": []

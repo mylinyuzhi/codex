@@ -4,7 +4,7 @@
 //! - Tool trait with 5-stage pipeline and input-dependent concurrency
 //! - Tool registry (built-in + MCP)
 //! - Streaming tool executor
-//! - 16 built-in tools aligned with Claude Code v2.1.7
+//! - 17 built-in tools aligned with Claude Code v2.1.7
 //!
 //! # Architecture
 //!
@@ -19,9 +19,9 @@
 //! │  - post_process()    │                     │                    │
 //! │  - cleanup()         │                     │                    │
 //! ├──────────────────────┴─────────────────────┴────────────────────┤
-//! │  Built-in Tools (16): Read, Glob, Grep, Edit, Write, Bash,     │
+//! │  Built-in Tools (17): Read, Glob, Grep, Edit, Write, Bash,     │
 //! │  Task, TaskOutput, KillShell, TodoWrite, EnterPlanMode,         │
-//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill      │
+//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill, Lsp │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -90,7 +90,7 @@
 //! - [`context`] - Execution context and approvals
 //! - [`registry`] - Tool registry management
 //! - [`executor`] - Streaming tool executor
-//! - [`builtin`] - 16 built-in tools (Read, Glob, Grep, Edit, Write, Bash, Task, etc.)
+//! - [`builtin`] - 17 built-in tools (Read, Glob, Grep, Edit, Write, Bash, Task, Lsp, etc.)
 
 pub mod builtin;
 pub mod context;

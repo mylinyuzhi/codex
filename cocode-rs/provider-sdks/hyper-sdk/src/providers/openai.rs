@@ -280,17 +280,6 @@ impl Model for OpenAIModel {
             params = params.tool_choice(convert_tool_choice_to_oai(choice));
         }
 
-        // Handle thinking config
-        if let Some(thinking_config) = &request.thinking_config {
-            if thinking_config.enabled {
-                if let Some(budget) = thinking_config.budget_tokens {
-                    params = params.thinking(oai::ThinkingConfig::enabled(budget));
-                } else {
-                    params = params.thinking(oai::ThinkingConfig::auto());
-                }
-            }
-        }
-
         // Handle provider-specific options
         if let Some(ref options) = request.provider_options {
             if let Some(openai_opts) = downcast_options::<OpenAIOptions>(options) {
@@ -388,16 +377,6 @@ impl Model for OpenAIModel {
 
         if let Some(choice) = &request.tool_choice {
             params = params.tool_choice(convert_tool_choice_to_oai(choice));
-        }
-
-        if let Some(thinking_config) = &request.thinking_config {
-            if thinking_config.enabled {
-                if let Some(budget) = thinking_config.budget_tokens {
-                    params = params.thinking(oai::ThinkingConfig::enabled(budget));
-                } else {
-                    params = params.thinking(oai::ThinkingConfig::auto());
-                }
-            }
         }
 
         if let Some(ref options) = request.provider_options {

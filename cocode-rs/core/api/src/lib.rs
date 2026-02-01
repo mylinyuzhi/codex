@@ -61,6 +61,7 @@ pub mod client;
 pub mod error;
 pub mod provider_factory;
 pub mod retry;
+pub mod thinking_convert;
 pub mod unified_stream;
 
 // Re-export main types at crate root
@@ -69,6 +70,7 @@ pub use client::{ApiClient, ApiClientBuilder, ApiClientConfig, FallbackConfig, S
 pub use error::{ApiError, Result};
 pub use provider_factory::{create_model, create_provider};
 pub use retry::{RetryConfig, RetryContext, RetryDecision};
+pub use thinking_convert::to_provider_options;
 pub use unified_stream::{CollectedResponse, QueryResultType, StreamingQueryResult, UnifiedStream};
 
 // Re-export commonly used hyper-sdk types for convenience

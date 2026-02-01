@@ -364,18 +364,6 @@ fn build_gemini_thinking_config(request: &GenerateRequest) -> Option<gem::types:
         }
     }
 
-    // Fall back to unified thinking_config
-    if let Some(ref tc) = request.thinking_config {
-        if tc.enabled {
-            if let Some(budget) = tc.budget_tokens {
-                // Use budget-based config
-                return Some(gem::types::ThinkingConfig::with_budget(budget));
-            }
-            // Enabled without budget - use default with thoughts included
-            return Some(gem::types::ThinkingConfig::with_thoughts());
-        }
-    }
-
     None
 }
 

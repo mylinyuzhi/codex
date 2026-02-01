@@ -33,6 +33,8 @@ pub use model::Capability;
 pub use model::ConfigShellToolType;
 pub use model::ModelInfo;
 pub use model::ReasoningEffort;
+pub use model::RoleSelection;
+pub use model::RoleSelections;
 pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;

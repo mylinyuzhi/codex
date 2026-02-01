@@ -39,6 +39,7 @@ members = [
     "lsp",
     "exec/shell",
     "exec/sandbox",
+    "exec/arg0",
     "features/skill",
     "features/hooks",
     "features/plugin",
@@ -48,6 +49,7 @@ members = [
     "core/executor",
     "app/session",
     "app/cli",
+    "app/tui",
 ]
 resolver = "2"
 
@@ -112,6 +114,7 @@ cocode-rmcp-client = { path = "mcp/rmcp-client" }
 # Internal - exec
 cocode-shell = { path = "exec/shell" }
 cocode-sandbox = { path = "exec/sandbox" }
+cocode-arg0 = { path = "exec/arg0" }
 
 # Internal - features
 cocode-skill = { path = "features/skill" }
@@ -122,6 +125,7 @@ cocode-plan-mode = { path = "features/plan-mode" }
 # Internal - app
 cocode-session = { path = "app/session" }
 cocode-cli = { path = "app/cli" }
+cocode-tui = { path = "app/tui" }
 
 # Internal - LSP
 cocode-lsp = { path = "lsp" }

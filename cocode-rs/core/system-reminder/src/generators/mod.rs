@@ -4,6 +4,7 @@
 //! for different types of system reminders.
 
 pub mod changed_files;
+pub mod hook_response;
 pub mod lsp_diagnostics;
 pub mod nested_memory;
 pub mod plan_mode;
@@ -11,6 +12,11 @@ pub mod todo_reminders;
 
 // Re-export generators
 pub use changed_files::ChangedFilesGenerator;
+pub use hook_response::{
+    ASYNC_HOOK_RESPONSES_KEY, AsyncHookResponseGenerator, AsyncHookResponseInfo, HOOK_BLOCKING_KEY,
+    HOOK_CONTEXT_KEY, HookAdditionalContextGenerator, HookBlockingErrorGenerator, HookBlockingInfo,
+    HookContextInfo,
+};
 pub use lsp_diagnostics::LspDiagnosticsGenerator;
 pub use nested_memory::NestedMemoryGenerator;
 pub use plan_mode::{PlanModeApprovedGenerator, PlanModeEnterGenerator, PlanToolReminderGenerator};

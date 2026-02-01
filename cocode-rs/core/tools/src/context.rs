@@ -4,7 +4,9 @@
 //! needed for tool execution, including permissions, event channels,
 //! and cancellation support.
 
+use cocode_lsp::LspServerManager;
 use cocode_protocol::{LoopEvent, PermissionMode};
+use cocode_shell::BackgroundTaskRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -238,6 +240,8 @@ impl FileTracker {
 /// - File tracking with content/timestamp validation
 /// - Subagent spawning capability
 /// - Plan mode state for Write/Edit permission checks
+/// - Background task registry for Bash background execution
+/// - LSP server manager for language intelligence
 #[derive(Clone)]
 pub struct ToolContext {
     /// Unique call ID for this execution.
@@ -268,6 +272,10 @@ pub struct ToolContext {
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
+    /// Background task registry for managing background shell commands.
+    pub background_registry: BackgroundTaskRegistry,
+    /// Optional LSP server manager for language intelligence tools.
+    pub lsp_manager: Option<Arc<LspServerManager>>,
 }
 
 impl ToolContext {
@@ -288,6 +296,8 @@ impl ToolContext {
             spawn_agent_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
+            background_registry: BackgroundTaskRegistry::new(),
+            lsp_manager: None,
         }
     }
 
@@ -349,6 +359,18 @@ impl ToolContext {
     pub fn with_plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
         self.is_plan_mode = is_active;
         self.plan_file_path = plan_file_path;
+        self
+    }
+
+    /// Set the background task registry.
+    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the LSP server manager.
+    pub fn with_lsp_manager(mut self, manager: Arc<LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
         self
     }
 
@@ -494,6 +516,7 @@ impl std::fmt::Debug for ToolContext {
             .field("is_cancelled", &self.is_cancelled())
             .field("is_plan_mode", &self.is_plan_mode)
             .field("plan_file_path", &self.plan_file_path)
+            .field("lsp_manager", &self.lsp_manager.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -514,6 +537,8 @@ pub struct ToolContextBuilder {
     spawn_agent_fn: Option<SpawnAgentFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
+    background_registry: BackgroundTaskRegistry,
+    lsp_manager: Option<Arc<LspServerManager>>,
 }
 
 impl ToolContextBuilder {
@@ -534,6 +559,8 @@ impl ToolContextBuilder {
             spawn_agent_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
+            background_registry: BackgroundTaskRegistry::new(),
+            lsp_manager: None,
         }
     }
 
@@ -604,6 +631,18 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the background task registry.
+    pub fn background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the LSP server manager.
+    pub fn lsp_manager(mut self, manager: Arc<LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -621,6 +660,8 @@ impl ToolContextBuilder {
             spawn_agent_fn: self.spawn_agent_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
+            background_registry: self.background_registry,
+            lsp_manager: self.lsp_manager,
         }
     }
 }

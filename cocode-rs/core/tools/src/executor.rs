@@ -10,13 +10,14 @@
 //! - **PostToolUse**: Called after successful tool execution
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
-use crate::context::{ApprovalStore, FileTracker, ToolContext, ToolContextBuilder};
+use crate::context::{ApprovalStore, FileTracker, SpawnAgentFn, ToolContext, ToolContextBuilder};
 use crate::error::Result;
 use crate::registry::ToolRegistry;
-use cocode_hooks::{HookContext, HookEventType, HookRegistry, HookResult};
+use cocode_hooks::{AsyncHookTracker, HookContext, HookEventType, HookRegistry, HookResult};
 use cocode_protocol::{
     AbortReason, ConcurrencySafety, LoopEvent, PermissionMode, ToolOutput, ValidationResult,
 };
+use cocode_shell::BackgroundTaskRegistry;
 use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -116,12 +117,18 @@ pub struct StreamingToolExecutor {
     file_tracker: Arc<Mutex<FileTracker>>,
     /// Hook registry for pre/post tool hooks.
     hooks: Option<Arc<HookRegistry>>,
+    /// Tracker for async hooks running in background.
+    async_hook_tracker: Arc<AsyncHookTracker>,
     /// Active tool execution tasks.
     active_tasks: Arc<Mutex<HashMap<String, JoinHandle<ToolExecutionResult>>>>,
     /// Pending unsafe tools waiting for sequential execution.
     pending_unsafe: Arc<Mutex<Vec<PendingToolCall>>>,
     /// Completed results waiting to be collected.
     completed_results: Arc<Mutex<Vec<ToolExecutionResult>>>,
+    /// Background task registry for Bash background execution.
+    background_registry: BackgroundTaskRegistry,
+    /// Optional callback for spawning subagents.
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl StreamingToolExecutor {
@@ -139,9 +146,12 @@ impl StreamingToolExecutor {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             hooks: None,
+            async_hook_tracker: Arc::new(AsyncHookTracker::new()),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_unsafe: Arc::new(Mutex::new(Vec::new())),
             completed_results: Arc::new(Mutex::new(Vec::new())),
+            background_registry: BackgroundTaskRegistry::new(),
+            spawn_agent_fn: None,
         }
     }
 
@@ -167,6 +177,64 @@ impl StreamingToolExecutor {
     pub fn with_file_tracker(mut self, tracker: Arc<Mutex<FileTracker>>) -> Self {
         self.file_tracker = tracker;
         self
+    }
+
+    /// Set the background task registry for Bash background execution.
+    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set a custom async hook tracker.
+    pub fn with_async_hook_tracker(mut self, tracker: Arc<AsyncHookTracker>) -> Self {
+        self.async_hook_tracker = tracker;
+        self
+    }
+
+    /// Get the async hook tracker for collecting completed async hooks.
+    ///
+    /// Call `tracker.take_completed()` to retrieve and clear completed hooks
+    /// for injection into system reminders.
+    ///
+    /// ## Usage with System Reminders
+    ///
+    /// After each turn, collect completed async hooks and pass them to the
+    /// system reminder generator context:
+    ///
+    /// ```ignore
+    /// use cocode_system_reminder::{
+    ///     AsyncHookResponseInfo, ASYNC_HOOK_RESPONSES_KEY,
+    ///     GeneratorContextBuilder,
+    /// };
+    ///
+    /// // Collect completed hooks
+    /// let completed = executor.async_hook_tracker().take_completed();
+    ///
+    /// // Convert to system reminder format
+    /// let responses: Vec<AsyncHookResponseInfo> = completed
+    ///     .into_iter()
+    ///     .map(|h| AsyncHookResponseInfo {
+    ///         hook_name: h.hook_name,
+    ///         additional_context: h.additional_context,
+    ///         was_blocking: h.was_blocking,
+    ///         blocking_reason: h.blocking_reason,
+    ///         duration_ms: h.duration_ms,
+    ///     })
+    ///     .collect();
+    ///
+    /// // Pass to generator context
+    /// let ctx = GeneratorContextBuilder::new(&config)
+    ///     .extension(ASYNC_HOOK_RESPONSES_KEY, responses)
+    ///     .build();
+    /// ```
+    pub fn async_hook_tracker(&self) -> &Arc<AsyncHookTracker> {
+        &self.async_hook_tracker
     }
 
     /// Called when a tool_use block completes during streaming.
@@ -475,14 +543,21 @@ impl StreamingToolExecutor {
 
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
-        ToolContextBuilder::new(call_id, &self.config.session_id)
+        let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
             .cwd(&self.config.cwd)
             .permission_mode(self.config.permission_mode)
             .cancel_token(self.cancel_token.clone())
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
-            .build()
+            .background_registry(self.background_registry.clone());
+
+        // Add spawn_agent_fn if available
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        builder.build()
     }
 
     /// Emit a loop event.
@@ -563,6 +638,17 @@ impl StreamingToolExecutor {
                         "Tool input modified by pre-hook"
                     );
                     current_input = new_input;
+                }
+                HookResult::Async { task_id, hook_name } => {
+                    // Register async hook for tracking - result will be delivered via system reminders
+                    self.async_hook_tracker
+                        .register(task_id.clone(), hook_name.clone());
+                    debug!(
+                        tool = %tool_name,
+                        task_id = %task_id,
+                        async_hook = %hook_name,
+                        "Async hook registered and running in background"
+                    );
                 }
             }
         }

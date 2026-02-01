@@ -231,7 +231,6 @@ pub use options::ProviderMarker;
 pub use options::ProviderOptions;
 pub use options::ProviderOptionsData;
 pub use options::ReasoningEffort;
-pub use options::ThinkingConfig;
 pub use options::TypedProviderOptions;
 pub use options::VolcengineOptions;
 pub use options::ZaiOptions;

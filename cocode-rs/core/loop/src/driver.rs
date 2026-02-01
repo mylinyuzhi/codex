@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use cocode_api::{ApiClient, CollectedResponse, QueryResultType, StreamOptions};
 use cocode_context::ConversationContext;
-use cocode_hooks::HookRegistry;
+use cocode_hooks::{AsyncHookTracker, HookRegistry};
 use cocode_message::{MessageHistory, TrackedMessage, Turn};
 use cocode_prompt::SystemPromptBuilder;
 use cocode_protocol::{
@@ -15,10 +15,14 @@ use cocode_protocol::{
 use cocode_system_reminder::{
     FileTracker, GeneratorContext, SystemReminderConfig, SystemReminderOrchestrator,
     combine_reminders,
+    generators::{
+        ASYNC_HOOK_RESPONSES_KEY, AsyncHookResponseInfo, HOOK_BLOCKING_KEY, HOOK_CONTEXT_KEY,
+        HookBlockingInfo, HookContextInfo,
+    },
 };
 use cocode_tools::{
-    ExecutorConfig, FileTracker as ToolsFileTracker, StreamingToolExecutor, ToolExecutionResult,
-    ToolRegistry,
+    ExecutorConfig, FileTracker as ToolsFileTracker, SpawnAgentFn, StreamingToolExecutor,
+    ToolExecutionResult, ToolRegistry,
 };
 use hyper_sdk::{
     ContentBlock, FinishReason, GenerateRequest, Message, Model, ToolCall, ToolDefinition,
@@ -82,6 +86,8 @@ pub struct AgentLoop {
 
     // Hooks
     hooks: Arc<HookRegistry>,
+    /// Shared async hook tracker (persists across turns for background hooks).
+    async_hook_tracker: Arc<AsyncHookTracker>,
 
     // Event channel
     event_tx: mpsc::Sender<LoopEvent>,
@@ -107,6 +113,10 @@ pub struct AgentLoop {
     // Plan mode tracking
     /// Plan mode state for the session.
     plan_mode_state: PlanModeState,
+
+    // Subagent spawning
+    /// Optional callback for spawning subagents (used by Task tool).
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -127,6 +137,7 @@ pub struct AgentLoopBuilder {
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     is_subagent: bool,
     plan_mode_state: Option<PlanModeState>,
+    spawn_agent_fn: Option<SpawnAgentFn>,
 }
 
 impl AgentLoopBuilder {
@@ -149,6 +160,7 @@ impl AgentLoopBuilder {
             extraction_agent: None,
             is_subagent: false,
             plan_mode_state: None,
+            spawn_agent_fn: None,
         }
     }
 
@@ -240,6 +252,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the spawn agent callback for the Task tool.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
@@ -272,6 +290,7 @@ impl AgentLoopBuilder {
             file_tracker,
             shared_tools_file_tracker,
             hooks: self.hooks.unwrap_or_else(|| Arc::new(HookRegistry::new())),
+            async_hook_tracker: Arc::new(AsyncHookTracker::new()),
             event_tx: self.event_tx.expect("event_tx is required"),
             turn_number: 0,
             cancel_token: self.cancel_token,
@@ -283,6 +302,7 @@ impl AgentLoopBuilder {
             // Initially true - the first turn always has user input
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
+            spawn_agent_fn: self.spawn_agent_fn,
         }
     }
 }
@@ -435,6 +455,45 @@ impl AgentLoop {
         // since they were last read by tools (Read, Glob, etc.).
         self.sync_file_trackers().await;
 
+        // Collect completed async hooks from previous turns
+        let completed_hooks = self.async_hook_tracker.take_completed();
+        let async_responses: Vec<AsyncHookResponseInfo> = completed_hooks
+            .iter()
+            .map(|h| AsyncHookResponseInfo {
+                hook_name: h.hook_name.clone(),
+                additional_context: h.additional_context.clone(),
+                was_blocking: h.was_blocking,
+                blocking_reason: h.blocking_reason.clone(),
+                duration_ms: h.duration_ms,
+            })
+            .collect();
+
+        // Separate blocking and context hooks for their dedicated generators
+        let blocking_hooks: Vec<HookBlockingInfo> = completed_hooks
+            .iter()
+            .filter(|h| h.was_blocking)
+            .map(|h| HookBlockingInfo {
+                hook_name: h.hook_name.clone(),
+                event_type: "async".to_string(),
+                tool_name: None,
+                reason: h
+                    .blocking_reason
+                    .clone()
+                    .unwrap_or_else(|| "Hook blocked execution".to_string()),
+            })
+            .collect();
+
+        let context_hooks: Vec<HookContextInfo> = completed_hooks
+            .into_iter()
+            .filter(|h| h.additional_context.is_some() && !h.was_blocking)
+            .map(|h| HookContextInfo {
+                hook_name: h.hook_name,
+                event_type: "async".to_string(),
+                tool_name: None,
+                additional_context: h.additional_context.unwrap_or_default(),
+            })
+            .collect();
+
         let reminder_config = self.reminder_orchestrator.config();
         let mut gen_ctx_builder = GeneratorContext::builder()
             .config(reminder_config)
@@ -450,6 +509,17 @@ impl AgentLoop {
         // Add plan file path if in plan mode
         if let Some(path) = self.plan_mode_state.plan_file_path.clone() {
             gen_ctx_builder = gen_ctx_builder.plan_file_path(path);
+        }
+
+        // Add async hook responses to generator context
+        if !async_responses.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(ASYNC_HOOK_RESPONSES_KEY, async_responses);
+        }
+        if !blocking_hooks.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(HOOK_BLOCKING_KEY, blocking_hooks);
+        }
+        if !context_hooks.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(HOOK_CONTEXT_KEY, context_hooks);
         }
 
         let gen_ctx = gen_ctx_builder.build();
@@ -488,7 +558,7 @@ impl AgentLoop {
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
             ..ExecutorConfig::default()
         };
-        let executor = StreamingToolExecutor::new(
+        let mut executor = StreamingToolExecutor::new(
             self.tool_registry.clone(),
             executor_config,
             Some(self.event_tx.clone()),
@@ -496,7 +566,14 @@ impl AgentLoop {
         .with_cancel_token(self.cancel_token.clone())
         .with_hooks(self.hooks.clone())
         // Share the file tracker across turns for change detection
-        .with_file_tracker(self.shared_tools_file_tracker.clone());
+        .with_file_tracker(self.shared_tools_file_tracker.clone())
+        // Share async hook tracker for background hook completion tracking
+        .with_async_hook_tracker(self.async_hook_tracker.clone());
+
+        // Add spawn_agent_fn if available for Task tool
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            executor = executor.with_spawn_agent_fn(spawn_fn.clone());
+        }
 
         // ── STEP 9: Main API streaming loop with retry ──
         let mut output_recovery_attempts = 0;

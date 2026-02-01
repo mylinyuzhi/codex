@@ -30,6 +30,8 @@ struct HookTomlEntry {
     enabled: bool,
     #[serde(default = "default_timeout")]
     timeout_secs: i32,
+    #[serde(default)]
+    once: bool,
 }
 
 fn default_enabled() -> bool {
@@ -108,8 +110,10 @@ impl From<HookTomlEntry> for HookDefinition {
             event_type: entry.event,
             matcher: entry.matcher.map(Into::into),
             handler: entry.handler.into(),
+            source: Default::default(), // Defaults to Session; source is set by aggregator
             enabled: entry.enabled,
             timeout_secs: entry.timeout_secs,
+            once: entry.once,
         }
     }
 }

@@ -5,6 +5,7 @@
 //! - Validating skill metadata (name, description, prompt)
 //! - Bundled skills with SHA-256 fingerprinting
 //! - Deduplication of loaded skills by name
+//! - Hook registration for skill-scoped hooks
 //!
 //! # Architecture
 //!
@@ -15,10 +16,12 @@
 //! 2. **Load** - [`loader`] reads and parses `SKILL.toml` files
 //! 3. **Validate** - [`validator`] checks constraints on skill metadata
 //! 4. **Dedup** - [`dedup`] removes duplicate skills by name
+//! 5. **Hooks** - [`hooks`] registers skill-scoped hooks with the registry
 
 pub mod bundled;
 pub mod command;
 pub mod dedup;
+pub mod hooks;
 pub mod interface;
 pub mod loader;
 pub mod manager;
@@ -42,6 +45,9 @@ pub use outcome::SkillLoadOutcome;
 pub use scanner::SkillScanner;
 pub use source::{LoadedFrom, SkillSource};
 pub use validator::validate_skill;
+
+// Re-export hook functionality
+pub use hooks::{cleanup_skill_hooks, convert_skill_hooks, register_skill_hooks};
 
 // Re-export the error type
 pub use error::{Result, SkillError};

@@ -93,6 +93,14 @@ pub enum AttachmentType {
     /// Agent invocations via @agent-type syntax.
     AgentMentions,
 
+    // === Hook-related (MainAgentOnly tier) ===
+    /// Background hook completed and returned additional context.
+    AsyncHookResponse,
+    /// Hook blocked execution and returned context.
+    HookBlockingError,
+    /// Hook succeeded and added context for the model.
+    HookAdditionalContext,
+
     // === Phase 2 (future) ===
     /// Tool result injection.
     ToolResult,
@@ -123,6 +131,9 @@ impl AttachmentType {
             | AttachmentType::TodoReminders
             | AttachmentType::AtMentionedFiles
             | AttachmentType::AgentMentions
+            | AttachmentType::AsyncHookResponse
+            | AttachmentType::HookBlockingError
+            | AttachmentType::HookAdditionalContext
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::TokenUsage
@@ -153,6 +164,9 @@ impl AttachmentType {
             | AttachmentType::LspDiagnostics
             | AttachmentType::OutputStyle
             | AttachmentType::TodoReminders
+            | AttachmentType::AsyncHookResponse
+            | AttachmentType::HookBlockingError
+            | AttachmentType::HookAdditionalContext
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::SessionMemoryContent
@@ -182,6 +196,9 @@ impl AttachmentType {
             AttachmentType::TodoReminders => "todo_reminders",
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
+            AttachmentType::AsyncHookResponse => "async_hook_response",
+            AttachmentType::HookBlockingError => "hook_blocking_error",
+            AttachmentType::HookAdditionalContext => "hook_additional_context",
             AttachmentType::ToolResult => "tool_result",
             AttachmentType::AsyncAgentStatus => "async_agent_status",
             AttachmentType::SessionMemoryContent => "session_memory",

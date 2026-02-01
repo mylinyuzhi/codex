@@ -31,6 +31,18 @@ pub enum HookResult {
         /// The replacement input.
         new_input: Value,
     },
+
+    /// Hook is running asynchronously in the background.
+    ///
+    /// This result indicates the hook has spawned a background task and execution
+    /// should continue immediately. The async hook's final result will be delivered
+    /// via the `AsyncHookResponse` system reminder when it completes.
+    Async {
+        /// Unique identifier for the async task.
+        task_id: String,
+        /// Name of the hook running in the background.
+        hook_name: String,
+    },
 }
 
 /// A completed hook execution with metadata.
@@ -133,5 +145,25 @@ mod tests {
         assert_eq!(parsed.hook_name, "lint-check");
         assert_eq!(parsed.duration_ms, 42);
         assert!(matches!(parsed.result, HookResult::Continue));
+    }
+
+    #[test]
+    fn test_async_result_serde() {
+        let result = HookResult::Async {
+            task_id: "async-123".to_string(),
+            hook_name: "test-hook".to_string(),
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(json.contains("async"));
+        assert!(json.contains("async-123"));
+        assert!(json.contains("test-hook"));
+
+        let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+        if let HookResult::Async { task_id, hook_name } = parsed {
+            assert_eq!(task_id, "async-123");
+            assert_eq!(hook_name, "test-hook");
+        } else {
+            panic!("Expected Async");
+        }
     }
 }

@@ -1,10 +1,15 @@
 //! cocode - Multi-provider LLM CLI
 //!
 //! A command-line interface for interacting with multiple LLM providers.
+//!
+//! This binary uses the arg0 dispatcher for single-binary deployment,
+//! supporting apply_patch and sandbox invocation via PATH hijacking.
 
 mod commands;
 mod output;
 mod repl;
+
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use cocode_config::ConfigManager;
@@ -88,8 +93,18 @@ enum Commands {
     Status,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Use arg0 dispatcher for single-binary deployment.
+    // This handles:
+    // - argv[0] dispatch: apply_patch, cocode-linux-sandbox
+    // - argv[1] hijack: --cocode-run-as-apply-patch
+    // - PATH setup with symlinks for subprocess integration
+    // - dotenv loading from ~/.cocode/.env
+    cocode_arg0::arg0_dispatch_or_else(cli_main)
+}
+
+/// Main CLI entry point (runs inside Tokio runtime created by arg0).
+async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing

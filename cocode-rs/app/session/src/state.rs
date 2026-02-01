@@ -11,9 +11,14 @@ use cocode_context::{ConversationContext, EnvironmentInfo};
 use cocode_hooks::HookRegistry;
 use cocode_loop::{AgentLoop, CompactionConfig, FallbackConfig, LoopConfig, LoopResult};
 use cocode_message::MessageHistory;
-use cocode_protocol::{LoopEvent, ProviderType, TokenUsage};
+use cocode_protocol::model::ModelRole;
+use cocode_protocol::{
+    LoopEvent, ProviderType, RoleSelection, RoleSelections, ThinkingLevel, TokenUsage,
+};
 use cocode_skill::SkillInterface;
 use cocode_tools::ToolRegistry;
+
+use cocode_api::thinking_convert;
 use hyper_sdk::Provider;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -131,6 +136,12 @@ pub struct SessionState {
 
     /// Context window size for the model.
     context_window: i32,
+
+    /// Runtime role selections (model + thinking_level per role).
+    current_selections: RoleSelections,
+
+    /// Provider type for the current session.
+    provider_type: ProviderType,
 }
 
 impl SessionState {
@@ -178,6 +189,12 @@ impl SessionState {
             ..LoopConfig::default()
         };
 
+        // Store provider type
+        let provider_type = provider_info.provider_type;
+
+        // Initialize role selections from config
+        let current_selections = config.current_selections();
+
         Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -192,6 +209,8 @@ impl SessionState {
             total_input_tokens: 0,
             total_output_tokens: 0,
             context_window,
+            current_selections,
+            provider_type,
         })
     }
 
@@ -465,6 +484,98 @@ impl SessionState {
     /// Get the loop configuration.
     pub fn loop_config(&self) -> &LoopConfig {
         &self.loop_config
+    }
+
+    // ==========================================================
+    // Role Selection API
+    // ==========================================================
+
+    /// Get all current role selections.
+    pub fn selections(&self) -> &RoleSelections {
+        &self.current_selections
+    }
+
+    /// Get selection for a specific role.
+    pub fn selection(&self, role: ModelRole) -> Option<&RoleSelection> {
+        self.current_selections.get(role)
+    }
+
+    /// Get thinking level for a specific role.
+    ///
+    /// Returns the explicitly set thinking level for this role, or None
+    /// if no override is set (model's default will be used).
+    pub fn thinking_level(&self, role: ModelRole) -> Option<&ThinkingLevel> {
+        self.current_selections
+            .get(role)
+            .and_then(|s| s.thinking_level.as_ref())
+    }
+
+    /// Get the provider type for this session.
+    pub fn provider_type(&self) -> ProviderType {
+        self.provider_type
+    }
+
+    /// Switch model for a specific role.
+    ///
+    /// This updates the role selection and recreates the API client if needed.
+    /// Note: For now, this only updates the selection. Full model switching
+    /// with client recreation will be implemented when multi-model support
+    /// is added to the agent loop.
+    pub fn switch_role(&mut self, role: ModelRole, selection: RoleSelection) {
+        info!(
+            role = %role,
+            model = %selection.model,
+            thinking = ?selection.thinking_level,
+            "Switching role"
+        );
+        self.current_selections.set(role, selection);
+    }
+
+    /// Switch only the thinking level for a specific role.
+    ///
+    /// This updates the thinking level without changing the model.
+    /// Returns `true` if the role selection exists and was updated.
+    pub fn switch_thinking_level(&mut self, role: ModelRole, level: ThinkingLevel) -> bool {
+        info!(
+            role = %role,
+            thinking = %level,
+            "Switching thinking level for role"
+        );
+        self.current_selections.set_thinking_level(role, level)
+    }
+
+    /// Clear thinking level override for a specific role.
+    ///
+    /// Returns `true` if the role selection exists and was updated.
+    pub fn clear_thinking_level(&mut self, role: ModelRole) -> bool {
+        if let Some(selection) = self.current_selections.get_mut(role) {
+            selection.clear_thinking_level();
+            info!(role = %role, "Cleared thinking level for role");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Build provider options from current thinking level for a role.
+    ///
+    /// Returns the provider-specific options needed to configure thinking
+    /// for the current session's provider, or None if no thinking is configured.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Get options for main role
+    /// if let Some(opts) = state.build_thinking_options(ModelRole::Main) {
+    ///     request = request.provider_options(opts);
+    /// }
+    /// ```
+    pub fn build_thinking_options(
+        &self,
+        role: ModelRole,
+    ) -> Option<hyper_sdk::options::ProviderOptions> {
+        let thinking_level = self.thinking_level(role)?;
+        thinking_convert::to_provider_options(thinking_level, self.provider_type)
     }
 }
 

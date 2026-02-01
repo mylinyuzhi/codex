@@ -1663,6 +1663,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-arg0"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cocode-apply-patch",
+ "cocode-sandbox",
+ "dirs 6.0.0",
+ "dotenvy",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-async-utils"
 version = "0.0.0"
 dependencies = [
@@ -1678,6 +1692,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cocode-arg0",
  "cocode-config",
  "cocode-protocol",
  "cocode-session",
@@ -1798,6 +1813,7 @@ dependencies = [
  "cocode-error",
  "cocode-protocol",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "snafu",
@@ -1806,6 +1822,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2152,6 +2169,7 @@ name = "cocode-skill"
 version = "0.0.0"
 dependencies = [
  "cocode-error",
+ "cocode-hooks",
  "cocode-protocol",
  "serde",
  "serde_json",
@@ -2223,6 +2241,7 @@ dependencies = [
  "cocode-file-ignore",
  "cocode-file-search",
  "cocode-hooks",
+ "cocode-lsp",
  "cocode-mcp-types",
  "cocode-message",
  "cocode-plan-mode",
@@ -2243,6 +2262,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "cocode-tui"
+version = "0.0.0"
+dependencies = [
+ "cocode-config",
+ "cocode-error",
+ "cocode-loop",
+ "cocode-protocol",
+ "crossterm",
+ "futures",
+ "insta",
+ "pretty_assertions",
+ "ratatui",
+ "textwrap",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
