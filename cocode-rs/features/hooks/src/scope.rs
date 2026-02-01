@@ -3,7 +3,8 @@
 //! Hooks are executed in scope priority order when multiple hooks match the
 //! same event.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// The scope from which a hook originates, which determines its priority.
 ///

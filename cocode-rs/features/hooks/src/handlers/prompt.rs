@@ -18,7 +18,8 @@
 //! LLM verification mode requires hyper-sdk integration and will be
 //! implemented when an LLM client interface is available.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
 

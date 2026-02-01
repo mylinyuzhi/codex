@@ -7,11 +7,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cocode_mcp_types::{CallToolResult, ContentBlock, TextContent, Tool as McpTool};
-use cocode_protocol::{ConcurrencySafety, ToolOutput, ToolResultContent};
+use cocode_mcp_types::CallToolResult;
+use cocode_mcp_types::ContentBlock;
+use cocode_mcp_types::TextContent;
+use cocode_mcp_types::Tool as McpTool;
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ToolResultContent;
 use cocode_rmcp_client::RmcpClient;
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 use crate::context::ToolContext;
 use crate::error::Result;

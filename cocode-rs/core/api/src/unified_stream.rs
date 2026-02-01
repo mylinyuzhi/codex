@@ -4,13 +4,21 @@
 //! for both streaming and non-streaming API responses. The agent loop can use
 //! the same code path regardless of whether streaming is enabled.
 
-use crate::error::{ApiError, Result};
+use crate::error::ApiError;
+use crate::error::Result;
 use cocode_protocol::TokenUsage as ProtocolUsage;
-use hyper_sdk::{
-    ContentBlock, FinishReason, GenerateResponse, Message, ProviderMetadata, Role, StreamProcessor,
-    StreamSnapshot, StreamUpdate, TokenUsage,
-};
-use serde::{Deserialize, Serialize};
+use hyper_sdk::ContentBlock;
+use hyper_sdk::FinishReason;
+use hyper_sdk::GenerateResponse;
+use hyper_sdk::Message;
+use hyper_sdk::ProviderMetadata;
+use hyper_sdk::Role;
+use hyper_sdk::StreamProcessor;
+use hyper_sdk::StreamSnapshot;
+use hyper_sdk::StreamUpdate;
+use hyper_sdk::TokenUsage;
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 /// Type of result from the unified stream.

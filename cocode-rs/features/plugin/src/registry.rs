@@ -12,11 +12,15 @@ use crate::loader::LoadedPlugin;
 use crate::mcp::McpServerConfig;
 use crate::scope::PluginScope;
 
-use cocode_hooks::{HookDefinition, HookRegistry};
-use cocode_skill::{SkillManager, SkillPromptCommand};
-use cocode_subagent::{AgentDefinition, SubagentManager};
+use cocode_hooks::HookDefinition;
+use cocode_hooks::HookRegistry;
+use cocode_skill::SkillManager;
+use cocode_skill::SkillPromptCommand;
+use cocode_subagent::AgentDefinition;
+use cocode_subagent::SubagentManager;
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Registry for managing loaded plugins.
 ///
@@ -269,7 +273,8 @@ impl PluginRegistry {
 mod tests {
     use super::*;
     use crate::contribution::PluginContributions;
-    use crate::manifest::{PluginManifest, PluginMetadata};
+    use crate::manifest::PluginManifest;
+    use crate::manifest::PluginMetadata;
     use std::path::PathBuf;
 
     fn make_plugin(name: &str, scope: PluginScope) -> LoadedPlugin {

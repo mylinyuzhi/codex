@@ -5,19 +5,26 @@
 //! - The main [`Tui`] struct for running the application
 //! - Panic handler for terminal cleanup
 
-use std::io::{self, Stdout};
+use std::io::Stdout;
+use std::io::{self};
 use std::panic;
 use std::sync::Arc;
 
-use crossterm::{
-    event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use crossterm::event::DisableBracketedPaste;
+use crossterm::event::DisableFocusChange;
+use crossterm::event::EnableBracketedPaste;
+use crossterm::event::EnableFocusChange;
+use crossterm::execute;
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::terminal::LeaveAlternateScreen;
+use crossterm::terminal::disable_raw_mode;
+use crossterm::terminal::enable_raw_mode;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::broadcast;
 
-use crate::event::{EventBroker, TuiEventStream};
+use crate::event::EventBroker;
+use crate::event::TuiEventStream;
 use crate::state::AppState;
 
 /// Type alias for the terminal backend.

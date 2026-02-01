@@ -10,24 +10,39 @@
 //! - **PostToolUse**: Called after successful tool execution
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
-use crate::context::{ApprovalStore, FileTracker, SpawnAgentFn, ToolContext, ToolContextBuilder};
+use crate::context::ApprovalStore;
+use crate::context::FileTracker;
+use crate::context::SpawnAgentFn;
+use crate::context::ToolContext;
+use crate::context::ToolContextBuilder;
 use crate::error::Result;
 use crate::registry::ToolRegistry;
 use crate::result_persistence;
-use cocode_hooks::{AsyncHookTracker, HookContext, HookEventType, HookRegistry, HookResult};
-use cocode_protocol::{
-    AbortReason, ConcurrencySafety, LoopEvent, PermissionMode, ToolOutput, ValidationResult,
-};
+use cocode_hooks::AsyncHookTracker;
+use cocode_hooks::HookContext;
+use cocode_hooks::HookEventType;
+use cocode_hooks::HookRegistry;
+use cocode_hooks::HookResult;
+use cocode_protocol::AbortReason;
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::PermissionMode;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ValidationResult;
 use cocode_shell::BackgroundTaskRegistry;
 use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]

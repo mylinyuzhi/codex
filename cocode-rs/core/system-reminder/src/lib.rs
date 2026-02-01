@@ -68,22 +68,37 @@ pub mod xml;
 
 // Re-export main types at crate root
 pub use config::SystemReminderConfig;
-pub use error::{Result, SystemReminderError};
-pub use file_tracker::{FileTracker, ReadFileState};
-pub use generator::{AttachmentGenerator, GeneratorContext, GeneratorContextBuilder};
-pub use inject::{combine_reminders, inject_reminders};
+pub use error::Result;
+pub use error::SystemReminderError;
+pub use file_tracker::FileTracker;
+pub use file_tracker::ReadFileState;
+pub use generator::AttachmentGenerator;
+pub use generator::GeneratorContext;
+pub use generator::GeneratorContextBuilder;
+pub use inject::combine_reminders;
+pub use inject::inject_reminders;
 pub use orchestrator::SystemReminderOrchestrator;
-pub use throttle::{ThrottleConfig, ThrottleManager};
-pub use types::{AttachmentType, ReminderTier, SystemReminder, XmlTag};
-pub use xml::{extract_system_reminder, wrap_system_reminder, wrap_with_tag};
+pub use throttle::ThrottleConfig;
+pub use throttle::ThrottleManager;
+pub use types::AttachmentType;
+pub use types::ReminderTier;
+pub use types::SystemReminder;
+pub use types::XmlTag;
+pub use xml::extract_system_reminder;
+pub use xml::wrap_system_reminder;
+pub use xml::wrap_with_tag;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::config::SystemReminderConfig;
     pub use crate::file_tracker::FileTracker;
-    pub use crate::generator::{AttachmentGenerator, GeneratorContext};
+    pub use crate::generator::AttachmentGenerator;
+    pub use crate::generator::GeneratorContext;
     pub use crate::inject::inject_reminders;
     pub use crate::orchestrator::SystemReminderOrchestrator;
-    pub use crate::types::{AttachmentType, ReminderTier, SystemReminder, XmlTag};
+    pub use crate::types::AttachmentType;
+    pub use crate::types::ReminderTier;
+    pub use crate::types::SystemReminder;
+    pub use crate::types::XmlTag;
     pub use crate::xml::wrap_system_reminder;
 }

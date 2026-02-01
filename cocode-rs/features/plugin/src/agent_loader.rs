@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use cocode_subagent::AgentDefinition;
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 use walkdir::WalkDir;
 
 use crate::contribution::PluginContribution;

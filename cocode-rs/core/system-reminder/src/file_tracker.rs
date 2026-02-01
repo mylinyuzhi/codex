@@ -3,8 +3,10 @@
 //! This module tracks file reads and detects modifications
 //! since the file was last read.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::SystemTime;
 

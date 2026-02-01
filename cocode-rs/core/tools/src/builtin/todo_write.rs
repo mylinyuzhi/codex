@@ -5,7 +5,8 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for creating and managing a structured task list.

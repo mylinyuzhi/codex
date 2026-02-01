@@ -28,9 +28,11 @@
 //! If the process exits with a non-zero status or produces invalid JSON,
 //! the hook returns `Continue`.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 use crate::context::HookContext;
 use crate::result::HookResult;

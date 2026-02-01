@@ -8,12 +8,15 @@ use async_trait::async_trait;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
-use crate::generator::{
-    AttachmentGenerator, BackgroundTaskInfo, BackgroundTaskStatus, BackgroundTaskType,
-    GeneratorContext,
-};
+use crate::generator::AttachmentGenerator;
+use crate::generator::BackgroundTaskInfo;
+use crate::generator::BackgroundTaskStatus;
+use crate::generator::BackgroundTaskType;
+use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleConfig;
-use crate::types::{AttachmentType, ReminderTier, SystemReminder};
+use crate::types::AttachmentType;
+use crate::types::ReminderTier;
+use crate::types::SystemReminder;
 
 /// Key for unified task info in generator context extension data.
 pub const UNIFIED_TASKS_KEY: &str = "unified_tasks";

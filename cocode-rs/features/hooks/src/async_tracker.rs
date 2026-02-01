@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::result::HookResult;
 

@@ -9,12 +9,18 @@
 //! 2. The hooks are registered with [`HookSource::Skill`] scope
 //! 3. When the skill ends, call [`cleanup_skill_hooks`] to remove them
 
-use cocode_hooks::{
-    HookDefinition, HookEventType, HookHandler, HookMatcher, HookRegistry, HookSource,
-};
-use tracing::{debug, warn};
+use cocode_hooks::HookDefinition;
+use cocode_hooks::HookEventType;
+use cocode_hooks::HookHandler;
+use cocode_hooks::HookMatcher;
+use cocode_hooks::HookRegistry;
+use cocode_hooks::HookSource;
+use tracing::debug;
+use tracing::warn;
 
-use crate::interface::{SkillHookConfig, SkillHookMatcher, SkillInterface};
+use crate::interface::SkillHookConfig;
+use crate::interface::SkillHookMatcher;
+use crate::interface::SkillInterface;
 
 /// Converts a [`SkillInterface`] hook configuration into [`HookDefinition`]s.
 ///

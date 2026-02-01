@@ -8,13 +8,21 @@
 mod session;
 mod ui;
 
-pub use session::{ChatMessage, MessageRole, SessionState, ToolExecution, ToolStatus};
-pub use ui::{
-    FocusTarget, InputState, ModelPickerOverlay, Overlay, PermissionOverlay, StreamingState,
-    UiState,
-};
+pub use session::ChatMessage;
+pub use session::MessageRole;
+pub use session::SessionState;
+pub use session::ToolExecution;
+pub use session::ToolStatus;
+pub use ui::FocusTarget;
+pub use ui::InputState;
+pub use ui::ModelPickerOverlay;
+pub use ui::Overlay;
+pub use ui::PermissionOverlay;
+pub use ui::StreamingState;
+pub use ui::UiState;
 
-use cocode_protocol::{ReasoningEffort, ThinkingLevel};
+use cocode_protocol::ReasoningEffort;
+use cocode_protocol::ThinkingLevel;
 
 /// The complete application state.
 ///

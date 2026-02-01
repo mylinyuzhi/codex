@@ -3,16 +3,27 @@
 //! This module provides the main render function that draws the UI
 //! based on the current application state.
 
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::Stylize,
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
-};
+use ratatui::Frame;
+use ratatui::layout::Constraint;
+use ratatui::layout::Direction;
+use ratatui::layout::Layout;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 
-use crate::state::{AppState, FocusTarget, Overlay};
-use crate::widgets::{ChatWidget, InputWidget, StatusBar, ToolPanel};
+use crate::state::AppState;
+use crate::state::FocusTarget;
+use crate::state::Overlay;
+use crate::widgets::ChatWidget;
+use crate::widgets::InputWidget;
+use crate::widgets::StatusBar;
+use crate::widgets::ToolPanel;
 
 /// Render the UI to the terminal frame.
 ///
@@ -297,7 +308,8 @@ fn render_error_overlay(frame: &mut Frame, area: Rect, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn create_test_terminal() -> Terminal<TestBackend> {
         let backend = TestBackend::new(80, 24);

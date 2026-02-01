@@ -4,14 +4,18 @@
 //! in response to events. Following the Elm Architecture pattern, these
 //! functions take the current state and an event, and return the new state.
 
-use cocode_protocol::{LoopEvent, ToolResultContent};
+use cocode_protocol::LoopEvent;
+use cocode_protocol::ToolResultContent;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
 use crate::event::TuiCommand;
-use crate::state::{
-    AppState, ChatMessage, FocusTarget, ModelPickerOverlay, Overlay, PermissionOverlay,
-};
+use crate::state::AppState;
+use crate::state::ChatMessage;
+use crate::state::FocusTarget;
+use crate::state::ModelPickerOverlay;
+use crate::state::Overlay;
+use crate::state::PermissionOverlay;
 
 /// Handle a TUI command and update the state accordingly.
 ///

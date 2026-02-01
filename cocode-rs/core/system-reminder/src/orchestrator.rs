@@ -8,19 +8,29 @@ use std::time::Duration;
 
 use futures::future;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 use crate::config::SystemReminderConfig;
-use crate::generator::{AttachmentGenerator, GeneratorContext};
-use crate::generators::{
-    AvailableSkillsGenerator, ChangedFilesGenerator, CollabNotificationsGenerator,
-    DelegateModeGenerator, LspDiagnosticsGenerator, NestedMemoryGenerator,
-    PlanModeApprovedGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
-    PlanToolReminderGenerator, PlanVerificationGenerator, TodoRemindersGenerator,
-    TokenUsageGenerator, UnifiedTasksGenerator,
-};
+use crate::generator::AttachmentGenerator;
+use crate::generator::GeneratorContext;
+use crate::generators::AvailableSkillsGenerator;
+use crate::generators::ChangedFilesGenerator;
+use crate::generators::CollabNotificationsGenerator;
+use crate::generators::DelegateModeGenerator;
+use crate::generators::LspDiagnosticsGenerator;
+use crate::generators::NestedMemoryGenerator;
+use crate::generators::PlanModeApprovedGenerator;
+use crate::generators::PlanModeEnterGenerator;
+use crate::generators::PlanModeExitGenerator;
+use crate::generators::PlanToolReminderGenerator;
+use crate::generators::PlanVerificationGenerator;
+use crate::generators::TodoRemindersGenerator;
+use crate::generators::TokenUsageGenerator;
+use crate::generators::UnifiedTasksGenerator;
 use crate::throttle::ThrottleManager;
-use crate::types::{ReminderTier, SystemReminder};
+use crate::types::ReminderTier;
+use crate::types::SystemReminder;
 
 /// Default timeout for generator execution (1 second).
 const DEFAULT_TIMEOUT_MS: i64 = 1000;

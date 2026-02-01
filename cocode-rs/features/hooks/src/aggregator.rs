@@ -4,7 +4,8 @@
 //! and produces a properly prioritized list for execution.
 
 use crate::definition::HookDefinition;
-use crate::scope::{HookScope, HookSource};
+use crate::scope::HookScope;
+use crate::scope::HookSource;
 use crate::settings::HookSettings;
 
 /// Aggregates hooks from multiple sources into a single prioritized collection.

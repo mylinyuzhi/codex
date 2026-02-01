@@ -1,7 +1,8 @@
 //! Multi-model role configuration.
 
 use super::ModelSpec;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Model role identifier.
 ///

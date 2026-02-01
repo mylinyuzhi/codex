@@ -6,9 +6,12 @@ use async_trait::async_trait;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
-use crate::generator::{AttachmentGenerator, GeneratorContext};
+use crate::generator::AttachmentGenerator;
+use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleConfig;
-use crate::types::{AttachmentType, ReminderTier, SystemReminder};
+use crate::types::AttachmentType;
+use crate::types::ReminderTier;
+use crate::types::SystemReminder;
 
 /// Key for storing available skills in extension data.
 pub const AVAILABLE_SKILLS_KEY: &str = "available_skills";

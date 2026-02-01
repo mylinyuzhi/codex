@@ -7,7 +7,8 @@ use std::path::Path;
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::definition::{HookDefinition, HookHandler};
+use crate::definition::HookDefinition;
+use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::matcher::HookMatcher;
 

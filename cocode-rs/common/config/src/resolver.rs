@@ -13,7 +13,8 @@
 use crate::builtin;
 use crate::error::ConfigError;
 use crate::error::NotFoundKind;
-use crate::error::config_error::{AuthSnafu, NotFoundSnafu};
+use crate::error::config_error::AuthSnafu;
+use crate::error::config_error::NotFoundSnafu;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
@@ -464,6 +465,7 @@ mod tests {
                     },
                 ],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -721,6 +723,7 @@ mod tests {
                 overrides,
                 models: vec![ProviderModelEntry::new("test-model")],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -768,6 +771,7 @@ mod tests {
                     overrides: model_overrides,
                 }],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -895,6 +899,7 @@ mod tests {
                     overrides: HashMap::new(),
                 }],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -954,6 +959,7 @@ mod tests {
                 overrides,
                 models: vec![ProviderModelEntry::new("test-model")],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 

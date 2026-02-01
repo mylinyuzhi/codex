@@ -35,7 +35,8 @@
 //! ```
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 /// Maximum output length for path extraction (matches Claude Code).

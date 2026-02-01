@@ -16,11 +16,16 @@
 //! ```
 
 use crate::error::Result;
-use cocode_protocol::{ProviderInfo, ProviderType};
-use hyper_sdk::{
-    AnthropicProvider, GeminiProvider, Model, OpenAICompatProvider, OpenAIProvider, Provider,
-    VolcengineProvider, ZaiProvider,
-};
+use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderType;
+use hyper_sdk::AnthropicProvider;
+use hyper_sdk::GeminiProvider;
+use hyper_sdk::Model;
+use hyper_sdk::OpenAICompatProvider;
+use hyper_sdk::OpenAIProvider;
+use hyper_sdk::Provider;
+use hyper_sdk::VolcengineProvider;
+use hyper_sdk::ZaiProvider;
 use std::sync::Arc;
 
 /// Create a provider from ProviderInfo configuration.

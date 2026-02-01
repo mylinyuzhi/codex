@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use cocode_protocol::{ThinkingLevel, TokenUsage};
+use cocode_protocol::ThinkingLevel;
+use cocode_protocol::TokenUsage;
 
 /// State synchronized with the agent session.
 #[derive(Debug, Clone)]

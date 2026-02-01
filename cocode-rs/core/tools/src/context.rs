@@ -6,16 +6,21 @@
 
 use cocode_hooks::HookRegistry;
 use cocode_lsp::LspServerManager;
-use cocode_protocol::{LoopEvent, PermissionMode};
+use cocode_protocol::LoopEvent;
+use cocode_protocol::PermissionMode;
 use cocode_shell::BackgroundTaskRegistry;
 use cocode_skill::SkillManager;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
-use tokio::sync::{Mutex, mpsc};
+use std::time::Instant;
+use std::time::SystemTime;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Input for spawning a subagent.

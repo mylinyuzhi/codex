@@ -3,41 +3,70 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_api::{ApiClient, CollectedResponse, QueryResultType, StreamOptions};
+use cocode_api::ApiClient;
+use cocode_api::CollectedResponse;
+use cocode_api::QueryResultType;
+use cocode_api::StreamOptions;
 use cocode_context::ConversationContext;
-use cocode_hooks::{AsyncHookTracker, HookRegistry};
-use cocode_message::{MessageHistory, TrackedMessage, Turn};
+use cocode_hooks::AsyncHookTracker;
+use cocode_hooks::HookRegistry;
+use cocode_message::MessageHistory;
+use cocode_message::TrackedMessage;
+use cocode_message::Turn;
 use cocode_prompt::SystemPromptBuilder;
-use cocode_protocol::{
-    AutoCompactTracking, CompactConfig, HookEventType, LoopConfig, LoopEvent, QueryTracking,
-    TokenUsage, ToolResultContent,
-};
+use cocode_protocol::AutoCompactTracking;
+use cocode_protocol::CompactConfig;
+use cocode_protocol::HookEventType;
+use cocode_protocol::LoopConfig;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::QueryTracking;
+use cocode_protocol::TokenUsage;
+use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
-use cocode_system_reminder::{
-    FileTracker, GeneratorContext, SystemReminderConfig, SystemReminderOrchestrator,
-    combine_reminders,
-    generators::{
-        ASYNC_HOOK_RESPONSES_KEY, AVAILABLE_SKILLS_KEY, AsyncHookResponseInfo, HOOK_BLOCKING_KEY,
-        HOOK_CONTEXT_KEY, HookBlockingInfo, HookContextInfo, SkillInfo,
-    },
-};
-use cocode_tools::{
-    ExecutorConfig, FileTracker as ToolsFileTracker, SpawnAgentFn, StreamingToolExecutor,
-    ToolExecutionResult, ToolRegistry,
-};
-use hyper_sdk::{
-    ContentBlock, FinishReason, GenerateRequest, Message, Model, ToolCall, ToolDefinition,
-};
+use cocode_system_reminder::FileTracker;
+use cocode_system_reminder::GeneratorContext;
+use cocode_system_reminder::SystemReminderConfig;
+use cocode_system_reminder::SystemReminderOrchestrator;
+use cocode_system_reminder::combine_reminders;
+use cocode_system_reminder::generators::ASYNC_HOOK_RESPONSES_KEY;
+use cocode_system_reminder::generators::AVAILABLE_SKILLS_KEY;
+use cocode_system_reminder::generators::AsyncHookResponseInfo;
+use cocode_system_reminder::generators::HOOK_BLOCKING_KEY;
+use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
+use cocode_system_reminder::generators::HookBlockingInfo;
+use cocode_system_reminder::generators::HookContextInfo;
+use cocode_system_reminder::generators::SkillInfo;
+use cocode_tools::ExecutorConfig;
+use cocode_tools::FileTracker as ToolsFileTracker;
+use cocode_tools::SpawnAgentFn;
+use cocode_tools::StreamingToolExecutor;
+use cocode_tools::ToolExecutionResult;
+use cocode_tools::ToolRegistry;
+use hyper_sdk::ContentBlock;
+use hyper_sdk::FinishReason;
+use hyper_sdk::GenerateRequest;
+use hyper_sdk::Message;
+use hyper_sdk::Model;
+use hyper_sdk::ToolCall;
+use hyper_sdk::ToolDefinition;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
-use crate::compaction::{
-    CompactionConfig, InvokedSkillRestoration, SessionMemorySummary, TaskStatusRestoration,
-    ThresholdStatus, build_compact_instructions, calculate_keep_start_index,
-    map_message_index_to_keep_turns, try_session_memory_compact, write_session_memory,
-};
-use crate::fallback::{FallbackConfig, FallbackState};
+use crate::compaction::CompactionConfig;
+use crate::compaction::InvokedSkillRestoration;
+use crate::compaction::SessionMemorySummary;
+use crate::compaction::TaskStatusRestoration;
+use crate::compaction::ThresholdStatus;
+use crate::compaction::build_compact_instructions;
+use crate::compaction::calculate_keep_start_index;
+use crate::compaction::map_message_index_to_keep_turns;
+use crate::compaction::try_session_memory_compact;
+use crate::compaction::write_session_memory;
+use crate::fallback::FallbackConfig;
+use crate::fallback::FallbackState;
 use crate::result::LoopResult;
 use crate::session_memory_agent::SessionMemoryExtractionAgent;
 use cocode_plan_mode::PlanModeState;

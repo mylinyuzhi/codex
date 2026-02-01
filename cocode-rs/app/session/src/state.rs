@@ -7,23 +7,33 @@ use std::sync::Arc;
 
 use cocode_api::ApiClient;
 use cocode_config::ConfigManager;
-use cocode_context::{ConversationContext, EnvironmentInfo};
+use cocode_context::ConversationContext;
+use cocode_context::EnvironmentInfo;
 use cocode_hooks::HookRegistry;
-use cocode_loop::{AgentLoop, CompactionConfig, FallbackConfig, LoopConfig, LoopResult};
+use cocode_loop::AgentLoop;
+use cocode_loop::CompactionConfig;
+use cocode_loop::FallbackConfig;
+use cocode_loop::LoopConfig;
+use cocode_loop::LoopResult;
 use cocode_message::MessageHistory;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::ProviderType;
+use cocode_protocol::RoleSelection;
+use cocode_protocol::RoleSelections;
+use cocode_protocol::ThinkingLevel;
+use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
-use cocode_protocol::{
-    LoopEvent, ProviderType, RoleSelection, RoleSelections, ThinkingLevel, TokenUsage,
-};
 use cocode_skill::SkillInterface;
 use cocode_tools::ToolRegistry;
 
 use cocode_api::thinking_convert;
 use hyper_sdk::Provider;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 use crate::session::Session;
 
@@ -221,10 +231,11 @@ impl SessionState {
         provider_info: &cocode_protocol::ProviderInfo,
         model: &str,
     ) -> anyhow::Result<(ApiClient, Arc<dyn hyper_sdk::Model>)> {
-        use hyper_sdk::providers::{
-            anthropic::AnthropicConfig, gemini::GeminiConfig, openai::OpenAIConfig,
-            volcengine::VolcengineConfig, zai::ZaiConfig,
-        };
+        use hyper_sdk::providers::anthropic::AnthropicConfig;
+        use hyper_sdk::providers::gemini::GeminiConfig;
+        use hyper_sdk::providers::openai::OpenAIConfig;
+        use hyper_sdk::providers::volcengine::VolcengineConfig;
+        use hyper_sdk::providers::zai::ZaiConfig;
 
         // Get provider model info
         let provider_model = provider_info.get_model(model).ok_or_else(|| {
@@ -582,6 +593,87 @@ impl SessionState {
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
         thinking_convert::to_provider_options(thinking_level, model_info, self.provider_type)
+    }
+
+    // ==========================================================
+    // Streaming Turn API
+    // ==========================================================
+
+    /// Run a single turn with the given user input, streaming events to the provided channel.
+    ///
+    /// This is similar to `run_turn` but forwards all events to the provided channel
+    /// instead of handling them internally. This enables real-time streaming to a TUI
+    /// or other consumer.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use tokio::sync::mpsc;
+    /// use cocode_protocol::LoopEvent;
+    ///
+    /// let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+    ///
+    /// // Spawn task to handle events
+    /// tokio::spawn(async move {
+    ///     while let Some(event) = event_rx.recv().await {
+    ///         // Process event (update TUI, etc.)
+    ///     }
+    /// });
+    ///
+    /// let result = state.run_turn_streaming("Hello!", event_tx).await?;
+    /// ```
+    pub async fn run_turn_streaming(
+        &mut self,
+        user_input: &str,
+        event_tx: mpsc::Sender<LoopEvent>,
+    ) -> anyhow::Result<TurnResult> {
+        info!(
+            session_id = %self.session.id,
+            input_len = user_input.len(),
+            "Running turn with streaming"
+        );
+
+        // Update session activity
+        self.session.touch();
+
+        // Build environment info
+        let environment = EnvironmentInfo::builder()
+            .cwd(&self.session.working_dir)
+            .model(&self.session.model)
+            .context_window(self.context_window)
+            .output_token_limit(16_384)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
+
+        // Build conversation context
+        let context = ConversationContext::builder()
+            .environment(environment)
+            .tool_names(self.tool_registry.tool_names())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
+
+        // Build and run the agent loop with the provided event channel
+        let mut loop_instance = AgentLoop::builder()
+            .api_client(self.api_client.clone())
+            .model(self.model.clone())
+            .tool_registry(self.tool_registry.clone())
+            .context(context)
+            .config(self.loop_config.clone())
+            .fallback_config(FallbackConfig::default())
+            .compaction_config(CompactionConfig::default())
+            .hooks(self.hook_registry.clone())
+            .event_tx(event_tx)
+            .cancel_token(self.cancel_token.clone())
+            .build();
+
+        let result = loop_instance.run(user_input).await?;
+
+        // Update totals
+        self.total_turns += result.turns_completed;
+        self.total_input_tokens += result.total_input_tokens;
+        self.total_output_tokens += result.total_output_tokens;
+
+        Ok(TurnResult::from_loop_result(&result))
     }
 }
 

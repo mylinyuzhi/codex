@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::oneshot;
 
-use crate::coordinator::lifecycle::{AgentLifecycleStatus, ThreadId};
+use crate::coordinator::lifecycle::AgentLifecycleStatus;
+use crate::coordinator::lifecycle::ThreadId;
 
 /// Callback type for executing an agent.
 ///

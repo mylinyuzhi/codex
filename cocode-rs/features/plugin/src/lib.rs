@@ -47,12 +47,20 @@ pub mod scope;
 mod error;
 
 // Re-export primary types
-pub use command::{CommandHandler, PluginCommand};
-pub use contribution::{PluginContribution, PluginContributions};
-pub use error::{PluginError, Result};
-pub use integration::{PluginIntegrationConfig, integrate_plugins, load_plugins};
-pub use loader::{LoadedPlugin, PluginLoader, load_plugins_from_roots};
+pub use command::CommandHandler;
+pub use command::PluginCommand;
+pub use contribution::PluginContribution;
+pub use contribution::PluginContributions;
+pub use error::PluginError;
+pub use error::Result;
+pub use integration::PluginIntegrationConfig;
+pub use integration::integrate_plugins;
+pub use integration::load_plugins;
+pub use loader::LoadedPlugin;
+pub use loader::PluginLoader;
+pub use loader::load_plugins_from_roots;
 pub use manifest::PluginManifest;
-pub use mcp::{McpServerConfig, McpTransport};
+pub use mcp::McpServerConfig;
+pub use mcp::McpTransport;
 pub use registry::PluginRegistry;
 pub use scope::PluginScope;

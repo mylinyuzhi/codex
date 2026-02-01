@@ -3,7 +3,8 @@
 //! After a hook executes, it produces a `HookResult` that determines how the
 //! agent loop should proceed.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 /// The outcome of a single hook execution.

@@ -2,7 +2,8 @@
 //!
 //! Defines settings for tool execution concurrency and timeouts.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Default maximum number of concurrent tool executions.
 pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;

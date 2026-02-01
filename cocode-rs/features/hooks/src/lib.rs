@@ -34,17 +34,23 @@ pub mod scope;
 pub mod settings;
 
 // Re-exports
-pub use aggregator::{HookAggregator, aggregate_hooks};
-pub use async_tracker::{AsyncHookTracker, CompletedAsyncHook, PendingAsyncHook};
+pub use aggregator::HookAggregator;
+pub use aggregator::aggregate_hooks;
+pub use async_tracker::AsyncHookTracker;
+pub use async_tracker::CompletedAsyncHook;
+pub use async_tracker::PendingAsyncHook;
 pub use config::load_hooks_from_toml;
 pub use context::HookContext;
-pub use definition::{HookDefinition, HookHandler};
+pub use definition::HookDefinition;
+pub use definition::HookHandler;
 pub use error::HookError;
 pub use event::HookEventType;
 pub use handlers::command::HookOutput;
 pub use handlers::inline::InlineHandler;
 pub use matcher::HookMatcher;
 pub use registry::HookRegistry;
-pub use result::{HookOutcome, HookResult};
-pub use scope::{HookScope, HookSource};
+pub use result::HookOutcome;
+pub use result::HookResult;
+pub use scope::HookScope;
+pub use scope::HookSource;
 pub use settings::HookSettings;

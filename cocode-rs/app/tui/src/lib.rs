@@ -45,11 +45,19 @@ pub mod update;
 pub mod widgets;
 
 // Re-export commonly used types
-pub use app::{App, AppConfig, create_channels};
+pub use app::App;
+pub use app::AppConfig;
+pub use app::create_channels;
 pub use command::UserCommand;
-pub use event::{TuiCommand, TuiEvent};
-pub use state::{AppState, FocusTarget, Overlay, RunningState};
-pub use terminal::{Tui, restore_terminal, setup_terminal};
+pub use event::TuiCommand;
+pub use event::TuiEvent;
+pub use state::AppState;
+pub use state::FocusTarget;
+pub use state::Overlay;
+pub use state::RunningState;
+pub use terminal::Tui;
+pub use terminal::restore_terminal;
+pub use terminal::setup_terminal;
 
 #[cfg(test)]
 mod tests {

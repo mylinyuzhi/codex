@@ -2,7 +2,8 @@
 //!
 //! Defines settings for automatic context compaction and session memory management.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 // ============================================================================
 // Session Memory Constants

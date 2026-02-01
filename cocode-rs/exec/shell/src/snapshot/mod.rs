@@ -25,8 +25,10 @@ mod scripts;
 mod shell_snapshot;
 
 pub use cleanup::cleanup_stale_snapshots;
-pub use scripts::{
-    EXCLUDED_EXPORT_VARS, bash_snapshot_script, powershell_snapshot_script, sh_snapshot_script,
-    zsh_snapshot_script,
-};
-pub use shell_snapshot::{ShellSnapshot, SnapshotConfig};
+pub use scripts::EXCLUDED_EXPORT_VARS;
+pub use scripts::bash_snapshot_script;
+pub use scripts::powershell_snapshot_script;
+pub use scripts::sh_snapshot_script;
+pub use scripts::zsh_snapshot_script;
+pub use shell_snapshot::ShellSnapshot;
+pub use shell_snapshot::SnapshotConfig;

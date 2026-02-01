@@ -176,6 +176,14 @@ pub struct ProviderConfig {
     /// Extra provider-specific configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
+
+    /// HTTP interceptors to apply to requests.
+    ///
+    /// Interceptors are applied in order of their priority (lower = earlier).
+    /// Available built-in interceptors:
+    /// - `byted_model_hub`: Adds session_id to "extra" header for ByteDance ModelHub
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interceptors: Vec<String>,
 }
 
 impl ProviderConfig {

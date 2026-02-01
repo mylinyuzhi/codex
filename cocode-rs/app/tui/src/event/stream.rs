@@ -8,14 +8,19 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::task::Context;
+use std::task::Poll;
 use std::time::Duration;
 
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEventKind};
+use crossterm::event::Event as CrosstermEvent;
+use crossterm::event::EventStream;
+use crossterm::event::KeyEventKind;
 use futures::Stream;
 use tokio::sync::broadcast;
-use tokio::time::{Interval, interval};
+use tokio::time::Interval;
+use tokio::time::interval;
 
 use super::TuiEvent;
 use super::broker::EventBroker;

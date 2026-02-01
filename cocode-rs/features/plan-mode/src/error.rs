@@ -1,6 +1,9 @@
 //! Error types for the plan-mode crate.
 
-use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use cocode_error::ErrorExt;
+use cocode_error::Location;
+use cocode_error::StatusCode;
+use cocode_error::stack_trace_debug;
 use snafu::Snafu;
 
 /// Result type alias for plan-mode operations.

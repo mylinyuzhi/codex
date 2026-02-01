@@ -10,7 +10,8 @@ use crate::error::tool_error;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_lsp::SymbolKind;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for LSP operations.

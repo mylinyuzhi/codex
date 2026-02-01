@@ -98,21 +98,38 @@ pub mod readonly;
 pub mod shell_types;
 pub mod snapshot;
 
-pub use background::{BackgroundProcess, BackgroundTaskRegistry};
-pub use command::{CommandInput, CommandResult, ExtractedPaths};
+pub use background::BackgroundProcess;
+pub use background::BackgroundTaskRegistry;
+pub use command::CommandInput;
+pub use command::CommandResult;
+pub use command::ExtractedPaths;
 pub use executor::ShellExecutor;
-pub use path_extractor::{
-    MAX_EXTRACTION_OUTPUT_CHARS, NoOpExtractor, PathExtractionResult, PathExtractor,
-    filter_existing_files, truncate_for_extraction,
-};
-pub use readonly::{
-    SafetyResult, analyze_command_safety, filter_risks_by_level, filter_risks_by_phase,
-    get_command_risks, is_git_read_only, is_read_only_command, safety_summary,
-};
+pub use path_extractor::MAX_EXTRACTION_OUTPUT_CHARS;
+pub use path_extractor::NoOpExtractor;
+pub use path_extractor::PathExtractionResult;
+pub use path_extractor::PathExtractor;
+pub use path_extractor::filter_existing_files;
+pub use path_extractor::truncate_for_extraction;
+pub use readonly::SafetyResult;
+pub use readonly::analyze_command_safety;
+pub use readonly::filter_risks_by_level;
+pub use readonly::filter_risks_by_phase;
+pub use readonly::get_command_risks;
+pub use readonly::is_git_read_only;
+pub use readonly::is_read_only_command;
+pub use readonly::safety_summary;
 
 // Re-export security types from shell-parser for convenience
-pub use cocode_shell_parser::security::{RiskKind, RiskLevel, RiskPhase, SecurityRisk};
-pub use shell_types::{
-    Shell, ShellType, default_user_shell, detect_shell_type, get_shell, get_shell_by_path,
-};
-pub use snapshot::{ShellSnapshot, SnapshotConfig, cleanup_stale_snapshots};
+pub use cocode_shell_parser::security::RiskKind;
+pub use cocode_shell_parser::security::RiskLevel;
+pub use cocode_shell_parser::security::RiskPhase;
+pub use cocode_shell_parser::security::SecurityRisk;
+pub use shell_types::Shell;
+pub use shell_types::ShellType;
+pub use shell_types::default_user_shell;
+pub use shell_types::detect_shell_type;
+pub use shell_types::get_shell;
+pub use shell_types::get_shell_by_path;
+pub use snapshot::ShellSnapshot;
+pub use snapshot::SnapshotConfig;
+pub use snapshot::cleanup_stale_snapshots;

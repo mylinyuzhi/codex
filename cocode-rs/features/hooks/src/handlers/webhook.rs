@@ -32,7 +32,8 @@
 
 use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 use super::command::HookOutput;
 use crate::context::HookContext;

@@ -29,10 +29,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cocode_api::ApiClient;
-use cocode_protocol::{AutoCompactTracking, LoopEvent, SessionMemoryExtractionConfig};
-use hyper_sdk::{ContentBlock, GenerateRequest, Message, Model};
+use cocode_protocol::AutoCompactTracking;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::SessionMemoryExtractionConfig;
+use hyper_sdk::ContentBlock;
+use hyper_sdk::GenerateRequest;
+use hyper_sdk::Message;
+use hyper_sdk::Model;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::compaction::write_session_memory;
 

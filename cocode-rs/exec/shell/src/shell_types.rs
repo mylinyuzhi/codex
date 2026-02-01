@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::watch;
 
 use crate::snapshot::ShellSnapshot;
@@ -193,7 +194,8 @@ pub fn get_shell_by_path(shell_path: &PathBuf) -> Shell {
 // Platform-specific user shell detection
 #[cfg(unix)]
 fn get_user_shell_path() -> Option<PathBuf> {
-    use libc::{getpwuid, getuid};
+    use libc::getpwuid;
+    use libc::getuid;
     use std::ffi::CStr;
 
     unsafe {

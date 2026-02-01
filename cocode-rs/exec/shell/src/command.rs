@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Extracted file paths from command output.
 ///

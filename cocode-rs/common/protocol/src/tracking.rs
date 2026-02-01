@@ -3,9 +3,12 @@
 //! These types track the state of queries and auto-compaction.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Tracking information for a query chain.
 ///

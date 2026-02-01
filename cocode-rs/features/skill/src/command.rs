@@ -4,7 +4,8 @@
 //! can invoke. Each skill is represented as a [`SkillPromptCommand`] with
 //! associated metadata and prompt content.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 
 /// A skill that injects a prompt into the conversation.

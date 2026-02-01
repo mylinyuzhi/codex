@@ -10,7 +10,8 @@
 use cocode_hooks::HookDefinition;
 use cocode_skill::SkillPromptCommand;
 use cocode_subagent::AgentDefinition;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::command::PluginCommand;
 use crate::mcp::McpServerConfig;

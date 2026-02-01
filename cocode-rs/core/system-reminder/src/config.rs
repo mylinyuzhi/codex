@@ -3,7 +3,8 @@
 //! This module provides the configuration structures for controlling
 //! which system reminders are enabled and how they behave.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Configuration for the system reminder system.
 #[derive(Debug, Clone, Serialize, Deserialize)]

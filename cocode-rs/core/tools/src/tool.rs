@@ -6,10 +6,12 @@
 use crate::context::ToolContext;
 use crate::error::ToolError;
 use async_trait::async_trait;
-use cocode_protocol::{
-    ConcurrencySafety, PermissionResult, ToolOutput, ToolResultContent, ValidationError,
-    ValidationResult,
-};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ToolResultContent;
+use cocode_protocol::ValidationError;
+use cocode_protocol::ValidationResult;
 use hyper_sdk::ToolDefinition;
 use serde_json::Value;
 

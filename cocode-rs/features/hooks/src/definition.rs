@@ -3,7 +3,8 @@
 //! A `HookDefinition` describes a single hook: when it fires (event type),
 //! what it matches against (optional matcher), and what it does (handler).
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::event::HookEventType;
 use crate::matcher::HookMatcher;

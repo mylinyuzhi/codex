@@ -1,11 +1,13 @@
 //! Skill tool for executing named skills.
 
 use super::prompts;
-use crate::context::{InvokedSkill, ToolContext};
+use crate::context::InvokedSkill;
+use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use cocode_skill::register_skill_hooks;
 use serde_json::Value;
 use std::time::Instant;
@@ -127,7 +129,8 @@ impl Tool for SkillTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cocode_skill::{SkillManager, SkillPromptCommand};
+    use cocode_skill::SkillManager;
+    use cocode_skill::SkillPromptCommand;
     use std::path::PathBuf;
     use std::sync::Arc;
 

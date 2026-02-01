@@ -9,7 +9,8 @@ use crate::config::ConfigOverrides;
 use crate::env_loader::EnvLoader;
 use crate::error::ConfigError;
 use crate::error::NotFoundKind;
-use crate::error::config_error::{InternalSnafu, NotFoundSnafu};
+use crate::error::config_error::InternalSnafu;
+use crate::error::config_error::NotFoundSnafu;
 use crate::json_config::AppConfig;
 use crate::json_config::LoggingConfig;
 use crate::loader::ConfigLoader;
@@ -252,6 +253,52 @@ impl ConfigManager {
     /// Get the application configuration.
     pub fn app_config(&self) -> AppConfig {
         self.config.read().unwrap().clone()
+    }
+
+    /// Set the active profile (in-memory only).
+    ///
+    /// This overrides the profile selection from config.json. The change is
+    /// in-memory only and will be lost on reload or restart.
+    ///
+    /// Returns `Ok(true)` if the profile exists, `Ok(false)` if the profile
+    /// doesn't exist (profile will still be set, but won't have any effect).
+    pub fn set_profile(&self, profile: &str) -> Result<bool, ConfigError> {
+        let mut config = self.config.write().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire write lock: {e}"),
+            }
+            .build()
+        })?;
+
+        let exists = config.has_profile(profile);
+        config.profile = Some(profile.to_string());
+
+        if exists {
+            info!(profile, "Profile set");
+        } else {
+            info!(
+                profile,
+                "Profile set (profile not found in config, will use defaults)"
+            );
+        }
+
+        Ok(exists)
+    }
+
+    /// Get the currently active profile name.
+    pub fn current_profile(&self) -> Option<String> {
+        self.config.read().unwrap().profile.clone()
+    }
+
+    /// List all available profiles.
+    pub fn list_profiles(&self) -> Vec<String> {
+        self.config
+            .read()
+            .unwrap()
+            .list_profiles()
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     /// Get the logging configuration from config.json.

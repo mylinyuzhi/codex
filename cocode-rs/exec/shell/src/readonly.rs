@@ -39,7 +39,10 @@
 //! ```
 
 use cocode_shell_parser::ShellParser;
-use cocode_shell_parser::security::{RiskLevel, RiskPhase, SecurityAnalysis, SecurityRisk};
+use cocode_shell_parser::security::RiskLevel;
+use cocode_shell_parser::security::RiskPhase;
+use cocode_shell_parser::security::SecurityAnalysis;
+use cocode_shell_parser::security::SecurityRisk;
 
 /// Known safe read-only commands that do not modify the system.
 const READ_ONLY_COMMANDS: &[&str] = &[

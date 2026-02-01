@@ -26,7 +26,8 @@
 //! - Timeout is enforced at the registry level
 //! - If the agent times out or fails to respond, action continues (fail-open)
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::debug;
 
 use crate::context::HookContext;

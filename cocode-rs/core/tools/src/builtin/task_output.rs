@@ -5,7 +5,8 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for retrieving output from background tasks or agents.
@@ -142,7 +143,8 @@ mod tests {
     use cocode_shell::BackgroundProcess;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, Notify};
+    use tokio::sync::Mutex;
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn test_task_output_tool_not_found() {

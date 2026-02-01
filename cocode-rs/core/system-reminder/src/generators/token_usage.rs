@@ -7,9 +7,11 @@ use async_trait::async_trait;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
-use crate::generator::{AttachmentGenerator, GeneratorContext};
+use crate::generator::AttachmentGenerator;
+use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleConfig;
-use crate::types::{AttachmentType, SystemReminder};
+use crate::types::AttachmentType;
+use crate::types::SystemReminder;
 
 /// Generator for token usage statistics.
 ///
@@ -139,7 +141,8 @@ fn format_tokens(tokens: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generator::{BudgetInfo, TokenUsageStats};
+    use crate::generator::BudgetInfo;
+    use crate::generator::TokenUsageStats;
     use std::path::PathBuf;
 
     fn test_config() -> SystemReminderConfig {

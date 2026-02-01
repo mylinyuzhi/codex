@@ -23,7 +23,9 @@
 //! Large results are stored at:
 //! `{session_dir}/tool-results/{tool_use_id}.txt`
 
-use cocode_protocol::{ToolConfig, ToolOutput, ToolResultContent};
+use cocode_protocol::ToolConfig;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ToolResultContent;
 use std::path::Path;
 use tracing::warn;
 
@@ -274,7 +276,8 @@ mod tests {
     /// Verify thresholds match Claude Code v2.1.7.
     #[test]
     fn test_default_thresholds() {
-        use cocode_protocol::{DEFAULT_MAX_RESULT_SIZE, DEFAULT_RESULT_PREVIEW_SIZE};
+        use cocode_protocol::DEFAULT_MAX_RESULT_SIZE;
+        use cocode_protocol::DEFAULT_RESULT_PREVIEW_SIZE;
         assert_eq!(DEFAULT_MAX_RESULT_SIZE, 400_000);
         assert_eq!(DEFAULT_RESULT_PREVIEW_SIZE, 2_000);
     }

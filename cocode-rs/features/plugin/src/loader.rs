@@ -5,16 +5,24 @@
 
 use crate::agent_loader::load_agents_from_dir;
 use crate::command_loader::load_commands_from_dir;
-use crate::contribution::{PluginContribution, PluginContributions};
+use crate::contribution::PluginContribution;
+use crate::contribution::PluginContributions;
 use crate::error::Result;
-use crate::error::plugin_error::{InvalidManifestSnafu, IoSnafu, PathTraversalSnafu};
-use crate::manifest::{PLUGIN_TOML, PluginManifest};
+use crate::error::plugin_error::InvalidManifestSnafu;
+use crate::error::plugin_error::IoSnafu;
+use crate::error::plugin_error::PathTraversalSnafu;
+use crate::manifest::PLUGIN_TOML;
+use crate::manifest::PluginManifest;
 use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
 
-use cocode_skill::{SkillLoadOutcome, load_skills_from_dir};
-use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use cocode_skill::SkillLoadOutcome;
+use cocode_skill::load_skills_from_dir;
+use std::path::Path;
+use std::path::PathBuf;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 use walkdir::WalkDir;
 
 /// Maximum depth to scan for plugins.

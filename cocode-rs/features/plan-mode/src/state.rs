@@ -3,7 +3,8 @@
 //! Tracks the state of plan mode across a session, including the active
 //! plan file path and mode transitions.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Plan mode state for a session.
 ///

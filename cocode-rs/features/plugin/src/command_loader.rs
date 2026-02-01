@@ -4,7 +4,8 @@
 
 use std::path::Path;
 
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 use walkdir::WalkDir;
 
 use crate::command::PluginCommand;

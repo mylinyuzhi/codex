@@ -5,14 +5,16 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use cocode_shell::BackgroundProcess;
 use serde_json::Value;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
 
 /// Maximum output size (bytes) before truncation.
 const MAX_OUTPUT_SIZE: usize = 30_000;
@@ -322,7 +324,8 @@ fn truncate_output(output: &str, max_size: usize) -> String {
 
 /// Generates a simple unique identifier (timestamp-based).
 fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())

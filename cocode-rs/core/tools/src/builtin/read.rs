@@ -5,7 +5,9 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ContextModifier, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ContextModifier;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
 

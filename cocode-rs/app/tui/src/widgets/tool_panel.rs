@@ -2,15 +2,19 @@
 //!
 //! Displays currently running and recently completed tools.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::List;
+use ratatui::widgets::ListItem;
+use ratatui::widgets::Widget;
 
-use crate::state::{ToolExecution, ToolStatus};
+use crate::state::ToolExecution;
+use crate::state::ToolStatus;
 
 /// Tool panel widget showing tool execution status.
 pub struct ToolPanel<'a> {

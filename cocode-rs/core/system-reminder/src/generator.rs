@@ -4,7 +4,8 @@
 //! generators must implement, and the [`GeneratorContext`] that provides
 //! the runtime state needed for generation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +16,9 @@ use crate::Result;
 use crate::config::SystemReminderConfig;
 use crate::file_tracker::FileTracker;
 use crate::throttle::ThrottleConfig;
-use crate::types::{AttachmentType, ReminderTier, SystemReminder};
+use crate::types::AttachmentType;
+use crate::types::ReminderTier;
+use crate::types::SystemReminder;
 
 /// Trait for attachment generators.
 ///

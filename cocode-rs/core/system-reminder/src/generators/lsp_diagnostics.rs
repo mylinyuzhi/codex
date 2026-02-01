@@ -6,10 +6,16 @@
 use async_trait::async_trait;
 
 use crate::Result;
-use crate::config::{DiagnosticSeverity, SystemReminderConfig};
-use crate::generator::{AttachmentGenerator, DiagnosticInfo, GeneratorContext};
+use crate::config::DiagnosticSeverity;
+use crate::config::SystemReminderConfig;
+use crate::generator::AttachmentGenerator;
+use crate::generator::DiagnosticInfo;
+use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleConfig;
-use crate::types::{AttachmentType, ReminderTier, SystemReminder, XmlTag};
+use crate::types::AttachmentType;
+use crate::types::ReminderTier;
+use crate::types::SystemReminder;
+use crate::types::XmlTag;
 
 /// Generator for LSP diagnostics.
 #[derive(Debug)]

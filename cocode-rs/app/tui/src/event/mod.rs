@@ -15,7 +15,8 @@ pub use handler::handle_key_event;
 pub use stream::TuiEventStream;
 
 use cocode_protocol::LoopEvent;
-use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 
 /// Events that can be processed by the TUI.
 #[derive(Debug, Clone)]

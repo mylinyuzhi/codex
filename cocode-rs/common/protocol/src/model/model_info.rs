@@ -5,7 +5,8 @@ use super::ConfigShellToolType;
 use super::ReasoningSummary;
 use super::TruncationPolicyConfig;
 use crate::thinking::ThinkingLevel;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Configurable model info for merging (all fields optional).

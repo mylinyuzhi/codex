@@ -27,18 +27,27 @@
 //! - WebSearch, WebFetch - web content
 //! - Edit, Write - file operation confirmations
 
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 // Re-export commonly used types and constants from protocol for convenience
+pub use cocode_protocol::CompactBoundaryMetadata;
 pub use cocode_protocol::CompactConfig;
-pub use cocode_protocol::{
-    CompactBoundaryMetadata, CompactTelemetry, CompactTrigger, FileRestorationConfig,
-    HookAdditionalContext, KeepWindowConfig, MemoryAttachment, PersistedToolResult, TokenBreakdown,
-};
+pub use cocode_protocol::CompactTelemetry;
+pub use cocode_protocol::CompactTrigger;
+pub use cocode_protocol::FileRestorationConfig;
+pub use cocode_protocol::HookAdditionalContext;
+pub use cocode_protocol::KeepWindowConfig;
+pub use cocode_protocol::MemoryAttachment;
+pub use cocode_protocol::PersistedToolResult;
+pub use cocode_protocol::TokenBreakdown;
 
 // Backwards-compatible re-exports with old names
 pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET as CONTEXT_RESTORATION_BUDGET;

@@ -2,11 +2,13 @@
 //!
 //! Provides functions for managing plan files at `~/.cocode/plans/`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use snafu::ResultExt;
 
-use crate::error::{Result, plan_mode_error};
+use crate::error::Result;
+use crate::error::plan_mode_error;
 use crate::plan_slug::get_unique_slug;
 
 /// Default plan directory name within the cocode config directory.

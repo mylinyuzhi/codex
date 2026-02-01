@@ -3,7 +3,8 @@
 //! These functions provide formatted output for streaming responses,
 //! tool calls, errors, and session information.
 
-use std::io::{self, Write};
+use std::io::Write;
+use std::io::{self};
 
 /// Print a streaming text response.
 #[allow(dead_code)]

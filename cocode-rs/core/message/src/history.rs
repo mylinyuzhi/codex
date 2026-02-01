@@ -3,12 +3,15 @@
 //! This module provides [`MessageHistory`] which manages the conversation
 //! history for the agent loop, including turn tracking and compaction.
 
-use crate::normalization::{NormalizationOptions, estimate_tokens, normalize_messages_for_api};
+use crate::normalization::NormalizationOptions;
+use crate::normalization::estimate_tokens;
+use crate::normalization::normalize_messages_for_api;
 use crate::tracked::TrackedMessage;
 use crate::turn::Turn;
 use cocode_protocol::TokenUsage;
 use hyper_sdk::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Configuration for message history.
 #[derive(Debug, Clone, Serialize, Deserialize)]

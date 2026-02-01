@@ -22,16 +22,24 @@
 //! # }
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_protocol::model::{ModelRole, ModelRoles, ModelSpec};
-use cocode_shell::path_extractor::{
-    BoxFuture, PathExtractionResult, PathExtractor, filter_existing_files, truncate_for_extraction,
-};
-use hyper_sdk::{GenerateRequest, HyperClient, Message};
-use tracing::{debug, warn};
+use cocode_protocol::model::ModelRole;
+use cocode_protocol::model::ModelRoles;
+use cocode_protocol::model::ModelSpec;
+use cocode_shell::path_extractor::BoxFuture;
+use cocode_shell::path_extractor::PathExtractionResult;
+use cocode_shell::path_extractor::PathExtractor;
+use cocode_shell::path_extractor::filter_existing_files;
+use cocode_shell::path_extractor::truncate_for_extraction;
+use hyper_sdk::GenerateRequest;
+use hyper_sdk::HyperClient;
+use hyper_sdk::Message;
+use tracing::debug;
+use tracing::warn;
 
 /// System prompt for path extraction (matches Claude Code).
 const PATH_EXTRACTION_PROMPT: &str = r#"Extract any file paths that this command reads or modifies from the output.

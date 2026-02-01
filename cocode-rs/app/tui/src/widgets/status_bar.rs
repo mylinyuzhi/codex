@@ -6,14 +6,15 @@
 //! - Plan mode indicator
 //! - Token usage
 
-use cocode_protocol::{ReasoningEffort, ThinkingLevel, TokenUsage};
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
-    text::{Line, Span},
-    widgets::Widget,
-};
+use cocode_protocol::ReasoningEffort;
+use cocode_protocol::ThinkingLevel;
+use cocode_protocol::TokenUsage;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Widget;
 
 /// Status bar widget showing model, thinking level, plan mode, and tokens.
 ///

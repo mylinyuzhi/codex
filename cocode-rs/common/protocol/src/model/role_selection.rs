@@ -6,7 +6,8 @@
 use super::ModelRole;
 use super::ModelSpec;
 use crate::ThinkingLevel;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Runtime selection for a single role: current model + current thinking level.
 ///

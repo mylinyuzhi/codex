@@ -1,17 +1,35 @@
 //! Shell command executor with timeout, background support, and shell snapshotting.
+//!
+//! ## Sandbox Mode
+//!
+//! This executor currently runs in **non-sandbox mode** by default, which means
+//! commands execute directly without any sandbox restrictions. This matches
+//! Claude Code's architecture where sandbox is optional and disabled by default.
+//!
+//! To check if a command should be sandboxed, use [`cocode_sandbox::SandboxSettings::is_sandboxed()`].
+//! When sandbox mode is enabled in the future, the executor will wrap commands with
+//! platform-specific sandbox enforcement (Landlock on Linux, Seatbelt on macOS).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
 
-use crate::background::{BackgroundProcess, BackgroundTaskRegistry};
-use crate::command::{CommandResult, ExtractedPaths};
-use crate::path_extractor::{PathExtractor, filter_existing_files, truncate_for_extraction};
-use crate::shell_types::{Shell, default_user_shell};
-use crate::snapshot::{ShellSnapshot, SnapshotConfig};
+use crate::background::BackgroundProcess;
+use crate::background::BackgroundTaskRegistry;
+use crate::command::CommandResult;
+use crate::command::ExtractedPaths;
+use crate::path_extractor::PathExtractor;
+use crate::path_extractor::filter_existing_files;
+use crate::path_extractor::truncate_for_extraction;
+use crate::shell_types::Shell;
+use crate::shell_types::default_user_shell;
+use crate::snapshot::ShellSnapshot;
+use crate::snapshot::SnapshotConfig;
 
 /// Default command timeout in seconds.
 const DEFAULT_TIMEOUT_SECS: i64 = 120;
@@ -659,7 +677,8 @@ fn extract_cwd_from_output(output: &str) -> (String, Option<PathBuf>) {
 
 /// Generates a simple unique identifier (timestamp-based).
 fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())

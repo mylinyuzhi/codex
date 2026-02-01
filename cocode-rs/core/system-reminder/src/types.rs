@@ -3,7 +3,8 @@
 //! This module defines the fundamental types used throughout the system reminder
 //! infrastructure, including attachment types, reminder tiers, and XML tags.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Reminder tier determines when generators run.
 ///

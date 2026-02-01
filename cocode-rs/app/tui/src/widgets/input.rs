@@ -2,13 +2,16 @@
 //!
 //! Multi-line input field with cursor support.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 
 use crate::state::InputState;
 

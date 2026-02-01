@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Runtime environment information for the agent session.
 #[derive(Debug, Clone, Serialize, Deserialize)]

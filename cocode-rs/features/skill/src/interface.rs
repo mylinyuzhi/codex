@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Metadata and content of a skill, as defined in `SKILL.toml`.
 ///

@@ -10,11 +10,13 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
-use crate::event::{TuiEvent, handle_key_event};
+use crate::event::TuiEvent;
+use crate::event::handle_key_event;
 use crate::render::render;
 use crate::state::AppState;
 use crate::terminal::Tui;
-use crate::update::{handle_agent_event, handle_command};
+use crate::update::handle_agent_event;
+use crate::update::handle_command;
 
 /// Configuration for the TUI application.
 #[derive(Debug, Clone)]

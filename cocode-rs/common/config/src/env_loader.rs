@@ -3,7 +3,11 @@
 //! Loads configuration from environment variables with support for both
 //! `COCODE_` and `CLAUDE_CODE_` prefixes (for compatibility).
 
-use cocode_protocol::{AttachmentConfig, CompactConfig, PathConfig, PlanModeConfig, ToolConfig};
+use cocode_protocol::AttachmentConfig;
+use cocode_protocol::CompactConfig;
+use cocode_protocol::PathConfig;
+use cocode_protocol::PlanModeConfig;
+use cocode_protocol::ToolConfig;
 use std::env;
 use std::path::PathBuf;
 use tracing::debug;

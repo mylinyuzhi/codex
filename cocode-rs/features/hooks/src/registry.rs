@@ -7,13 +7,17 @@ use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::context::HookContext;
-use crate::definition::{HookDefinition, HookHandler};
+use crate::definition::HookDefinition;
+use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::handlers;
-use crate::result::{HookOutcome, HookResult};
+use crate::result::HookOutcome;
+use crate::result::HookResult;
 
 /// Central registry that stores hooks and dispatches events.
 ///

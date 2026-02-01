@@ -5,8 +5,10 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
-use globset::{Glob, GlobSetBuilder};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
+use globset::Glob;
+use globset::GlobSetBuilder;
 use serde_json::Value;
 use walkdir::WalkDir;
 
@@ -183,7 +185,8 @@ impl Tool for GlobTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self, File};
+    use std::fs::File;
+    use std::fs::{self};
     use std::path::PathBuf;
     use tempfile::TempDir;
 

@@ -12,7 +12,9 @@ use crate::outcome::SkillLoadOutcome;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 /// Result of loading skills from directories.
 #[derive(Debug, Default)]

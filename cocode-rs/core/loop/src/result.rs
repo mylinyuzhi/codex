@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Describes why the agent loop stopped.
 #[derive(Debug, Clone, Serialize, Deserialize)]

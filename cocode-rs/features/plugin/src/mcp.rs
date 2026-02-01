@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Default function for auto_start field.
 fn default_true() -> bool {

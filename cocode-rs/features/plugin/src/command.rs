@@ -4,7 +4,8 @@
 //! or other interfaces. They support shell commands, skill invocations, and
 //! agent spawning.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Default function for visible field.
 fn default_true() -> bool {

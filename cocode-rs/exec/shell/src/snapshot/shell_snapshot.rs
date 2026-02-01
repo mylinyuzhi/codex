@@ -1,19 +1,25 @@
 //! Shell snapshot capture and management.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::time::timeout;
 
-use crate::shell_types::{Shell, ShellType};
-use crate::snapshot::scripts::{
-    bash_snapshot_script, powershell_snapshot_script, sh_snapshot_script, zsh_snapshot_script,
-};
+use crate::shell_types::Shell;
+use crate::shell_types::ShellType;
+use crate::snapshot::scripts::bash_snapshot_script;
+use crate::snapshot::scripts::powershell_snapshot_script;
+use crate::snapshot::scripts::sh_snapshot_script;
+use crate::snapshot::scripts::zsh_snapshot_script;
 
 /// Default timeout for snapshot capture operations.
 const DEFAULT_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);

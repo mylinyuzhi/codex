@@ -4,7 +4,8 @@
 //! capabilities with exponential backoff and retry decisions.
 
 use crate::error::ApiError;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::time::Duration;
 
 /// Configuration for retry behavior.

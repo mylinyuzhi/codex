@@ -3,7 +3,9 @@
 //! This module converts raw crossterm key events into high-level
 //! [`TuiCommand`]s that can be processed by the application.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 
 use super::TuiCommand;
 

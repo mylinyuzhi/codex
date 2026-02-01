@@ -3,8 +3,12 @@
 //! Combines environment info, budget, tool state, memory, and configuration
 //! into a single context value used by the prompt builder.
 
-use cocode_protocol::{CompactConfig, PermissionMode, SessionMemoryConfig, ThinkingLevel};
-use serde::{Deserialize, Serialize};
+use cocode_protocol::CompactConfig;
+use cocode_protocol::PermissionMode;
+use cocode_protocol::SessionMemoryConfig;
+use cocode_protocol::ThinkingLevel;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::budget::ContextBudget;
 use crate::environment::EnvironmentInfo;
