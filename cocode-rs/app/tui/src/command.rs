@@ -50,6 +50,14 @@ pub enum UserCommand {
         remember: bool,
     },
 
+    /// Execute a skill command.
+    ExecuteSkill {
+        /// The skill name (e.g., "commit").
+        name: String,
+        /// Arguments passed to the skill.
+        args: String,
+    },
+
     /// Request graceful shutdown.
     Shutdown,
 }
@@ -80,6 +88,13 @@ impl std::fmt::Display for UserCommand {
                     f,
                     "ApprovalResponse({request_id}, approved={approved}, remember={remember})"
                 )
+            }
+            UserCommand::ExecuteSkill { name, args } => {
+                if args.is_empty() {
+                    write!(f, "ExecuteSkill({name})")
+                } else {
+                    write!(f, "ExecuteSkill({name}, args={args})")
+                }
             }
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }

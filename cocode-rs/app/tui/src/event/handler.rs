@@ -38,18 +38,38 @@ pub fn handle_key_event(key: KeyEvent, has_overlay: bool) -> Option<TuiCommand> 
     handle_input_key(key)
 }
 
-/// Handle a key event with file suggestion state.
+/// Handle a key event with file and skill suggestion state.
 ///
-/// When file suggestions are active, some keys are redirected to
-/// suggestion navigation.
+/// When suggestions are active, some keys are redirected to
+/// suggestion navigation. Skill suggestions take priority over file suggestions.
 pub fn handle_key_event_with_suggestions(
     key: KeyEvent,
     has_overlay: bool,
     has_file_suggestions: bool,
 ) -> Option<TuiCommand> {
+    handle_key_event_with_all_suggestions(key, has_overlay, has_file_suggestions, false)
+}
+
+/// Handle a key event with file and skill suggestion state.
+///
+/// When suggestions are active, some keys are redirected to
+/// suggestion navigation. Skill suggestions take priority over file suggestions.
+pub fn handle_key_event_with_all_suggestions(
+    key: KeyEvent,
+    has_overlay: bool,
+    has_file_suggestions: bool,
+    has_skill_suggestions: bool,
+) -> Option<TuiCommand> {
     // Handle overlay-specific keys first
     if has_overlay {
         return handle_overlay_key(key);
+    }
+
+    // Handle skill suggestion navigation (higher priority)
+    if has_skill_suggestions {
+        if let Some(cmd) = handle_skill_suggestion_key(key) {
+            return Some(cmd);
+        }
     }
 
     // Handle file suggestion navigation
@@ -87,6 +107,25 @@ fn handle_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
+/// Handle keys for skill suggestion navigation.
+fn handle_skill_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
+    match (key.modifiers, key.code) {
+        // Navigate suggestions
+        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSkillSuggestion),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSkillSuggestion),
+
+        // Accept suggestion
+        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSkillSuggestion),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSkillSuggestion),
+
+        // Dismiss suggestions
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSkillSuggestions),
+
+        // Other keys pass through to normal handling
+        _ => None,
+    }
+}
+
 /// Handle keys when an overlay (permission prompt, model picker) is active.
 fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
@@ -109,6 +148,14 @@ fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
         }
+
+        // Character input for filter-based overlays
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            Some(TuiCommand::InsertChar(c))
+        }
+
+        // Backspace for filter
+        KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
 
         _ => None,
     }
@@ -134,6 +181,23 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // External editor (Ctrl+E)
         (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(TuiCommand::OpenExternalEditor),
+
+        // Command palette (Ctrl+P)
+        (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(TuiCommand::ShowCommandPalette),
+
+        // Session browser (Ctrl+S)
+        (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(TuiCommand::ShowSessionBrowser),
+
+        // Toggle thinking display (Ctrl+Shift+T)
+        (m, KeyCode::Char('T'))
+            if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+        {
+            Some(TuiCommand::ToggleThinking)
+        }
+
+        // Show help (? or F1)
+        (KeyModifiers::NONE, KeyCode::F(1)) => Some(TuiCommand::ShowHelp),
+        (KeyModifiers::SHIFT, KeyCode::Char('?')) => Some(TuiCommand::ShowHelp),
 
         // Quit (Ctrl+Q)
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(TuiCommand::Quit),
@@ -169,10 +233,11 @@ fn handle_input_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // Backspace
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(TuiCommand::DeleteBackward),
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(TuiCommand::DeleteBackward), // TODO: Delete word
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(TuiCommand::DeleteWordBackward),
 
         // Delete
         (KeyModifiers::NONE, KeyCode::Delete) => Some(TuiCommand::DeleteForward),
+        (KeyModifiers::CONTROL, KeyCode::Delete) => Some(TuiCommand::DeleteWordForward),
 
         // Cursor movement
         (KeyModifiers::NONE, KeyCode::Left) => Some(TuiCommand::CursorLeft),
@@ -183,8 +248,8 @@ fn handle_input_key(key: KeyEvent) -> Option<TuiCommand> {
         (KeyModifiers::NONE, KeyCode::End) => Some(TuiCommand::CursorEnd),
 
         // Word movement (Ctrl+Arrow)
-        (KeyModifiers::CONTROL, KeyCode::Left) => Some(TuiCommand::CursorHome), // TODO: Word left
-        (KeyModifiers::CONTROL, KeyCode::Right) => Some(TuiCommand::CursorEnd), // TODO: Word right
+        (KeyModifiers::CONTROL, KeyCode::Left) => Some(TuiCommand::WordLeft),
+        (KeyModifiers::CONTROL, KeyCode::Right) => Some(TuiCommand::WordRight),
 
         // Scroll (without modifiers, for chat area)
         (KeyModifiers::ALT, KeyCode::Up) => Some(TuiCommand::ScrollUp),
@@ -276,5 +341,59 @@ mod tests {
     fn test_escape_cancels() {
         let event = key(KeyCode::Esc, KeyModifiers::NONE);
         assert_eq!(handle_key_event(event, false), Some(TuiCommand::Cancel));
+    }
+
+    #[test]
+    fn test_ctrl_left_word_left() {
+        let event = key(KeyCode::Left, KeyModifiers::CONTROL);
+        assert_eq!(handle_key_event(event, false), Some(TuiCommand::WordLeft));
+    }
+
+    #[test]
+    fn test_ctrl_right_word_right() {
+        let event = key(KeyCode::Right, KeyModifiers::CONTROL);
+        assert_eq!(handle_key_event(event, false), Some(TuiCommand::WordRight));
+    }
+
+    #[test]
+    fn test_ctrl_backspace_delete_word() {
+        let event = key(KeyCode::Backspace, KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key_event(event, false),
+            Some(TuiCommand::DeleteWordBackward)
+        );
+    }
+
+    #[test]
+    fn test_ctrl_delete_delete_word_forward() {
+        let event = key(KeyCode::Delete, KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key_event(event, false),
+            Some(TuiCommand::DeleteWordForward)
+        );
+    }
+
+    #[test]
+    fn test_f1_shows_help() {
+        let event = key(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(handle_key_event(event, false), Some(TuiCommand::ShowHelp));
+    }
+
+    #[test]
+    fn test_question_mark_shows_help() {
+        let event = key(KeyCode::Char('?'), KeyModifiers::SHIFT);
+        assert_eq!(handle_key_event(event, false), Some(TuiCommand::ShowHelp));
+    }
+
+    #[test]
+    fn test_ctrl_shift_t_toggles_thinking() {
+        let event = key(
+            KeyCode::Char('T'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            handle_key_event(event, false),
+            Some(TuiCommand::ToggleThinking)
+        );
     }
 }

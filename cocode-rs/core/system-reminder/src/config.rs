@@ -190,12 +190,22 @@ impl Default for AtMentionedFilesConfig {
 }
 
 /// Configuration for output style instructions.
+///
+/// Output styles modify the model's response style. You can use:
+/// - A built-in style by name (e.g., "explanatory", "learning")
+/// - A custom instruction text
+///
+/// Custom instruction takes precedence over style_name if both are set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputStyleConfig {
     /// Enable output style instructions.
     pub enabled: bool,
-    /// Custom output style instruction.
+    /// Built-in style name (e.g., "explanatory", "learning").
+    /// Use `cocode_config::builtin::list_builtin_output_styles()` to see available styles.
+    pub style_name: Option<String>,
+    /// Custom output style instruction text.
+    /// Takes precedence over style_name if both are set.
     pub instruction: Option<String>,
 }
 
@@ -203,8 +213,36 @@ impl Default for OutputStyleConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            style_name: None,
             instruction: None,
         }
+    }
+}
+
+impl OutputStyleConfig {
+    /// Resolve the output style instruction content.
+    ///
+    /// Resolution order:
+    /// 1. Custom instruction (if set) - takes precedence
+    /// 2. Built-in style (looked up by style_name)
+    ///
+    /// Returns `None` if neither custom instruction nor valid style_name is set.
+    pub fn resolve_instruction(&self) -> Option<String> {
+        // Custom instruction takes precedence
+        if let Some(instruction) = &self.instruction {
+            if !instruction.is_empty() {
+                return Some(instruction.clone());
+            }
+        }
+
+        // Look up by name from builtin
+        if let Some(name) = &self.style_name {
+            if let Some(content) = cocode_config::builtin::get_output_style(name) {
+                return Some(content.to_string());
+            }
+        }
+
+        None
     }
 }
 
@@ -262,5 +300,67 @@ mod tests {
         assert_eq!(config.max_file_size, 100 * 1024); // 100KB
         assert_eq!(config.max_lines, 2000);
         assert_eq!(config.max_line_length, 2000);
+    }
+
+    #[test]
+    fn test_output_style_config_defaults() {
+        let config = OutputStyleConfig::default();
+        assert!(!config.enabled);
+        assert!(config.style_name.is_none());
+        assert!(config.instruction.is_none());
+    }
+
+    #[test]
+    fn test_output_style_config_resolve_builtin() {
+        let config = OutputStyleConfig {
+            enabled: true,
+            style_name: Some("explanatory".to_string()),
+            instruction: None,
+        };
+        let instruction = config.resolve_instruction().unwrap();
+        assert!(instruction.contains("Explanatory Style Active"));
+    }
+
+    #[test]
+    fn test_output_style_config_custom_takes_precedence() {
+        let config = OutputStyleConfig {
+            enabled: true,
+            style_name: Some("explanatory".to_string()),
+            instruction: Some("My custom style".to_string()),
+        };
+        let instruction = config.resolve_instruction().unwrap();
+        assert_eq!(instruction, "My custom style");
+    }
+
+    #[test]
+    fn test_output_style_config_empty_instruction_fallback() {
+        // Empty string instruction should fall back to style_name
+        let config = OutputStyleConfig {
+            enabled: true,
+            style_name: Some("learning".to_string()),
+            instruction: Some(String::new()),
+        };
+        let instruction = config.resolve_instruction().unwrap();
+        assert!(instruction.contains("Learning Style Active"));
+    }
+
+    #[test]
+    fn test_output_style_config_unknown_style() {
+        let config = OutputStyleConfig {
+            enabled: true,
+            style_name: Some("nonexistent".to_string()),
+            instruction: None,
+        };
+        assert!(config.resolve_instruction().is_none());
+    }
+
+    #[test]
+    fn test_output_style_config_neither_set() {
+        let config = OutputStyleConfig {
+            enabled: true,
+            style_name: None,
+            instruction: None,
+        };
+        assert!(config.resolve_instruction().is_none());
     }
 }

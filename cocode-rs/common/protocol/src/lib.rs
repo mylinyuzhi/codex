@@ -16,6 +16,7 @@ pub mod compact_config;
 pub mod features;
 pub mod loop_config;
 pub mod loop_event;
+pub mod mcp_config;
 pub mod model;
 pub mod path_config;
 pub mod permission;
@@ -168,3 +169,13 @@ pub use tool_config::DEFAULT_MAX_RESULT_SIZE;
 pub use tool_config::DEFAULT_MAX_TOOL_CONCURRENCY;
 pub use tool_config::DEFAULT_RESULT_PREVIEW_SIZE;
 pub use tool_config::ToolConfig;
+
+// MCP config types
+pub use mcp_config::McpAutoSearchConfig;
+pub use mcp_config::McpConfig;
+pub use mcp_config::McpToolCacheConfig;
+// MCP config constants
+pub use mcp_config::DEFAULT_AUTOSEARCH_CONTEXT_THRESHOLD;
+pub use mcp_config::DEFAULT_AUTOSEARCH_MIN_CONTEXT_WINDOW;
+pub use mcp_config::DEFAULT_CHARS_PER_TOKEN;
+pub use mcp_config::DEFAULT_TOOL_CACHE_TTL_SECS;

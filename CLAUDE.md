@@ -155,6 +155,12 @@ See [common/error/README.md](cocode-rs/common/error/README.md) for patterns and 
 | LSP | [lsp/CLAUDE.md](cocode-rs/lsp/CLAUDE.md) |
 | Provider SDKs | [provider-sdks/hyper-sdk/CLAUDE.md](cocode-rs/provider-sdks/hyper-sdk/CLAUDE.md) |
 
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **No Prompt Caching** | Prompt caching (Anthropic's cache breakpoints feature) is not required for this project. Do not implement or plan for it. |
+
 ## References
 
 - **Code conventions**: `AGENTS.md`

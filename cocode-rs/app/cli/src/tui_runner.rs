@@ -280,6 +280,53 @@ async fn run_agent_driver(
                     })
                     .await;
             }
+            UserCommand::ExecuteSkill { name, args } => {
+                info!(name, args, "Skill execution requested");
+                // TODO: Implement skill execution through skill manager
+                // For now, convert to a message with the skill command
+                let message = if args.is_empty() {
+                    format!("/{name}")
+                } else {
+                    format!("/{name} {args}")
+                };
+
+                turn_counter += 1;
+                let turn_id = format!("turn-{turn_counter}");
+
+                let _ = event_tx
+                    .send(LoopEvent::TurnStarted {
+                        turn_id: turn_id.clone(),
+                        turn_number: turn_counter,
+                    })
+                    .await;
+
+                let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
+
+                match run_turn_with_events(&mut state, &message, &event_tx, &turn_id).await {
+                    Ok(usage) => {
+                        let _ = event_tx
+                            .send(LoopEvent::StreamRequestEnd {
+                                usage: usage.clone(),
+                            })
+                            .await;
+                        let _ = event_tx
+                            .send(LoopEvent::TurnCompleted { turn_id, usage })
+                            .await;
+                    }
+                    Err(e) => {
+                        error!("Skill execution failed: {e}");
+                        let _ = event_tx
+                            .send(LoopEvent::Error {
+                                error: LoopError {
+                                    code: "skill_error".to_string(),
+                                    message: e.to_string(),
+                                    recoverable: true,
+                                },
+                            })
+                            .await;
+                    }
+                }
+            }
         }
     }
 

@@ -58,6 +58,7 @@
 pub mod config;
 pub mod error;
 pub mod file_tracker;
+pub mod file_watcher;
 pub mod generator;
 pub mod generators;
 pub mod inject;
@@ -73,6 +74,10 @@ pub use error::Result;
 pub use error::SystemReminderError;
 pub use file_tracker::FileTracker;
 pub use file_tracker::ReadFileState;
+pub use file_watcher::FileChangeEvent;
+pub use file_watcher::FileChangeKind;
+pub use file_watcher::FileSystemWatcher;
+pub use file_watcher::FileWatcherConfig;
 pub use generator::AttachmentGenerator;
 pub use generator::GeneratorContext;
 pub use generator::GeneratorContextBuilder;
@@ -101,6 +106,8 @@ pub use parsing::parse_mentions;
 pub mod prelude {
     pub use crate::config::SystemReminderConfig;
     pub use crate::file_tracker::FileTracker;
+    pub use crate::file_watcher::FileChangeEvent;
+    pub use crate::file_watcher::FileSystemWatcher;
     pub use crate::generator::AttachmentGenerator;
     pub use crate::generator::GeneratorContext;
     pub use crate::inject::inject_reminders;

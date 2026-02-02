@@ -44,10 +44,16 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+/// Default maximum concurrent tool executions.
+pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
+
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
     /// Maximum concurrent tool executions.
+    ///
+    /// Configurable via `COCODE_MAX_TOOL_USE_CONCURRENCY` environment variable.
+    /// Default: 10.
     pub max_concurrency: i32,
     /// Working directory for tool execution.
     pub cwd: PathBuf,
@@ -72,8 +78,15 @@ pub struct ExecutorConfig {
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
+        // Check environment variable for max concurrency override
+        let max_concurrency = std::env::var("COCODE_MAX_TOOL_USE_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_MAX_TOOL_CONCURRENCY);
+
         Self {
-            max_concurrency: 10,
+            max_concurrency,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             session_id: String::new(),
             permission_mode: PermissionMode::Default,

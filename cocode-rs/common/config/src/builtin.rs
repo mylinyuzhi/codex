@@ -10,6 +10,10 @@ const GEMINI_PROMPT: &str = include_str!("../gemini_prompt.md");
 const GPT_5_2_PROMPT: &str = include_str!("../gpt_5_2_prompt.md");
 const GPT_5_2_CODEX_PROMPT: &str = include_str!("../gpt-5.2-codex_prompt.md");
 
+// Built-in output style templates (embedded at compile time)
+const OUTPUT_STYLE_EXPLANATORY: &str = include_str!("../output_style_explanatory.md");
+const OUTPUT_STYLE_LEARNING: &str = include_str!("../output_style_learning.md");
+
 use crate::types::ProviderConfig;
 use crate::types::ProviderType;
 use cocode_protocol::Capability;
@@ -49,6 +53,26 @@ pub fn list_builtin_providers() -> Vec<&'static str> {
         .get()
         .map(|p| p.keys().map(String::as_str).collect())
         .unwrap_or_default()
+}
+
+/// Get a built-in output style by name (case-insensitive).
+///
+/// Supported styles:
+/// - `"explanatory"` - Educational insights while completing tasks
+/// - `"learning"` - Hands-on learning with TODO(human) contributions
+///
+/// Returns `None` if the style name is not recognized.
+pub fn get_output_style(name: &str) -> Option<&'static str> {
+    match name.to_lowercase().as_str() {
+        "explanatory" => Some(OUTPUT_STYLE_EXPLANATORY),
+        "learning" => Some(OUTPUT_STYLE_LEARNING),
+        _ => None,
+    }
+}
+
+/// List all built-in output style names.
+pub fn list_builtin_output_styles() -> Vec<&'static str> {
+    vec!["explanatory", "learning"]
 }
 
 // Lazily initialized built-in models
@@ -391,5 +415,43 @@ mod tests {
                 "Model {slug} should have non-empty base_instructions"
             );
         }
+    }
+
+    #[test]
+    fn test_get_output_style_explanatory() {
+        let style = get_output_style("explanatory").unwrap();
+        assert!(style.contains("Explanatory Style Active"));
+        assert!(style.contains("Insight Format"));
+
+        // Test case-insensitive variants
+        assert_eq!(style, get_output_style("Explanatory").unwrap());
+        assert_eq!(style, get_output_style("EXPLANATORY").unwrap());
+        assert_eq!(style, get_output_style("ExPlAnAtOrY").unwrap());
+    }
+
+    #[test]
+    fn test_get_output_style_learning() {
+        let style = get_output_style("learning").unwrap();
+        assert!(style.contains("Learning Style Active"));
+        assert!(style.contains("TODO(human)"));
+
+        // Test case-insensitive variants
+        assert_eq!(style, get_output_style("Learning").unwrap());
+        assert_eq!(style, get_output_style("LEARNING").unwrap());
+        assert_eq!(style, get_output_style("LeArNiNg").unwrap());
+    }
+
+    #[test]
+    fn test_get_output_style_unknown() {
+        let style = get_output_style("unknown");
+        assert!(style.is_none());
+    }
+
+    #[test]
+    fn test_list_builtin_output_styles() {
+        let styles = list_builtin_output_styles();
+        assert!(styles.contains(&"explanatory"));
+        assert!(styles.contains(&"learning"));
+        assert_eq!(styles.len(), 2);
     }
 }

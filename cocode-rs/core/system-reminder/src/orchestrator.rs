@@ -20,6 +20,7 @@ use crate::generators::CollabNotificationsGenerator;
 use crate::generators::DelegateModeGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
+use crate::generators::OutputStyleGenerator;
 use crate::generators::PlanModeApprovedGenerator;
 use crate::generators::PlanModeEnterGenerator;
 use crate::generators::PlanModeExitGenerator;
@@ -91,6 +92,7 @@ impl SystemReminderOrchestrator {
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator),
             Arc::new(LspDiagnosticsGenerator),
+            Arc::new(OutputStyleGenerator),
             Arc::new(TodoRemindersGenerator),
             Arc::new(UnifiedTasksGenerator),
             Arc::new(DelegateModeGenerator),

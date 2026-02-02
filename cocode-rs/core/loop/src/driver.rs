@@ -56,12 +56,15 @@ use tracing::info;
 use tracing::warn;
 
 use crate::compaction::CompactionConfig;
+use crate::compaction::FileRestoration;
 use crate::compaction::InvokedSkillRestoration;
 use crate::compaction::SessionMemorySummary;
 use crate::compaction::TaskStatusRestoration;
 use crate::compaction::ThresholdStatus;
 use crate::compaction::build_compact_instructions;
+use crate::compaction::build_context_restoration_with_config;
 use crate::compaction::calculate_keep_start_index;
+use crate::compaction::format_restoration_message;
 use crate::compaction::map_message_index_to_keep_turns;
 use crate::compaction::try_session_memory_compact;
 use crate::compaction::write_session_memory;
@@ -1282,10 +1285,10 @@ impl AgentLoop {
         // Use the API client to get a summary with retry mechanism
         let max_retries = self.compact_config.max_summary_retries;
         let mut attempt = 0;
-        let mut last_error = String::new();
 
         let summary_text = loop {
             attempt += 1;
+            let last_error: String;
 
             // Build request for each attempt
             let summary_messages =
@@ -1429,6 +1432,7 @@ impl AgentLoop {
         debug!(
             keep_turns,
             keep_start_index = keep_result.keep_start_index,
+            messages_to_keep = keep_result.messages_to_keep,
             keep_tokens = keep_result.keep_tokens,
             text_messages_kept = keep_result.text_messages_kept,
             "Calculated keep window for compaction"
@@ -1478,6 +1482,10 @@ impl AgentLoop {
             })
             .await;
         }
+
+        // Context restoration: restore important files that were read before compaction
+        self.restore_context_after_compaction(&invoked_skills, &task_status)
+            .await;
 
         // Save to session memory for future Tier 1 compaction
         if self.compaction_config.session_memory.enabled {
@@ -1566,6 +1574,120 @@ impl AgentLoop {
         }
     }
 
+    /// Restore context after compaction.
+    ///
+    /// This method restores important files, skills, and task status that were
+    /// tracked before compaction. Files are prioritized by recency and importance.
+    ///
+    /// # Arguments
+    /// * `invoked_skills` - Skills that were invoked before compaction
+    /// * `task_status` - Task status restoration data
+    async fn restore_context_after_compaction(
+        &mut self,
+        invoked_skills: &[InvokedSkillRestoration],
+        task_status: &TaskStatusRestoration,
+    ) {
+        // Get file restoration config
+        let file_config = &self.compact_config.file_restoration;
+
+        // Collect files from the file tracker (Layer 2)
+        let tracked_files = self.file_tracker.tracked_files();
+        let mut files_for_restoration: Vec<FileRestoration> = Vec::new();
+
+        for path in tracked_files {
+            // Skip excluded patterns
+            let path_str = path.to_string_lossy();
+            if file_config.should_exclude(&path_str) {
+                continue;
+            }
+
+            // Try to read the file content
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                let tokens = (content.len() / 4) as i32; // Rough estimate
+
+                // Get last access time from file tracker
+                let last_accessed = if let Some(state) = self.file_tracker.get_state(&path) {
+                    // Use read_turn as a proxy for access time
+                    state.read_turn as i64
+                } else {
+                    0
+                };
+
+                files_for_restoration.push(FileRestoration {
+                    path,
+                    content,
+                    priority: 1, // Default priority
+                    tokens,
+                    last_accessed,
+                });
+            }
+        }
+
+        // Limit to configured max files
+        if files_for_restoration.len() > file_config.max_files as usize {
+            // Sort by last_accessed descending (most recent first)
+            files_for_restoration.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+            files_for_restoration.truncate(file_config.max_files as usize);
+        }
+
+        // Build todo list from task status
+        let todos = if !task_status.tasks.is_empty() {
+            let todo_text = task_status
+                .tasks
+                .iter()
+                .map(|t| format!("- [{}] {}: {}", t.status, t.id, t.subject))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(todo_text)
+        } else {
+            None
+        };
+
+        // Build skills list from invoked skills
+        let skills: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
+
+        // Get plan content if in plan mode
+        let plan = if self.plan_mode_state.is_active {
+            if let Some(plan_path) = &self.plan_mode_state.plan_file_path {
+                tokio::fs::read_to_string(plan_path).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Build context restoration
+        let restoration = build_context_restoration_with_config(
+            files_for_restoration,
+            todos,
+            plan,
+            skills,
+            file_config,
+        );
+
+        // Format and inject restoration message if there's content to restore
+        let restoration_message = format_restoration_message(&restoration);
+        if !restoration_message.is_empty() {
+            let files_count = restoration.files.len();
+            debug!(
+                files_restored = files_count,
+                has_todos = restoration.todos.is_some(),
+                has_plan = restoration.plan.is_some(),
+                skills_count = restoration.skills.len(),
+                "Context restoration completed"
+            );
+
+            // Emit context restoration event
+            self.emit(LoopEvent::ContextRestored {
+                files_count: files_count as i32,
+                has_todos: restoration.todos.is_some(),
+                has_plan: restoration.plan.is_some(),
+            })
+            .await;
+        }
+    }
+
     /// Apply a cached session memory summary (Tier 1 compaction).
     ///
     /// This is the zero-cost compaction path that uses a previously saved summary
@@ -1607,6 +1729,7 @@ impl AgentLoop {
         debug!(
             keep_turns,
             keep_start_index = keep_result.keep_start_index,
+            messages_to_keep = keep_result.messages_to_keep,
             keep_tokens = keep_result.keep_tokens,
             "Calculated keep window for session memory compact"
         );
