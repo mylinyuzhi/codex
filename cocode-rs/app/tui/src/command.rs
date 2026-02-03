@@ -58,6 +58,27 @@ pub enum UserCommand {
         args: String,
     },
 
+    /// Queue a command for later processing (Enter during streaming).
+    ///
+    /// The command will be processed as a new user turn after the
+    /// current turn completes. This is visible in chat history.
+    QueueCommand {
+        /// The prompt to queue.
+        prompt: String,
+    },
+
+    /// Add steering guidance (Shift+Enter).
+    ///
+    /// This is hidden from the user but visible to the model.
+    /// Used for mid-stream guidance like "use TypeScript".
+    AddSteering {
+        /// The steering prompt.
+        prompt: String,
+    },
+
+    /// Clear all queued commands and steering.
+    ClearQueues,
+
     /// Request graceful shutdown.
     Shutdown,
 }
@@ -96,6 +117,23 @@ impl std::fmt::Display for UserCommand {
                     write!(f, "ExecuteSkill({name}, args={args})")
                 }
             }
+            UserCommand::QueueCommand { prompt } => {
+                let preview = if prompt.len() > 20 {
+                    format!("{}...", &prompt[..20])
+                } else {
+                    prompt.clone()
+                };
+                write!(f, "QueueCommand({preview:?})")
+            }
+            UserCommand::AddSteering { prompt } => {
+                let preview = if prompt.len() > 20 {
+                    format!("{}...", &prompt[..20])
+                } else {
+                    prompt.clone()
+                };
+                write!(f, "AddSteering({preview:?})")
+            }
+            UserCommand::ClearQueues => write!(f, "ClearQueues"),
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }
     }

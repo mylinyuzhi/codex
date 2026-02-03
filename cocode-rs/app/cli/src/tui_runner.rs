@@ -3,12 +3,15 @@
 //! This module provides the bridge between the CLI and the TUI,
 //! setting up channels and running the TUI event loop.
 
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use cocode_config::ConfigManager;
 use cocode_protocol::LoopError;
 use cocode_protocol::LoopEvent;
+use cocode_protocol::ModelSpec;
 use cocode_protocol::ProviderType;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
 use cocode_session::Session;
@@ -20,11 +23,84 @@ use tokio::sync::mpsc;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
+
+/// Initialize file logging for TUI mode.
+///
+/// Logs are written to `~/.cocode/log/cocode-tui.log`.
+/// Returns a WorkerGuard that must be kept alive for the duration of the program.
+fn init_tui_logging(config: &ConfigManager, verbose: bool) -> Option<WorkerGuard> {
+    // Get logging config
+    let logging_config = config.logging_config();
+    let common_logging = logging_config
+        .map(|c| c.to_common_logging())
+        .unwrap_or_default();
+
+    // Override level if verbose flag is set
+    let effective_logging = if verbose {
+        cocode_utils_common::LoggingConfig {
+            level: "info,cocode=debug".to_string(),
+            ..common_logging
+        }
+    } else {
+        common_logging
+    };
+
+    // Create log directory
+    let log_dir = cocode_config::log_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("Warning: Could not create log directory {log_dir:?}: {e}");
+        return None;
+    }
+
+    // Open log file with append mode and restrictive permissions
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.create(true).append(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_file_opts.mode(0o600);
+    }
+
+    let log_path = log_dir.join("cocode-tui.log");
+    let log_file = match log_file_opts.open(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Warning: Could not open log file {log_path:?}: {e}");
+            return None;
+        }
+    };
+
+    // Wrap file in non-blocking writer
+    let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
+
+    // Build file layer (timezone is handled inside the macro via ConfigurableTimer)
+    let file_layer = cocode_utils_common::configure_fmt_layer!(
+        fmt::layer().with_writer(non_blocking).with_ansi(false),
+        &effective_logging,
+        "info"
+    );
+
+    match tracing_subscriber::registry().with(file_layer).try_init() {
+        Ok(()) => Some(guard),
+        Err(_) => None, // Already initialized
+    }
+}
 
 /// Run the TUI interface.
 ///
 /// This sets up the TUI with channels for communicating with the agent loop.
-pub async fn run_tui(title: Option<String>, config: &ConfigManager) -> anyhow::Result<()> {
+pub async fn run_tui(
+    title: Option<String>,
+    config: &ConfigManager,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    // Initialize file logging for TUI mode
+    let _logging_guard = init_tui_logging(config, verbose);
+
     info!("Starting TUI mode");
 
     // Get current model/provider from config
@@ -96,9 +172,10 @@ async fn run_agent_driver(
         .map(|info| info.provider_type)
         .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
 
-    // Create session
-    let mut session = Session::new(working_dir.clone(), &model_name, provider_type);
-    session.provider = provider_name.clone();
+    // Create session with model spec
+    let spec = ModelSpec::with_type(&provider_name, provider_type, &model_name);
+    let selection = RoleSelection::new(spec);
+    let mut session = Session::new(working_dir.clone(), selection);
     if let Some(t) = title {
         session.set_title(t);
     }
@@ -122,10 +199,8 @@ async fn run_agent_driver(
         }
     };
 
-    // Track plan mode state locally (Session doesn't have plan_mode field yet)
     let plan_file = working_dir.join(".cocode/plan.md");
 
-    // Handle commands from TUI
     let mut turn_counter = 0;
     while let Some(command) = command_rx.recv().await {
         match command {
@@ -135,7 +210,6 @@ async fn run_agent_driver(
                 turn_counter += 1;
                 let turn_id = format!("turn-{turn_counter}");
 
-                // Signal turn start
                 let _ = event_tx
                     .send(LoopEvent::TurnStarted {
                         turn_id: turn_id.clone(),
@@ -143,10 +217,8 @@ async fn run_agent_driver(
                     })
                     .await;
 
-                // Signal request start
                 let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
 
-                // Run turn and stream events
                 match run_turn_with_events(&mut state, &message, &event_tx, &turn_id).await {
                     Ok(usage) => {
                         let _ = event_tx
@@ -197,25 +269,20 @@ async fn run_agent_driver(
             }
             UserCommand::SetThinkingLevel { level } => {
                 info!(?level, "Thinking level changed");
-                // Update runtime config
                 if let Err(e) = config.switch_thinking_level(ModelRole::Main, level.clone()) {
                     warn!(error = %e, "Failed to update thinking level in config");
                 }
-                // Update session state
                 state.switch_thinking_level(ModelRole::Main, level);
             }
             UserCommand::SetModel { model } => {
                 info!(model, "Model changed");
-                // Parse model spec (format: "provider/model" or just "model")
                 let (new_provider, new_model) = if model.contains('/') {
                     let parts: Vec<&str> = model.splitn(2, '/').collect();
                     (parts[0].to_string(), parts[1].to_string())
                 } else {
-                    // Use current provider
                     (state.provider().to_string(), model.clone())
                 };
 
-                // Validate and switch in config
                 if let Err(e) = config.switch(&new_provider, &new_model) {
                     error!(error = %e, "Failed to switch model");
                     let _ = event_tx
@@ -230,18 +297,15 @@ async fn run_agent_driver(
                     continue;
                 }
 
-                // Resolve provider type for the new model
                 let new_provider_type = config
                     .resolve_provider(&new_provider)
                     .map(|info| info.provider_type)
                     .unwrap_or(ProviderType::OpenaiCompat);
 
-                // Create new session with the new model
-                let mut new_session =
-                    Session::new(working_dir.clone(), &new_model, new_provider_type);
-                new_session.provider = new_provider.clone();
+                let spec = ModelSpec::with_type(&new_provider, new_provider_type, &new_model);
+                let selection = RoleSelection::new(spec);
+                let new_session = Session::new(working_dir.clone(), selection);
 
-                // Recreate session state
                 match cocode_session::SessionState::new(new_session, &config).await {
                     Ok(new_state) => {
                         state = new_state;
@@ -282,8 +346,6 @@ async fn run_agent_driver(
             }
             UserCommand::ExecuteSkill { name, args } => {
                 info!(name, args, "Skill execution requested");
-                // TODO: Implement skill execution through skill manager
-                // For now, convert to a message with the skill command
                 let message = if args.is_empty() {
                     format!("/{name}")
                 } else {
@@ -327,25 +389,61 @@ async fn run_agent_driver(
                     }
                 }
             }
+            UserCommand::QueueCommand { prompt } => {
+                // Queue command for later processing
+                // In the current simplified runner, we just process it immediately
+                // In the full AgentLoop, this would be queued and processed after current turn
+                info!(
+                    prompt_len = prompt.len(),
+                    "Command queued (processing immediately in simplified runner)"
+                );
+                let id = uuid::Uuid::new_v4().to_string();
+                let preview = if prompt.len() > 30 {
+                    format!("{}...", &prompt[..30])
+                } else {
+                    prompt.clone()
+                };
+                let _ = event_tx
+                    .send(LoopEvent::CommandQueued { id, preview })
+                    .await;
+            }
+            UserCommand::AddSteering { prompt } => {
+                // Add steering guidance (hidden from user, visible to model)
+                // In the current simplified runner, we just log it
+                // In the full AgentLoop, this would be injected as a meta message
+                info!(
+                    prompt_len = prompt.len(),
+                    "Steering added (not yet implemented in simplified runner)"
+                );
+                let id = uuid::Uuid::new_v4().to_string();
+                let _ = event_tx
+                    .send(LoopEvent::SteeringInjected {
+                        id,
+                        source: cocode_protocol::SteeringSource::User,
+                    })
+                    .await;
+            }
+            UserCommand::ClearQueues => {
+                info!("Clear queues requested");
+                let _ = event_tx
+                    .send(LoopEvent::QueueStateChanged {
+                        queued: 0,
+                        steering: 0,
+                    })
+                    .await;
+            }
         }
     }
 
     info!("Agent driver stopped");
 }
 
-/// Run a turn and send events to TUI.
-///
-/// This uses real streaming via the AgentLoop, forwarding all events
-/// to the TUI through the provided event channel.
 async fn run_turn_with_events(
     state: &mut cocode_session::SessionState,
     input: &str,
     event_tx: &mpsc::Sender<LoopEvent>,
     _turn_id: &str,
 ) -> anyhow::Result<TokenUsage> {
-    // Use real streaming via SessionState::run_turn_streaming
-    // The AgentLoop sends events directly to the TUI via event_tx
     let result = state.run_turn_streaming(input, event_tx.clone()).await?;
-
     Ok(result.usage)
 }

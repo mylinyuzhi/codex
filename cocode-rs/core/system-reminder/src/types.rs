@@ -63,6 +63,8 @@ impl XmlTag {
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
     // === Core tier (always run) ===
+    /// Security guidelines (dual-placed for compaction survival).
+    SecurityGuidelines,
     /// Detects files that changed since last read.
     ChangedFiles,
     /// Plan mode entry instructions (5-phase workflow).
@@ -132,7 +134,8 @@ impl AttachmentType {
     pub fn xml_tag(&self) -> XmlTag {
         match self {
             // Most attachments use the standard system-reminder tag
-            AttachmentType::ChangedFiles
+            AttachmentType::SecurityGuidelines
+            | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
@@ -170,7 +173,8 @@ impl AttachmentType {
     pub fn tier(&self) -> ReminderTier {
         match self {
             // Core tier - always run
-            AttachmentType::ChangedFiles
+            AttachmentType::SecurityGuidelines
+            | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
@@ -207,6 +211,7 @@ impl AttachmentType {
     /// Get the display name for this attachment type.
     pub fn name(&self) -> &'static str {
         match self {
+            AttachmentType::SecurityGuidelines => "security_guidelines",
             AttachmentType::ChangedFiles => "changed_files",
             AttachmentType::PlanModeEnter => "plan_mode_enter",
             AttachmentType::PlanModeApproved => "plan_mode_approved",

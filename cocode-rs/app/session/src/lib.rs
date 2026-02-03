@@ -44,12 +44,14 @@
 //! ```
 
 pub mod manager;
+pub mod model_registry;
 pub mod persistence;
 pub mod session;
 pub mod state;
 
 // Re-exports
 pub use manager::SessionManager;
+pub use model_registry::ConfigModelFactory;
 pub use persistence::load_session_from_file;
 pub use persistence::save_session_to_file;
 pub use session::Session;

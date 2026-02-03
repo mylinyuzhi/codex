@@ -75,6 +75,10 @@ command.delete_session: "Delete Session %{id}"
 # Thinking toggle
 command.toggle_thinking: "Toggle Thinking"
 
+# Queue & Steering
+command.queue_input: "Queue Input"
+command.add_steering: "Add Steering"
+
 # Quit
 command.quit: "Quit"
 
@@ -101,6 +105,10 @@ status.mcp: "MCP:%{count}"
 
 # Token display
 status.tokens: "%{count} tokens"
+
+# Queue status
+status.queued: "%{count} queued"
+status.steering: "%{count} steering"
 
 # Thinking status
 status.thinking: "thinking..."

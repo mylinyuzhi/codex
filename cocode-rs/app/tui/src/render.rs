@@ -211,7 +211,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         state.session.thinking_budget_remaining(),
     )
     .plan_phase(state.session.plan_phase)
-    .mcp_server_count(state.session.connected_mcp_count());
+    .mcp_server_count(state.session.connected_mcp_count())
+    .queue_counts(state.session.queued_count(), state.session.steering_count());
     frame.render_widget(status_bar, area);
 }
 

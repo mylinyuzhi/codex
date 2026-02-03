@@ -1638,6 +1638,9 @@ dependencies = [
 name = "cocode-api"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "cocode-config",
  "cocode-error",
  "cocode-protocol",
  "futures",
@@ -1647,6 +1650,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "snafu-virtstack",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -1705,12 +1709,15 @@ dependencies = [
  "cocode-session",
  "cocode-skill",
  "cocode-tui",
+ "cocode-utils-common",
  "dirs 6.0.0",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1719,8 +1726,10 @@ version = "0.0.0"
 dependencies = [
  "cocode-error",
  "cocode-protocol",
+ "cocode-utils-common",
  "dirs 5.0.1",
  "hyper-sdk",
+ "jsonc-parser",
  "serde",
  "serde_json",
  "snafu",
@@ -1778,6 +1787,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "cocode-file-encoding"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2006,10 +2023,12 @@ dependencies = [
 name = "cocode-protocol"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "humantime-serde",
  "serde",
  "serde_json",
  "strum 0.27.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2245,6 +2264,7 @@ dependencies = [
  "regex-lite",
  "serde",
  "serde_json",
+ "similar",
  "snafu",
  "snafu-virtstack",
  "tempfile",
@@ -2261,6 +2281,7 @@ dependencies = [
  "async-trait",
  "cocode-apply-patch",
  "cocode-error",
+ "cocode-file-encoding",
  "cocode-file-ignore",
  "cocode-file-search",
  "cocode-hooks",
@@ -5285,6 +5306,15 @@ dependencies = [
  "rand 0.9.2",
  "ryu",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ebcfcb2f2b016f7372835b99cd3be24cc13ce9823107beb0f98b09c6092ba9f"
+dependencies = [
  "serde_json",
 ]
 

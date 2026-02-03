@@ -36,6 +36,7 @@ mod glob;
 mod grep;
 mod kill_shell;
 mod lsp;
+mod notebook_edit;
 pub mod path_extraction;
 mod read;
 mod skill;
@@ -56,6 +57,7 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
 pub use lsp::LspTool;
+pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
 pub use skill::SkillTool;
 pub use task::TaskTool;
@@ -98,6 +100,7 @@ pub fn register_builtin_tools_with_config(registry: &mut ToolRegistry, tool_conf
     registry.register(WebSearchTool::new());
     registry.register(SkillTool::new());
     registry.register(LspTool::new());
+    registry.register(NotebookEditTool::new());
 
     // Conditionally register apply_patch tool based on config
     if let Some(apply_patch_type) = tool_config.apply_patch_tool_type {
@@ -125,6 +128,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "WebSearch",
         "Skill",
         "Lsp",
+        "NotebookEdit",
         "apply_patch",
     ]
 }

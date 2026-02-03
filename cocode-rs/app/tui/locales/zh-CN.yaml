@@ -75,6 +75,10 @@ command.delete_session: "删除会话 %{id}"
 # 思考切换
 command.toggle_thinking: "切换思考显示"
 
+# 队列和引导
+command.queue_input: "排队输入"
+command.add_steering: "添加引导"
+
 # 退出
 command.quit: "退出"
 
@@ -101,6 +105,10 @@ status.mcp: "MCP:%{count}"
 
 # Token 显示
 status.tokens: "%{count} tokens"
+
+# 队列状态
+status.queued: "%{count} 排队"
+status.steering: "%{count} 引导"
 
 # 思考状态
 status.thinking: "思考中..."

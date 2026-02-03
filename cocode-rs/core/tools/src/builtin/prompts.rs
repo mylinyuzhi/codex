@@ -274,6 +274,26 @@ Important:\n\
 - File references must be relative, never absolute\n\
 - You must prefix new lines with + even when creating a new file";
 
+/// Description for the NotebookEdit tool.
+pub const NOTEBOOK_EDIT_DESCRIPTION: &str = "\
+Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source.\n\
+\n\
+Jupyter notebooks are interactive documents that combine code, text, and visualizations, \
+commonly used for data analysis and scientific computing.\n\
+\n\
+Usage:\n\
+- The notebook_path parameter must be an absolute path, not a relative path\n\
+- The cell_id is used to identify which cell to modify; use Read to see cell IDs first\n\
+- Use edit_mode=insert to add a new cell at the index specified by cell_number\n\
+- Use edit_mode=delete to delete the cell at the index specified by cell_number\n\
+- When inserting a new cell, specify cell_type (code or markdown)\n\
+- Prefer using Read tool first to understand the notebook structure\n\
+\n\
+Edit modes:\n\
+- replace (default): Replace the content of an existing cell\n\
+- insert: Insert a new cell (cell_type required)\n\
+- delete: Delete the specified cell";
+
 /// Description for the LSP tool.
 pub const LSP_DESCRIPTION: &str = "\
 Language Server Protocol operations for code intelligence.\n\

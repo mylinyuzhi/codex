@@ -23,6 +23,7 @@ pub mod permission;
 pub mod plan_config;
 pub mod protocol;
 pub mod provider;
+pub mod queue;
 pub mod sandbox;
 pub mod thinking;
 pub mod tool_config;
@@ -33,12 +34,15 @@ pub mod tracking;
 pub use model::Capability;
 pub use model::ConfigShellToolType;
 pub use model::ModelInfo;
+pub use model::ModelSpec;
+pub use model::ModelSpecParseError;
 pub use model::ReasoningEffort;
 pub use model::RoleSelection;
 pub use model::RoleSelections;
 pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;
+pub use model::resolve_provider_type;
 
 // Provider types
 pub use provider::ProviderInfo;
@@ -111,6 +115,11 @@ pub use tool_types::QueuedCommand;
 pub use tool_types::ToolOutput;
 pub use tool_types::ValidationError;
 pub use tool_types::ValidationResult;
+
+// Queue types (user input during streaming)
+pub use queue::SteeringAttachment;
+pub use queue::SteeringSource;
+pub use queue::UserQueuedCommand;
 
 // Tracking types
 pub use tracking::AutoCompactTracking;

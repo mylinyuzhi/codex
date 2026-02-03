@@ -98,7 +98,8 @@
       "WebFetch(domain:www.anthropic.com)",
       "WebFetch(domain:www.humanlayer.dev)",
       "WebFetch(domain:www.builder.io)",
-      "WebFetch(domain:dometrain.com)"
+      "WebFetch(domain:dometrain.com)",
+      "WebFetch(domain:lib.rs)"
     ],
     "deny": [],
     "ask": []

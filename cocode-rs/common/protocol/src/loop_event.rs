@@ -488,6 +488,43 @@ pub enum LoopEvent {
         rolled_back_calls: Vec<String>,
     },
 
+    // ========== Queue & Steering ==========
+    /// A command was queued (Enter during streaming).
+    ///
+    /// This command will be processed as a new user turn after the
+    /// current turn completes. Visible in chat history.
+    CommandQueued {
+        /// Command identifier.
+        id: String,
+        /// Preview of the command (truncated).
+        preview: String,
+    },
+    /// A queued command was dequeued and is being processed.
+    CommandDequeued {
+        /// Command identifier.
+        id: String,
+    },
+    /// Steering was injected (Shift+Enter).
+    ///
+    /// This is a hidden meta message that the model sees but the user
+    /// does not see in chat history. Used for mid-stream guidance.
+    SteeringInjected {
+        /// Steering identifier.
+        id: String,
+        /// Source of the steering (user, hook, system).
+        source: crate::queue::SteeringSource,
+    },
+    /// Queue state changed.
+    ///
+    /// Emitted when the queue or steering counts change, allowing
+    /// the UI to update its status display.
+    QueueStateChanged {
+        /// Number of commands in the visible queue.
+        queued: i32,
+        /// Number of pending steering attachments.
+        steering: i32,
+    },
+
     // ========== Errors & Control ==========
     /// An error occurred in the loop.
     Error {

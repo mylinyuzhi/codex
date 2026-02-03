@@ -381,6 +381,39 @@ pub async fn handle_command(
             state.ui.clear_skill_suggestions();
         }
 
+        // ========== Queue & Steering ==========
+        TuiCommand::QueueInput => {
+            // Queue input for later processing (Enter during streaming)
+            let prompt = state.ui.input.take();
+            if !prompt.trim().is_empty() {
+                let id = state.session.queue_command(&prompt);
+                let _ = command_tx
+                    .send(UserCommand::QueueCommand {
+                        prompt: prompt.clone(),
+                    })
+                    .await;
+                let count = state.session.queued_count();
+                state
+                    .ui
+                    .toast_info(t!("toast.command_queued", count = count).to_string());
+                tracing::debug!(id, count, "Command queued");
+            }
+        }
+        TuiCommand::AddSteering => {
+            // Add steering guidance (Shift+Enter)
+            let prompt = state.ui.input.take();
+            if !prompt.trim().is_empty() {
+                let id = state.session.add_steering(&prompt);
+                let _ = command_tx
+                    .send(UserCommand::AddSteering {
+                        prompt: prompt.clone(),
+                    })
+                    .await;
+                state.ui.toast_info(t!("toast.steering_added").to_string());
+                tracing::debug!(id, "Steering added");
+            }
+        }
+
         // ========== External Editor ==========
         TuiCommand::OpenExternalEditor => {
             // TODO: Implement external editor support
@@ -828,6 +861,24 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
         LoopEvent::ModelFallbackCompleted => {
             state.session.fallback_model = None;
             tracing::debug!("Model fallback completed");
+        }
+
+        // ========== Queue & Steering ==========
+        LoopEvent::CommandQueued { id, preview } => {
+            tracing::debug!(id, preview, "Command queued (from core)");
+        }
+        LoopEvent::CommandDequeued { id } => {
+            // Remove from local queue if present
+            state.session.queued_commands.retain(|c| c.id != id);
+            tracing::debug!(id, "Command dequeued");
+        }
+        LoopEvent::SteeringInjected { id, source } => {
+            // Remove from local pending steering if present
+            state.session.pending_steering.retain(|s| s.id != id);
+            tracing::debug!(id, %source, "Steering injected");
+        }
+        LoopEvent::QueueStateChanged { queued, steering } => {
+            tracing::debug!(queued, steering, "Queue state changed");
         }
 
         // ========== MCP Events ==========

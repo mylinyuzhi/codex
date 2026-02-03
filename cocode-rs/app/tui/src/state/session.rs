@@ -6,8 +6,10 @@
 use std::path::PathBuf;
 
 use cocode_protocol::AgentProgress;
+use cocode_protocol::SteeringAttachment;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
+use cocode_protocol::UserQueuedCommand;
 
 /// State synchronized with the agent session.
 #[derive(Debug, Clone)]
@@ -56,6 +58,12 @@ pub struct SessionState {
 
     /// Whether context compaction is in progress.
     pub is_compacting: bool,
+
+    /// Visible queue of commands to process after current turn (Enter during streaming).
+    pub queued_commands: Vec<UserQueuedCommand>,
+
+    /// Hidden steering attachments to inject (Shift+Enter).
+    pub pending_steering: Vec<SteeringAttachment>,
 }
 
 impl Default for SessionState {
@@ -76,6 +84,8 @@ impl Default for SessionState {
             mcp_servers: Vec::new(),
             fallback_model: None,
             is_compacting: false,
+            queued_commands: Vec::new(),
+            pending_steering: Vec::new(),
         }
     }
 }
@@ -290,6 +300,63 @@ impl SessionState {
                 true
             });
         }
+    }
+
+    // ========== Queue Management ==========
+
+    /// Queue a visible command for later processing (Enter during streaming).
+    ///
+    /// Returns the command ID.
+    pub fn queue_command(&mut self, prompt: impl Into<String>) -> String {
+        let cmd = UserQueuedCommand::new(prompt);
+        let id = cmd.id.clone();
+        self.queued_commands.push(cmd);
+        id
+    }
+
+    /// Dequeue the next command to process.
+    pub fn dequeue_command(&mut self) -> Option<UserQueuedCommand> {
+        if self.queued_commands.is_empty() {
+            None
+        } else {
+            Some(self.queued_commands.remove(0))
+        }
+    }
+
+    /// Get the number of queued commands.
+    pub fn queued_count(&self) -> i32 {
+        self.queued_commands.len() as i32
+    }
+
+    /// Add hidden steering guidance (Shift+Enter).
+    ///
+    /// Returns the steering ID.
+    pub fn add_steering(&mut self, prompt: impl Into<String>) -> String {
+        let steering = SteeringAttachment::user(prompt);
+        let id = steering.id.clone();
+        self.pending_steering.push(steering);
+        id
+    }
+
+    /// Drain all pending steering attachments.
+    pub fn drain_steering(&mut self) -> Vec<SteeringAttachment> {
+        std::mem::take(&mut self.pending_steering)
+    }
+
+    /// Get the number of pending steering attachments.
+    pub fn steering_count(&self) -> i32 {
+        self.pending_steering.len() as i32
+    }
+
+    /// Clear all queued commands and steering.
+    pub fn clear_queues(&mut self) {
+        self.queued_commands.clear();
+        self.pending_steering.clear();
+    }
+
+    /// Check if there are any queued items (commands or steering).
+    pub fn has_queued_items(&self) -> bool {
+        !self.queued_commands.is_empty() || !self.pending_steering.is_empty()
     }
 }
 

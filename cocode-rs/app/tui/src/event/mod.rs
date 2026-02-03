@@ -12,6 +12,7 @@ mod stream;
 
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
+pub use handler::handle_key_event_full;
 pub use handler::handle_key_event_with_all_suggestions;
 pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
@@ -218,6 +219,19 @@ pub enum TuiCommand {
     /// Toggle display of thinking content in chat.
     ToggleThinking,
 
+    // ========== Queue & Steering ==========
+    /// Queue input for later processing (Enter while streaming).
+    ///
+    /// The input will be processed as a new user turn after the
+    /// current turn completes. Visible in chat history.
+    QueueInput,
+
+    /// Add steering guidance (Shift+Enter anytime).
+    ///
+    /// This is hidden from the user but visible to the model.
+    /// Useful for mid-stream guidance.
+    AddSteering,
+
     // ========== Quit ==========
     /// Request to quit the application.
     Quit,
@@ -286,6 +300,8 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::LoadSession(id) => write!(f, "{}", t!("command.load_session", id = id)),
             TuiCommand::DeleteSession(id) => write!(f, "{}", t!("command.delete_session", id = id)),
             TuiCommand::ToggleThinking => write!(f, "{}", t!("command.toggle_thinking")),
+            TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
+            TuiCommand::AddSteering => write!(f, "{}", t!("command.add_steering")),
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }

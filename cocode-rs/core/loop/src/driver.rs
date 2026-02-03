@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use cocode_api::ApiClient;
 use cocode_api::CollectedResponse;
+use cocode_api::MultiModel;
 use cocode_api::QueryResultType;
 use cocode_api::StreamOptions;
 use cocode_context::ConversationContext;
@@ -16,6 +17,7 @@ use cocode_message::Turn;
 use cocode_prompt::SystemPromptBuilder;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::CompactConfig;
+use cocode_protocol::ContextModifier;
 use cocode_protocol::HookEventType;
 use cocode_protocol::LoopConfig;
 use cocode_protocol::LoopEvent;
@@ -36,7 +38,9 @@ use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
 use cocode_system_reminder::generators::HookBlockingInfo;
 use cocode_system_reminder::generators::HookContextInfo;
 use cocode_system_reminder::generators::SkillInfo;
+use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
+use cocode_tools::FileReadState;
 use cocode_tools::FileTracker as ToolsFileTracker;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::StreamingToolExecutor;
@@ -93,7 +97,9 @@ const MAX_OUTPUT_TOKEN_RECOVERY: i32 = 3;
 pub struct AgentLoop {
     // Provider / model
     api_client: ApiClient,
-    model: Arc<dyn Model>,
+    /// Multi-model container for role-based model resolution.
+    /// Provides lazy creation, caching, and fallback to Main role.
+    multi_model: Arc<MultiModel>,
 
     // Tool system
     tool_registry: Arc<ToolRegistry>,
@@ -116,6 +122,8 @@ pub struct AgentLoop {
     /// Shared FileTracker for tool execution (persists across turns).
     /// This is synced to `file_tracker` before generating reminders.
     shared_tools_file_tracker: Arc<tokio::sync::Mutex<ToolsFileTracker>>,
+    /// Shared ApprovalStore for tool execution (persists across turns).
+    shared_approval_store: Arc<tokio::sync::Mutex<ApprovalStore>>,
 
     // Hooks
     hooks: Arc<HookRegistry>,
@@ -159,7 +167,7 @@ pub struct AgentLoop {
 /// Builder for constructing an [`AgentLoop`].
 pub struct AgentLoopBuilder {
     api_client: Option<ApiClient>,
-    model: Option<Arc<dyn Model>>,
+    multi_model: Option<Arc<MultiModel>>,
     tool_registry: Option<Arc<ToolRegistry>>,
     message_history: Option<MessageHistory>,
     context: Option<ConversationContext>,
@@ -183,7 +191,7 @@ impl AgentLoopBuilder {
     pub fn new() -> Self {
         Self {
             api_client: None,
-            model: None,
+            multi_model: None,
             tool_registry: None,
             message_history: None,
             context: None,
@@ -208,9 +216,24 @@ impl AgentLoopBuilder {
         self
     }
 
-    /// Set the model for API calls.
+    /// Set a single model for API calls (backward compatible).
+    ///
+    /// This wraps the model in a `MultiModel` with only the Main role configured.
+    /// For multi-model support, use [`multi_model()`](Self::multi_model) instead.
     pub fn model(mut self, model: Arc<dyn Model>) -> Self {
-        self.model = Some(model);
+        // Wrap single model in MultiModel for backward compatibility
+        // Use Openai as default provider type since it doesn't affect behavior
+        let multi = MultiModel::single(model, cocode_protocol::ProviderType::Openai);
+        self.multi_model = Some(Arc::new(multi));
+        self
+    }
+
+    /// Set the multi-model container for role-based model resolution.
+    ///
+    /// This enables using different models for different roles (Main, Fast,
+    /// Compact, etc.). For single-model use, [`model()`](Self::model) is simpler.
+    pub fn multi_model(mut self, multi_model: Arc<MultiModel>) -> Self {
+        self.multi_model = Some(multi_model);
         self
     }
 
@@ -306,7 +329,7 @@ impl AgentLoopBuilder {
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
-    /// Panics if required fields (`api_client`, `model`, `tool_registry`,
+    /// Panics if required fields (`api_client`, `multi_model`, `tool_registry`,
     /// `context`, `event_tx`) have not been set.
     pub fn build(self) -> AgentLoop {
         let model_name = self
@@ -320,10 +343,12 @@ impl AgentLoopBuilder {
         let file_tracker = FileTracker::new();
         // Create shared file tracker for tool execution (persists across turns)
         let shared_tools_file_tracker = Arc::new(tokio::sync::Mutex::new(ToolsFileTracker::new()));
+        // Create shared approval store for tool execution (persists across turns)
+        let shared_approval_store = Arc::new(tokio::sync::Mutex::new(ApprovalStore::new()));
 
         AgentLoop {
             api_client: self.api_client.expect("api_client is required"),
-            model: self.model.expect("model is required"),
+            multi_model: self.multi_model.expect("model or multi_model is required"),
             tool_registry: self.tool_registry.expect("tool_registry is required"),
             message_history: self.message_history.unwrap_or_default(),
             context: self.context.expect("context is required"),
@@ -334,6 +359,7 @@ impl AgentLoopBuilder {
             reminder_orchestrator,
             file_tracker,
             shared_tools_file_tracker,
+            shared_approval_store,
             hooks: self.hooks.unwrap_or_else(|| Arc::new(HookRegistry::new())),
             async_hook_tracker: Arc::new(AsyncHookTracker::new()),
             event_tx: self.event_tx.expect("event_tx is required"),
@@ -628,6 +654,8 @@ impl AgentLoop {
         .with_hooks(self.hooks.clone())
         // Share the file tracker across turns for change detection
         .with_file_tracker(self.shared_tools_file_tracker.clone())
+        // Share the approval store across turns for permission persistence
+        .with_approval_store(self.shared_approval_store.clone())
         // Share async hook tracker for background hook completion tracking
         .with_async_hook_tracker(self.async_hook_tracker.clone());
 
@@ -741,8 +769,9 @@ impl AgentLoop {
                 ));
             }
 
-            // Add tool results to history - use proper tool_result messages
-            self.add_tool_results_to_history(&results, &tool_calls);
+            // Add tool results to history and apply context modifiers
+            self.add_tool_results_to_history(&results, &tool_calls)
+                .await;
 
             // ── Handle plan mode transitions ──
             // Check if EnterPlanMode or ExitPlanMode was called
@@ -950,9 +979,12 @@ impl AgentLoop {
 
         debug!(turn_id, "Sending API request");
 
+        // Get the main model for streaming
+        let model = self.multi_model.main()?;
+
         let mut stream = self
             .api_client
-            .stream_request(&*self.model, request, StreamOptions::streaming())
+            .stream_request(&*model, request, StreamOptions::streaming())
             .await
             .map_err(|e| anyhow::anyhow!("API stream error: {e}"))?;
 
@@ -1296,9 +1328,14 @@ impl AgentLoop {
             let mut summary_request = GenerateRequest::new(summary_messages);
             summary_request.max_tokens = Some(max_output_tokens);
 
+            // Use Compact role for summarization (falls back to Main if not configured)
+            let compact_model = self
+                .multi_model
+                .get(cocode_protocol::model::ModelRole::Compact)?;
+
             match self
                 .api_client
-                .generate(&*self.model, summary_request)
+                .generate(&*compact_model, summary_request)
                 .await
             {
                 Ok(response) => {
@@ -1771,13 +1808,18 @@ impl AgentLoop {
         Ok(())
     }
 
-    /// Add tool results to the message history.
+    /// Add tool results to the message history and apply context modifiers.
     ///
     /// This creates proper tool_result messages that link back to the tool_use
     /// blocks via their call_id. The results are added to the current turn
     /// for tracking, and a new turn with tool result messages is created
     /// for the next API call.
-    fn add_tool_results_to_history(
+    ///
+    /// Context modifiers from tool outputs are applied to update:
+    /// - `FileTracker`: Records file reads with content and timestamps
+    /// - `ApprovalStore`: Records permission grants for future operations
+    /// - Queued commands (logged but not yet executed)
+    async fn add_tool_results_to_history(
         &mut self,
         results: &[ToolExecutionResult],
         _tool_calls: &[ToolCall],
@@ -1786,14 +1828,26 @@ impl AgentLoop {
             return;
         }
 
+        // Collect all modifiers from successful tool executions
+        let mut all_modifiers: Vec<ContextModifier> = Vec::new();
+
         // Add tool results to current turn for tracking
         for result in results {
             let (output, is_error) = match &result.result {
-                Ok(output) => (output.content.clone(), output.is_error),
+                Ok(output) => {
+                    // Collect modifiers from successful executions
+                    all_modifiers.extend(output.modifiers.clone());
+                    (output.content.clone(), output.is_error)
+                }
                 Err(e) => (ToolResultContent::Text(e.to_string()), true),
             };
             self.message_history
                 .add_tool_result(&result.call_id, &result.name, output, is_error);
+        }
+
+        // Apply context modifiers
+        if !all_modifiers.is_empty() {
+            self.apply_modifiers(&all_modifiers).await;
         }
 
         // Create a new turn with tool result messages for the next API call
@@ -1825,6 +1879,57 @@ impl AgentLoop {
         let user_msg = TrackedMessage::user(&tool_results_text, &next_turn_id);
         let turn = Turn::new(self.turn_number + 1, user_msg);
         self.message_history.add_turn(turn);
+    }
+
+    /// Apply context modifiers from tool execution results.
+    ///
+    /// This processes modifiers collected from tool outputs and updates the
+    /// appropriate stores:
+    /// - `FileRead`: Updates the FileTracker with file content and timestamps
+    /// - `PermissionGranted`: Updates the ApprovalStore with granted permissions
+    /// - `QueueCommand`: Logs queued commands (execution not yet implemented)
+    async fn apply_modifiers(&mut self, modifiers: &[ContextModifier]) {
+        for modifier in modifiers {
+            match modifier {
+                ContextModifier::FileRead { path, content } => {
+                    // Update the shared file tracker with the file read state
+                    let mut tracker = self.shared_tools_file_tracker.lock().await;
+                    // Get file mtime for change detection
+                    let file_mtime = tokio::fs::metadata(path)
+                        .await
+                        .ok()
+                        .and_then(|m| m.modified().ok());
+                    let state = FileReadState::complete(content.clone(), file_mtime);
+                    tracker.record_read_with_state(path.clone(), state);
+                    debug!(
+                        path = %path.display(),
+                        content_len = content.len(),
+                        "Applied FileRead modifier"
+                    );
+                }
+                ContextModifier::PermissionGranted { tool, pattern } => {
+                    // Update the shared approval store with the granted permission
+                    let mut store = self.shared_approval_store.lock().await;
+                    store.approve_pattern(tool, pattern);
+                    debug!(
+                        tool = %tool,
+                        pattern = %pattern,
+                        "Applied PermissionGranted modifier"
+                    );
+                }
+                ContextModifier::QueueCommand { command } => {
+                    // Log the queued command - actual execution not yet implemented
+                    // This could be used for deferred operations like running tests
+                    // after code changes are complete
+                    debug!(
+                        command = %command.command,
+                        args = ?command.args,
+                        priority = command.priority,
+                        "QueueCommand modifier recorded (execution not implemented)"
+                    );
+                }
+            }
+        }
     }
 
     /// Emit a loop event to the event channel.

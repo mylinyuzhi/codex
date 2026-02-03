@@ -86,6 +86,8 @@ pub struct AttachmentSettings {
     pub plan_verification: bool,
     /// Enable token usage display.
     pub token_usage: bool,
+    /// Enable security guidelines (dual-placed for compaction survival).
+    pub security_guidelines: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -112,6 +114,7 @@ impl Default for AttachmentSettings {
             collab_notifications: true,
             plan_verification: true,
             token_usage: true,
+            security_guidelines: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

@@ -393,6 +393,23 @@ impl<'a> GeneratorContext<'a> {
     pub fn is_budget_low(&self) -> bool {
         self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
     }
+
+    /// Check if full reminders should be used this turn.
+    ///
+    /// Full reminders are used on turn 1 and every 5th turn thereafter
+    /// (i.e., turns 1, 6, 11, 16, ...). This follows Claude Code's steering
+    /// pattern to reduce token usage while maintaining model guidance.
+    pub fn should_use_full_reminders(&self) -> bool {
+        self.turn_number == 1 || self.turn_number % 5 == 1
+    }
+
+    /// Check if sparse reminders should be used this turn.
+    ///
+    /// Sparse reminders are brief summaries used on turns where full
+    /// reminders are not needed. This is the inverse of `should_use_full_reminders()`.
+    pub fn should_use_sparse_reminders(&self) -> bool {
+        !self.should_use_full_reminders()
+    }
 }
 
 /// Builder for [`GeneratorContext`].
@@ -699,5 +716,61 @@ mod tests {
         assert_eq!(task.task_type, BackgroundTaskType::Shell);
         assert_eq!(task.status, BackgroundTaskStatus::Running);
         assert!(task.has_new_output);
+    }
+
+    #[test]
+    fn test_should_use_full_reminders() {
+        let config = test_config();
+
+        // Turn 1 - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(1)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+        assert!(!ctx.should_use_sparse_reminders());
+
+        // Turn 2, 3, 4, 5 - should be sparse
+        for turn in [2, 3, 4, 5] {
+            let ctx = GeneratorContext::builder()
+                .config(&config)
+                .turn_number(turn)
+                .cwd(PathBuf::from("/tmp"))
+                .build();
+            assert!(
+                !ctx.should_use_full_reminders(),
+                "Turn {turn} should be sparse"
+            );
+            assert!(
+                ctx.should_use_sparse_reminders(),
+                "Turn {turn} should be sparse"
+            );
+        }
+
+        // Turn 6 (5+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(6)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+        assert!(!ctx.should_use_sparse_reminders());
+
+        // Turn 11 (10+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(11)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+
+        // Turn 16 (15+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(16)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
     }
 }

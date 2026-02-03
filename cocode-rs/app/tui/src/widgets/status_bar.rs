@@ -52,6 +52,10 @@ pub struct StatusBar<'a> {
     plan_phase: Option<PlanPhase>,
     /// Number of connected MCP servers.
     mcp_server_count: i32,
+    /// Number of queued commands.
+    queued_count: i32,
+    /// Number of pending steering.
+    steering_count: i32,
 }
 
 impl<'a> StatusBar<'a> {
@@ -74,6 +78,8 @@ impl<'a> StatusBar<'a> {
             thinking_budget_remaining: None,
             plan_phase: None,
             mcp_server_count: 0,
+            queued_count: 0,
+            steering_count: 0,
         }
     }
 
@@ -111,6 +117,13 @@ impl<'a> StatusBar<'a> {
     /// Set the MCP server count.
     pub fn mcp_server_count(mut self, count: i32) -> Self {
         self.mcp_server_count = count;
+        self
+    }
+
+    /// Set the queue counts.
+    pub fn queue_counts(mut self, queued: i32, steering: i32) -> Self {
+        self.queued_count = queued;
+        self.steering_count = steering;
         self
     }
 
@@ -181,6 +194,24 @@ impl<'a> StatusBar<'a> {
         } else {
             None
         }
+    }
+
+    /// Format the queue status indicator.
+    fn format_queue_status(&self) -> Option<Span<'static>> {
+        if self.queued_count == 0 && self.steering_count == 0 {
+            return None;
+        }
+
+        let mut parts = Vec::new();
+        if self.queued_count > 0 {
+            parts.push(t!("status.queued", count = self.queued_count).to_string());
+        }
+        if self.steering_count > 0 {
+            parts.push(t!("status.steering", count = self.steering_count).to_string());
+        }
+
+        let text = format!(" {} ", parts.join(" | "));
+        Some(Span::raw(text).yellow())
     }
 
     /// Format the token usage.
@@ -317,6 +348,12 @@ impl Widget for StatusBar<'_> {
         // MCP servers (if any connected)
         if let Some(mcp_span) = self.format_mcp_status() {
             spans.push(mcp_span);
+            spans.push(Span::raw("│").dim());
+        }
+
+        // Queue status (if items pending)
+        if let Some(queue_span) = self.format_queue_status() {
+            spans.push(queue_span);
             spans.push(Span::raw("│").dim());
         }
 
@@ -462,5 +499,35 @@ mod tests {
         let bar = StatusBar::new("model", &thinking, false, &usage).thinking_budget(250, None);
         let span = bar.format_thinking_budget().unwrap();
         assert!(span.content.contains("250"));
+    }
+
+    #[test]
+    fn test_queue_status_display() {
+        let usage = TokenUsage::default();
+        let thinking = ThinkingLevel::default();
+
+        // No queued items - should not display
+        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(0, 0);
+        assert!(bar.format_queue_status().is_none());
+
+        // Only queued commands
+        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(2, 0);
+        let span = bar.format_queue_status().unwrap();
+        assert!(span.content.contains("2"));
+        assert!(span.content.contains("queued"));
+
+        // Only steering
+        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(0, 1);
+        let span = bar.format_queue_status().unwrap();
+        assert!(span.content.contains("1"));
+        assert!(span.content.contains("steering"));
+
+        // Both queued and steering
+        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(3, 2);
+        let span = bar.format_queue_status().unwrap();
+        assert!(span.content.contains("3"));
+        assert!(span.content.contains("queued"));
+        assert!(span.content.contains("2"));
+        assert!(span.content.contains("steering"));
     }
 }

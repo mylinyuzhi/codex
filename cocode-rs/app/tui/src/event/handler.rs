@@ -60,6 +60,28 @@ pub fn handle_key_event_with_all_suggestions(
     has_file_suggestions: bool,
     has_skill_suggestions: bool,
 ) -> Option<TuiCommand> {
+    handle_key_event_full(
+        key,
+        has_overlay,
+        has_file_suggestions,
+        has_skill_suggestions,
+        false,
+    )
+}
+
+/// Handle a key event with full context including streaming state.
+///
+/// This is the most complete handler that supports:
+/// - Overlay handling
+/// - File and skill suggestion navigation
+/// - Queue/steering behavior based on streaming state
+pub fn handle_key_event_full(
+    key: KeyEvent,
+    has_overlay: bool,
+    has_file_suggestions: bool,
+    has_skill_suggestions: bool,
+    is_streaming: bool,
+) -> Option<TuiCommand> {
     // Handle overlay-specific keys first
     if has_overlay {
         return handle_overlay_key(key);
@@ -84,8 +106,8 @@ pub fn handle_key_event_with_all_suggestions(
         return Some(cmd);
     }
 
-    // Handle input editing keys
-    handle_input_key(key)
+    // Handle input editing keys with streaming context
+    handle_input_key_with_streaming(key, is_streaming)
 }
 
 /// Handle keys for file suggestion navigation.
@@ -217,13 +239,37 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
 
 /// Handle input editing keys.
 fn handle_input_key(key: KeyEvent) -> Option<TuiCommand> {
+    // Delegate to streaming-aware handler with streaming=false
+    handle_input_key_with_streaming(key, false)
+}
+
+/// Handle input editing keys with streaming context.
+///
+/// When `is_streaming` is true:
+/// - Enter queues the input for later (QueueInput)
+/// - Shift+Enter adds steering guidance (AddSteering)
+///
+/// When `is_streaming` is false:
+/// - Enter submits immediately (SubmitInput)
+/// - Shift+Enter adds steering guidance (AddSteering)
+/// - Alt+Enter inserts a newline (InsertNewline)
+fn handle_input_key_with_streaming(key: KeyEvent, is_streaming: bool) -> Option<TuiCommand> {
     match (key.modifiers, key.code) {
-        // Submit (Enter without modifiers, or Ctrl+Enter)
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::SubmitInput),
+        // Enter: Submit or Queue depending on streaming state
+        (KeyModifiers::NONE, KeyCode::Enter) => {
+            if is_streaming {
+                Some(TuiCommand::QueueInput)
+            } else {
+                Some(TuiCommand::SubmitInput)
+            }
+        }
+        // Ctrl+Enter: Always submit (force submit even during streaming)
         (KeyModifiers::CONTROL, KeyCode::Enter) => Some(TuiCommand::SubmitInput),
 
-        // Newline (Shift+Enter, or Alt+Enter)
-        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(TuiCommand::InsertNewline),
+        // Shift+Enter: Add steering guidance (hidden from user, visible to model)
+        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(TuiCommand::AddSteering),
+
+        // Alt+Enter: Insert newline (for multi-line input)
         (KeyModifiers::ALT, KeyCode::Enter) => Some(TuiCommand::InsertNewline),
 
         // Character input
@@ -308,8 +354,19 @@ mod tests {
     }
 
     #[test]
-    fn test_shift_enter_inserts_newline() {
+    fn test_shift_enter_adds_steering() {
+        // Shift+Enter now adds steering (hidden guidance) instead of newline
         let event = key(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(event, false),
+            Some(TuiCommand::AddSteering)
+        );
+    }
+
+    #[test]
+    fn test_alt_enter_inserts_newline() {
+        // Alt+Enter inserts newline for multi-line input
+        let event = key(KeyCode::Enter, KeyModifiers::ALT);
         assert_eq!(
             handle_key_event(event, false),
             Some(TuiCommand::InsertNewline)
@@ -394,6 +451,56 @@ mod tests {
         assert_eq!(
             handle_key_event(event, false),
             Some(TuiCommand::ToggleThinking)
+        );
+    }
+
+    // ========== Streaming-aware tests ==========
+
+    #[test]
+    fn test_enter_while_streaming_queues_input() {
+        let event = key(KeyCode::Enter, KeyModifiers::NONE);
+        // When streaming, Enter should queue instead of submit
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, true),
+            Some(TuiCommand::QueueInput)
+        );
+    }
+
+    #[test]
+    fn test_enter_while_not_streaming_submits() {
+        let event = key(KeyCode::Enter, KeyModifiers::NONE);
+        // When not streaming, Enter should submit
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, false),
+            Some(TuiCommand::SubmitInput)
+        );
+    }
+
+    #[test]
+    fn test_ctrl_enter_always_submits() {
+        let event = key(KeyCode::Enter, KeyModifiers::CONTROL);
+        // Ctrl+Enter should always submit, even during streaming
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, true),
+            Some(TuiCommand::SubmitInput)
+        );
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, false),
+            Some(TuiCommand::SubmitInput)
+        );
+    }
+
+    #[test]
+    fn test_shift_enter_adds_steering_regardless_of_streaming() {
+        let event = key(KeyCode::Enter, KeyModifiers::SHIFT);
+        // Shift+Enter adds steering regardless of streaming state
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, true),
+            Some(TuiCommand::AddSteering)
+        );
+        assert_eq!(
+            handle_key_event_full(event, false, false, false, false),
+            Some(TuiCommand::AddSteering)
         );
     }
 }
