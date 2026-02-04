@@ -12,6 +12,7 @@ use cocode_protocol::LoopEvent;
 use cocode_protocol::ModelSpec;
 use cocode_protocol::ProviderType;
 use cocode_protocol::RoleSelection;
+use cocode_protocol::SubmissionId;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
 use cocode_session::Session;
@@ -20,6 +21,7 @@ use cocode_tui::AppConfig;
 use cocode_tui::UserCommand;
 use cocode_tui::create_channels;
 use tokio::sync::mpsc;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -201,11 +203,33 @@ async fn run_agent_driver(
 
     let plan_file = working_dir.join(".cocode/plan.md");
 
+    // Track current correlation ID for turn-related events.
+    // This can be used in future to wrap LoopEvents with CorrelatedEvent
+    // for request-response tracking.
+    #[allow(unused_assignments)]
+    let mut _current_correlation_id: Option<SubmissionId> = None;
+
     let mut turn_counter = 0;
     while let Some(command) = command_rx.recv().await {
+        // Generate correlation ID for commands that trigger turns
+        let correlation_id = if command.triggers_turn() {
+            let id = SubmissionId::new();
+            debug!(correlation_id = %id, "Generated correlation ID for command");
+            Some(id)
+        } else {
+            None
+        };
+
         match command {
             UserCommand::SubmitInput { message } => {
-                info!(input_len = message.len(), "Processing user input");
+                info!(
+                    input_len = message.len(),
+                    correlation_id = ?correlation_id.as_ref().map(|id| id.as_str()),
+                    "Processing user input"
+                );
+
+                // Track the correlation ID for this turn's events
+                _current_correlation_id = correlation_id.clone();
 
                 turn_counter += 1;
                 let turn_id = format!("turn-{turn_counter}");
@@ -345,7 +369,15 @@ async fn run_agent_driver(
                     .await;
             }
             UserCommand::ExecuteSkill { name, args } => {
-                info!(name, args, "Skill execution requested");
+                info!(
+                    name, args,
+                    correlation_id = ?correlation_id.as_ref().map(|id| id.as_str()),
+                    "Skill execution requested"
+                );
+
+                // Track the correlation ID for this turn's events
+                _current_correlation_id = correlation_id.clone();
+
                 let message = if args.is_empty() {
                     format!("/{name}")
                 } else {
@@ -407,29 +439,10 @@ async fn run_agent_driver(
                     .send(LoopEvent::CommandQueued { id, preview })
                     .await;
             }
-            UserCommand::AddSteering { prompt } => {
-                // Add steering guidance (hidden from user, visible to model)
-                // In the current simplified runner, we just log it
-                // In the full AgentLoop, this would be injected as a meta message
-                info!(
-                    prompt_len = prompt.len(),
-                    "Steering added (not yet implemented in simplified runner)"
-                );
-                let id = uuid::Uuid::new_v4().to_string();
-                let _ = event_tx
-                    .send(LoopEvent::SteeringInjected {
-                        id,
-                        source: cocode_protocol::SteeringSource::User,
-                    })
-                    .await;
-            }
             UserCommand::ClearQueues => {
                 info!("Clear queues requested");
                 let _ = event_tx
-                    .send(LoopEvent::QueueStateChanged {
-                        queued: 0,
-                        steering: 0,
-                    })
+                    .send(LoopEvent::QueueStateChanged { queued: 0 })
                     .await;
             }
         }

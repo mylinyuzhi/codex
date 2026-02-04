@@ -81,6 +81,7 @@ pub use file_watcher::FileWatcherConfig;
 pub use generator::AttachmentGenerator;
 pub use generator::GeneratorContext;
 pub use generator::GeneratorContextBuilder;
+pub use generator::QueuedCommandInfo;
 pub use inject::combine_reminders;
 pub use inject::inject_reminders;
 pub use orchestrator::SystemReminderOrchestrator;

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use cocode_api::ApiClient;
+use cocode_api::ModelHub;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
 use cocode_hooks::HookRegistry;
@@ -62,6 +63,9 @@ pub struct AgentExecutor {
     /// API client for model inference.
     api_client: ApiClient,
 
+    /// Model hub for model resolution.
+    model_hub: Arc<ModelHub>,
+
     /// Tool registry for tool execution.
     tool_registry: Arc<ToolRegistry>,
 
@@ -79,15 +83,17 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
-    /// Create a new executor with the given API client and tool registry.
+    /// Create a new executor with the given API client, model hub, and tool registry.
     pub fn new(
         api_client: ApiClient,
+        model_hub: Arc<ModelHub>,
         tool_registry: Arc<ToolRegistry>,
         config: ExecutorConfig,
     ) -> Self {
         Self {
             session_id: uuid::Uuid::new_v4().to_string(),
             api_client,
+            model_hub,
             tool_registry,
             hooks: Arc::new(HookRegistry::new()),
             config,
@@ -200,6 +206,7 @@ impl AgentExecutor {
         // Build and run the agent loop
         let mut builder = AgentLoop::builder()
             .api_client(self.api_client.clone())
+            .model_hub(self.model_hub.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(loop_config)
@@ -244,6 +251,7 @@ impl AgentExecutor {
 /// Builder for creating an [`AgentExecutor`].
 pub struct ExecutorBuilder {
     api_client: Option<ApiClient>,
+    model_hub: Option<Arc<ModelHub>>,
     tool_registry: Option<Arc<ToolRegistry>>,
     hooks: Option<Arc<HookRegistry>>,
     config: ExecutorConfig,
@@ -256,12 +264,19 @@ impl ExecutorBuilder {
     pub fn new() -> Self {
         Self {
             api_client: None,
+            model_hub: None,
             tool_registry: None,
             hooks: None,
             config: ExecutorConfig::default(),
             cancel_token: CancellationToken::new(),
             spawn_agent_fn: None,
         }
+    }
+
+    /// Set the model hub.
+    pub fn model_hub(mut self, hub: Arc<ModelHub>) -> Self {
+        self.model_hub = Some(hub);
+        self
     }
 
     /// Set the API client.
@@ -339,10 +354,11 @@ impl ExecutorBuilder {
     /// Build the executor.
     ///
     /// # Panics
-    /// Panics if `api_client` or `tool_registry` have not been set.
+    /// Panics if `api_client`, `model_hub`, or `tool_registry` have not been set.
     pub fn build(self) -> AgentExecutor {
         let mut executor = AgentExecutor::new(
             self.api_client.expect("api_client is required"),
+            self.model_hub.expect("model_hub is required"),
             self.tool_registry.expect("tool_registry is required"),
             self.config,
         );
@@ -382,6 +398,7 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ExecutorBuilder::new();
         assert!(builder.api_client.is_none());
+        assert!(builder.model_hub.is_none());
         assert!(builder.tool_registry.is_none());
         assert!(builder.hooks.is_none());
         assert!(builder.spawn_agent_fn.is_none());

@@ -6,7 +6,6 @@
 use std::path::PathBuf;
 
 use cocode_protocol::AgentProgress;
-use cocode_protocol::SteeringAttachment;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::UserQueuedCommand;
@@ -59,11 +58,10 @@ pub struct SessionState {
     /// Whether context compaction is in progress.
     pub is_compacting: bool,
 
-    /// Visible queue of commands to process after current turn (Enter during streaming).
+    /// Queue of commands to process after current turn (Enter during streaming).
+    /// These also serve as real-time steering: they are injected into the
+    /// current turn as <system-reminder>User sent: {message}</system-reminder>.
     pub queued_commands: Vec<UserQueuedCommand>,
-
-    /// Hidden steering attachments to inject (Shift+Enter).
-    pub pending_steering: Vec<SteeringAttachment>,
 }
 
 impl Default for SessionState {
@@ -85,7 +83,6 @@ impl Default for SessionState {
             fallback_model: None,
             is_compacting: false,
             queued_commands: Vec::new(),
-            pending_steering: Vec::new(),
         }
     }
 }
@@ -328,35 +325,14 @@ impl SessionState {
         self.queued_commands.len() as i32
     }
 
-    /// Add hidden steering guidance (Shift+Enter).
-    ///
-    /// Returns the steering ID.
-    pub fn add_steering(&mut self, prompt: impl Into<String>) -> String {
-        let steering = SteeringAttachment::user(prompt);
-        let id = steering.id.clone();
-        self.pending_steering.push(steering);
-        id
-    }
-
-    /// Drain all pending steering attachments.
-    pub fn drain_steering(&mut self) -> Vec<SteeringAttachment> {
-        std::mem::take(&mut self.pending_steering)
-    }
-
-    /// Get the number of pending steering attachments.
-    pub fn steering_count(&self) -> i32 {
-        self.pending_steering.len() as i32
-    }
-
-    /// Clear all queued commands and steering.
+    /// Clear all queued commands.
     pub fn clear_queues(&mut self) {
         self.queued_commands.clear();
-        self.pending_steering.clear();
     }
 
-    /// Check if there are any queued items (commands or steering).
+    /// Check if there are any queued commands.
     pub fn has_queued_items(&self) -> bool {
-        !self.queued_commands.is_empty() || !self.pending_steering.is_empty()
+        !self.queued_commands.is_empty()
     }
 }
 

@@ -75,9 +75,8 @@ command.delete_session: "删除会话 %{id}"
 # 思考切换
 command.toggle_thinking: "切换思考显示"
 
-# 队列和引导
+# 队列
 command.queue_input: "排队输入"
-command.add_steering: "添加引导"
 
 # 退出
 command.quit: "退出"
@@ -108,7 +107,7 @@ status.tokens: "%{count} tokens"
 
 # 队列状态
 status.queued: "%{count} 排队"
-status.steering: "%{count} 引导"
+status.waiting: "等待中:"
 
 # 思考状态
 status.thinking: "思考中..."
@@ -220,6 +219,10 @@ chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [C
 
 input.title: "消息"
 input.placeholder: "输入消息... (Enter 发送, Shift+Enter 换行)"
+
+# 队列提示消息
+toast.command_queued: "已排队 (%{count} 等待中)"
+toast.steering_added: "引导已添加"
 
 # ============================================================
 # 命令面板项目

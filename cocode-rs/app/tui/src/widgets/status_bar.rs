@@ -52,10 +52,8 @@ pub struct StatusBar<'a> {
     plan_phase: Option<PlanPhase>,
     /// Number of connected MCP servers.
     mcp_server_count: i32,
-    /// Number of queued commands.
+    /// Number of queued commands (also serves as steering).
     queued_count: i32,
-    /// Number of pending steering.
-    steering_count: i32,
 }
 
 impl<'a> StatusBar<'a> {
@@ -79,7 +77,6 @@ impl<'a> StatusBar<'a> {
             plan_phase: None,
             mcp_server_count: 0,
             queued_count: 0,
-            steering_count: 0,
         }
     }
 
@@ -120,10 +117,13 @@ impl<'a> StatusBar<'a> {
         self
     }
 
-    /// Set the queue counts.
-    pub fn queue_counts(mut self, queued: i32, steering: i32) -> Self {
+    /// Set the queue count.
+    ///
+    /// Queued commands serve dual purpose: they are executed as new turns
+    /// after idle, and also injected as steering into the current turn.
+    pub fn queue_counts(mut self, queued: i32, _steering: i32) -> Self {
         self.queued_count = queued;
-        self.steering_count = steering;
+        // steering_count is deprecated - queued commands now serve as steering
         self
     }
 
@@ -198,19 +198,11 @@ impl<'a> StatusBar<'a> {
 
     /// Format the queue status indicator.
     fn format_queue_status(&self) -> Option<Span<'static>> {
-        if self.queued_count == 0 && self.steering_count == 0 {
+        if self.queued_count == 0 {
             return None;
         }
 
-        let mut parts = Vec::new();
-        if self.queued_count > 0 {
-            parts.push(t!("status.queued", count = self.queued_count).to_string());
-        }
-        if self.steering_count > 0 {
-            parts.push(t!("status.steering", count = self.steering_count).to_string());
-        }
-
-        let text = format!(" {} ", parts.join(" | "));
+        let text = format!(" {} ", t!("status.queued", count = self.queued_count));
         Some(Span::raw(text).yellow())
     }
 
@@ -510,24 +502,16 @@ mod tests {
         let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(0, 0);
         assert!(bar.format_queue_status().is_none());
 
-        // Only queued commands
+        // Queued commands (also serve as steering)
         let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(2, 0);
         let span = bar.format_queue_status().unwrap();
         assert!(span.content.contains("2"));
         assert!(span.content.contains("queued"));
 
-        // Only steering
-        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(0, 1);
-        let span = bar.format_queue_status().unwrap();
-        assert!(span.content.contains("1"));
-        assert!(span.content.contains("steering"));
-
-        // Both queued and steering
-        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(3, 2);
+        // More queued commands
+        let bar = StatusBar::new("model", &thinking, false, &usage).queue_counts(3, 0);
         let span = bar.format_queue_status().unwrap();
         assert!(span.content.contains("3"));
         assert!(span.content.contains("queued"));
-        assert!(span.content.contains("2"));
-        assert!(span.content.contains("steering"));
     }
 }

@@ -240,6 +240,22 @@ pub struct CollabNotification {
     pub received_turn: i32,
 }
 
+/// Information about a queued command (real-time steering).
+///
+/// Queued commands are entered by the user via Enter during streaming.
+/// They serve dual purpose:
+/// 1. Injected as `<system-reminder>User sent: {prompt}</system-reminder>` for real-time steering
+/// 2. Executed as new user turns after the current turn completes
+#[derive(Debug, Clone)]
+pub struct QueuedCommandInfo {
+    /// Unique identifier for this command.
+    pub id: String,
+    /// The user's prompt/message.
+    pub prompt: String,
+    /// When the command was queued (Unix millis).
+    pub queued_at: i64,
+}
+
 /// Context passed to generators during execution.
 ///
 /// This provides all the runtime state needed for generators to
@@ -325,6 +341,11 @@ pub struct GeneratorContext<'a> {
     // === Collaboration notifications ===
     /// Pending collaboration notifications from other agents.
     pub collab_notifications: Vec<CollabNotification>,
+
+    // === Real-time steering ===
+    /// Queued commands from user (Enter during streaming).
+    /// These are injected as "User sent: {message}" to steer the model.
+    pub queued_commands: Vec<QueuedCommandInfo>,
 
     // === Global state flags ===
     /// Whether plan mode exit is pending (triggers one-time exit instructions).
@@ -443,6 +464,7 @@ pub struct GeneratorContextBuilder<'a> {
     token_usage: Option<TokenUsageStats>,
     budget: Option<BudgetInfo>,
     collab_notifications: Vec<CollabNotification>,
+    queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
 }
 
@@ -582,6 +604,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
+        self.queued_commands = commands;
+        self
+    }
+
     pub fn plan_mode_exit_pending(mut self, pending: bool) -> Self {
         self.plan_mode_exit_pending = pending;
         self
@@ -622,6 +649,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             token_usage: self.token_usage,
             budget: self.budget,
             collab_notifications: self.collab_notifications,
+            queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
         }
     }

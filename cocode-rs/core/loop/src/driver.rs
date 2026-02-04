@@ -5,8 +5,9 @@ use std::time::Instant;
 
 use cocode_api::ApiClient;
 use cocode_api::CollectedResponse;
-use cocode_api::MultiModel;
+use cocode_api::ModelHub;
 use cocode_api::QueryResultType;
+use cocode_api::RequestBuilder;
 use cocode_api::StreamOptions;
 use cocode_context::ConversationContext;
 use cocode_hooks::AsyncHookTracker;
@@ -15,6 +16,7 @@ use cocode_message::MessageHistory;
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
 use cocode_prompt::SystemPromptBuilder;
+use cocode_protocol::AgentStatus;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::CompactConfig;
 use cocode_protocol::ContextModifier;
@@ -22,11 +24,13 @@ use cocode_protocol::HookEventType;
 use cocode_protocol::LoopConfig;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::QueryTracking;
+use cocode_protocol::RoleSelections;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::FileTracker;
 use cocode_system_reminder::GeneratorContext;
+use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::combine_reminders;
@@ -48,12 +52,11 @@ use cocode_tools::ToolExecutionResult;
 use cocode_tools::ToolRegistry;
 use hyper_sdk::ContentBlock;
 use hyper_sdk::FinishReason;
-use hyper_sdk::GenerateRequest;
 use hyper_sdk::Message;
-use hyper_sdk::Model;
 use hyper_sdk::ToolCall;
 use hyper_sdk::ToolDefinition;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::info;
@@ -97,9 +100,17 @@ const MAX_OUTPUT_TOKEN_RECOVERY: i32 = 3;
 pub struct AgentLoop {
     // Provider / model
     api_client: ApiClient,
-    /// Multi-model container for role-based model resolution.
-    /// Provides lazy creation, caching, and fallback to Main role.
-    multi_model: Arc<MultiModel>,
+    /// Model hub for unified model resolution.
+    ///
+    /// Provides model acquisition and caching. Note: ModelHub is role-agnostic;
+    /// role resolution uses `selections` which are passed to ModelHub methods.
+    model_hub: Arc<ModelHub>,
+    /// Role selections for this agent loop.
+    ///
+    /// Owned by the loop (cloned from Session at creation time). This enables
+    /// proper isolation: subagents get their own copy and are unaffected by
+    /// changes to the parent's model settings.
+    selections: RoleSelections,
 
     // Tool system
     tool_registry: Arc<ToolRegistry>,
@@ -162,12 +173,23 @@ pub struct AgentLoop {
     // Skill system
     /// Optional skill manager for loading and executing skills.
     skill_manager: Option<Arc<SkillManager>>,
+
+    // Real-time steering
+    /// Queued commands from user (Enter during streaming).
+    /// These are injected as steering reminders and executed after idle.
+    queued_commands: Vec<QueuedCommandInfo>,
+
+    // Status broadcast
+    /// Watch channel sender for broadcasting agent status.
+    /// This allows efficient status polling without processing all events.
+    status_tx: watch::Sender<AgentStatus>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
 pub struct AgentLoopBuilder {
     api_client: Option<ApiClient>,
-    multi_model: Option<Arc<MultiModel>>,
+    model_hub: Option<Arc<ModelHub>>,
+    selections: Option<RoleSelections>,
     tool_registry: Option<Arc<ToolRegistry>>,
     message_history: Option<MessageHistory>,
     context: Option<ConversationContext>,
@@ -184,6 +206,8 @@ pub struct AgentLoopBuilder {
     plan_mode_state: Option<PlanModeState>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
+    queued_commands: Vec<QueuedCommandInfo>,
+    status_tx: Option<watch::Sender<AgentStatus>>,
 }
 
 impl AgentLoopBuilder {
@@ -191,7 +215,8 @@ impl AgentLoopBuilder {
     pub fn new() -> Self {
         Self {
             api_client: None,
-            multi_model: None,
+            model_hub: None,
+            selections: None,
             tool_registry: None,
             message_history: None,
             context: None,
@@ -208,6 +233,8 @@ impl AgentLoopBuilder {
             plan_mode_state: None,
             spawn_agent_fn: None,
             skill_manager: None,
+            queued_commands: Vec::new(),
+            status_tx: None,
         }
     }
 
@@ -216,24 +243,25 @@ impl AgentLoopBuilder {
         self
     }
 
-    /// Set a single model for API calls (backward compatible).
+    /// Set the model hub for model acquisition and caching.
     ///
-    /// This wraps the model in a `MultiModel` with only the Main role configured.
-    /// For multi-model support, use [`multi_model()`](Self::multi_model) instead.
-    pub fn model(mut self, model: Arc<dyn Model>) -> Self {
-        // Wrap single model in MultiModel for backward compatibility
-        // Use Openai as default provider type since it doesn't affect behavior
-        let multi = MultiModel::single(model, cocode_protocol::ProviderType::Openai);
-        self.multi_model = Some(Arc::new(multi));
+    /// The hub provides:
+    /// - Provider and model caching
+    /// - `InferenceContext` for request building
+    ///
+    /// Note: ModelHub is role-agnostic. Use `selections()` to set role mappings.
+    pub fn model_hub(mut self, hub: Arc<ModelHub>) -> Self {
+        self.model_hub = Some(hub);
         self
     }
 
-    /// Set the multi-model container for role-based model resolution.
+    /// Set the role selections for this agent loop.
     ///
-    /// This enables using different models for different roles (Main, Fast,
-    /// Compact, etc.). For single-model use, [`model()`](Self::model) is simpler.
-    pub fn multi_model(mut self, multi_model: Arc<MultiModel>) -> Self {
-        self.multi_model = Some(multi_model);
+    /// Selections map roles (Main, Fast, Plan, etc.) to model specs and thinking levels.
+    /// This should be cloned from the Session at creation time. Subagents receive
+    /// their own copy, isolating them from future changes to the parent's settings.
+    pub fn selections(mut self, selections: RoleSelections) -> Self {
+        self.selections = Some(selections);
         self
     }
 
@@ -326,11 +354,44 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set initial queued commands (for real-time steering).
+    ///
+    /// These commands are injected as `<system-reminder>User sent: {message}</system-reminder>`
+    /// to steer the model in real-time, and also executed as new turns after idle.
+    pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
+        self.queued_commands = commands;
+        self
+    }
+
+    /// Set the status watch channel sender.
+    ///
+    /// This enables efficient status polling without processing all events.
+    /// If not set, a new channel will be created internally (the receiver
+    /// will be accessible via `AgentLoop::status_receiver()`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use tokio::sync::watch;
+    /// use cocode_protocol::AgentStatus;
+    ///
+    /// let (status_tx, status_rx) = watch::channel(AgentStatus::default());
+    /// let loop_builder = AgentLoop::builder()
+    ///     .status_tx(status_tx)
+    ///     // ... other config
+    ///     .build();
+    /// // status_rx can be used to poll status efficiently
+    /// ```
+    pub fn status_tx(mut self, tx: watch::Sender<AgentStatus>) -> Self {
+        self.status_tx = Some(tx);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
-    /// Panics if required fields (`api_client`, `multi_model`, `tool_registry`,
-    /// `context`, `event_tx`) have not been set.
+    /// Panics if required fields (`api_client`, `tool_registry`,
+    /// `context`, `event_tx`, `model_hub`, `selections`) have not been set.
     pub fn build(self) -> AgentLoop {
         let model_name = self
             .config
@@ -346,9 +407,15 @@ impl AgentLoopBuilder {
         // Create shared approval store for tool execution (persists across turns)
         let shared_approval_store = Arc::new(tokio::sync::Mutex::new(ApprovalStore::new()));
 
+        // Create status channel if not provided
+        let status_tx = self
+            .status_tx
+            .unwrap_or_else(|| watch::channel(AgentStatus::default()).0);
+
         AgentLoop {
             api_client: self.api_client.expect("api_client is required"),
-            multi_model: self.multi_model.expect("model or multi_model is required"),
+            model_hub: self.model_hub.expect("model_hub is required"),
+            selections: self.selections.expect("selections is required"),
             tool_registry: self.tool_registry.expect("tool_registry is required"),
             message_history: self.message_history.unwrap_or_default(),
             context: self.context.expect("context is required"),
@@ -375,6 +442,8 @@ impl AgentLoopBuilder {
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
+            queued_commands: self.queued_commands,
+            status_tx,
         }
     }
 }
@@ -389,6 +458,71 @@ impl AgentLoop {
     /// Create a builder for constructing an agent loop.
     pub fn builder() -> AgentLoopBuilder {
         AgentLoopBuilder::new()
+    }
+
+    /// Queue a command for real-time steering.
+    ///
+    /// Queued commands serve dual purpose:
+    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` immediately
+    /// 2. Executed as new user turns after the current turn completes
+    ///
+    /// This matches Claude Code's behavior where Enter during streaming both
+    /// steers the current turn and queues for later execution.
+    pub fn queue_command(&mut self, prompt: impl Into<String>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cmd = QueuedCommandInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            prompt: prompt.into(),
+            queued_at: now,
+        };
+        self.queued_commands.push(cmd);
+    }
+
+    /// Get the current queued commands (for processing after idle).
+    pub fn take_queued_commands(&mut self) -> Vec<QueuedCommandInfo> {
+        std::mem::take(&mut self.queued_commands)
+    }
+
+    /// Get the number of queued commands.
+    pub fn queued_count(&self) -> usize {
+        self.queued_commands.len()
+    }
+
+    /// Subscribe to status updates.
+    ///
+    /// Returns a watch receiver that can be used to efficiently poll
+    /// the current agent status without processing all events.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut status_rx = agent_loop.subscribe_status();
+    /// loop {
+    ///     let status = status_rx.borrow().clone();
+    ///     if status.is_busy() {
+    ///         println!("Agent is busy: {status}");
+    ///     }
+    ///     status_rx.changed().await.ok();
+    /// }
+    /// ```
+    pub fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
+        self.status_tx.subscribe()
+    }
+
+    /// Get the current agent status.
+    pub fn current_status(&self) -> AgentStatus {
+        self.status_tx.borrow().clone()
+    }
+
+    /// Update the agent status.
+    ///
+    /// This is called internally at key state transitions.
+    fn set_status(&self, status: AgentStatus) {
+        // Ignore send errors - if all receivers are dropped, that's fine
+        let _ = self.status_tx.send(status);
     }
 
     /// Run the agent loop to completion, starting with an initial user message.
@@ -416,6 +550,77 @@ impl AgentLoop {
 
         self.core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
             .await
+    }
+
+    /// Continue the conversation with a new user message.
+    ///
+    /// This is used to process queued commands after the agent becomes idle.
+    /// Unlike `run`, this continues an existing conversation rather than starting
+    /// a new one.
+    pub async fn continue_with_message(&mut self, message: &str) -> anyhow::Result<LoopResult> {
+        info!("Continuing conversation with new message");
+
+        // Add user message to history
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let user_msg = TrackedMessage::user(message, &turn_id);
+        let next_turn_number = self.message_history.turn_count() as i32 + 1;
+        let turn = Turn::new(next_turn_number, user_msg);
+        self.message_history.add_turn(turn);
+
+        // Mark that this turn has user input
+        self.current_turn_has_user_input = true;
+
+        // Initialize tracking for this continuation
+        let mut query_tracking = QueryTracking::new_root(uuid::Uuid::new_v4().to_string());
+        let mut auto_compact_tracking = AutoCompactTracking::new();
+
+        self.core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
+            .await
+    }
+
+    /// Run the agent loop and then process any queued commands.
+    ///
+    /// This implements Claude Code's dual-purpose queue mechanism:
+    /// 1. Queued commands are injected as steering during the initial run
+    /// 2. After idle, remaining queued commands are executed as new user turns
+    ///
+    /// Returns the last result from processing (or the initial result if no queued commands).
+    pub async fn run_and_process_queue(
+        &mut self,
+        initial_message: &str,
+    ) -> anyhow::Result<LoopResult> {
+        // Run the initial message
+        let mut result = self.run(initial_message).await?;
+
+        // After idle, process any queued commands as new user turns
+        // This matches Claude Code's useQueuedCommandsProcessor behavior
+        while !self.queued_commands.is_empty() {
+            // Take the first queued command
+            let cmd = self.queued_commands.remove(0);
+
+            info!(
+                prompt = %cmd.prompt,
+                remaining = self.queued_commands.len(),
+                "Processing queued command after idle"
+            );
+
+            // Clear queued commands before processing to avoid re-injection
+            // The command is being processed as a new turn now
+            // Note: New commands queued during this turn will be processed next iteration
+
+            // Process as a new user turn
+            result = self.continue_with_message(&cmd.prompt).await?;
+
+            // Check if the loop was interrupted or errored
+            match &result.stop_reason {
+                crate::result::StopReason::UserInterrupted
+                | crate::result::StopReason::Error { .. }
+                | crate::result::StopReason::HookStopped => break,
+                _ => {}
+            }
+        }
+
+        Ok(result)
     }
 
     /// The 18-step core message loop.
@@ -501,17 +706,21 @@ impl AgentLoop {
                         .await?;
                 } else {
                     // Tier 2: Fall back to LLM-based compaction
-                    self.compact(auto_compact_tracking, &turn_id).await?;
+                    self.compact(auto_compact_tracking, &turn_id, query_tracking)
+                        .await?;
                 }
             } else {
                 // Session memory compact disabled, go directly to Tier 2
                 debug!("Session memory compact disabled, using LLM-based compaction");
-                self.compact(auto_compact_tracking, &turn_id).await?;
+                self.compact(auto_compact_tracking, &turn_id, query_tracking)
+                    .await?;
             }
         }
 
         // ── STEP 6: Initialize state ──
         self.turn_number += 1;
+        // Update status to streaming
+        self.set_status(AgentStatus::streaming(turn_id.clone()));
         self.emit(LoopEvent::TurnStarted {
             turn_id: turn_id.clone(),
             turn_number: self.turn_number,
@@ -609,6 +818,12 @@ impl AgentLoop {
             }
         }
 
+        // Add queued commands for real-time steering
+        // These are injected as `<system-reminder>User sent: {message}</system-reminder>`
+        if !self.queued_commands.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.queued_commands(self.queued_commands.clone());
+        }
+
         let gen_ctx = gen_ctx_builder.build();
 
         let reminders = self.reminder_orchestrator.generate_all(&gen_ctx).await;
@@ -625,6 +840,7 @@ impl AgentLoop {
                 estimated_tokens = estimated_with_margin,
                 blocking_limit, "Context window exceeded blocking limit"
             );
+            self.set_status(AgentStatus::error("Context window exceeded"));
             return Ok(LoopResult::error(
                 self.turn_number,
                 self.total_input_tokens,
@@ -669,10 +885,16 @@ impl AgentLoop {
             executor = executor.with_skill_manager(sm.clone());
         }
 
+        // Pass parent selections for subagent isolation
+        // Subagents spawned via Task tool will inherit these selections,
+        // ensuring they're unaffected by changes to this agent's model settings.
+        executor = executor.with_parent_selections(self.selections.clone());
+
         // ── STEP 9: Main API streaming loop with retry ──
         let mut output_recovery_attempts = 0;
         let collected = loop {
             if self.cancel_token.is_cancelled() {
+                self.set_status(AgentStatus::Idle);
                 return Ok(LoopResult::interrupted(
                     self.turn_number,
                     self.total_input_tokens,
@@ -681,7 +903,12 @@ impl AgentLoop {
             }
 
             match self
-                .stream_with_tools(&turn_id, &executor, reminder_content.as_deref())
+                .stream_with_tools(
+                    &turn_id,
+                    &executor,
+                    reminder_content.as_deref(),
+                    query_tracking,
+                )
                 .await
             {
                 Ok(collected) => break collected,
@@ -762,6 +989,7 @@ impl AgentLoop {
             // ── STEP 13: Handle abort after tool execution ──
             // Check if cancelled during tool execution
             if self.cancel_token.is_cancelled() {
+                self.set_status(AgentStatus::Idle);
                 return Ok(LoopResult::interrupted(
                     self.turn_number,
                     self.total_input_tokens,
@@ -918,13 +1146,17 @@ impl AgentLoop {
 
         // ── STEP 18: Recurse or return ──
         match collected.finish_reason {
-            FinishReason::Stop => Ok(LoopResult::completed(
-                self.turn_number,
-                self.total_input_tokens,
-                self.total_output_tokens,
-                response_text,
-                collected.content,
-            )),
+            FinishReason::Stop => {
+                // Turn completed with stop - set status to Idle
+                self.set_status(AgentStatus::Idle);
+                Ok(LoopResult::completed(
+                    self.turn_number,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                    response_text,
+                    collected.content,
+                ))
+            }
             FinishReason::ToolCalls => {
                 // Tool call turns don't have fresh user input - only tool results
                 self.current_turn_has_user_input = false;
@@ -933,6 +1165,7 @@ impl AgentLoop {
             }
             FinishReason::MaxTokens => {
                 // Output token recovery already handled in step 9
+                self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
                     self.turn_number,
                     self.total_input_tokens,
@@ -943,6 +1176,7 @@ impl AgentLoop {
             }
             other => {
                 warn!(?other, "Unexpected finish reason");
+                self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
                     self.turn_number,
                     self.total_input_tokens,
@@ -969,18 +1203,37 @@ impl AgentLoop {
     /// * `turn_id` - Unique identifier for this turn
     /// * `executor` - Tool executor for handling tool calls
     /// * `reminder_content` - Optional system reminder content to inject
+    /// * `query_tracking` - Query tracking info containing the real session_id (chain_id)
     async fn stream_with_tools(
         &mut self,
         turn_id: &str,
         executor: &StreamingToolExecutor,
         reminder_content: Option<&str>,
+        query_tracking: &QueryTracking,
     ) -> anyhow::Result<CollectedResponse> {
-        let request = self.build_request(reminder_content)?;
-
         debug!(turn_id, "Sending API request");
 
-        // Get the main model for streaming
-        let model = self.multi_model.main()?;
+        // Get model and build request using ModelHub
+        // Use the real session_id from query_tracking instead of extracting from turn_id
+        let session_id = &query_tracking.chain_id;
+        let (ctx, model) = self
+            .model_hub
+            .prepare_main_with_selections(&self.selections, session_id, self.turn_number)
+            .map_err(|e| anyhow::anyhow!("Failed to prepare main model: {e}"))?;
+
+        // Build messages and tools using existing logic
+        let (messages, tools) = self.build_messages_and_tools(reminder_content);
+
+        // Use RequestBuilder to assemble the final request with context parameters
+        let mut builder = RequestBuilder::new(ctx).messages(messages);
+        if !tools.is_empty() {
+            builder = builder.tools(tools);
+        }
+        if let Some(max_tokens) = self.config.max_tokens {
+            builder = builder.max_tokens(max_tokens);
+        }
+
+        let request = builder.build();
 
         let mut stream = self
             .api_client
@@ -1163,26 +1416,28 @@ impl AgentLoop {
         })
     }
 
-    /// Build the API request from current context, history, and tools.
+    /// Build messages and tool definitions for the API request.
+    ///
+    /// This extracts the message/tool building logic for use with `RequestBuilder`.
+    /// Used when `model_hub` is available to leverage `InferenceContext` parameters.
     ///
     /// # Arguments
     ///
-    /// * `reminder_content` - Optional system reminder content to inject as a
-    ///   user message. These are dynamic contextual hints (file changes, plan
-    ///   mode instructions, etc.) that are visible to the model but hidden from
-    ///   the user interface.
-    fn build_request(&self, reminder_content: Option<&str>) -> anyhow::Result<GenerateRequest> {
+    /// * `reminder_content` - Optional system reminder content to inject
+    fn build_messages_and_tools(
+        &self,
+        reminder_content: Option<&str>,
+    ) -> (Vec<Message>, Vec<ToolDefinition>) {
         // Build system prompt
         let system_prompt = SystemPromptBuilder::build(&self.context);
 
         // Get conversation messages
         let messages = self.message_history.messages_for_api();
 
-        // Build request with system, messages, and tools
+        // Build messages with system, reminders, and conversation
         let mut all_messages = vec![Message::system(&system_prompt)];
 
         // Inject system reminders as a user message before the conversation
-        // This provides dynamic context (file changes, plan mode, etc.)
         if let Some(content) = reminder_content {
             all_messages.push(Message::user(content));
         }
@@ -1192,17 +1447,7 @@ impl AgentLoop {
         // Get tool definitions
         let tools: Vec<ToolDefinition> = self.tool_registry.all_definitions();
 
-        let mut request = GenerateRequest::new(all_messages);
-
-        if !tools.is_empty() {
-            request.tools = Some(tools);
-        }
-
-        if let Some(max_tokens) = self.config.max_tokens {
-            request.max_tokens = Some(max_tokens);
-        }
-
-        Ok(request)
+        (all_messages, tools)
     }
 
     /// Micro-compaction: remove old tool results to save tokens (no LLM call).
@@ -1260,6 +1505,7 @@ impl AgentLoop {
         &mut self,
         tracking: &mut AutoCompactTracking,
         turn_id: &str,
+        query_tracking: &QueryTracking,
     ) -> anyhow::Result<()> {
         // Execute PreCompact hooks before starting compaction
         let hook_ctx = cocode_hooks::HookContext::new(
@@ -1294,6 +1540,8 @@ impl AgentLoop {
             }
         }
 
+        // Update status to compacting
+        self.set_status(AgentStatus::Compacting);
         self.emit(LoopEvent::CompactionStarted).await;
 
         // Estimate tokens before compaction
@@ -1325,13 +1573,20 @@ impl AgentLoop {
             // Build request for each attempt
             let summary_messages =
                 vec![Message::system(&system_prompt), Message::user(&user_prompt)];
-            let mut summary_request = GenerateRequest::new(summary_messages);
-            summary_request.max_tokens = Some(max_output_tokens);
 
-            // Use Compact role for summarization (falls back to Main if not configured)
-            let compact_model = self
-                .multi_model
-                .get(cocode_protocol::model::ModelRole::Compact)?;
+            // Get compact model and build request using ModelHub
+            // Use the real session_id from query_tracking
+            let session_id = &query_tracking.chain_id;
+            let (ctx, compact_model) = self
+                .model_hub
+                .prepare_compact_with_selections(&self.selections, session_id, self.turn_number)
+                .map_err(|e| anyhow::anyhow!("Failed to prepare compact model: {e}"))?;
+
+            // Use RequestBuilder for the summary request
+            let summary_request = RequestBuilder::new(ctx)
+                .messages(summary_messages.clone())
+                .max_tokens(max_output_tokens)
+                .build();
 
             match self
                 .api_client
@@ -1497,6 +1752,8 @@ impl AgentLoop {
         self.message_history
             .update_boundary_post_tokens(post_tokens);
 
+        // Compaction complete - restore status to Idle
+        self.set_status(AgentStatus::Idle);
         self.emit(LoopEvent::CompactionCompleted {
             removed_messages: 0, // Tracked by MessageHistory
             summary_tokens: post_tokens,

@@ -75,9 +75,8 @@ command.delete_session: "Delete Session %{id}"
 # Thinking toggle
 command.toggle_thinking: "Toggle Thinking"
 
-# Queue & Steering
+# Queue
 command.queue_input: "Queue Input"
-command.add_steering: "Add Steering"
 
 # Quit
 command.quit: "Quit"
@@ -108,7 +107,7 @@ status.tokens: "%{count} tokens"
 
 # Queue status
 status.queued: "%{count} queued"
-status.steering: "%{count} steering"
+status.waiting: "Waiting:"
 
 # Thinking status
 status.thinking: "thinking..."
@@ -220,6 +219,10 @@ chat.thinking_active_collapsed: "Thinking (%{tokens} tokens, %{duration})... [Ct
 
 input.title: "Message"
 input.placeholder: "Type a message... (Enter to send, Shift+Enter for newline)"
+
+# Toast messages for queue
+toast.command_queued: "Queued (%{count} waiting)"
+toast.steering_added: "Steering added"
 
 # ============================================================
 # Command palette items

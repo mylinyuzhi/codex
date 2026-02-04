@@ -9,10 +9,12 @@
 //! - [`SkillSuggestionPopup`]: Skill autocomplete dropdown
 //! - [`SubagentPanel`]: Subagent status display
 //! - [`ToastWidget`]: Toast notification display
+//! - [`QueuedListWidget`]: Displays queued commands waiting to be processed
 
 mod chat;
 mod file_suggestion_popup;
 mod input;
+mod queued_list;
 mod skill_suggestion_popup;
 mod status_bar;
 mod subagent_panel;
@@ -22,6 +24,7 @@ mod tool_panel;
 pub use chat::ChatWidget;
 pub use file_suggestion_popup::FileSuggestionPopup;
 pub use input::InputWidget;
+pub use queued_list::QueuedListWidget;
 pub use skill_suggestion_popup::SkillSuggestionPopup;
 pub use status_bar::StatusBar;
 pub use subagent_panel::SubagentPanel;

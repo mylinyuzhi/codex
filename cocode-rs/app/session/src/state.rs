@@ -6,8 +6,7 @@
 use std::sync::Arc;
 
 use cocode_api::ApiClient;
-use cocode_api::ModelResolver;
-use cocode_api::MultiModel;
+use cocode_api::ModelHub;
 use cocode_config::ConfigManager;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
@@ -28,7 +27,6 @@ use cocode_protocol::model::ModelRole;
 use cocode_skill::SkillInterface;
 use cocode_tools::ToolRegistry;
 
-use cocode_api::thinking_convert;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -127,14 +125,14 @@ pub struct SessionState {
     /// API client for model inference.
     api_client: ApiClient,
 
-    /// Model resolver with provider and model caching.
-    /// This is the primary source for model resolution.
-    model_resolver: Arc<ModelResolver>,
+    /// Model hub for model acquisition and caching.
+    ///
+    /// Note: ModelHub is role-agnostic. Role selections are stored in
+    /// `self.session.selections` and passed to ModelHub methods as parameters.
+    model_hub: Arc<ModelHub>,
 
-    /// Multi-model container for backward compatibility with AgentLoop.
-    /// This is backed by the same ModelResolver and synced with current_selections.
-    multi_model: Arc<MultiModel>,
-
+    // NOTE: Role selections are stored in `self.session.selections` (single source of truth).
+    // This enables proper persistence when the session is saved.
     /// Cancellation token for graceful shutdown.
     cancel_token: CancellationToken,
 
@@ -152,9 +150,6 @@ pub struct SessionState {
 
     /// Context window size for the model.
     context_window: i32,
-
-    /// Runtime role selections (model + thinking_level per role).
-    current_selections: RoleSelections,
 
     /// Provider type for the current session.
     provider_type: ProviderType,
@@ -196,30 +191,23 @@ impl SessionState {
         // Create API client
         let api_client = ApiClient::new();
 
-        // Create ModelResolver for provider and model caching
-        let model_resolver = Arc::new(ModelResolver::new(Arc::new(config.clone())));
+        // Merge config defaults into session.selections (session is the single source of truth)
+        // Start with config defaults, then apply session's existing selections on top
+        let mut merged_selections = config.current_selections();
+        merged_selections.merge(&session.selections);
 
-        // Create MultiModel backed by ModelResolver for AgentLoop compatibility
-        let multi_model = Arc::new(MultiModel::with_resolver(model_resolver.clone()));
-
-        // Set initial selections from session and config
-        // current_selections is the SINGLE SOURCE OF TRUTH
-        let mut current_selections = config.current_selections();
-        current_selections.merge(&session.selections);
-
-        // Sync selections to MultiModel for AgentLoop compatibility
-        // Set main model selection
-        let main_key = format!("{}/{}", provider_name, model_name);
-        multi_model.set_selection(ModelRole::Main, &main_key);
-
-        // Sync other role selections
-        for role in ModelRole::all() {
-            if *role != ModelRole::Main {
-                if let Some(selection) = current_selections.get(*role) {
-                    multi_model.set_selection(*role, selection.model.to_string());
-                }
-            }
+        // Ensure main model is set
+        let main_spec = cocode_protocol::model::ModelSpec::new(provider_name, model_name);
+        if merged_selections.get(ModelRole::Main).is_none() {
+            merged_selections.set(ModelRole::Main, RoleSelection::new(main_spec));
         }
+
+        // Update session with merged selections (session owns the selections)
+        let mut session = session;
+        session.selections = merged_selections;
+
+        // Create ModelHub (role-agnostic, just for model caching)
+        let model_hub = Arc::new(ModelHub::new(Arc::new(config.clone())));
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
@@ -244,15 +232,13 @@ impl SessionState {
             hook_registry: Arc::new(hook_registry),
             skills,
             api_client,
-            model_resolver,
-            multi_model,
+            model_hub,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             context_window,
-            current_selections,
             provider_type,
         })
     }
@@ -306,9 +292,11 @@ impl SessionState {
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
         // Build and run the agent loop
+        // Clone selections so the loop has its own copy (isolation)
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
-            .multi_model(self.multi_model.clone())
+            .model_hub(self.model_hub.clone())
+            .selections(self.session.selections.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())
@@ -451,23 +439,28 @@ impl SessionState {
     // ==========================================================
 
     /// Get all current role selections.
-    pub fn selections(&self) -> &RoleSelections {
-        &self.current_selections
+    ///
+    /// Returns a clone of the session's selections.
+    pub fn get_selections(&self) -> RoleSelections {
+        self.session.selections.clone()
     }
 
     /// Get selection for a specific role.
-    pub fn selection(&self, role: ModelRole) -> Option<&RoleSelection> {
-        self.current_selections.get(role)
+    ///
+    /// Falls back to Main if the role is not configured.
+    pub fn selection(&self, role: ModelRole) -> Option<RoleSelection> {
+        self.session.selections.get_or_main(role).cloned()
     }
 
     /// Get thinking level for a specific role.
     ///
     /// Returns the explicitly set thinking level for this role, or None
     /// if no override is set (model's default will be used).
-    pub fn thinking_level(&self, role: ModelRole) -> Option<&ThinkingLevel> {
-        self.current_selections
-            .get(role)
-            .and_then(|s| s.thinking_level.as_ref())
+    pub fn thinking_level(&self, role: ModelRole) -> Option<ThinkingLevel> {
+        self.session
+            .selections
+            .get_or_main(role)
+            .and_then(|s| s.thinking_level.clone())
     }
 
     /// Get the provider type for this session.
@@ -475,17 +468,16 @@ impl SessionState {
         self.provider_type
     }
 
-    /// Get the model resolver.
+    /// Get the model hub.
     ///
-    /// The resolver provides access to cached providers and models.
-    /// Use `get_for_role(role, &selections)` to get models with custom selections.
-    pub fn model_resolver(&self) -> &Arc<ModelResolver> {
-        &self.model_resolver
+    /// The hub provides model acquisition and caching (role-agnostic).
+    pub fn model_hub(&self) -> &Arc<ModelHub> {
+        &self.model_hub
     }
 
     /// Get or create a model for a specific role.
     ///
-    /// Get model for a specific role using the model resolver with current selections.
+    /// Get model for a specific role using the session's selections.
     /// Falls back to the main role if the requested role has no selection.
     ///
     /// # Returns
@@ -495,10 +487,9 @@ impl SessionState {
         &self,
         role: ModelRole,
     ) -> anyhow::Result<Option<(Arc<dyn hyper_sdk::Model>, ProviderType)>> {
-        // Use ModelResolver with current_selections as the source of truth
         match self
-            .model_resolver
-            .get_for_role(role, &self.current_selections)
+            .model_hub
+            .get_model_for_role_with_selections(role, &self.session.selections)
         {
             Ok((model, provider_type)) => Ok(Some((model, provider_type))),
             Err(e) => {
@@ -514,16 +505,17 @@ impl SessionState {
 
     /// Get the main model (shorthand for get_model_for_role(ModelRole::Main)).
     ///
-    /// Returns the main model using the model resolver with current selections.
+    /// Returns the main model using the session's selections.
     pub fn main_model(&self) -> anyhow::Result<Arc<dyn hyper_sdk::Model>> {
-        self.model_resolver
-            .main(&self.current_selections)
+        self.model_hub
+            .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
+            .map(|(m, _)| m)
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Switch model for a specific role.
     ///
-    /// This updates both the role selection and the multi-model container.
+    /// Updates the session's role selections.
     pub fn switch_role(&mut self, role: ModelRole, selection: RoleSelection) {
         info!(
             role = %role,
@@ -531,11 +523,7 @@ impl SessionState {
             thinking = ?selection.thinking_level,
             "Switching role"
         );
-        // Update selections
-        self.current_selections.set(role, selection.clone());
-        // Update multi-model selection
-        self.multi_model
-            .set_selection(role, selection.model.to_string());
+        self.session.selections.set(role, selection);
     }
 
     /// Switch only the thinking level for a specific role.
@@ -548,15 +536,17 @@ impl SessionState {
             thinking = %level,
             "Switching thinking level for role"
         );
-        self.current_selections.set_thinking_level(role, level)
+        self.session.selections.set_thinking_level(role, level)
     }
 
     /// Clear thinking level override for a specific role.
     ///
     /// Returns `true` if the role selection exists and was updated.
     pub fn clear_thinking_level(&mut self, role: ModelRole) -> bool {
-        if let Some(selection) = self.current_selections.get_mut(role) {
+        // Get current selection, clear thinking level, and set it back
+        if let Some(mut selection) = self.session.selections.get(role).cloned() {
             selection.clear_thinking_level();
+            self.session.selections.set(role, selection);
             info!(role = %role, "Cleared thinking level for role");
             true
         } else {
@@ -588,7 +578,11 @@ impl SessionState {
         let thinking_level = self.thinking_level(role)?;
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
-        thinking_convert::to_provider_options(thinking_level, model_info, self.provider_type)
+        cocode_api::thinking_convert::to_provider_options(
+            &thinking_level,
+            model_info,
+            self.provider_type,
+        )
     }
 
     // ==========================================================
@@ -653,9 +647,11 @@ impl SessionState {
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
         // Build and run the agent loop with the provided event channel
+        // Clone selections so the loop has its own copy (isolation)
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
-            .multi_model(self.multi_model.clone())
+            .model_hub(self.model_hub.clone())
+            .selections(self.session.selections.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())

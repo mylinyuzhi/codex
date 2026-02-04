@@ -3,6 +3,7 @@
 //! These commands represent user actions that need to be communicated
 //! to the core agent loop for processing.
 
+use cocode_protocol::SubmissionId;
 use cocode_protocol::ThinkingLevel;
 
 /// Commands sent from the TUI to the core agent.
@@ -61,26 +62,51 @@ pub enum UserCommand {
     /// Queue a command for later processing (Enter during streaming).
     ///
     /// The command will be processed as a new user turn after the
-    /// current turn completes. This is visible in chat history.
+    /// current turn completes. Also serves as real-time steering:
+    /// queued commands are injected into the current turn as
+    /// <system-reminder>User sent: {message}</system-reminder>
     QueueCommand {
         /// The prompt to queue.
         prompt: String,
     },
 
-    /// Add steering guidance (Shift+Enter).
-    ///
-    /// This is hidden from the user but visible to the model.
-    /// Used for mid-stream guidance like "use TypeScript".
-    AddSteering {
-        /// The steering prompt.
-        prompt: String,
-    },
-
-    /// Clear all queued commands and steering.
+    /// Clear all queued commands.
     ClearQueues,
 
     /// Request graceful shutdown.
     Shutdown,
+}
+
+impl UserCommand {
+    /// Create a submission with a correlation ID.
+    ///
+    /// Returns a tuple of (SubmissionId, UserCommand) where the SubmissionId
+    /// can be used to correlate events back to this command.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cocode_tui::UserCommand;
+    ///
+    /// let cmd = UserCommand::SubmitInput { message: "Hello".to_string() };
+    /// let (id, cmd) = cmd.with_correlation_id();
+    /// // `id` can now be used to track events related to this command
+    /// ```
+    pub fn with_correlation_id(self) -> (SubmissionId, Self) {
+        (SubmissionId::new(), self)
+    }
+
+    /// Check if this command triggers a turn (requires correlation tracking).
+    ///
+    /// Commands that trigger turns should have their events correlated.
+    pub fn triggers_turn(&self) -> bool {
+        matches!(
+            self,
+            UserCommand::SubmitInput { .. }
+                | UserCommand::ExecuteSkill { .. }
+                | UserCommand::QueueCommand { .. }
+        )
+    }
 }
 
 impl std::fmt::Display for UserCommand {
@@ -124,14 +150,6 @@ impl std::fmt::Display for UserCommand {
                     prompt.clone()
                 };
                 write!(f, "QueueCommand({preview:?})")
-            }
-            UserCommand::AddSteering { prompt } => {
-                let preview = if prompt.len() > 20 {
-                    format!("{}...", &prompt[..20])
-                } else {
-                    prompt.clone()
-                };
-                write!(f, "AddSteering({preview:?})")
             }
             UserCommand::ClearQueues => write!(f, "ClearQueues"),
             UserCommand::Shutdown => write!(f, "Shutdown"),
@@ -187,5 +205,64 @@ mod tests {
         let display = cmd.to_string();
         assert!(display.contains("..."));
         assert!(display.len() < long_message.len() + 30);
+    }
+
+    #[test]
+    fn test_with_correlation_id() {
+        let cmd = UserCommand::SubmitInput {
+            message: "Hello".to_string(),
+        };
+        let (id1, cmd1) = cmd.with_correlation_id();
+
+        // ID should be a valid UUID (36 chars with hyphens)
+        assert_eq!(id1.as_str().len(), 36);
+
+        // Command should be preserved
+        if let UserCommand::SubmitInput { message } = cmd1 {
+            assert_eq!(message, "Hello");
+        } else {
+            panic!("Expected SubmitInput command");
+        }
+
+        // Each call should generate unique IDs
+        let cmd = UserCommand::Interrupt;
+        let (id2, _) = cmd.with_correlation_id();
+        assert_ne!(id1.as_str(), id2.as_str());
+    }
+
+    #[test]
+    fn test_triggers_turn() {
+        // Commands that trigger turns
+        assert!(
+            UserCommand::SubmitInput {
+                message: "test".to_string()
+            }
+            .triggers_turn()
+        );
+        assert!(
+            UserCommand::ExecuteSkill {
+                name: "commit".to_string(),
+                args: String::new()
+            }
+            .triggers_turn()
+        );
+        assert!(
+            UserCommand::QueueCommand {
+                prompt: "test".to_string()
+            }
+            .triggers_turn()
+        );
+
+        // Commands that don't trigger turns
+        assert!(!UserCommand::Interrupt.triggers_turn());
+        assert!(!UserCommand::SetPlanMode { active: true }.triggers_turn());
+        assert!(
+            !UserCommand::SetModel {
+                model: "test".to_string()
+            }
+            .triggers_turn()
+        );
+        assert!(!UserCommand::Shutdown.triggers_turn());
+        assert!(!UserCommand::ClearQueues.triggers_turn());
     }
 }

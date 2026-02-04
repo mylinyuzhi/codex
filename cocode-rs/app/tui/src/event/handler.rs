@@ -247,12 +247,14 @@ fn handle_input_key(key: KeyEvent) -> Option<TuiCommand> {
 ///
 /// When `is_streaming` is true:
 /// - Enter queues the input for later (QueueInput)
-/// - Shift+Enter adds steering guidance (AddSteering)
 ///
 /// When `is_streaming` is false:
 /// - Enter submits immediately (SubmitInput)
-/// - Shift+Enter adds steering guidance (AddSteering)
-/// - Alt+Enter inserts a newline (InsertNewline)
+///
+/// Both modes:
+/// - Shift+Enter inserts a newline (for multi-line input)
+/// - Alt+Enter inserts a newline (for multi-line input)
+/// - Ctrl+Enter always submits (force submit even during streaming)
 fn handle_input_key_with_streaming(key: KeyEvent, is_streaming: bool) -> Option<TuiCommand> {
     match (key.modifiers, key.code) {
         // Enter: Submit or Queue depending on streaming state
@@ -266,8 +268,8 @@ fn handle_input_key_with_streaming(key: KeyEvent, is_streaming: bool) -> Option<
         // Ctrl+Enter: Always submit (force submit even during streaming)
         (KeyModifiers::CONTROL, KeyCode::Enter) => Some(TuiCommand::SubmitInput),
 
-        // Shift+Enter: Add steering guidance (hidden from user, visible to model)
-        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(TuiCommand::AddSteering),
+        // Shift+Enter: Insert newline (aligned with Claude Code behavior)
+        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(TuiCommand::InsertNewline),
 
         // Alt+Enter: Insert newline (for multi-line input)
         (KeyModifiers::ALT, KeyCode::Enter) => Some(TuiCommand::InsertNewline),
@@ -354,12 +356,12 @@ mod tests {
     }
 
     #[test]
-    fn test_shift_enter_adds_steering() {
-        // Shift+Enter now adds steering (hidden guidance) instead of newline
+    fn test_shift_enter_inserts_newline() {
+        // Shift+Enter inserts newline (aligned with Claude Code behavior)
         let event = key(KeyCode::Enter, KeyModifiers::SHIFT);
         assert_eq!(
             handle_key_event(event, false),
-            Some(TuiCommand::AddSteering)
+            Some(TuiCommand::InsertNewline)
         );
     }
 
@@ -491,16 +493,16 @@ mod tests {
     }
 
     #[test]
-    fn test_shift_enter_adds_steering_regardless_of_streaming() {
+    fn test_shift_enter_inserts_newline_regardless_of_streaming() {
         let event = key(KeyCode::Enter, KeyModifiers::SHIFT);
-        // Shift+Enter adds steering regardless of streaming state
+        // Shift+Enter inserts newline regardless of streaming state
         assert_eq!(
             handle_key_event_full(event, false, false, false, true),
-            Some(TuiCommand::AddSteering)
+            Some(TuiCommand::InsertNewline)
         );
         assert_eq!(
             handle_key_event_full(event, false, false, false, false),
-            Some(TuiCommand::AddSteering)
+            Some(TuiCommand::InsertNewline)
         );
     }
 }

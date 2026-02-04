@@ -24,6 +24,7 @@ use crate::state::Overlay;
 use crate::widgets::ChatWidget;
 use crate::widgets::FileSuggestionPopup;
 use crate::widgets::InputWidget;
+use crate::widgets::QueuedListWidget;
 use crate::widgets::SkillSuggestionPopup;
 use crate::widgets::StatusBar;
 use crate::widgets::SubagentPanel;
@@ -109,13 +110,30 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState) {
     let input_lines = state.ui.input.text().lines().count().max(1);
     let input_height = (input_lines as u16 + 2).min(10); // +2 for borders, max 10
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),               // Chat
-            Constraint::Length(input_height), // Input
-        ])
-        .split(area);
+    // Calculate queued list height (if any queued commands)
+    let queued_list = QueuedListWidget::new(&state.session.queued_commands);
+    let queued_height = queued_list.required_height();
+
+    let chunks = if queued_height > 0 {
+        // Layout: Chat | Queued List | Input
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),                // Chat
+                Constraint::Length(queued_height), // Queued list
+                Constraint::Length(input_height),  // Input
+            ])
+            .split(area)
+    } else {
+        // Layout: Chat | Input (no queued commands)
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),               // Chat
+                Constraint::Length(input_height), // Input
+            ])
+            .split(area)
+    };
 
     // Chat widget
     let streaming_content = state.ui.streaming.as_ref().map(|s| s.content.as_str());
@@ -131,24 +149,35 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState) {
         .thinking_duration(state.ui.thinking_duration());
     frame.render_widget(chat, chunks[0]);
 
+    // Queued list widget (if any queued commands)
+    // Get the input chunk index based on whether queued list is shown
+    let input_chunk_index = if queued_height > 0 {
+        // Render queued list
+        let queued_list = QueuedListWidget::new(&state.session.queued_commands);
+        frame.render_widget(queued_list, chunks[1]);
+        2 // Input is at index 2
+    } else {
+        1 // Input is at index 1
+    };
+
     // Input widget
     let placeholder = t!("input.placeholder").to_string();
     let input = InputWidget::new(&state.ui.input)
         .focused(state.ui.focus == FocusTarget::Input)
         .placeholder(&placeholder);
-    frame.render_widget(input, chunks[1]);
+    frame.render_widget(input, chunks[input_chunk_index]);
 
     // File suggestion popup (if active)
     if let Some(ref suggestions) = state.ui.file_suggestions {
         let popup = FileSuggestionPopup::new(suggestions);
-        let popup_area = popup.calculate_area(chunks[1], area.height);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
         frame.render_widget(popup, popup_area);
     }
 
     // Skill suggestion popup (if active)
     if let Some(ref suggestions) = state.ui.skill_suggestions {
         let popup = SkillSuggestionPopup::new(suggestions);
-        let popup_area = popup.calculate_area(chunks[1], area.height);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
         frame.render_widget(popup, popup_area);
     }
 }
@@ -212,7 +241,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     )
     .plan_phase(state.session.plan_phase)
     .mcp_server_count(state.session.connected_mcp_count())
-    .queue_counts(state.session.queued_count(), state.session.steering_count());
+    .queue_counts(state.session.queued_count(), 0);
     frame.render_widget(status_bar, area);
 }
 

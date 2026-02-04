@@ -116,6 +116,11 @@ pub enum AttachmentType {
     /// Hook succeeded and added context for the model.
     HookAdditionalContext,
 
+    // === Real-time steering ===
+    /// Queued commands from user (Enter during streaming).
+    /// Injected as "User sent: {message}" to steer model in real-time.
+    QueuedCommands,
+
     // === Phase 2 (future) ===
     /// Tool result injection.
     ToolResult,
@@ -156,6 +161,7 @@ impl AttachmentType {
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
+            | AttachmentType::QueuedCommands
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::TokenUsage
@@ -195,6 +201,7 @@ impl AttachmentType {
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
+            | AttachmentType::QueuedCommands
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::SessionMemoryContent
@@ -234,6 +241,7 @@ impl AttachmentType {
             AttachmentType::AsyncHookResponse => "async_hook_response",
             AttachmentType::HookBlockingError => "hook_blocking_error",
             AttachmentType::HookAdditionalContext => "hook_additional_context",
+            AttachmentType::QueuedCommands => "queued_commands",
             AttachmentType::ToolResult => "tool_result",
             AttachmentType::AsyncAgentStatus => "async_agent_status",
             AttachmentType::SessionMemoryContent => "session_memory",

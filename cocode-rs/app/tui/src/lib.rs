@@ -83,6 +83,11 @@ pub use editor::edit_in_external_editor;
 pub use theme::Theme;
 pub use theme::ThemeName;
 
+// Re-export correlation types from protocol for convenience
+pub use cocode_protocol::AgentStatus;
+pub use cocode_protocol::CorrelatedEvent;
+pub use cocode_protocol::SubmissionId;
+
 #[cfg(test)]
 mod tests {
     #[test]

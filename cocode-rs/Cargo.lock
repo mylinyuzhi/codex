@@ -1653,6 +1653,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2237,6 +2238,7 @@ name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "cocode-config",
  "cocode-protocol",
  "cocode-tools",
  "once_cell",

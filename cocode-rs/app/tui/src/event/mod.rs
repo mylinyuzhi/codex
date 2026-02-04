@@ -219,18 +219,14 @@ pub enum TuiCommand {
     /// Toggle display of thinking content in chat.
     ToggleThinking,
 
-    // ========== Queue & Steering ==========
+    // ========== Queue ==========
     /// Queue input for later processing (Enter while streaming).
     ///
     /// The input will be processed as a new user turn after the
-    /// current turn completes. Visible in chat history.
+    /// current turn completes. Also serves as real-time steering:
+    /// queued commands are injected into the current turn as
+    /// <system-reminder>User sent: {message}</system-reminder>
     QueueInput,
-
-    /// Add steering guidance (Shift+Enter anytime).
-    ///
-    /// This is hidden from the user but visible to the model.
-    /// Useful for mid-stream guidance.
-    AddSteering,
 
     // ========== Quit ==========
     /// Request to quit the application.
@@ -301,7 +297,6 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::DeleteSession(id) => write!(f, "{}", t!("command.delete_session", id = id)),
             TuiCommand::ToggleThinking => write!(f, "{}", t!("command.toggle_thinking")),
             TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
-            TuiCommand::AddSteering => write!(f, "{}", t!("command.add_steering")),
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }

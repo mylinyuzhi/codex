@@ -26,6 +26,7 @@ use crate::generators::PlanModeEnterGenerator;
 use crate::generators::PlanModeExitGenerator;
 use crate::generators::PlanToolReminderGenerator;
 use crate::generators::PlanVerificationGenerator;
+use crate::generators::QueuedCommandsGenerator;
 use crate::generators::SecurityGuidelinesGenerator;
 use crate::generators::TodoRemindersGenerator;
 use crate::generators::TokenUsageGenerator;
@@ -101,6 +102,7 @@ impl SystemReminderOrchestrator {
             Arc::new(CollabNotificationsGenerator),
             Arc::new(PlanVerificationGenerator),
             Arc::new(TokenUsageGenerator),
+            Arc::new(QueuedCommandsGenerator),
         ]
     }
 

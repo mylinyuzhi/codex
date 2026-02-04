@@ -10,9 +10,13 @@
 //! - Core loop configuration and events
 //! - Tool execution types
 //! - Query and compaction tracking
+//! - Agent status and correlation tracking
 
+pub mod agent_status;
 pub mod attachment_config;
 pub mod compact_config;
+pub mod correlation;
+pub mod execution;
 pub mod features;
 pub mod loop_config;
 pub mod loop_event;
@@ -34,6 +38,8 @@ pub mod tracking;
 pub use model::Capability;
 pub use model::ConfigShellToolType;
 pub use model::ModelInfo;
+pub use model::ModelRole;
+pub use model::ModelRoles;
 pub use model::ModelSpec;
 pub use model::ModelSpecParseError;
 pub use model::ReasoningEffort;
@@ -43,6 +49,11 @@ pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;
 pub use model::resolve_provider_type;
+
+// Execution context types
+pub use execution::AgentKind;
+pub use execution::ExecutionIdentity;
+pub use execution::InferenceContext;
 
 // Provider types
 pub use provider::ProviderInfo;
@@ -117,8 +128,6 @@ pub use tool_types::ValidationError;
 pub use tool_types::ValidationResult;
 
 // Queue types (user input during streaming)
-pub use queue::SteeringAttachment;
-pub use queue::SteeringSource;
 pub use queue::UserQueuedCommand;
 
 // Tracking types
@@ -188,3 +197,10 @@ pub use mcp_config::DEFAULT_AUTOSEARCH_CONTEXT_THRESHOLD;
 pub use mcp_config::DEFAULT_AUTOSEARCH_MIN_CONTEXT_WINDOW;
 pub use mcp_config::DEFAULT_CHARS_PER_TOKEN;
 pub use mcp_config::DEFAULT_TOOL_CACHE_TTL_SECS;
+
+// Agent status types
+pub use agent_status::AgentStatus;
+
+// Correlation types
+pub use correlation::CorrelatedEvent;
+pub use correlation::SubmissionId;

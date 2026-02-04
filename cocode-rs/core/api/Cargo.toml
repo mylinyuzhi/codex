@@ -20,6 +20,7 @@ snafu-virtstack.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
