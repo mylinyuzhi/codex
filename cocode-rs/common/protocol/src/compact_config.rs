@@ -196,9 +196,9 @@ pub struct CompactConfig {
     // ========================================================================
     /// Override auto-compact percentage threshold (0-100).
     ///
-    /// Can also be set per-model via `ModelInfo.autocompact_pct`.
+    /// Can also be set per-model via `ModelInfo.auto_compact_pct`.
     #[serde(default)]
-    pub autocompact_pct: Option<i32>,
+    pub auto_compact_pct: Option<i32>,
 
     /// Override blocking limit for compaction.
     #[serde(default)]
@@ -722,7 +722,7 @@ impl Default for CompactConfig {
             disable_auto_compact: false,
             disable_micro_compact: false,
             // Overrides — Claude Code triggers auto-compact at 80% context usage
-            autocompact_pct: Some(80),
+            auto_compact_pct: Some(80),
             blocking_limit_override: None,
             // Session memory
             session_memory_min_tokens: DEFAULT_SESSION_MEMORY_MIN_TOKENS,
@@ -774,10 +774,10 @@ impl CompactConfig {
 
     /// Calculate auto-compact target based on available tokens.
     ///
-    /// If `autocompact_pct` is set, uses that percentage of available tokens,
+    /// If `auto_compact_pct` is set, uses that percentage of available tokens,
     /// capped at `available_tokens - min_tokens_to_preserve`.
     pub fn auto_compact_target(&self, available_tokens: i32) -> i32 {
-        if let Some(pct) = self.autocompact_pct {
+        if let Some(pct) = self.auto_compact_pct {
             let calculated = (available_tokens as f64 * (pct as f64 / 100.0)).floor() as i32;
             calculated.min(available_tokens - self.min_tokens_to_preserve)
         } else {
@@ -812,10 +812,10 @@ impl CompactConfig {
     ///
     /// Returns an error message if any values are invalid.
     pub fn validate(&self) -> Result<(), String> {
-        // Validate autocompact_pct
-        if let Some(pct) = self.autocompact_pct {
+        // Validate auto_compact_pct
+        if let Some(pct) = self.auto_compact_pct {
             if !(0..=100).contains(&pct) {
-                return Err(format!("autocompact_pct must be 0-100, got {pct}"));
+                return Err(format!("auto_compact_pct must be 0-100, got {pct}"));
             }
         }
 
@@ -906,12 +906,12 @@ impl CompactConfig {
 
     /// Apply model-level overrides to compact config.
     ///
-    /// If the model specifies `autocompact_pct` and this config
+    /// If the model specifies `auto_compact_pct` and this config
     /// doesn't already have one set (by env or JSON), use the model's value.
     pub fn apply_model_overrides(&mut self, model_info: &crate::ModelInfo) {
-        if let Some(pct) = model_info.autocompact_pct {
-            if self.autocompact_pct.is_none() {
-                self.autocompact_pct = Some(pct);
+        if let Some(pct) = model_info.auto_compact_pct {
+            if self.auto_compact_pct.is_none() {
+                self.auto_compact_pct = Some(pct);
             }
         }
     }
@@ -1001,7 +1001,7 @@ mod tests {
         assert!(!config.disable_auto_compact);
         assert!(!config.disable_micro_compact);
         // Overrides — default is 80% (matching Claude Code)
-        assert_eq!(config.autocompact_pct, Some(80));
+        assert_eq!(config.auto_compact_pct, Some(80));
         assert!(config.blocking_limit_override.is_none());
         // Session memory
         assert_eq!(
@@ -1068,7 +1068,7 @@ mod tests {
         let json = r#"{
             "disable_compact": true,
             "disable_auto_compact": true,
-            "autocompact_pct": 80,
+            "auto_compact_pct": 80,
             "session_memory_min_tokens": 15000,
             "session_memory_max_tokens": 50000,
             "min_tokens_to_preserve": 15000,
@@ -1077,7 +1077,7 @@ mod tests {
         let config: CompactConfig = serde_json::from_str(json).unwrap();
         assert!(config.disable_compact);
         assert!(config.disable_auto_compact);
-        assert_eq!(config.autocompact_pct, Some(80));
+        assert_eq!(config.auto_compact_pct, Some(80));
         assert_eq!(config.session_memory_min_tokens, 15000);
         assert_eq!(config.session_memory_max_tokens, 50000);
         assert_eq!(config.min_tokens_to_preserve, 15000);
@@ -1130,13 +1130,13 @@ mod tests {
 
         // Without percentage override, target = available - min_tokens_to_preserve
         let mut config_no_pct = CompactConfig::default();
-        config_no_pct.autocompact_pct = None;
+        config_no_pct.auto_compact_pct = None;
         let target = config_no_pct.auto_compact_target(available);
         assert_eq!(target, available - DEFAULT_MIN_TOKENS_TO_PRESERVE);
 
         // High percentage should be capped at available - min_tokens_to_preserve
         let mut config_high_pct = CompactConfig::default();
-        config_high_pct.autocompact_pct = Some(99);
+        config_high_pct.auto_compact_pct = Some(99);
         let target = config_high_pct.auto_compact_target(available);
         // 99% = 198000, but capped at 200000 - 13000 = 187000
         assert_eq!(target, 187000);
@@ -1189,7 +1189,7 @@ mod tests {
     #[test]
     fn test_validate_invalid_pct() {
         let config = CompactConfig {
-            autocompact_pct: Some(150),
+            auto_compact_pct: Some(150),
             ..Default::default()
         };
         assert!(config.validate().is_err());

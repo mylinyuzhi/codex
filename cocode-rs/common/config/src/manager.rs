@@ -798,8 +798,8 @@ impl ConfigManager {
                     config.disable_micro_compact = true;
                 }
                 // Option fields: use JSON if env didn't set
-                if config.autocompact_pct.is_none() {
-                    config.autocompact_pct = json_config.autocompact_pct;
+                if config.auto_compact_pct.is_none() {
+                    config.auto_compact_pct = json_config.auto_compact_pct;
                 }
                 if config.blocking_limit_override.is_none() {
                     config.blocking_limit_override = json_config.blocking_limit_override;

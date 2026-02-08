@@ -79,7 +79,7 @@ pub struct ModelInfo {
     // === Context Management ===
     /// Autocompact percentage of context window (0-100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub autocompact_pct: Option<i32>,
+    pub auto_compact_pct: Option<i32>,
 
     // === Tool Related ===
     /// Shell execution type.
@@ -162,7 +162,7 @@ impl ModelInfo {
         merge_field!(include_thoughts);
         merge_field!(reasoning_summary);
         // Context management
-        merge_field!(autocompact_pct);
+        merge_field!(auto_compact_pct);
         // Tool related
         merge_field!(shell_type);
         merge_field!(max_tool_output_chars);
