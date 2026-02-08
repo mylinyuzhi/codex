@@ -1552,6 +1552,7 @@ dependencies = [
  "cocode-loop",
  "cocode-protocol",
  "cocode-skill",
+ "cocode-subagent",
  "cocode-utils-common",
  "crossterm",
  "dirs 6.0.0",

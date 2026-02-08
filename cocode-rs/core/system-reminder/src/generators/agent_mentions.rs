@@ -39,70 +39,29 @@ impl AttachmentGenerator for AgentMentionsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Need user prompt to parse mentions
         let user_prompt = match ctx.user_prompt {
             Some(p) if !p.is_empty() => p,
             _ => return Ok(None),
         };
 
-        // Parse @agent-* mentions from prompt
         let mentions = parse_agent_mentions(user_prompt);
         if mentions.is_empty() {
             return Ok(None);
         }
 
         let mut content = String::new();
-        content.push_str("The user has requested the following agent types:\n\n");
-
         for mention in &mentions {
-            let agent_type = &mention.agent_type;
-            let instructions = get_agent_instructions(agent_type);
-            content.push_str(&format!("## @agent-{agent_type}\n"));
-            content.push_str(&format!("{instructions}\n\n"));
+            content.push_str(&format!(
+                "The user has expressed a desire to invoke the agent \"{}\". \
+                 Please invoke the agent appropriately, passing in the required context to it.\n\n",
+                mention.agent_type
+            ));
         }
 
         Ok(Some(SystemReminder::new(
             AttachmentType::AgentMentions,
             content.trim(),
         )))
-    }
-}
-
-/// Get instructions for a specific agent type.
-fn get_agent_instructions(agent_type: &str) -> &'static str {
-    match agent_type {
-        "search" | "explore" => {
-            "Use search and exploration tools to find relevant files and code patterns. \
-             Focus on understanding the codebase structure before making changes."
-        }
-        "edit" | "write" => {
-            "Focus on making precise code modifications. Use the Edit tool for existing files \
-             and Write tool only when creating new files is necessary."
-        }
-        "plan" => {
-            "Create a detailed implementation plan before writing code. Break down the task \
-             into clear steps and identify dependencies between tasks."
-        }
-        "review" | "analyze" => {
-            "Analyze the code carefully for potential issues, bugs, or improvements. \
-             Consider security, performance, and maintainability aspects."
-        }
-        "test" => {
-            "Focus on testing aspects: run existing tests, write new tests, and ensure \
-             proper test coverage for the changes being made."
-        }
-        "debug" => {
-            "Investigate the issue systematically. Look at error messages, stack traces, \
-             and relevant code paths to identify the root cause."
-        }
-        "refactor" => {
-            "Focus on improving code structure without changing behavior. Identify \
-             opportunities for simplification and better organization."
-        }
-        _ => {
-            "Proceed with the requested agent type. If unsure about the specific behavior, \
-             ask the user for clarification."
-        }
     }
 }
 
@@ -149,13 +108,9 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content().unwrap().contains("@agent-search"));
-        assert!(
-            reminder
-                .content()
-                .unwrap()
-                .contains("search and exploration")
-        );
+        let content = reminder.content().unwrap();
+        assert!(content.contains("invoke the agent"));
+        assert!(content.contains("search"));
     }
 
     #[tokio::test]
@@ -175,16 +130,9 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content().unwrap().contains("@agent-plan"));
-        assert!(reminder.content().unwrap().contains("@agent-edit"));
-    }
-
-    #[test]
-    fn test_agent_instructions() {
-        assert!(get_agent_instructions("search").contains("search"));
-        assert!(get_agent_instructions("edit").contains("Edit tool"));
-        assert!(get_agent_instructions("plan").contains("implementation plan"));
-        assert!(get_agent_instructions("unknown").contains("Proceed"));
+        let content = reminder.content().unwrap();
+        assert!(content.contains("invoke the agent \"plan\""));
+        assert!(content.contains("invoke the agent \"edit\""));
     }
 
     #[test]

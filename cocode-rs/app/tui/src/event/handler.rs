@@ -47,20 +47,21 @@ pub fn handle_key_event_with_suggestions(
     has_overlay: bool,
     has_file_suggestions: bool,
 ) -> Option<TuiCommand> {
-    handle_key_event_full(key, has_overlay, has_file_suggestions, false, false)
+    handle_key_event_full(key, has_overlay, has_file_suggestions, false, false, false)
 }
 
 /// Handle a key event with full context including streaming state.
 ///
 /// This is the most complete handler that supports:
 /// - Overlay handling
-/// - File and skill suggestion navigation
+/// - File, skill, and agent suggestion navigation
 /// - Queue/steering behavior based on streaming state
 pub fn handle_key_event_full(
     key: KeyEvent,
     has_overlay: bool,
     has_file_suggestions: bool,
     has_skill_suggestions: bool,
+    has_agent_suggestions: bool,
     is_streaming: bool,
 ) -> Option<TuiCommand> {
     // Handle overlay-specific keys first
@@ -68,9 +69,16 @@ pub fn handle_key_event_full(
         return handle_overlay_key(key);
     }
 
-    // Handle skill suggestion navigation (higher priority)
+    // Handle skill suggestion navigation (highest priority)
     if has_skill_suggestions {
         if let Some(cmd) = handle_skill_suggestion_key(key) {
+            return Some(cmd);
+        }
+    }
+
+    // Handle agent suggestion navigation
+    if has_agent_suggestions {
+        if let Some(cmd) = handle_agent_suggestion_key(key) {
             return Some(cmd);
         }
     }
@@ -123,6 +131,25 @@ fn handle_skill_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // Dismiss suggestions
         (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSkillSuggestions),
+
+        // Other keys pass through to normal handling
+        _ => None,
+    }
+}
+
+/// Handle keys for agent suggestion navigation.
+fn handle_agent_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
+    match (key.modifiers, key.code) {
+        // Navigate suggestions
+        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevAgentSuggestion),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextAgentSuggestion),
+
+        // Accept suggestion
+        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptAgentSuggestion),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptAgentSuggestion),
+
+        // Dismiss suggestions
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissAgentSuggestions),
 
         // Other keys pass through to normal handling
         _ => None,
@@ -447,7 +474,7 @@ mod tests {
         let event = key(KeyCode::Enter, KeyModifiers::NONE);
         // When streaming, Enter should queue instead of submit
         assert_eq!(
-            handle_key_event_full(event, false, false, false, true),
+            handle_key_event_full(event, false, false, false, false, true),
             Some(TuiCommand::QueueInput)
         );
     }
@@ -457,7 +484,7 @@ mod tests {
         let event = key(KeyCode::Enter, KeyModifiers::NONE);
         // When not streaming, Enter should submit
         assert_eq!(
-            handle_key_event_full(event, false, false, false, false),
+            handle_key_event_full(event, false, false, false, false, false),
             Some(TuiCommand::SubmitInput)
         );
     }
@@ -467,11 +494,11 @@ mod tests {
         let event = key(KeyCode::Enter, KeyModifiers::CONTROL);
         // Ctrl+Enter behaves the same as Enter: queue when streaming, submit otherwise
         assert_eq!(
-            handle_key_event_full(event, false, false, false, true),
+            handle_key_event_full(event, false, false, false, false, true),
             Some(TuiCommand::QueueInput)
         );
         assert_eq!(
-            handle_key_event_full(event, false, false, false, false),
+            handle_key_event_full(event, false, false, false, false, false),
             Some(TuiCommand::SubmitInput)
         );
     }
@@ -481,11 +508,11 @@ mod tests {
         let event = key(KeyCode::Enter, KeyModifiers::SHIFT);
         // Shift+Enter inserts newline regardless of streaming state
         assert_eq!(
-            handle_key_event_full(event, false, false, false, true),
+            handle_key_event_full(event, false, false, false, false, true),
             Some(TuiCommand::InsertNewline)
         );
         assert_eq!(
-            handle_key_event_full(event, false, false, false, false),
+            handle_key_event_full(event, false, false, false, false, false),
             Some(TuiCommand::InsertNewline)
         );
     }

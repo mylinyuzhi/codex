@@ -10,6 +10,8 @@ use cocode_protocol::LoopEvent;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use crate::agent_search::AgentInfo;
+use crate::agent_search::AgentSearchManager;
 use crate::clipboard_paste;
 use crate::command::UserCommand;
 use crate::editor;
@@ -78,6 +80,8 @@ pub struct App {
     file_search_rx: mpsc::Receiver<FileSearchEvent>,
     /// Skill search manager for /command autocomplete.
     skill_search: SkillSearchManager,
+    /// Agent search manager for @agent-* autocomplete.
+    agent_search: AgentSearchManager,
     /// Paste manager for handling large pastes.
     paste_manager: PasteManager,
 }
@@ -112,6 +116,11 @@ impl App {
         // Create skill search manager
         let skill_search = SkillSearchManager::new();
 
+        // Create agent search manager and load builtin agents
+        let mut agent_search = AgentSearchManager::new();
+        let agent_defs = cocode_subagent::builtin_agents_with_overrides();
+        agent_search.load_agents(agent_defs.iter().map(AgentInfo::from));
+
         // Create paste manager
         let paste_manager = PasteManager::new();
 
@@ -124,6 +133,7 @@ impl App {
             file_search,
             file_search_rx,
             skill_search,
+            agent_search,
             paste_manager,
         })
     }
@@ -138,6 +148,7 @@ impl App {
         let (file_search_tx, file_search_rx) = create_file_search_channel();
         let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
         let skill_search = SkillSearchManager::new();
+        let agent_search = AgentSearchManager::new();
 
         Self {
             tui,
@@ -148,6 +159,7 @@ impl App {
             file_search,
             file_search_rx,
             skill_search,
+            agent_search,
             paste_manager: PasteManager::new(),
         }
     }
@@ -226,12 +238,14 @@ impl App {
                 let has_overlay = self.state.has_overlay();
                 let has_file_suggestions = self.state.ui.has_file_suggestions();
                 let has_skill_suggestions = self.state.ui.has_skill_suggestions();
+                let has_agent_suggestions = self.state.ui.has_agent_suggestions();
 
                 if let Some(cmd) = handle_key_event_full(
                     key,
                     has_overlay,
                     has_file_suggestions,
                     has_skill_suggestions,
+                    has_agent_suggestions,
                     self.state.is_streaming(),
                 ) {
                     self.handle_command_internal(cmd).await;
@@ -302,23 +316,38 @@ impl App {
         Ok(())
     }
 
-    /// Check for @mention in input and trigger file search if needed.
+    /// Check for @mention in input and trigger file or agent search if needed.
     fn check_at_mention(&mut self) {
         if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
             if has_line_range_suffix(&query) {
                 // User is typing a line range suffix — dismiss autocomplete
                 self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_agent_suggestions();
                 self.file_search.cancel();
                 return;
             }
-            // Start or update file suggestions
-            self.state
-                .ui
-                .start_file_suggestions(query.clone(), start_pos);
-            self.file_search.on_query(query, start_pos);
+
+            if query.starts_with("agent") && self.agent_search.has_agents() {
+                // Agent mention: synchronous search, no debounce needed
+                self.state.ui.clear_file_suggestions();
+                self.file_search.cancel();
+                self.state
+                    .ui
+                    .start_agent_suggestions(query.clone(), start_pos);
+                let suggestions = self.agent_search.search(&query);
+                self.state.ui.update_agent_suggestions(suggestions);
+            } else {
+                // File/directory mention: async search
+                self.state.ui.clear_agent_suggestions();
+                self.state
+                    .ui
+                    .start_file_suggestions(query.clone(), start_pos);
+                self.file_search.on_query(query, start_pos);
+            }
         } else {
-            // No @mention, clear suggestions
+            // No @mention, clear all suggestions
             self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
             self.file_search.cancel();
         }
     }
@@ -326,6 +355,10 @@ impl App {
     /// Check for /command in input and trigger skill search if needed.
     fn check_slash_command(&mut self) {
         if let Some((start_pos, query)) = self.state.ui.input.current_slash_token() {
+            // Skill suggestions are exclusive with file/agent suggestions
+            self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
+            self.file_search.cancel();
             // Start or update skill suggestions
             self.state
                 .ui
@@ -344,6 +377,11 @@ impl App {
         skills: impl Iterator<Item = &'a cocode_skill::SkillPromptCommand>,
     ) {
         self.skill_search.load_skills(skills);
+    }
+
+    /// Load agents into the agent search manager.
+    pub fn load_agents(&mut self, agents: impl Iterator<Item = AgentInfo>) {
+        self.agent_search.load_agents(agents);
     }
 
     /// Handle a TUI command internally.

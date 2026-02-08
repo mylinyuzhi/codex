@@ -27,6 +27,9 @@ cocode-file-search = { workspace = true }
 # Internal - features
 cocode-skill = { workspace = true }
 
+# Internal - core (for agent definitions)
+cocode-subagent = { workspace = true }
+
 # Internal - core
 cocode-loop = { workspace = true }
 

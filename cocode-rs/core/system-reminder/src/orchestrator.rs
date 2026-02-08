@@ -14,7 +14,9 @@ use tracing::warn;
 use crate::config::SystemReminderConfig;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
+use crate::generators::AgentMentionsGenerator;
 use crate::generators::AlreadyReadFilesGenerator;
+use crate::generators::AtMentionedFilesGenerator;
 use crate::generators::AvailableSkillsGenerator;
 use crate::generators::BudgetUsdGenerator;
 use crate::generators::ChangedFilesGenerator;
@@ -110,6 +112,9 @@ impl SystemReminderOrchestrator {
             Arc::new(AlreadyReadFilesGenerator),
             Arc::new(BudgetUsdGenerator),
             Arc::new(CompactFileReferenceGenerator),
+            // UserPrompt tier
+            Arc::new(AtMentionedFilesGenerator),
+            Arc::new(AgentMentionsGenerator),
         ]
     }
 

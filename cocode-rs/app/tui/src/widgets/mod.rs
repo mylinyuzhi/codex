@@ -7,10 +7,12 @@
 //! - [`ToolPanel`]: Shows tool execution progress
 //! - [`FileSuggestionPopup`]: File autocomplete dropdown
 //! - [`SkillSuggestionPopup`]: Skill autocomplete dropdown
+//! - [`AgentSuggestionPopup`]: Agent autocomplete dropdown
 //! - [`SubagentPanel`]: Subagent status display
 //! - [`ToastWidget`]: Toast notification display
 //! - [`QueuedListWidget`]: Displays queued commands waiting to be processed
 
+mod agent_suggestion_popup;
 mod chat;
 mod file_suggestion_popup;
 mod input;
@@ -21,6 +23,7 @@ mod subagent_panel;
 mod toast;
 mod tool_panel;
 
+pub use agent_suggestion_popup::AgentSuggestionPopup;
 pub use chat::ChatWidget;
 pub use file_suggestion_popup::FileSuggestionPopup;
 pub use input::InputWidget;

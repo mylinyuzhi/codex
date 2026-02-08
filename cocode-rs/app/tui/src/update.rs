@@ -399,6 +399,31 @@ pub async fn handle_command(
             state.ui.clear_skill_suggestions();
         }
 
+        // ========== Agent Autocomplete ==========
+        TuiCommand::SelectNextAgentSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.agent_suggestions {
+                suggestions.move_down();
+            }
+        }
+        TuiCommand::SelectPrevAgentSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.agent_suggestions {
+                suggestions.move_up();
+            }
+        }
+        TuiCommand::AcceptAgentSuggestion => {
+            if let Some(suggestions) = state.ui.agent_suggestions.take() {
+                if let Some(selected) = suggestions.selected_suggestion() {
+                    state
+                        .ui
+                        .input
+                        .insert_selected_agent(suggestions.start_pos, &selected.agent_type);
+                }
+            }
+        }
+        TuiCommand::DismissAgentSuggestions => {
+            state.ui.clear_agent_suggestions();
+        }
+
         // ========== Queue ==========
         TuiCommand::QueueInput => {
             // Queue input for later processing (Enter during streaming)

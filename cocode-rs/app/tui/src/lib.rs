@@ -38,6 +38,7 @@
 // Initialize i18n at crate root - this generates the _rust_i18n_t function
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub mod agent_search;
 pub mod app;
 pub mod clipboard_paste;
 pub mod command;
@@ -77,6 +78,10 @@ pub use file_search::create_file_search_channel;
 // Skill search for slash command autocomplete
 pub use skill_search::SkillInfo;
 pub use skill_search::SkillSearchManager;
+
+// Agent search for @agent-* autocomplete
+pub use agent_search::AgentInfo;
+pub use agent_search::AgentSearchManager;
 
 // External editor support
 pub use editor::edit_in_external_editor;

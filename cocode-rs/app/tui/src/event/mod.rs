@@ -139,6 +139,19 @@ pub enum TuiCommand {
     /// Dismiss skill suggestions.
     DismissSkillSuggestions,
 
+    // ========== Agent Autocomplete ==========
+    /// Select next agent suggestion.
+    SelectNextAgentSuggestion,
+
+    /// Select previous agent suggestion.
+    SelectPrevAgentSuggestion,
+
+    /// Accept the current agent suggestion.
+    AcceptAgentSuggestion,
+
+    /// Dismiss agent suggestions.
+    DismissAgentSuggestions,
+
     // ========== Editing ==========
     /// Insert a character at the cursor.
     InsertChar(char),
@@ -262,6 +275,18 @@ impl std::fmt::Display for TuiCommand {
             }
             TuiCommand::DismissSkillSuggestions => {
                 write!(f, "{}", t!("command.dismiss_skill_suggestions"))
+            }
+            TuiCommand::SelectNextAgentSuggestion => {
+                write!(f, "{}", t!("command.select_next_agent_suggestion"))
+            }
+            TuiCommand::SelectPrevAgentSuggestion => {
+                write!(f, "{}", t!("command.select_prev_agent_suggestion"))
+            }
+            TuiCommand::AcceptAgentSuggestion => {
+                write!(f, "{}", t!("command.accept_agent_suggestion"))
+            }
+            TuiCommand::DismissAgentSuggestions => {
+                write!(f, "{}", t!("command.dismiss_agent_suggestions"))
             }
             TuiCommand::SubmitInput => write!(f, "{}", t!("command.submit_input")),
             TuiCommand::Interrupt => write!(f, "{}", t!("command.interrupt")),

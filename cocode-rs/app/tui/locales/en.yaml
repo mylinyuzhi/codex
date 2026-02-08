@@ -23,6 +23,12 @@ command.select_prev_skill_suggestion: "Select Previous Skill Suggestion"
 command.accept_skill_suggestion: "Accept Skill Suggestion"
 command.dismiss_skill_suggestions: "Dismiss Skill Suggestions"
 
+# Agent autocomplete
+command.select_next_agent_suggestion: "Select Next Agent Suggestion"
+command.select_prev_agent_suggestion: "Select Previous Agent Suggestion"
+command.accept_agent_suggestion: "Accept Agent Suggestion"
+command.dismiss_agent_suggestions: "Dismiss Agent Suggestions"
+
 # Input actions
 command.submit_input: "Submit Input"
 command.interrupt: "Interrupt"

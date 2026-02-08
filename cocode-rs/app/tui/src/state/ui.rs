@@ -35,6 +35,9 @@ pub struct UiState {
     /// Skill autocomplete state (shown when typing /command).
     pub skill_suggestions: Option<SkillSuggestionState>,
 
+    /// Agent autocomplete state (shown when typing @agent-*).
+    pub agent_suggestions: Option<AgentSuggestionState>,
+
     /// Whether to show thinking content in chat messages.
     pub show_thinking: bool,
 
@@ -147,6 +150,28 @@ impl UiState {
     /// Update skill suggestions with search results.
     pub fn update_skill_suggestions(&mut self, suggestions: Vec<SkillSuggestionItem>) {
         if let Some(ref mut state) = self.skill_suggestions {
+            state.update_suggestions(suggestions);
+        }
+    }
+
+    /// Check if agent suggestions are active.
+    pub fn has_agent_suggestions(&self) -> bool {
+        self.agent_suggestions.is_some()
+    }
+
+    /// Start showing agent suggestions.
+    pub fn start_agent_suggestions(&mut self, query: String, start_pos: i32) {
+        self.agent_suggestions = Some(AgentSuggestionState::new(query, start_pos));
+    }
+
+    /// Clear agent suggestions.
+    pub fn clear_agent_suggestions(&mut self) {
+        self.agent_suggestions = None;
+    }
+
+    /// Update agent suggestions with search results.
+    pub fn update_agent_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
+        if let Some(ref mut state) = self.agent_suggestions {
             state.update_suggestions(suggestions);
         }
     }
@@ -574,7 +599,10 @@ impl InputState {
     /// An @mention is detected when:
     /// - There's an @ character before the cursor
     /// - The @ is either at the start or preceded by whitespace
-    /// - There's no space between @ and the cursor
+    /// - There's no space between @ and the cursor (unless in quoted mode)
+    ///
+    /// Supports quoted paths: `@"path with spaces"` — the opening `"`
+    /// after `@` starts a quoted context where spaces are allowed.
     pub fn current_at_token(&self) -> Option<(i32, String)> {
         let text = &self.text;
         let cursor = self.cursor as usize;
@@ -583,34 +611,67 @@ impl InputState {
             return None;
         }
 
-        // Look backwards from cursor for @
         let before_cursor = &text[..cursor.min(text.len())];
 
-        // Find the last @ before cursor that isn't followed by a space
-        let mut at_pos = None;
+        // Check for quoted mode: @"... (look backwards for @")
+        // Find the last @ before cursor
         for (i, c) in before_cursor.char_indices().rev() {
-            if c == ' ' || c == '\n' || c == '\t' {
-                // Hit whitespace without finding @, no active mention
-                break;
-            }
             if c == '@' {
                 // Check if @ is at start or preceded by whitespace
-                if i == 0 {
-                    at_pos = Some(i);
-                } else {
-                    let prev_char = before_cursor[..i].chars().last();
-                    if prev_char.is_some_and(|c| c.is_whitespace()) {
-                        at_pos = Some(i);
+                let is_valid_start = i == 0
+                    || before_cursor[..i]
+                        .chars()
+                        .last()
+                        .is_some_and(|c| c.is_whitespace());
+                if !is_valid_start {
+                    return None;
+                }
+
+                let after_at = &before_cursor[i + 1..];
+
+                // Check for quoted mode: @"...
+                if let Some(rest) = after_at.strip_prefix('"') {
+                    // In quoted mode — extract text inside quotes (closing quote optional)
+                    let query = if let Some(close) = rest.find('"') {
+                        // Closing quote found — mention is complete, no active token
+                        // (unless cursor is right on the closing quote)
+                        if i + 2 + close < cursor {
+                            return None;
+                        }
+                        rest[..close].to_string()
+                    } else {
+                        rest.to_string()
+                    };
+                    return Some((i as i32, query));
+                }
+
+                // Normal (unquoted) mode — no whitespace allowed between @ and cursor
+                if after_at.contains(|c: char| c == ' ' || c == '\n' || c == '\t') {
+                    return None;
+                }
+                return Some((i as i32, after_at.to_string()));
+            }
+
+            // In unquoted mode, whitespace means no active mention
+            // But in quoted mode (@"path with spaces"), spaces are allowed
+            if c == ' ' || c == '\n' || c == '\t' {
+                let prefix = &before_cursor[..i];
+                if let Some(at_quote_pos) = prefix.rfind("@\"") {
+                    let valid_start = at_quote_pos == 0
+                        || prefix[..at_quote_pos]
+                            .chars()
+                            .last()
+                            .is_some_and(|ch| ch.is_whitespace());
+                    let after_open = &prefix[at_quote_pos + 2..];
+                    if valid_start && !after_open.contains('"') {
+                        continue;
                     }
                 }
                 break;
             }
         }
 
-        at_pos.map(|pos| {
-            let query = before_cursor[pos + 1..].to_string();
-            (pos as i32, query)
-        })
+        None
     }
 
     /// Detect a /command token at cursor position.
@@ -685,10 +746,36 @@ impl InputState {
         self.cursor = new_cursor as i32;
     }
 
+    /// Insert a selected agent type, replacing the current @query.
+    ///
+    /// The `start_pos` is the position of the @ character, and `agent_type` is
+    /// the agent type to insert (e.g., "explore" → `@agent-explore `).
+    pub fn insert_selected_agent(&mut self, start_pos: i32, agent_type: &str) {
+        let start = start_pos as usize;
+        let cursor = self.cursor as usize;
+
+        if start >= self.text.len() || cursor > self.text.len() {
+            return;
+        }
+
+        // Build new text: before @ + @agent-type + space + after cursor
+        let before = &self.text[..start];
+        let after = &self.text[cursor..];
+        let mention = format!("agent-{agent_type}");
+        let new_text = format!("{before}@{mention} {after}");
+
+        // Calculate new cursor position: after the inserted agent mention and space
+        let new_cursor = start + 1 + mention.len() + 1;
+
+        self.text = new_text;
+        self.cursor = new_cursor as i32;
+    }
+
     /// Insert a selected file path, replacing the current @query.
     ///
     /// The `start_pos` is the position of the @ character, and `path` is
     /// the path to insert (without the @).
+    /// If the path contains spaces, it is wrapped in quotes: `@"path with spaces"`.
     pub fn insert_selected_path(&mut self, start_pos: i32, path: &str) {
         let start = start_pos as usize;
         let cursor = self.cursor as usize;
@@ -697,16 +784,22 @@ impl InputState {
             return;
         }
 
-        // Build new text: before @ + @path + after cursor
         let before = &self.text[..start];
         let after = &self.text[cursor..];
-        let new_text = format!("{before}@{path} {after}");
 
-        // Calculate new cursor position: after the inserted path and space
-        let new_cursor = start + 1 + path.len() + 1;
-
-        self.text = new_text;
-        self.cursor = new_cursor as i32;
+        if path.contains(' ') {
+            // Quoted path: @"path with spaces"
+            let new_text = format!("{before}@\"{path}\" {after}");
+            let new_cursor = start + 2 + path.len() + 2; // @" + path + " + space
+            self.text = new_text;
+            self.cursor = new_cursor as i32;
+        } else {
+            // Normal path: @path
+            let new_text = format!("{before}@{path} {after}");
+            let new_cursor = start + 1 + path.len() + 1;
+            self.text = new_text;
+            self.cursor = new_cursor as i32;
+        }
     }
 }
 
@@ -1207,6 +1300,75 @@ pub struct SkillSuggestionItem {
     pub match_indices: Vec<usize>,
 }
 
+/// State for agent autocomplete suggestions.
+#[derive(Debug, Clone)]
+pub struct AgentSuggestionState {
+    /// The query extracted from @mention (without the @).
+    pub query: String,
+    /// Start position of the @mention in the input text.
+    pub start_pos: i32,
+    /// Current suggestions.
+    pub suggestions: Vec<AgentSuggestionItem>,
+    /// Currently selected index in the dropdown.
+    pub selected: i32,
+}
+
+impl AgentSuggestionState {
+    /// Create a new agent suggestion state.
+    pub fn new(query: String, start_pos: i32) -> Self {
+        Self {
+            query,
+            start_pos,
+            suggestions: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = (self.suggestions.len() as i32).saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the currently selected suggestion.
+    pub fn selected_suggestion(&self) -> Option<&AgentSuggestionItem> {
+        self.suggestions.get(self.selected as usize)
+    }
+
+    /// Update suggestions from search results.
+    pub fn update_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
+        self.suggestions = suggestions;
+        // Reset selection if out of bounds
+        if self.selected >= self.suggestions.len() as i32 {
+            self.selected = 0;
+        }
+    }
+}
+
+/// A single agent suggestion item for display.
+#[derive(Debug, Clone)]
+pub struct AgentSuggestionItem {
+    /// Agent type identifier (e.g., "explore").
+    pub agent_type: String,
+    /// Human-readable name (e.g., "Explore").
+    pub name: String,
+    /// Short description.
+    pub description: String,
+    /// Fuzzy match score (lower = better match).
+    pub score: i32,
+    /// Character indices that matched the query (for highlighting).
+    pub match_indices: Vec<usize>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1602,5 +1764,89 @@ mod tests {
     fn test_terminal_focused_default() {
         let ui = UiState::default();
         assert!(!ui.terminal_focused);
+    }
+
+    #[test]
+    fn test_insert_selected_agent_basic() {
+        let mut input = InputState::default();
+        input.set_text("use @agent-exp to search");
+        input.cursor = 14; // After "@agent-exp"
+
+        input.insert_selected_agent(4, "explore");
+
+        assert_eq!(input.text(), "use @agent-explore  to search");
+        assert_eq!(input.cursor, 19); // After "@agent-explore "
+    }
+
+    #[test]
+    fn test_insert_selected_agent_start_of_line() {
+        let mut input = InputState::default();
+        input.set_text("@agent");
+        input.cursor = 6;
+
+        input.insert_selected_agent(0, "bash");
+
+        assert_eq!(input.text(), "@agent-bash ");
+        assert_eq!(input.cursor, 12);
+    }
+
+    #[test]
+    fn test_agent_suggestion_state_navigation() {
+        let mut state = AgentSuggestionState::new("exp".to_string(), 0);
+
+        state.update_suggestions(vec![
+            AgentSuggestionItem {
+                agent_type: "explore".to_string(),
+                name: "Explore".to_string(),
+                description: "Search codebase".to_string(),
+                score: -100,
+                match_indices: vec![0, 1, 2],
+            },
+            AgentSuggestionItem {
+                agent_type: "explain".to_string(),
+                name: "Explain".to_string(),
+                description: "Explain code".to_string(),
+                score: -90,
+                match_indices: vec![0, 1],
+            },
+        ]);
+
+        assert_eq!(state.selected, 0);
+
+        // Move down
+        state.move_down();
+        assert_eq!(state.selected, 1);
+
+        // Should not go past last
+        state.move_down();
+        assert_eq!(state.selected, 1);
+
+        // Move up
+        state.move_up();
+        assert_eq!(state.selected, 0);
+
+        // Should not go negative
+        state.move_up();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_current_at_token_quoted_with_space() {
+        let mut input = InputState::default();
+        input.set_text("@\"my file");
+        input.cursor = 9; // After @"my file
+
+        let result = input.current_at_token();
+        assert_eq!(result, Some((0, "my file".to_string())));
+    }
+
+    #[test]
+    fn test_current_at_token_quoted_complete() {
+        let mut input = InputState::default();
+        input.set_text("@\"my file\" rest");
+        input.cursor = 15; // After closing quote + space + rest
+
+        let result = input.current_at_token();
+        assert_eq!(result, None); // Closing quote means mention is complete
     }
 }

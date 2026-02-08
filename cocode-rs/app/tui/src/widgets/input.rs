@@ -25,6 +25,8 @@ enum TokenType {
     Text,
     /// @mention (file path).
     AtMention,
+    /// @agent-* mention.
+    AgentMention,
     /// /command (skill).
     SlashCommand,
     /// Paste pill ([Pasted text #1], [Image #1]).
@@ -130,7 +132,16 @@ fn tokenize(text: &str) -> Vec<Token> {
             ' ' | '\t' | '\n' => {
                 // Whitespace ends mentions/commands
                 if in_mention {
-                    tokens.push(Token::new(&current_text, TokenType::AtMention));
+                    // Check if this is an @agent-* mention
+                    let token_type = if current_text
+                        .strip_prefix('@')
+                        .is_some_and(|rest| rest.starts_with("agent-") || rest == "agent")
+                    {
+                        TokenType::AgentMention
+                    } else {
+                        TokenType::AtMention
+                    };
+                    tokens.push(Token::new(&current_text, token_type));
                     current_text.clear();
                     in_mention = false;
                 } else if in_command {
@@ -154,7 +165,14 @@ fn tokenize(text: &str) -> Vec<Token> {
     // Flush remaining text
     if !current_text.is_empty() {
         let token_type = if in_mention {
-            TokenType::AtMention
+            if current_text
+                .strip_prefix('@')
+                .is_some_and(|rest| rest.starts_with("agent-") || rest == "agent")
+            {
+                TokenType::AgentMention
+            } else {
+                TokenType::AtMention
+            }
         } else if in_command {
             TokenType::SlashCommand
         } else {
@@ -308,6 +326,7 @@ impl<'a> InputWidget<'a> {
         match token_type {
             TokenType::Text => Span::raw(text.to_string()),
             TokenType::AtMention => Span::raw(text.to_string()).cyan(),
+            TokenType::AgentMention => Span::raw(text.to_string()).yellow().bold(),
             TokenType::SlashCommand => Span::raw(text.to_string()).magenta(),
             TokenType::PastePill => Span::raw(text.to_string()).green().italic(),
         }

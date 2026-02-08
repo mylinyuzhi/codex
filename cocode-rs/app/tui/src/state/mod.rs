@@ -17,6 +17,8 @@ pub use session::SubagentInstance;
 pub use session::SubagentStatus;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
+pub use ui::AgentSuggestionItem;
+pub use ui::AgentSuggestionState;
 pub use ui::CommandAction;
 pub use ui::CommandItem;
 pub use ui::CommandPaletteOverlay;
