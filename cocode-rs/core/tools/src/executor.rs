@@ -12,6 +12,7 @@
 
 use crate::context::ApprovalStore;
 use crate::context::FileTracker;
+use crate::context::ModelCallFn;
 use crate::context::SpawnAgentFn;
 use crate::context::ToolContext;
 use crate::context::ToolContextBuilder;
@@ -175,6 +176,8 @@ pub struct StreamingToolExecutor {
     shell_executor: ShellExecutor,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional model call function for single-shot LLM calls.
+    model_call_fn: Option<ModelCallFn>,
     /// Optional skill manager for the Skill tool.
     skill_manager: Option<Arc<cocode_skill::SkillManager>>,
     /// Parent selections for subagent isolation.
@@ -216,6 +219,7 @@ impl StreamingToolExecutor {
             completed_results: Arc::new(Mutex::new(Vec::new())),
             shell_executor,
             spawn_agent_fn: None,
+            model_call_fn: None,
             skill_manager: None,
             parent_selections: None,
             permission_requester: None,
@@ -257,6 +261,12 @@ impl StreamingToolExecutor {
     /// Set the spawn agent callback for the Task tool.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the model call function for single-shot LLM calls (SmartEdit).
+    pub fn with_model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
         self
     }
 
@@ -761,6 +771,11 @@ impl StreamingToolExecutor {
             builder = builder.spawn_agent_fn(spawn_fn.clone());
         }
 
+        // Add model_call_fn if available
+        if let Some(ref call_fn) = self.model_call_fn {
+            builder = builder.model_call_fn(call_fn.clone());
+        }
+
         // Add skill_manager if available
         if let Some(ref sm) = self.skill_manager {
             builder = builder.skill_manager(sm.clone());
@@ -956,7 +971,10 @@ async fn execute_tool(
 
 /// Check if a tool name is an edit/write tool (for AcceptEdits mode).
 fn is_edit_tool(name: &str) -> bool {
-    matches!(name, "Edit" | "Write" | "NotebookEdit" | "ApplyPatch")
+    matches!(
+        name,
+        "Edit" | "SmartEdit" | "Write" | "NotebookEdit" | "ApplyPatch"
+    )
 }
 
 /// Check if a tool name is read-only or a plan mode control tool.

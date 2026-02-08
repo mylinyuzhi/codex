@@ -76,6 +76,8 @@ pub enum Feature {
     Ls,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
     McpResourceTools,
+    /// LLM-assisted edit correction when string matching fails.
+    SmartEdit,
 }
 
 impl Feature {
@@ -254,6 +256,12 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::SmartEdit,
+        key: "smart_edit",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
 ];
 
 #[cfg(test)]
@@ -388,7 +396,7 @@ mod tests {
     fn test_all_features_contains_all_variants() {
         let specs: Vec<_> = all_features().collect();
         // Ensure we have a reasonable number of features
-        assert!(specs.len() >= 11);
+        assert!(specs.len() >= 12);
 
         // Check that some expected features are present
         assert!(specs.iter().any(|s| s.id == Feature::WebFetch));

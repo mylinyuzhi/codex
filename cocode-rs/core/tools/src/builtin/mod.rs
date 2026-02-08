@@ -23,6 +23,7 @@
 //! - [`McpSearchTool`] - Search MCP tools by keyword (dynamic, for auto-search mode)
 //! - [`LsTool`] - List directory contents with tree-style output
 //! - [`ApplyPatchTool`] - Apply multi-file patches (optional, for GPT-5)
+//! - [`SmartEditTool`] - Edit with LLM correction fallback (feature-gated)
 //!
 //! ## Utilities
 //!
@@ -49,6 +50,7 @@ mod read;
 mod read_many;
 mod shell;
 mod skill;
+mod smart_edit;
 mod task;
 mod task_output;
 mod todo_write;
@@ -73,6 +75,7 @@ pub use read::ReadTool;
 pub use read_many::ReadManyFilesTool;
 pub use shell::ShellTool;
 pub use skill::SkillTool;
+pub use smart_edit::SmartEditTool;
 pub use task::TaskTool;
 pub use task_output::TaskOutputTool;
 pub use todo_write::TodoWriteTool;
@@ -110,6 +113,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(ApplyPatchTool::new());
     registry.register(ShellTool::new());
     registry.register(ReadManyFilesTool::new());
+    registry.register(SmartEditTool::new());
 }
 
 /// Get a list of built-in tool names.
@@ -137,5 +141,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "NotebookEdit",
         "apply_patch",
         "shell",
+        "SmartEdit",
     ]
 }

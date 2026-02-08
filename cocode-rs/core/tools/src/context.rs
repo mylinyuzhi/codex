@@ -71,6 +71,31 @@ pub struct SpawnAgentResult {
     pub output_file: Option<PathBuf>,
 }
 
+/// Input for a single-shot model call (no agent loop).
+#[derive(Debug, Clone)]
+pub struct ModelCallInput {
+    /// The object request (messages + JSON schema).
+    pub request: hyper_sdk::ObjectRequest,
+}
+
+/// Result of a single-shot model call.
+#[derive(Debug, Clone)]
+pub struct ModelCallResult {
+    /// The structured object response.
+    pub response: hyper_sdk::ObjectResponse,
+}
+
+/// Lightweight model call callback — single request/response, no agent loop.
+/// Used by SmartEdit for LLM-assisted edit correction.
+pub type ModelCallFn = Arc<
+    dyn Fn(
+            ModelCallInput,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<ModelCallResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Type alias for the agent spawn callback function.
 ///
 /// This callback is provided by the executor layer to enable tools
@@ -370,6 +395,8 @@ pub struct ToolContext {
     pub file_tracker: Arc<Mutex<FileTracker>>,
     /// Optional callback for spawning subagents.
     pub spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional lightweight model call function (for SmartEdit correction).
+    pub model_call_fn: Option<ModelCallFn>,
     /// Whether plan mode is currently active.
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
@@ -425,6 +452,7 @@ impl ToolContext {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
             shell_executor,
@@ -491,6 +519,12 @@ impl ToolContext {
     /// Set the spawn agent callback.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the model call function for single-shot LLM calls.
+    pub fn with_model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
         self
     }
 
@@ -762,6 +796,7 @@ pub struct ToolContextBuilder {
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
     shell_executor: Option<ShellExecutor>,
@@ -792,6 +827,7 @@ impl ToolContextBuilder {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
             shell_executor: None,
@@ -864,6 +900,12 @@ impl ToolContextBuilder {
     /// Set the spawn agent callback.
     pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the model call function for single-shot LLM calls.
+    pub fn model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
         self
     }
 
@@ -950,6 +992,7 @@ impl ToolContextBuilder {
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
             spawn_agent_fn: self.spawn_agent_fn,
+            model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
             shell_executor,

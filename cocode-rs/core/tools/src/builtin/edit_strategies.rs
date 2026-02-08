@@ -377,6 +377,64 @@ pub fn find_closest_match(content: &str, old_string: &str) -> String {
     }
 }
 
+/// Try three-tier matching: Exact → Flexible → Regex.
+///
+/// Returns `Ok((replaced_content, strategy))` on success, or `Err` with
+/// a uniqueness error when `!replace_all && count > 1`.
+pub fn try_match(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> crate::error::Result<(String, MatchStrategy)> {
+    // Tier 1: Exact
+    if let Some((replaced, count)) = try_exact_replace(content, old_string, new_string, replace_all)
+    {
+        if !replace_all && count > 1 {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!(
+                    "old_string is not unique in the file ({count} occurrences). \
+                     Provide more context to make it unique, or use replace_all."
+                ),
+            }
+            .build());
+        }
+        return Ok((replaced, MatchStrategy::Exact));
+    }
+
+    // Tier 2: Flexible
+    if let Some((replaced, count)) =
+        try_flexible_replace(content, old_string, new_string, replace_all)
+    {
+        if !replace_all && count > 1 {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!(
+                    "old_string is not unique in the file ({count} occurrences, flexible match). \
+                     Provide more context to make it unique, or use replace_all."
+                ),
+            }
+            .build());
+        }
+        tracing::info!(
+            strategy = "flexible",
+            "Edit matched via whitespace-flexible strategy"
+        );
+        return Ok((replaced, MatchStrategy::Flexible));
+    }
+
+    // Tier 3: Regex (always first match only, no uniqueness issue)
+    if let Some((replaced, _count)) = try_regex_replace(content, old_string, new_string) {
+        tracing::info!(strategy = "regex", "Edit matched via regex strategy");
+        return Ok((replaced, MatchStrategy::Regex));
+    }
+
+    // All failed — signal caller to try trim fallback or error
+    Err(crate::error::tool_error::ExecutionFailedSnafu {
+        message: "no strategy matched".to_string(),
+    }
+    .build())
+}
+
 /// Truncate a string to a maximum length, appending "..." if truncated.
 pub fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {

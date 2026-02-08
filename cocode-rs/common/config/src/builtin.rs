@@ -381,6 +381,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 ThinkingLevel::high(),
             ]),
             apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
+            excluded_tools: Some(vec![
+                "Edit".to_string(),
+                "Write".to_string(),
+                "ReadManyFiles".to_string(),
+                "NotebookEdit".to_string(),
+                "SmartEdit".to_string(),
+            ]),
             ..Default::default()
         },
     );
@@ -413,6 +420,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            excluded_tools: Some(vec![
+                "Edit".to_string(),
+                "Write".to_string(),
+                "ReadManyFiles".to_string(),
+                "NotebookEdit".to_string(),
+                "SmartEdit".to_string(),
+            ]),
             ..Default::default()
         },
     );
@@ -446,6 +460,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            excluded_tools: Some(vec![
+                "Edit".to_string(),
+                "Write".to_string(),
+                "ReadManyFiles".to_string(),
+                "NotebookEdit".to_string(),
+                "SmartEdit".to_string(),
+            ]),
             ..Default::default()
         },
     );
@@ -697,6 +718,50 @@ mod tests {
         assert!(levels.iter().any(|l| l.effort == ReasoningEffort::Medium));
         assert!(levels.iter().any(|l| l.effort == ReasoningEffort::High));
         assert!(levels.iter().any(|l| l.effort == ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn test_excluded_tools() {
+        ensure_initialized();
+
+        let expected = &[
+            "Edit",
+            "Write",
+            "ReadManyFiles",
+            "NotebookEdit",
+            "SmartEdit",
+        ];
+
+        // All GPT models must have excluded_tools set
+        let gpt_slugs: Vec<_> = list_builtin_models()
+            .into_iter()
+            .filter(|s| s.starts_with("gpt"))
+            .collect();
+        assert!(!gpt_slugs.is_empty(), "should have at least one GPT model");
+
+        for slug in &gpt_slugs {
+            let model = get_model_defaults(slug).unwrap();
+            let excluded = model.excluded_tools.as_ref().unwrap_or_else(|| {
+                panic!("{slug} should have excluded_tools set");
+            });
+            for tool in expected {
+                assert!(
+                    excluded.contains(&tool.to_string()),
+                    "{slug} should exclude {tool}"
+                );
+            }
+        }
+
+        // Non-GPT models should not have excluded_tools
+        for slug in list_builtin_models() {
+            if !slug.starts_with("gpt") {
+                let model = get_model_defaults(slug).unwrap();
+                assert_eq!(
+                    model.excluded_tools, None,
+                    "{slug} should not have excluded_tools"
+                );
+            }
+        }
     }
 
     #[test]

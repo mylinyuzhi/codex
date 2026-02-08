@@ -340,6 +340,21 @@ with .gitignore awareness.\n\
 \n\
 Use Glob for pattern-based file matching or Grep for content search instead.";
 
+/// Description for the SmartEdit tool.
+pub const SMART_EDIT_DESCRIPTION: &str = "\
+Performs string replacements in files with enhanced matching and LLM-assisted correction.\n\
+\n\
+Usage:\n\
+- You must use the Read tool at least once before editing. This tool will error if you attempt an edit without reading the file.\n\
+- When editing text from Read tool output, preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix.\n\
+- ALWAYS prefer editing existing files. NEVER write new files unless explicitly required.\n\
+- The edit will FAIL if old_string is not unique in the file. Either provide a larger string with more context to make it unique or use replace_all.\n\
+- Use replace_all for replacing and renaming strings across the file.\n\
+- If exact matching fails, the tool automatically tries whitespace-flexible matching, then regex-based token matching.\n\
+- If all matching strategies fail, an LLM is used to correct the search/replace pair based on the instruction you provide.\n\
+- The instruction parameter is required — describe the semantic intent of your edit (e.g., 'rename variable x to y', 'add error handling to function foo').\n\
+- To create a new file, pass an empty string for old_string. The file must not already exist.";
+
 /// Description for the LSP tool.
 pub const LSP_DESCRIPTION: &str = "\
 Language Server Protocol operations for code intelligence.\n\

@@ -104,6 +104,12 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 
+    /// Tools to exclude for this model (blacklist filter).
+    ///
+    /// Tool names listed here are removed from the definitions sent to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_tools: Option<Vec<String>>,
+
     // === Instructions ===
     /// Base instructions for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,6 +168,7 @@ impl ModelInfo {
         merge_field!(max_tool_output_chars);
         merge_field!(experimental_supported_tools);
         merge_field!(apply_patch_tool_type);
+        merge_field!(excluded_tools);
         // Instructions
         merge_field!(base_instructions);
         merge_field!(base_instructions_file);
@@ -256,6 +263,12 @@ impl ModelInfo {
     /// Set the apply_patch tool type.
     pub fn with_apply_patch_tool_type(mut self, tool_type: ApplyPatchToolType) -> Self {
         self.apply_patch_tool_type = Some(tool_type);
+        self
+    }
+
+    /// Set excluded tools (blacklist).
+    pub fn with_excluded_tools(mut self, tools: Vec<String>) -> Self {
+        self.excluded_tools = Some(tools);
         self
     }
 
@@ -604,5 +617,53 @@ mod tests {
         assert!(json.contains("max_tool_output_chars"));
         let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.max_tool_output_chars, Some(30_000));
+    }
+
+    #[test]
+    fn test_merge_excluded_tools_replaces() {
+        let mut base = ModelInfo {
+            excluded_tools: Some(vec!["Edit".to_string()]),
+            ..Default::default()
+        };
+
+        let other = ModelInfo {
+            excluded_tools: Some(vec!["Write".to_string(), "Read".to_string()]),
+            ..Default::default()
+        };
+
+        base.merge_from(&other);
+        assert_eq!(
+            base.excluded_tools,
+            Some(vec!["Write".to_string(), "Read".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_merge_excluded_tools_none_preserves() {
+        let mut base = ModelInfo {
+            excluded_tools: Some(vec!["Edit".to_string()]),
+            ..Default::default()
+        };
+
+        let other = ModelInfo::default();
+        base.merge_from(&other);
+        assert_eq!(base.excluded_tools, Some(vec!["Edit".to_string()]));
+    }
+
+    #[test]
+    fn test_excluded_tools_serde() {
+        let config = ModelInfo {
+            slug: "test-model".to_string(),
+            excluded_tools: Some(vec!["Edit".to_string(), "Write".to_string()]),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(json.contains("excluded_tools"));
+        let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            parsed.excluded_tools,
+            Some(vec!["Edit".to_string(), "Write".to_string()])
+        );
     }
 }

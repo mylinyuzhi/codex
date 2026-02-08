@@ -48,6 +48,9 @@ use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
 use cocode_tools::FileTracker as ToolsFileTracker;
+use cocode_tools::ModelCallFn;
+use cocode_tools::ModelCallInput;
+use cocode_tools::ModelCallResult;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::StreamingToolExecutor;
 use cocode_tools::ToolExecutionResult;
@@ -894,6 +897,27 @@ impl AgentLoop {
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             executor = executor.with_spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Wire model_call_fn for SmartEdit LLM correction (prefer Fast model, fallback to Main)
+        {
+            let hub = self.model_hub.clone();
+            let sels = self.selections.clone();
+            let model_call_fn: ModelCallFn = std::sync::Arc::new(move |input: ModelCallInput| {
+                let hub = hub.clone();
+                let sels = sels.clone();
+                Box::pin(async move {
+                    let (model, _provider) = hub
+                        .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
+                        .map_err(|e| anyhow::anyhow!("Failed to get model: {e}"))?;
+                    let response = model
+                        .generate_object(input.request)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("generate_object failed: {e}"))?;
+                    Ok(ModelCallResult { response })
+                })
+            });
+            executor = executor.with_model_call_fn(model_call_fn);
         }
 
         // Add skill_manager if available for Skill tool
@@ -2334,6 +2358,7 @@ impl AgentLoop {
 /// This ensures each model only sees tools it supports:
 /// - `shell_type`: `Disabled` removes shell-related tools (`Bash`, `shell`, `TaskOutput`, `TaskStop`)
 /// - `apply_patch`: controlled by `ModelInfo.apply_patch_tool_type`
+/// - `excluded_tools`: blacklist filter removing named tools
 /// - experimental tools: controlled by `ModelInfo.experimental_supported_tools`
 ///
 /// Feature-gated tools are already filtered by `ToolRegistry::definitions_filtered()`.
@@ -2379,7 +2404,14 @@ fn select_tools_for_model(
         }
     }
 
-    // 3. Handle experimental_supported_tools (whitelist filter)
+    // 3. Handle excluded_tools (blacklist filter)
+    if let Some(ref excluded) = model_info.excluded_tools {
+        if !excluded.is_empty() {
+            defs.retain(|d| !excluded.contains(&d.name));
+        }
+    }
+
+    // 4. Handle experimental_supported_tools (whitelist filter)
     if let Some(ref supported) = model_info.experimental_supported_tools {
         if !supported.is_empty() {
             defs.retain(|d| supported.contains(&d.name));
@@ -2531,6 +2563,42 @@ mod tests {
             };
             let result = select_tools_for_model(sample_defs(), &model_info);
             // Empty whitelist = no filtering
+            assert_eq!(result.len(), 3);
+        }
+
+        #[test]
+        fn excluded_tools_removes_named() {
+            let model_info = ModelInfo {
+                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+                excluded_tools: Some(vec!["Edit".to_string()]),
+                ..Default::default()
+            };
+            let result = select_tools_for_model(sample_defs(), &model_info);
+            assert_eq!(result.len(), 2);
+            assert!(result.iter().any(|d| d.name == "Read"));
+            assert!(result.iter().any(|d| d.name == "apply_patch"));
+            assert!(result.iter().all(|d| d.name != "Edit"));
+        }
+
+        #[test]
+        fn empty_excluded_tools_does_not_filter() {
+            let model_info = ModelInfo {
+                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+                excluded_tools: Some(vec![]),
+                ..Default::default()
+            };
+            let result = select_tools_for_model(sample_defs(), &model_info);
+            assert_eq!(result.len(), 3);
+        }
+
+        #[test]
+        fn none_excluded_tools_does_not_filter() {
+            let model_info = ModelInfo {
+                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+                excluded_tools: None,
+                ..Default::default()
+            };
+            let result = select_tools_for_model(sample_defs(), &model_info);
             assert_eq!(result.len(), 3);
         }
 
