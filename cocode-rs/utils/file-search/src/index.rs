@@ -15,6 +15,7 @@ use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::FileSearchOptions;
 use crate::FileSearchResults;
 use crate::run;
 
@@ -145,24 +146,29 @@ impl FileIndex {
             return Vec::new();
         }
 
-        // Use the existing run() function with a temporary directory
-        // containing symlinks to our cached files
-        let cancel_flag = Arc::new(AtomicBool::new(false));
         let limit = NonZero::new(max_results as usize).unwrap_or(NonZero::new(15).expect("15 > 0"));
 
         match run(
             query,
-            limit,
-            &self.cwd,
-            vec![],
-            NonZero::new(2).expect("2 > 0"),
-            cancel_flag,
-            true, // compute_indices for highlighting
-            true, // respect_gitignore
+            vec![self.cwd.clone()],
+            FileSearchOptions {
+                limit,
+                exclude: vec![],
+                threads: NonZero::new(2).expect("2 > 0"),
+                compute_indices: true,
+                respect_gitignore: true,
+            },
+            None,
         ) {
             Ok(FileSearchResults { matches, .. }) => matches
                 .into_iter()
-                .map(|m| FileSuggestion::new(m.path, m.score, m.indices.unwrap_or_default()))
+                .map(|m| {
+                    FileSuggestion::new(
+                        m.path.to_string_lossy().into_owned(),
+                        m.score,
+                        m.indices.unwrap_or_default(),
+                    )
+                })
                 .collect(),
             Err(_) => Vec::new(),
         }

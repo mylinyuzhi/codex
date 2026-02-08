@@ -1028,11 +1028,13 @@ dependencies = [
  "anyhow",
  "clap",
  "cocode-file-ignore",
+ "crossbeam-channel",
  "ignore",
- "nucleo-matcher",
+ "nucleo",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1510,7 +1512,6 @@ dependencies = [
  "cocode-error",
  "cocode-file-encoding",
  "cocode-file-ignore",
- "cocode-file-search",
  "cocode-hooks",
  "cocode-lsp",
  "cocode-mcp-types",
@@ -4095,10 +4096,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleo"
+version = "0.5.0"
+source = "git+https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9faabb4e5c6d81d946a5e35a90f87347ee"
+dependencies = [
+ "nucleo-matcher",
+ "parking_lot",
+ "rayon",
+]
+
+[[package]]
 name = "nucleo-matcher"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+source = "git+https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9faabb4e5c6d81d946a5e35a90f87347ee"
 dependencies = [
  "memchr",
  "unicode-segmentation",
