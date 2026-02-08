@@ -14,6 +14,7 @@ members = [
     "utils/file-ignore",
     "utils/file-search",
     "utils/file-watch",
+    "utils/symbol-search",
     "provider-sdks/anthropic",
     "provider-sdks/openai",
     "provider-sdks/volcengine-ark",
@@ -97,6 +98,7 @@ cocode-keyring-store = { path = "utils/keyring-store" }
 cocode-file-ignore = { path = "utils/file-ignore" }
 cocode-file-search = { path = "utils/file-search" }
 cocode-file-watch = { path = "utils/file-watch" }
+cocode-symbol-search = { path = "utils/symbol-search" }
 cocode-git = { path = "utils/git" }
 cocode-utils-absolute-path = { path = "utils/absolute-path" }
 cocode-utils-cache = { path = "utils/cache" }

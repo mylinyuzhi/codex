@@ -17,7 +17,7 @@ use crate::command::UserCommand;
 use crate::editor;
 use crate::event::TuiCommand;
 use crate::event::TuiEvent;
-use crate::event::handle_key_event_full;
+use crate::event::handle_key_event_full_with_symbols;
 use crate::file_search::FileSearchEvent;
 use crate::file_search::FileSearchManager;
 use crate::file_search::create_file_search_channel;
@@ -26,10 +26,14 @@ use crate::render::render;
 use crate::skill_search::SkillSearchManager;
 use crate::state::AppState;
 use crate::state::Overlay;
+use crate::symbol_search::SymbolSearchEvent;
+use crate::symbol_search::SymbolSearchManager;
+use crate::symbol_search::create_symbol_search_channel;
 use crate::terminal::Tui;
 use crate::update::handle_agent_event;
 use crate::update::handle_command;
 use crate::update::handle_file_search_event;
+use crate::update::handle_symbol_search_event;
 
 /// Configuration for the TUI application.
 #[derive(Debug, Clone)]
@@ -82,6 +86,10 @@ pub struct App {
     skill_search: SkillSearchManager,
     /// Agent search manager for @agent-* autocomplete.
     agent_search: AgentSearchManager,
+    /// Symbol search manager for @# autocomplete.
+    symbol_search: SymbolSearchManager,
+    /// Receiver for symbol search events.
+    symbol_search_rx: mpsc::Receiver<SymbolSearchEvent>,
     /// Paste manager for handling large pastes.
     paste_manager: PasteManager,
 }
@@ -109,6 +117,10 @@ impl App {
         let tui = Tui::new()?;
         let state = AppState::with_model(&config.model);
 
+        // Create symbol search manager (before file search, since config.cwd is moved)
+        let (symbol_search_tx, symbol_search_rx) = create_symbol_search_channel();
+        let symbol_search = SymbolSearchManager::new(config.cwd.clone(), symbol_search_tx);
+
         // Create file search manager
         let (file_search_tx, file_search_rx) = create_file_search_channel();
         let file_search = FileSearchManager::new(config.cwd, file_search_tx);
@@ -134,6 +146,8 @@ impl App {
             file_search_rx,
             skill_search,
             agent_search,
+            symbol_search,
+            symbol_search_rx,
             paste_manager,
         })
     }
@@ -149,6 +163,8 @@ impl App {
         let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
         let skill_search = SkillSearchManager::new();
         let agent_search = AgentSearchManager::new();
+        let (symbol_search_tx, symbol_search_rx) = create_symbol_search_channel();
+        let symbol_search = SymbolSearchManager::new(PathBuf::from("."), symbol_search_tx);
 
         Self {
             tui,
@@ -160,6 +176,8 @@ impl App {
             file_search_rx,
             skill_search,
             agent_search,
+            symbol_search,
+            symbol_search_rx,
             paste_manager: PasteManager::new(),
         }
     }
@@ -202,6 +220,9 @@ impl App {
         // Trigger initial file index refresh
         self.file_search.refresh_index();
 
+        // Start building symbol index in the background
+        self.symbol_search.start_indexing();
+
         loop {
             tokio::select! {
                 // Handle TUI events (keyboard, tick, draw)
@@ -216,6 +237,11 @@ impl App {
                 // Handle file search results
                 Some(search_event) = self.file_search_rx.recv() => {
                     handle_file_search_event(&mut self.state, search_event);
+                    self.render()?;
+                }
+                // Handle symbol search results
+                Some(symbol_event) = self.symbol_search_rx.recv() => {
+                    handle_symbol_search_event(&mut self.state, symbol_event);
                     self.render()?;
                 }
             }
@@ -239,13 +265,15 @@ impl App {
                 let has_file_suggestions = self.state.ui.has_file_suggestions();
                 let has_skill_suggestions = self.state.ui.has_skill_suggestions();
                 let has_agent_suggestions = self.state.ui.has_agent_suggestions();
+                let has_symbol_suggestions = self.state.ui.has_symbol_suggestions();
 
-                if let Some(cmd) = handle_key_event_full(
+                if let Some(cmd) = handle_key_event_full_with_symbols(
                     key,
                     has_overlay,
                     has_file_suggestions,
                     has_skill_suggestions,
                     has_agent_suggestions,
+                    has_symbol_suggestions,
                     self.state.is_streaming(),
                 ) {
                     self.handle_command_internal(cmd).await;
@@ -316,21 +344,35 @@ impl App {
         Ok(())
     }
 
-    /// Check for @mention in input and trigger file or agent search if needed.
+    /// Check for @mention in input and trigger file, agent, or symbol search if needed.
     fn check_at_mention(&mut self) {
         if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
             if has_line_range_suffix(&query) {
                 // User is typing a line range suffix — dismiss autocomplete
                 self.state.ui.clear_file_suggestions();
                 self.state.ui.clear_agent_suggestions();
+                self.state.ui.clear_symbol_suggestions();
                 self.file_search.cancel();
+                self.symbol_search.cancel();
                 return;
             }
 
-            if query.starts_with("agent") && self.agent_search.has_agents() {
+            if let Some(symbol_query) = query.strip_prefix('#') {
+                // Symbol mention: @#query → search symbols
+                self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_agent_suggestions();
+                self.file_search.cancel();
+                self.state
+                    .ui
+                    .start_symbol_suggestions(symbol_query.to_string(), start_pos);
+                self.symbol_search
+                    .on_query(symbol_query.to_string(), start_pos);
+            } else if query.starts_with("agent") && self.agent_search.has_agents() {
                 // Agent mention: synchronous search, no debounce needed
                 self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_symbol_suggestions();
                 self.file_search.cancel();
+                self.symbol_search.cancel();
                 self.state
                     .ui
                     .start_agent_suggestions(query.clone(), start_pos);
@@ -339,6 +381,8 @@ impl App {
             } else {
                 // File/directory mention: async search
                 self.state.ui.clear_agent_suggestions();
+                self.state.ui.clear_symbol_suggestions();
+                self.symbol_search.cancel();
                 self.state
                     .ui
                     .start_file_suggestions(query.clone(), start_pos);
@@ -348,7 +392,9 @@ impl App {
             // No @mention, clear all suggestions
             self.state.ui.clear_file_suggestions();
             self.state.ui.clear_agent_suggestions();
+            self.state.ui.clear_symbol_suggestions();
             self.file_search.cancel();
+            self.symbol_search.cancel();
         }
     }
 

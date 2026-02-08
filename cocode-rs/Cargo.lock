@@ -1479,6 +1479,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-symbol-search"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cocode-file-ignore",
+ "cocode-utils-common",
+ "notify 8.2.0",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-tags",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "cocode-system-reminder"
 version = "0.0.0"
 dependencies = [
@@ -1553,6 +1574,7 @@ dependencies = [
  "cocode-protocol",
  "cocode-skill",
  "cocode-subagent",
+ "cocode-symbol-search",
  "cocode-utils-common",
  "crossterm",
  "dirs 6.0.0",

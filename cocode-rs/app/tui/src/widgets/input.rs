@@ -27,6 +27,8 @@ enum TokenType {
     AtMention,
     /// @agent-* mention.
     AgentMention,
+    /// @#symbol mention.
+    SymbolMention,
     /// /command (skill).
     SlashCommand,
     /// Paste pill ([Pasted text #1], [Image #1]).
@@ -132,12 +134,17 @@ fn tokenize(text: &str) -> Vec<Token> {
             ' ' | '\t' | '\n' => {
                 // Whitespace ends mentions/commands
                 if in_mention {
-                    // Check if this is an @agent-* mention
+                    // Check if this is an @agent-* or @#symbol mention
                     let token_type = if current_text
                         .strip_prefix('@')
                         .is_some_and(|rest| rest.starts_with("agent-") || rest == "agent")
                     {
                         TokenType::AgentMention
+                    } else if current_text
+                        .strip_prefix('@')
+                        .is_some_and(|rest| rest.starts_with('#'))
+                    {
+                        TokenType::SymbolMention
                     } else {
                         TokenType::AtMention
                     };
@@ -170,6 +177,11 @@ fn tokenize(text: &str) -> Vec<Token> {
                 .is_some_and(|rest| rest.starts_with("agent-") || rest == "agent")
             {
                 TokenType::AgentMention
+            } else if current_text
+                .strip_prefix('@')
+                .is_some_and(|rest| rest.starts_with('#'))
+            {
+                TokenType::SymbolMention
             } else {
                 TokenType::AtMention
             }
@@ -327,6 +339,7 @@ impl<'a> InputWidget<'a> {
             TokenType::Text => Span::raw(text.to_string()),
             TokenType::AtMention => Span::raw(text.to_string()).cyan(),
             TokenType::AgentMention => Span::raw(text.to_string()).yellow().bold(),
+            TokenType::SymbolMention => Span::raw(text.to_string()).green().bold(),
             TokenType::SlashCommand => Span::raw(text.to_string()).magenta(),
             TokenType::PastePill => Span::raw(text.to_string()).green().italic(),
         }

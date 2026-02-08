@@ -50,6 +50,7 @@ pub mod paste;
 pub mod render;
 pub mod skill_search;
 pub mod state;
+pub mod symbol_search;
 pub mod terminal;
 pub mod theme;
 pub mod update;
@@ -82,6 +83,11 @@ pub use skill_search::SkillSearchManager;
 // Agent search for @agent-* autocomplete
 pub use agent_search::AgentInfo;
 pub use agent_search::AgentSearchManager;
+
+// Symbol search for @# autocomplete
+pub use symbol_search::SymbolSearchEvent;
+pub use symbol_search::SymbolSearchManager;
+pub use symbol_search::create_symbol_search_channel;
 
 // External editor support
 pub use editor::edit_in_external_editor;

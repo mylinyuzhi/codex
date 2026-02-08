@@ -424,6 +424,32 @@ pub async fn handle_command(
             state.ui.clear_agent_suggestions();
         }
 
+        // ========== Symbol Autocomplete ==========
+        TuiCommand::SelectNextSymbolSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.symbol_suggestions {
+                suggestions.move_down();
+            }
+        }
+        TuiCommand::SelectPrevSymbolSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.symbol_suggestions {
+                suggestions.move_up();
+            }
+        }
+        TuiCommand::AcceptSymbolSuggestion => {
+            if let Some(suggestions) = state.ui.symbol_suggestions.take() {
+                if let Some(selected) = suggestions.selected_suggestion() {
+                    state.ui.input.insert_selected_symbol(
+                        suggestions.start_pos,
+                        &selected.file_path,
+                        selected.line,
+                    );
+                }
+            }
+        }
+        TuiCommand::DismissSymbolSuggestions => {
+            state.ui.clear_symbol_suggestions();
+        }
+
         // ========== Queue ==========
         TuiCommand::QueueInput => {
             // Queue input for later processing (Enter during streaming)
@@ -659,6 +685,33 @@ fn handle_history_down(state: &mut AppState) {
             // At the most recent or not in history, clear input
             state.ui.input.take();
             state.ui.input.history_index = None;
+        }
+    }
+}
+
+/// Handle a symbol search event.
+///
+/// This function processes results from the symbol search manager
+/// and updates the autocomplete suggestions.
+pub fn handle_symbol_search_event(
+    state: &mut AppState,
+    event: crate::symbol_search::SymbolSearchEvent,
+) {
+    match event {
+        crate::symbol_search::SymbolSearchEvent::IndexReady { symbol_count } => {
+            tracing::info!(symbol_count, "Symbol index ready");
+        }
+        crate::symbol_search::SymbolSearchEvent::SearchResult {
+            query,
+            start_pos: _,
+            suggestions,
+        } => {
+            // Only update if we're still showing suggestions for this query
+            if let Some(ref current) = state.ui.symbol_suggestions {
+                if current.query == query {
+                    state.ui.update_symbol_suggestions(suggestions);
+                }
+            }
         }
     }
 }

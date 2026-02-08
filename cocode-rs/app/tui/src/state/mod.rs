@@ -35,6 +35,8 @@ pub use ui::SessionSummary;
 pub use ui::SkillSuggestionItem;
 pub use ui::SkillSuggestionState;
 pub use ui::StreamingState;
+pub use ui::SymbolSuggestionItem;
+pub use ui::SymbolSuggestionState;
 pub use ui::UiState;
 
 // Re-export theme types for convenience

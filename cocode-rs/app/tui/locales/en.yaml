@@ -29,6 +29,12 @@ command.select_prev_agent_suggestion: "Select Previous Agent Suggestion"
 command.accept_agent_suggestion: "Accept Agent Suggestion"
 command.dismiss_agent_suggestions: "Dismiss Agent Suggestions"
 
+# Symbol autocomplete
+command.select_next_symbol_suggestion: "Select Next Symbol Suggestion"
+command.select_prev_symbol_suggestion: "Select Previous Symbol Suggestion"
+command.accept_symbol_suggestion: "Accept Symbol Suggestion"
+command.dismiss_symbol_suggestions: "Dismiss Symbol Suggestions"
+
 # Input actions
 command.submit_input: "Submit Input"
 command.interrupt: "Interrupt"

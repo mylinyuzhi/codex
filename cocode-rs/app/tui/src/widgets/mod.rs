@@ -20,6 +20,7 @@ mod queued_list;
 mod skill_suggestion_popup;
 mod status_bar;
 mod subagent_panel;
+mod symbol_suggestion_popup;
 mod toast;
 mod tool_panel;
 
@@ -31,6 +32,7 @@ pub use queued_list::QueuedListWidget;
 pub use skill_suggestion_popup::SkillSuggestionPopup;
 pub use status_bar::StatusBar;
 pub use subagent_panel::SubagentPanel;
+pub use symbol_suggestion_popup::SymbolSuggestionPopup;
 pub use toast::Toast;
 pub use toast::ToastSeverity;
 pub use toast::ToastWidget;

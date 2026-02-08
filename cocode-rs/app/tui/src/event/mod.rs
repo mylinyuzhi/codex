@@ -13,6 +13,7 @@ mod stream;
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
 pub use handler::handle_key_event_full;
+pub use handler::handle_key_event_full_with_symbols;
 pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
@@ -152,6 +153,19 @@ pub enum TuiCommand {
     /// Dismiss agent suggestions.
     DismissAgentSuggestions,
 
+    // ========== Symbol Autocomplete ==========
+    /// Select next symbol suggestion.
+    SelectNextSymbolSuggestion,
+
+    /// Select previous symbol suggestion.
+    SelectPrevSymbolSuggestion,
+
+    /// Accept the current symbol suggestion.
+    AcceptSymbolSuggestion,
+
+    /// Dismiss symbol suggestions.
+    DismissSymbolSuggestions,
+
     // ========== Editing ==========
     /// Insert a character at the cursor.
     InsertChar(char),
@@ -287,6 +301,18 @@ impl std::fmt::Display for TuiCommand {
             }
             TuiCommand::DismissAgentSuggestions => {
                 write!(f, "{}", t!("command.dismiss_agent_suggestions"))
+            }
+            TuiCommand::SelectNextSymbolSuggestion => {
+                write!(f, "{}", t!("command.select_next_symbol_suggestion"))
+            }
+            TuiCommand::SelectPrevSymbolSuggestion => {
+                write!(f, "{}", t!("command.select_prev_symbol_suggestion"))
+            }
+            TuiCommand::AcceptSymbolSuggestion => {
+                write!(f, "{}", t!("command.accept_symbol_suggestion"))
+            }
+            TuiCommand::DismissSymbolSuggestions => {
+                write!(f, "{}", t!("command.dismiss_symbol_suggestions"))
             }
             TuiCommand::SubmitInput => write!(f, "{}", t!("command.submit_input")),
             TuiCommand::Interrupt => write!(f, "{}", t!("command.interrupt")),

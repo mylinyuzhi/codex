@@ -38,6 +38,9 @@ pub struct UiState {
     /// Agent autocomplete state (shown when typing @agent-*).
     pub agent_suggestions: Option<AgentSuggestionState>,
 
+    /// Symbol autocomplete state (shown when typing @#symbol).
+    pub symbol_suggestions: Option<SymbolSuggestionState>,
+
     /// Whether to show thinking content in chat messages.
     pub show_thinking: bool,
 
@@ -172,6 +175,28 @@ impl UiState {
     /// Update agent suggestions with search results.
     pub fn update_agent_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
         if let Some(ref mut state) = self.agent_suggestions {
+            state.update_suggestions(suggestions);
+        }
+    }
+
+    /// Check if symbol suggestions are active.
+    pub fn has_symbol_suggestions(&self) -> bool {
+        self.symbol_suggestions.is_some()
+    }
+
+    /// Start showing symbol suggestions.
+    pub fn start_symbol_suggestions(&mut self, query: String, start_pos: i32) {
+        self.symbol_suggestions = Some(SymbolSuggestionState::new(query, start_pos));
+    }
+
+    /// Clear symbol suggestions.
+    pub fn clear_symbol_suggestions(&mut self) {
+        self.symbol_suggestions = None;
+    }
+
+    /// Update symbol suggestions with search results.
+    pub fn update_symbol_suggestions(&mut self, suggestions: Vec<SymbolSuggestionItem>) {
+        if let Some(ref mut state) = self.symbol_suggestions {
             state.update_suggestions(suggestions);
         }
     }
@@ -771,6 +796,31 @@ impl InputState {
         self.cursor = new_cursor as i32;
     }
 
+    /// Insert a selected symbol, replacing the current @#query with @filepath:line.
+    ///
+    /// The `start_pos` is the position of the @ character, and `file_path` / `line`
+    /// identify the symbol's location.
+    pub fn insert_selected_symbol(&mut self, start_pos: i32, file_path: &str, line: i32) {
+        let start = start_pos as usize;
+        let cursor = self.cursor as usize;
+
+        if start >= self.text.len() || cursor > self.text.len() {
+            return;
+        }
+
+        // Build new text: before @ + @filepath:line + space + after cursor
+        let before = &self.text[..start];
+        let after = &self.text[cursor..];
+        let mention = format!("{file_path}:{line}");
+        let new_text = format!("{before}@{mention} {after}");
+
+        // Calculate new cursor position: after the inserted mention and space
+        let new_cursor = start + 1 + mention.len() + 1;
+
+        self.text = new_text;
+        self.cursor = new_cursor as i32;
+    }
+
     /// Insert a selected file path, replacing the current @query.
     ///
     /// The `start_pos` is the position of the @ character, and `path` is
@@ -1364,6 +1414,81 @@ pub struct AgentSuggestionItem {
     /// Short description.
     pub description: String,
     /// Fuzzy match score (lower = better match).
+    pub score: i32,
+    /// Character indices that matched the query (for highlighting).
+    pub match_indices: Vec<usize>,
+}
+
+/// State for symbol autocomplete suggestions.
+#[derive(Debug, Clone)]
+pub struct SymbolSuggestionState {
+    /// The query extracted from @#mention (without the @#).
+    pub query: String,
+    /// Start position of the @mention in the input text.
+    pub start_pos: i32,
+    /// Current suggestions.
+    pub suggestions: Vec<SymbolSuggestionItem>,
+    /// Currently selected index in the dropdown.
+    pub selected: i32,
+    /// Whether a search is currently in progress.
+    pub loading: bool,
+}
+
+impl SymbolSuggestionState {
+    /// Create a new symbol suggestion state.
+    pub fn new(query: String, start_pos: i32) -> Self {
+        Self {
+            query,
+            start_pos,
+            suggestions: Vec::new(),
+            selected: 0,
+            loading: true,
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = (self.suggestions.len() as i32).saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the currently selected suggestion.
+    pub fn selected_suggestion(&self) -> Option<&SymbolSuggestionItem> {
+        self.suggestions.get(self.selected as usize)
+    }
+
+    /// Update suggestions from search results.
+    pub fn update_suggestions(&mut self, suggestions: Vec<SymbolSuggestionItem>) {
+        self.suggestions = suggestions;
+        self.loading = false;
+        // Reset selection if out of bounds
+        if self.selected >= self.suggestions.len() as i32 {
+            self.selected = 0;
+        }
+    }
+}
+
+/// A single symbol suggestion item for display.
+#[derive(Debug, Clone)]
+pub struct SymbolSuggestionItem {
+    /// Symbol name (original case).
+    pub name: String,
+    /// Kind of symbol.
+    pub kind: cocode_symbol_search::SymbolKind,
+    /// File path relative to root.
+    pub file_path: String,
+    /// Line number (1-indexed).
+    pub line: i32,
+    /// Fuzzy match score (higher = better match).
     pub score: i32,
     /// Character indices that matched the query (for highlighting).
     pub match_indices: Vec<usize>,

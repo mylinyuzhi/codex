@@ -54,7 +54,7 @@ pub fn handle_key_event_with_suggestions(
 ///
 /// This is the most complete handler that supports:
 /// - Overlay handling
-/// - File, skill, and agent suggestion navigation
+/// - File, skill, agent, and symbol suggestion navigation
 /// - Queue/steering behavior based on streaming state
 pub fn handle_key_event_full(
     key: KeyEvent,
@@ -62,6 +62,29 @@ pub fn handle_key_event_full(
     has_file_suggestions: bool,
     has_skill_suggestions: bool,
     has_agent_suggestions: bool,
+    is_streaming: bool,
+) -> Option<TuiCommand> {
+    handle_key_event_full_with_symbols(
+        key,
+        has_overlay,
+        has_file_suggestions,
+        has_skill_suggestions,
+        has_agent_suggestions,
+        false,
+        is_streaming,
+    )
+}
+
+/// Handle a key event with full context including symbol suggestions.
+///
+/// Priority: overlay > skill > agent > symbol > file > global > input
+pub fn handle_key_event_full_with_symbols(
+    key: KeyEvent,
+    has_overlay: bool,
+    has_file_suggestions: bool,
+    has_skill_suggestions: bool,
+    has_agent_suggestions: bool,
+    has_symbol_suggestions: bool,
     is_streaming: bool,
 ) -> Option<TuiCommand> {
     // Handle overlay-specific keys first
@@ -79,6 +102,13 @@ pub fn handle_key_event_full(
     // Handle agent suggestion navigation
     if has_agent_suggestions {
         if let Some(cmd) = handle_agent_suggestion_key(key) {
+            return Some(cmd);
+        }
+    }
+
+    // Handle symbol suggestion navigation
+    if has_symbol_suggestions {
+        if let Some(cmd) = handle_symbol_suggestion_key(key) {
             return Some(cmd);
         }
     }
@@ -131,6 +161,25 @@ fn handle_skill_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // Dismiss suggestions
         (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSkillSuggestions),
+
+        // Other keys pass through to normal handling
+        _ => None,
+    }
+}
+
+/// Handle keys for symbol suggestion navigation.
+fn handle_symbol_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
+    match (key.modifiers, key.code) {
+        // Navigate suggestions
+        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSymbolSuggestion),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSymbolSuggestion),
+
+        // Accept suggestion
+        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSymbolSuggestion),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSymbolSuggestion),
+
+        // Dismiss suggestions
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSymbolSuggestions),
 
         // Other keys pass through to normal handling
         _ => None,

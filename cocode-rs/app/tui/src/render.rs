@@ -29,6 +29,7 @@ use crate::widgets::QueuedListWidget;
 use crate::widgets::SkillSuggestionPopup;
 use crate::widgets::StatusBar;
 use crate::widgets::SubagentPanel;
+use crate::widgets::SymbolSuggestionPopup;
 use crate::widgets::ToastWidget;
 use crate::widgets::ToolPanel;
 
@@ -169,13 +170,17 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(input, chunks[input_chunk_index]);
 
     // Suggestion popups are mutually exclusive — only render one at a time.
-    // Priority: skill > agent > file (matches key event handling order).
+    // Priority: skill > agent > symbol > file (matches key event handling order).
     if let Some(ref suggestions) = state.ui.skill_suggestions {
         let popup = SkillSuggestionPopup::new(suggestions);
         let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
         frame.render_widget(popup, popup_area);
     } else if let Some(ref suggestions) = state.ui.agent_suggestions {
         let popup = AgentSuggestionPopup::new(suggestions);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+        frame.render_widget(popup, popup_area);
+    } else if let Some(ref suggestions) = state.ui.symbol_suggestions {
+        let popup = SymbolSuggestionPopup::new(suggestions);
         let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
         frame.render_widget(popup, popup_area);
     } else if let Some(ref suggestions) = state.ui.file_suggestions {
