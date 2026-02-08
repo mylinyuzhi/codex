@@ -336,6 +336,7 @@ pub async fn run_main_with_transport(
         }
     }
 
+    // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
@@ -349,6 +350,8 @@ pub async fn run_main_with_transport(
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
             config_warnings,
+            None, // lsp_manager - disabled for app-server
+            None, // retrieval_manager - disabled for app-server
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();

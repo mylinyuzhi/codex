@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
 use std::time::Duration;
 

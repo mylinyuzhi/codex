@@ -14,7 +14,9 @@ use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_lsp::LspServerManager;
 use codex_otel::OtelManager;
+use codex_retrieval::RetrievalFacade;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -39,4 +41,8 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    /// LSP server manager (shared from ThreadManager, None if LSP feature disabled)
+    pub(crate) lsp_manager: Option<Arc<LspServerManager>>,
+    /// Retrieval manager (shared from ThreadManager, None if feature disabled or subagent)
+    pub(crate) retrieval_manager: Option<Arc<RetrievalFacade>>,
 }

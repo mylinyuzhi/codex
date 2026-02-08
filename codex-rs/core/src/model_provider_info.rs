@@ -56,7 +56,7 @@ impl<'de> Deserialize<'de> for WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
@@ -112,6 +112,11 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+
+    /// Extended provider configuration (adapter support, streaming, model parameters).
+    /// Flattened into this struct for convenient access.
+    #[serde(flatten)]
+    pub ext: crate::model_provider_info_ext::ModelProviderInfoExt,
 }
 
 impl ModelProviderInfo {
@@ -170,6 +175,15 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            adapter: self.ext.adapter.clone(),
+            model_parameters: self
+                .ext
+                .model_parameters
+                .as_ref()
+                .and_then(|p| serde_json::to_value(p).ok()),
+            interceptors: self.ext.interceptors.clone(),
+            request_timeout: self.ext.request_timeout_ms.map(Duration::from_millis),
+            streaming: self.ext.streaming,
         })
     }
 
@@ -257,6 +271,7 @@ impl ModelProviderInfo {
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            ext: Default::default(),
         }
     }
 
@@ -331,6 +346,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        ext: Default::default(),
     }
 }
 
@@ -360,6 +376,7 @@ base_url = "http://localhost:11434/v1"
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -390,7 +407,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
-            supports_websockets: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -425,6 +442,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();

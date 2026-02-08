@@ -10,6 +10,7 @@ use crate::safety::get_platform_sandbox;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::spec_ext::ToolFilter;
 use async_trait::async_trait;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ResponseInputItem;
@@ -242,6 +243,16 @@ impl ToolRegistryBuilder {
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
+    }
+
+    /// Filter specs based on a ToolFilter.
+    /// This removes specs for tools that are not allowed or are blocked.
+    pub fn filter_with(mut self, filter: &ToolFilter) -> Self {
+        self.specs.retain(|configured_spec| {
+            let tool_name = configured_spec.spec.name();
+            filter.is_allowed(tool_name)
+        });
+        self
     }
 }
 

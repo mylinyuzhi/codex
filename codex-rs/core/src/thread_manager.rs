@@ -20,6 +20,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
+use codex_lsp::LspServerManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -28,6 +29,7 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_retrieval::RetrievalFacade;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,6 +111,10 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
+    /// LSP server manager (shared across sessions, None if LSP feature disabled)
+    lsp_manager: Option<Arc<LspServerManager>>,
+    /// Retrieval manager (shared across sessions, None if Retrieval feature disabled)
+    retrieval_manager: Option<Arc<RetrievalFacade>>,
     session_source: SessionSource,
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
@@ -121,6 +127,8 @@ impl ThreadManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<RetrievalFacade>>,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
@@ -133,6 +141,8 @@ impl ThreadManager {
                 skills_manager,
                 file_watcher,
                 auth_manager,
+                lsp_manager,
+                retrieval_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -140,6 +150,16 @@ impl ThreadManager {
             #[cfg(any(test, feature = "test-support"))]
             _test_codex_home_guard: None,
         }
+    }
+
+    /// Get the LSP server manager if available.
+    pub fn get_lsp_manager(&self) -> Option<Arc<LspServerManager>> {
+        self.state.lsp_manager.clone()
+    }
+
+    /// Get the Retrieval manager if available.
+    pub fn get_retrieval_manager(&self) -> Option<Arc<RetrievalFacade>> {
+        self.state.retrieval_manager.clone()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -177,6 +197,8 @@ impl ThreadManager {
                 skills_manager,
                 file_watcher,
                 auth_manager,
+                lsp_manager: None,
+                retrieval_manager: None,
                 session_source: SessionSource::Exec,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -466,6 +488,8 @@ impl ThreadManagerState {
             session_source,
             agent_control,
             dynamic_tools,
+            self.lsp_manager.clone(),
+            self.retrieval_manager.clone(),
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await

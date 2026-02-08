@@ -20,13 +20,17 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-sdk-protocol = { path = "../sdk-protocol" }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-lsp = { workspace = true }
+codex-retrieval = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-common = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -47,7 +51,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 
 [dev-dependencies]

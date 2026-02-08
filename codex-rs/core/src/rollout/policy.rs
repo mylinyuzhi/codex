@@ -111,6 +111,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => false,
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::Ext(_) => false,
     }
 }

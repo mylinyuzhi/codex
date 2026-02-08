@@ -145,8 +145,7 @@ impl Feature {
     }
 
     fn info(self) -> &'static FeatureSpec {
-        FEATURES
-            .iter()
+        all_features()
             .find(|spec| spec.id == self)
             .unwrap_or_else(|| unreachable!("missing FeatureSpec for {:?}", self))
     }
@@ -188,7 +187,7 @@ impl Features {
     /// Starts with built-in defaults.
     pub fn with_defaults() -> Self {
         let mut set = BTreeSet::new();
-        for spec in FEATURES {
+        for spec in all_features() {
             if spec.default_enabled {
                 set.insert(spec.id);
             }
@@ -394,7 +393,16 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
 }
 
-pub const FEATURES: &[FeatureSpec] = &[
+/// Returns all feature specifications (core + ext).
+/// Use this instead of accessing FEATURES directly.
+pub fn all_features() -> impl Iterator<Item = &'static FeatureSpec> {
+    FEATURES
+        .iter()
+        .chain(crate::features_ext::EXT_FEATURES.iter())
+}
+
+/// Core feature specifications. Use `all_features()` to include ext features.
+const FEATURES: &[FeatureSpec] = &[
     // Stable features.
     FeatureSpec {
         id: Feature::GhostCommit,

@@ -13,6 +13,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -24,6 +25,9 @@ pub struct ToolInvocation {
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
+    /// Cancellation token for aborting the tool execution.
+    /// Child of the parent turn's cancellation token.
+    pub cancellation_token: CancellationToken,
 }
 
 #[derive(Clone, Debug)]

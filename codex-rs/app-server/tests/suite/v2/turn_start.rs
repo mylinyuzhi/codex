@@ -39,6 +39,7 @@ use codex_core::config::ConfigToml;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use codex_core::features::all_features;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -1874,8 +1875,7 @@ fn create_config_toml_with_sandbox(
     let feature_entries = features
         .into_iter()
         .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
+            let key = all_features()
                 .find(|spec| spec.id == feature)
                 .map(|spec| spec.key)
                 .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));

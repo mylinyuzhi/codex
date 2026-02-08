@@ -1,7 +1,12 @@
 pub mod aggregate;
+pub mod chat;
+pub mod chat_ext;
 pub mod compact;
 pub mod memories;
 pub mod models;
 pub mod responses;
+pub mod responses_ext;
 pub mod responses_websocket;
 mod session;
+mod streaming;
+mod streaming_ext;

@@ -110,6 +110,7 @@ impl AgentControl {
                         text_elements: Vec::new(),
                     }],
                     final_output_json_schema: None,
+                    ultrathink_enabled: false,
                 },
             )
             .await;
@@ -411,6 +412,7 @@ mod tests {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             },
         );
         let captured = harness
@@ -442,6 +444,7 @@ mod tests {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             },
         );
         let captured = harness

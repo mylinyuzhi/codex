@@ -883,6 +883,9 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+    /// Extension events (subagent, compact v2, etc.)
+    /// All custom events are wrapped here to minimize upstream conflicts.
+    Ext(ExtEventMsg),
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {

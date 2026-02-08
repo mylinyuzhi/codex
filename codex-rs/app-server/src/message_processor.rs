@@ -45,10 +45,12 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
+use codex_lsp::LspServerManager;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
 use tokio::time::Duration;
 use tokio::time::timeout;
+use codex_retrieval::RetrievalFacade;
 use toml::Value as TomlValue;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -143,6 +145,8 @@ impl MessageProcessor {
             cloud_requirements,
             feedback,
             config_warnings,
+            lsp_manager,
+            retrieval_manager,
         } = args;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -157,6 +161,8 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
+            lsp_manager,
+            retrieval_manager,
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
