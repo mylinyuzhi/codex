@@ -13,6 +13,7 @@ members = [
     "utils/file-encoding",
     "utils/file-ignore",
     "utils/file-search",
+    "utils/file-watch",
     "provider-sdks/anthropic",
     "provider-sdks/openai",
     "provider-sdks/volcengine-ark",
@@ -95,6 +96,7 @@ cocode-async-utils = { path = "utils/async-utils" }
 cocode-keyring-store = { path = "utils/keyring-store" }
 cocode-file-ignore = { path = "utils/file-ignore" }
 cocode-file-search = { path = "utils/file-search" }
+cocode-file-watch = { path = "utils/file-watch" }
 cocode-git = { path = "utils/git" }
 cocode-utils-absolute-path = { path = "utils/absolute-path" }
 cocode-utils-cache = { path = "utils/cache" }
@@ -156,6 +158,7 @@ lazy_static = "1"
 log = "0.4"
 lru = "0.16.3"
 nucleo-matcher = "0.3.1"
+notify = "8"
 once_cell = "1.20.2"
 opentelemetry = "0.31.0"
 opentelemetry-appender-tracing = "0.31.0"

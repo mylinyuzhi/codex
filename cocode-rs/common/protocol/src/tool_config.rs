@@ -16,11 +16,11 @@ use serde::Serialize;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
-    /// JSON function tool with "input" parameter (default, for gpt-oss).
+    /// String-schema function tool (default, for GPT-5.2+, codex models).
     #[default]
-    Function,
-    /// String-schema function tool (for GPT-5.2+, codex models).
     Freeform,
+    /// JSON function tool with "input" parameter (for gpt-oss).
+    Function,
     /// Shell-based, prompt instructions only (for GPT-5, o3, o4-mini).
     Shell,
 }
