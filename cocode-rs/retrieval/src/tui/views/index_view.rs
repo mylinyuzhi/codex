@@ -61,13 +61,5 @@ impl Widget for IndexView<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_index_view_creation() {
-        let index = IndexState::default();
-        let event_log = EventLogState::new();
-        let _view = IndexView::new(&index, &event_log);
-    }
-}
+#[path = "index_view.test.rs"]
+mod tests;

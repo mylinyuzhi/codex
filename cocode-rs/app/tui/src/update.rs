@@ -399,6 +399,57 @@ pub async fn handle_command(
             state.ui.clear_skill_suggestions();
         }
 
+        // ========== Agent Autocomplete ==========
+        TuiCommand::SelectNextAgentSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.agent_suggestions {
+                suggestions.move_down();
+            }
+        }
+        TuiCommand::SelectPrevAgentSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.agent_suggestions {
+                suggestions.move_up();
+            }
+        }
+        TuiCommand::AcceptAgentSuggestion => {
+            if let Some(suggestions) = state.ui.agent_suggestions.take() {
+                if let Some(selected) = suggestions.selected_suggestion() {
+                    state
+                        .ui
+                        .input
+                        .insert_selected_agent(suggestions.start_pos, &selected.agent_type);
+                }
+            }
+        }
+        TuiCommand::DismissAgentSuggestions => {
+            state.ui.clear_agent_suggestions();
+        }
+
+        // ========== Symbol Autocomplete ==========
+        TuiCommand::SelectNextSymbolSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.symbol_suggestions {
+                suggestions.move_down();
+            }
+        }
+        TuiCommand::SelectPrevSymbolSuggestion => {
+            if let Some(ref mut suggestions) = state.ui.symbol_suggestions {
+                suggestions.move_up();
+            }
+        }
+        TuiCommand::AcceptSymbolSuggestion => {
+            if let Some(suggestions) = state.ui.symbol_suggestions.take() {
+                if let Some(selected) = suggestions.selected_suggestion() {
+                    state.ui.input.insert_selected_symbol(
+                        suggestions.start_pos,
+                        &selected.file_path,
+                        selected.line,
+                    );
+                }
+            }
+        }
+        TuiCommand::DismissSymbolSuggestions => {
+            state.ui.clear_symbol_suggestions();
+        }
+
         // ========== Queue ==========
         TuiCommand::QueueInput => {
             // Queue input for later processing (Enter during streaming)
@@ -634,6 +685,33 @@ fn handle_history_down(state: &mut AppState) {
             // At the most recent or not in history, clear input
             state.ui.input.take();
             state.ui.input.history_index = None;
+        }
+    }
+}
+
+/// Handle a symbol search event.
+///
+/// This function processes results from the symbol search manager
+/// and updates the autocomplete suggestions.
+pub fn handle_symbol_search_event(
+    state: &mut AppState,
+    event: crate::symbol_search::SymbolSearchEvent,
+) {
+    match event {
+        crate::symbol_search::SymbolSearchEvent::IndexReady { symbol_count } => {
+            tracing::info!(symbol_count, "Symbol index ready");
+        }
+        crate::symbol_search::SymbolSearchEvent::SearchResult {
+            query,
+            start_pos: _,
+            suggestions,
+        } => {
+            // Only update if we're still showing suggestions for this query
+            if let Some(ref current) = state.ui.symbol_suggestions {
+                if current.query == query {
+                    state.ui.update_symbol_suggestions(suggestions);
+                }
+            }
         }
     }
 }
@@ -924,137 +1002,5 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::MessageRole;
-    use cocode_protocol::TokenUsage;
-
-    fn create_test_state() -> AppState {
-        AppState::new()
-    }
-
-    #[test]
-    fn test_handle_agent_event_turn_started() {
-        let mut state = create_test_state();
-
-        handle_agent_event(
-            &mut state,
-            LoopEvent::TurnStarted {
-                turn_id: "turn-1".to_string(),
-                turn_number: 1,
-            },
-        );
-
-        assert!(state.is_streaming());
-        assert_eq!(
-            state.ui.streaming.as_ref().map(|s| s.turn_id.as_str()),
-            Some("turn-1")
-        );
-    }
-
-    #[test]
-    fn test_handle_agent_event_text_delta() {
-        let mut state = create_test_state();
-        state.ui.start_streaming("turn-1".to_string());
-
-        handle_agent_event(
-            &mut state,
-            LoopEvent::TextDelta {
-                turn_id: "turn-1".to_string(),
-                delta: "Hello ".to_string(),
-            },
-        );
-        handle_agent_event(
-            &mut state,
-            LoopEvent::TextDelta {
-                turn_id: "turn-1".to_string(),
-                delta: "World".to_string(),
-            },
-        );
-
-        assert_eq!(
-            state.ui.streaming.as_ref().map(|s| s.content.as_str()),
-            Some("Hello World")
-        );
-    }
-
-    #[test]
-    fn test_handle_agent_event_turn_completed() {
-        let mut state = create_test_state();
-        state.ui.start_streaming("turn-1".to_string());
-        state.ui.append_streaming("Test content");
-
-        handle_agent_event(
-            &mut state,
-            LoopEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                usage: TokenUsage::new(100, 50),
-            },
-        );
-
-        assert!(!state.is_streaming());
-        assert_eq!(state.session.messages.len(), 1);
-        assert_eq!(state.session.messages[0].content, "Test content");
-        assert_eq!(state.session.messages[0].role, MessageRole::Assistant);
-    }
-
-    #[test]
-    fn test_handle_agent_event_tool_lifecycle() {
-        let mut state = create_test_state();
-
-        handle_agent_event(
-            &mut state,
-            LoopEvent::ToolUseStarted {
-                call_id: "call-1".to_string(),
-                name: "bash".to_string(),
-            },
-        );
-
-        assert_eq!(state.session.tool_executions.len(), 1);
-        assert_eq!(state.session.tool_executions[0].name, "bash");
-
-        handle_agent_event(
-            &mut state,
-            LoopEvent::ToolUseCompleted {
-                call_id: "call-1".to_string(),
-                output: ToolResultContent::Text("Success".to_string()),
-                is_error: false,
-            },
-        );
-
-        assert_eq!(
-            state.session.tool_executions[0].output,
-            Some("Success".to_string())
-        );
-    }
-
-    #[test]
-    fn test_handle_history_up_down() {
-        use crate::state::HistoryEntry;
-
-        let mut state = create_test_state();
-        // Add history entries - they're sorted by frecency (most recent first)
-        state.ui.input.history = vec![
-            HistoryEntry::new("second"), // Index 0 - most recent
-            HistoryEntry::new("first"),  // Index 1 - older
-        ];
-
-        // Navigate up (goes to older entries, index increases)
-        handle_history_up(&mut state);
-        assert_eq!(state.ui.input.text(), "second");
-        assert_eq!(state.ui.input.history_index, Some(0));
-
-        handle_history_up(&mut state);
-        assert_eq!(state.ui.input.text(), "first");
-        assert_eq!(state.ui.input.history_index, Some(1));
-
-        // Navigate down (goes to newer entries, index decreases)
-        handle_history_down(&mut state);
-        assert_eq!(state.ui.input.text(), "second");
-        assert_eq!(state.ui.input.history_index, Some(0));
-
-        handle_history_down(&mut state);
-        assert!(state.ui.input.is_empty());
-        assert_eq!(state.ui.input.history_index, None);
-    }
-}
+#[path = "update.test.rs"]
+mod tests;

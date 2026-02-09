@@ -15,6 +15,7 @@ use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::FileSearchOptions;
 use crate::FileSearchResults;
 use crate::run;
 
@@ -145,24 +146,29 @@ impl FileIndex {
             return Vec::new();
         }
 
-        // Use the existing run() function with a temporary directory
-        // containing symlinks to our cached files
-        let cancel_flag = Arc::new(AtomicBool::new(false));
         let limit = NonZero::new(max_results as usize).unwrap_or(NonZero::new(15).expect("15 > 0"));
 
         match run(
             query,
-            limit,
-            &self.cwd,
-            vec![],
-            NonZero::new(2).expect("2 > 0"),
-            cancel_flag,
-            true, // compute_indices for highlighting
-            true, // respect_gitignore
+            vec![self.cwd.clone()],
+            FileSearchOptions {
+                limit,
+                exclude: vec![],
+                threads: NonZero::new(2).expect("2 > 0"),
+                compute_indices: true,
+                respect_gitignore: true,
+            },
+            None,
         ) {
             Ok(FileSearchResults { matches, .. }) => matches
                 .into_iter()
-                .map(|m| FileSuggestion::new(m.path, m.score, m.indices.unwrap_or_default()))
+                .map(|m| {
+                    FileSuggestion::new(
+                        m.path.to_string_lossy().into_owned(),
+                        m.score,
+                        m.indices.unwrap_or_default(),
+                    )
+                })
                 .collect(),
             Err(_) => Vec::new(),
         }
@@ -316,68 +322,5 @@ pub fn create_shared_index(cwd: impl Into<std::path::PathBuf>) -> SharedFileInde
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_directories_basic() {
-        let files = vec![
-            "src/main.rs".to_string(),
-            "src/lib.rs".to_string(),
-            "src/utils/mod.rs".to_string(),
-            "Cargo.toml".to_string(),
-        ];
-
-        let dirs = extract_directories(&files);
-
-        assert!(dirs.contains(&"src/".to_string()));
-        assert!(dirs.contains(&"src/utils/".to_string()));
-    }
-
-    #[test]
-    fn test_extract_directories_nested() {
-        let files = vec![
-            "src/components/Button.tsx".to_string(),
-            "src/components/Input.tsx".to_string(),
-            "src/utils/helpers.ts".to_string(),
-        ];
-
-        let dirs = extract_directories(&files);
-
-        assert!(dirs.contains(&"src/".to_string()));
-        assert!(dirs.contains(&"src/components/".to_string()));
-        assert!(dirs.contains(&"src/utils/".to_string()));
-    }
-
-    #[test]
-    fn test_file_suggestion_new() {
-        let suggestion = FileSuggestion::new("src/main.rs".to_string(), 100, vec![0, 4, 5]);
-
-        assert_eq!(suggestion.path, "src/main.rs");
-        assert_eq!(suggestion.score, 100);
-        assert_eq!(suggestion.match_indices, vec![0, 4, 5]);
-        assert!(!suggestion.is_directory);
-    }
-
-    #[test]
-    fn test_file_suggestion_directory() {
-        let suggestion = FileSuggestion::directory("src".to_string());
-
-        assert_eq!(suggestion.path, "src");
-        assert_eq!(suggestion.display_text, "src/");
-        assert!(suggestion.is_directory);
-    }
-
-    #[test]
-    fn test_file_index_cache_validity() {
-        let index = FileIndex::new("/tmp");
-        assert!(!index.is_cache_valid());
-    }
-
-    #[tokio::test]
-    async fn test_discovery_result_default() {
-        let result = DiscoveryResult::default();
-        assert!(result.files.is_empty());
-        assert!(result.directories.is_empty());
-    }
-}
+#[path = "index.test.rs"]
+mod tests;

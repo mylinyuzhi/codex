@@ -10,39 +10,71 @@ use std::path::PathBuf;
 
 /// Where a skill was loaded from.
 ///
-/// Skills can originate from bundled defaults, project-local `.cocode/skills/`
-/// directories, user-global `~/.cocode/skills/`, or plugin directories.
+/// Skills can originate from built-in defaults, bundled skills, MCP servers,
+/// plugins, project settings, user settings, or policy settings.
+///
+/// Variants are ordered by priority (lower number = lower priority).
+/// When skills share the same name, higher-priority sources win.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkillSource {
+    /// A built-in skill hardcoded in the binary (e.g., system commands).
+    Builtin,
+
     /// A skill bundled with the binary.
     Bundled,
 
-    /// A project-local skill found in `.cocode/skills/`.
-    ProjectLocal {
-        /// Absolute path to the skill directory.
-        path: PathBuf,
-    },
-
-    /// A user-global skill found in `~/.cocode/skills/`.
-    UserGlobal {
-        /// Absolute path to the skill directory.
-        path: PathBuf,
-    },
+    /// A skill provided by an MCP server.
+    Mcp,
 
     /// A skill provided by a plugin.
     Plugin {
         /// Name of the plugin that provided the skill.
         plugin_name: String,
     },
+
+    /// A project-level skill from `.cocode/skills/` or project settings.
+    ProjectSettings {
+        /// Absolute path to the skill directory.
+        path: PathBuf,
+    },
+
+    /// A user-level skill from `~/.cocode/skills/` or user settings.
+    UserSettings {
+        /// Absolute path to the skill directory.
+        path: PathBuf,
+    },
+
+    /// A policy-level skill from organization policy settings.
+    PolicySettings,
+}
+
+impl SkillSource {
+    /// Returns the priority of this source (lower = lower priority).
+    ///
+    /// When skills share the same name, the source with higher priority wins.
+    pub fn priority(&self) -> i32 {
+        match self {
+            Self::Builtin => 0,
+            Self::Bundled => 1,
+            Self::Mcp => 2,
+            Self::Plugin { .. } => 3,
+            Self::ProjectSettings { .. } => 4,
+            Self::UserSettings { .. } => 5,
+            Self::PolicySettings => 6,
+        }
+    }
 }
 
 impl fmt::Display for SkillSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Builtin => write!(f, "builtin"),
             Self::Bundled => write!(f, "bundled"),
-            Self::ProjectLocal { path } => write!(f, "project-local ({})", path.display()),
-            Self::UserGlobal { path } => write!(f, "user-global ({})", path.display()),
+            Self::Mcp => write!(f, "mcp"),
+            Self::ProjectSettings { path } => write!(f, "project-settings ({})", path.display()),
+            Self::UserSettings { path } => write!(f, "user-settings ({})", path.display()),
             Self::Plugin { plugin_name } => write!(f, "plugin ({plugin_name})"),
+            Self::PolicySettings => write!(f, "policy-settings"),
         }
     }
 }
@@ -53,26 +85,38 @@ impl fmt::Display for SkillSource {
 /// path is not needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoadedFrom {
+    /// From built-in skills hardcoded in the binary.
+    Builtin,
+
     /// From bundled skills compiled into the binary.
-    BundledDir,
+    Bundled,
 
-    /// From a project-local `.cocode/skills/` directory.
-    ProjectSkillsDir,
-
-    /// From the user-global `~/.cocode/skills/` directory.
-    UserSkillsDir,
+    /// From an MCP server.
+    Mcp,
 
     /// From a plugin directory.
-    PluginDir,
+    Plugin,
+
+    /// From project-level skills directory.
+    ProjectSettings,
+
+    /// From user-level skills directory.
+    UserSettings,
+
+    /// From policy settings.
+    PolicySettings,
 }
 
 impl fmt::Display for LoadedFrom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BundledDir => write!(f, "bundled"),
-            Self::ProjectSkillsDir => write!(f, "project skills"),
-            Self::UserSkillsDir => write!(f, "user skills"),
-            Self::PluginDir => write!(f, "plugin"),
+            Self::Builtin => write!(f, "builtin"),
+            Self::Bundled => write!(f, "bundled"),
+            Self::Mcp => write!(f, "mcp"),
+            Self::Plugin => write!(f, "plugin"),
+            Self::ProjectSettings => write!(f, "project settings"),
+            Self::UserSettings => write!(f, "user settings"),
+            Self::PolicySettings => write!(f, "policy settings"),
         }
     }
 }
@@ -80,75 +124,17 @@ impl fmt::Display for LoadedFrom {
 impl From<&SkillSource> for LoadedFrom {
     fn from(source: &SkillSource) -> Self {
         match source {
-            SkillSource::Bundled => Self::BundledDir,
-            SkillSource::ProjectLocal { .. } => Self::ProjectSkillsDir,
-            SkillSource::UserGlobal { .. } => Self::UserSkillsDir,
-            SkillSource::Plugin { .. } => Self::PluginDir,
+            SkillSource::Builtin => Self::Builtin,
+            SkillSource::Bundled => Self::Bundled,
+            SkillSource::Mcp => Self::Mcp,
+            SkillSource::Plugin { .. } => Self::Plugin,
+            SkillSource::ProjectSettings { .. } => Self::ProjectSettings,
+            SkillSource::UserSettings { .. } => Self::UserSettings,
+            SkillSource::PolicySettings => Self::PolicySettings,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_skill_source_display() {
-        assert_eq!(SkillSource::Bundled.to_string(), "bundled");
-
-        let local = SkillSource::ProjectLocal {
-            path: PathBuf::from("/project/.cocode/skills/commit"),
-        };
-        assert_eq!(
-            local.to_string(),
-            "project-local (/project/.cocode/skills/commit)"
-        );
-
-        let global = SkillSource::UserGlobal {
-            path: PathBuf::from("/home/user/.cocode/skills/review"),
-        };
-        assert_eq!(
-            global.to_string(),
-            "user-global (/home/user/.cocode/skills/review)"
-        );
-
-        let plugin = SkillSource::Plugin {
-            plugin_name: "my-plugin".to_string(),
-        };
-        assert_eq!(plugin.to_string(), "plugin (my-plugin)");
-    }
-
-    #[test]
-    fn test_loaded_from_display() {
-        assert_eq!(LoadedFrom::BundledDir.to_string(), "bundled");
-        assert_eq!(LoadedFrom::ProjectSkillsDir.to_string(), "project skills");
-        assert_eq!(LoadedFrom::UserSkillsDir.to_string(), "user skills");
-        assert_eq!(LoadedFrom::PluginDir.to_string(), "plugin");
-    }
-
-    #[test]
-    fn test_loaded_from_conversion() {
-        assert_eq!(
-            LoadedFrom::from(&SkillSource::Bundled),
-            LoadedFrom::BundledDir
-        );
-        assert_eq!(
-            LoadedFrom::from(&SkillSource::ProjectLocal {
-                path: PathBuf::from("/x")
-            }),
-            LoadedFrom::ProjectSkillsDir
-        );
-        assert_eq!(
-            LoadedFrom::from(&SkillSource::UserGlobal {
-                path: PathBuf::from("/x")
-            }),
-            LoadedFrom::UserSkillsDir
-        );
-        assert_eq!(
-            LoadedFrom::from(&SkillSource::Plugin {
-                plugin_name: "p".to_string()
-            }),
-            LoadedFrom::PluginDir
-        );
-    }
-}
+#[path = "source.test.rs"]
+mod tests;

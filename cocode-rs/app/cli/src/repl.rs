@@ -1,6 +1,7 @@
 //! Interactive REPL for chat sessions.
 
 use cocode_session::SessionState;
+use cocode_skill::SkillContext;
 use cocode_skill::SkillManager;
 use cocode_skill::execute_skill;
 use std::io::BufRead;
@@ -8,6 +9,8 @@ use std::io::Write;
 use std::io::{self};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::info;
+use tracing::warn;
 
 use crate::output;
 
@@ -183,10 +186,11 @@ impl<'a> Repl<'a> {
         println!("  /cancel        - Cancel current operation");
 
         let manager = self.skill_manager.lock().await;
-        if !manager.is_empty() {
+        let visible = manager.user_visible_skills();
+        if !visible.is_empty() {
             println!();
             println!("Skills:");
-            for skill in manager.all() {
+            for skill in visible {
                 println!("  /{} - {}", skill.name, skill.description);
             }
         }
@@ -195,12 +199,13 @@ impl<'a> Repl<'a> {
     /// List all available skills.
     async fn list_skills(&self) {
         let manager = self.skill_manager.lock().await;
-        if manager.is_empty() {
+        let visible = manager.user_visible_skills();
+        if visible.is_empty() {
             println!("No skills loaded.");
             println!("Skills are loaded from .cocode/skills/ directories.");
         } else {
-            println!("Available skills ({}):", manager.len());
-            for skill in manager.all() {
+            println!("Available skills ({}):", visible.len());
+            for skill in visible {
                 println!("  /{} - {}", skill.name, skill.description);
             }
         }
@@ -209,6 +214,7 @@ impl<'a> Repl<'a> {
     /// Try to execute a skill command.
     ///
     /// Returns true if a skill was found and executed.
+    /// Handles model override, fork context dispatch, and allowed_tools.
     async fn try_execute_skill(&mut self, input: &str) -> anyhow::Result<bool> {
         let manager = self.skill_manager.lock().await;
         let result = execute_skill(&manager, input);
@@ -216,11 +222,33 @@ impl<'a> Repl<'a> {
 
         match result {
             Some(skill_result) => {
+                // Handle fork context
+                if skill_result.context == SkillContext::Fork {
+                    warn!(
+                        skill = %skill_result.skill_name,
+                        agent = ?skill_result.agent,
+                        "Fork context is not supported in the REPL; executing inline"
+                    );
+                }
+
+                if let Some(ref tools) = skill_result.allowed_tools {
+                    info!(
+                        skill = %skill_result.skill_name,
+                        tools = ?tools,
+                        "Skill specifies allowed_tools (not enforced in REPL)"
+                    );
+                }
+
                 println!("Executing skill: /{}", skill_result.skill_name);
                 println!();
 
-                // Run the skill prompt as a turn
-                match self.session.run_turn(&skill_result.prompt).await {
+                // Run the skill prompt with optional model override
+                let turn_result = self
+                    .session
+                    .run_skill_turn(&skill_result.prompt, skill_result.model.as_deref())
+                    .await;
+
+                match turn_result {
                     Ok(result) => {
                         println!("{}", result.final_text);
                         output::print_turn_summary(

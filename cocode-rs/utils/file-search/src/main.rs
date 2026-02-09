@@ -26,6 +26,7 @@ struct StdioReporter {
 
 impl Reporter for StdioReporter {
     fn report_match(&self, file_match: &FileMatch) {
+        let path_str = file_match.path.to_string_lossy();
         if self.write_output_as_json {
             println!("{}", serde_json::to_string(&file_match).unwrap());
         } else if self.show_indices {
@@ -39,7 +40,7 @@ impl Reporter for StdioReporter {
             // iterating over the characters.
             let mut indices_iter = indices.iter().peekable();
 
-            for (i, c) in file_match.path.chars().enumerate() {
+            for (i, c) in path_str.chars().enumerate() {
                 match indices_iter.peek() {
                     Some(next) if **next == i as u32 => {
                         // ANSI escape code for bold: \x1b[1m ... \x1b[0m
@@ -54,7 +55,7 @@ impl Reporter for StdioReporter {
             }
             println!();
         } else {
-            println!("{}", file_match.path);
+            println!("{path_str}");
         }
     }
 

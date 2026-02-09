@@ -35,6 +35,12 @@ pub struct UiState {
     /// Skill autocomplete state (shown when typing /command).
     pub skill_suggestions: Option<SkillSuggestionState>,
 
+    /// Agent autocomplete state (shown when typing @agent-*).
+    pub agent_suggestions: Option<AgentSuggestionState>,
+
+    /// Symbol autocomplete state (shown when typing @#symbol).
+    pub symbol_suggestions: Option<SymbolSuggestionState>,
+
     /// Whether to show thinking content in chat messages.
     pub show_thinking: bool,
 
@@ -147,6 +153,50 @@ impl UiState {
     /// Update skill suggestions with search results.
     pub fn update_skill_suggestions(&mut self, suggestions: Vec<SkillSuggestionItem>) {
         if let Some(ref mut state) = self.skill_suggestions {
+            state.update_suggestions(suggestions);
+        }
+    }
+
+    /// Check if agent suggestions are active.
+    pub fn has_agent_suggestions(&self) -> bool {
+        self.agent_suggestions.is_some()
+    }
+
+    /// Start showing agent suggestions.
+    pub fn start_agent_suggestions(&mut self, query: String, start_pos: i32) {
+        self.agent_suggestions = Some(AgentSuggestionState::new(query, start_pos));
+    }
+
+    /// Clear agent suggestions.
+    pub fn clear_agent_suggestions(&mut self) {
+        self.agent_suggestions = None;
+    }
+
+    /// Update agent suggestions with search results.
+    pub fn update_agent_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
+        if let Some(ref mut state) = self.agent_suggestions {
+            state.update_suggestions(suggestions);
+        }
+    }
+
+    /// Check if symbol suggestions are active.
+    pub fn has_symbol_suggestions(&self) -> bool {
+        self.symbol_suggestions.is_some()
+    }
+
+    /// Start showing symbol suggestions.
+    pub fn start_symbol_suggestions(&mut self, query: String, start_pos: i32) {
+        self.symbol_suggestions = Some(SymbolSuggestionState::new(query, start_pos));
+    }
+
+    /// Clear symbol suggestions.
+    pub fn clear_symbol_suggestions(&mut self) {
+        self.symbol_suggestions = None;
+    }
+
+    /// Update symbol suggestions with search results.
+    pub fn update_symbol_suggestions(&mut self, suggestions: Vec<SymbolSuggestionItem>) {
+        if let Some(ref mut state) = self.symbol_suggestions {
             state.update_suggestions(suggestions);
         }
     }
@@ -574,7 +624,10 @@ impl InputState {
     /// An @mention is detected when:
     /// - There's an @ character before the cursor
     /// - The @ is either at the start or preceded by whitespace
-    /// - There's no space between @ and the cursor
+    /// - There's no space between @ and the cursor (unless in quoted mode)
+    ///
+    /// Supports quoted paths: `@"path with spaces"` — the opening `"`
+    /// after `@` starts a quoted context where spaces are allowed.
     pub fn current_at_token(&self) -> Option<(i32, String)> {
         let text = &self.text;
         let cursor = self.cursor as usize;
@@ -583,34 +636,67 @@ impl InputState {
             return None;
         }
 
-        // Look backwards from cursor for @
         let before_cursor = &text[..cursor.min(text.len())];
 
-        // Find the last @ before cursor that isn't followed by a space
-        let mut at_pos = None;
+        // Check for quoted mode: @"... (look backwards for @")
+        // Find the last @ before cursor
         for (i, c) in before_cursor.char_indices().rev() {
-            if c == ' ' || c == '\n' || c == '\t' {
-                // Hit whitespace without finding @, no active mention
-                break;
-            }
             if c == '@' {
                 // Check if @ is at start or preceded by whitespace
-                if i == 0 {
-                    at_pos = Some(i);
-                } else {
-                    let prev_char = before_cursor[..i].chars().last();
-                    if prev_char.is_some_and(|c| c.is_whitespace()) {
-                        at_pos = Some(i);
+                let is_valid_start = i == 0
+                    || before_cursor[..i]
+                        .chars()
+                        .last()
+                        .is_some_and(|c| c.is_whitespace());
+                if !is_valid_start {
+                    return None;
+                }
+
+                let after_at = &before_cursor[i + 1..];
+
+                // Check for quoted mode: @"...
+                if let Some(rest) = after_at.strip_prefix('"') {
+                    // In quoted mode — extract text inside quotes (closing quote optional)
+                    let query = if let Some(close) = rest.find('"') {
+                        // Closing quote found — mention is complete, no active token
+                        // (unless cursor is right on the closing quote)
+                        if i + 2 + close < cursor {
+                            return None;
+                        }
+                        rest[..close].to_string()
+                    } else {
+                        rest.to_string()
+                    };
+                    return Some((i as i32, query));
+                }
+
+                // Normal (unquoted) mode — no whitespace allowed between @ and cursor
+                if after_at.contains(|c: char| c == ' ' || c == '\n' || c == '\t') {
+                    return None;
+                }
+                return Some((i as i32, after_at.to_string()));
+            }
+
+            // In unquoted mode, whitespace means no active mention
+            // But in quoted mode (@"path with spaces"), spaces are allowed
+            if c == ' ' || c == '\n' || c == '\t' {
+                let prefix = &before_cursor[..i];
+                if let Some(at_quote_pos) = prefix.rfind("@\"") {
+                    let valid_start = at_quote_pos == 0
+                        || prefix[..at_quote_pos]
+                            .chars()
+                            .last()
+                            .is_some_and(|ch| ch.is_whitespace());
+                    let after_open = &prefix[at_quote_pos + 2..];
+                    if valid_start && !after_open.contains('"') {
+                        continue;
                     }
                 }
                 break;
             }
         }
 
-        at_pos.map(|pos| {
-            let query = before_cursor[pos + 1..].to_string();
-            (pos as i32, query)
-        })
+        None
     }
 
     /// Detect a /command token at cursor position.
@@ -685,10 +771,61 @@ impl InputState {
         self.cursor = new_cursor as i32;
     }
 
+    /// Insert a selected agent type, replacing the current @query.
+    ///
+    /// The `start_pos` is the position of the @ character, and `agent_type` is
+    /// the agent type to insert (e.g., "explore" → `@agent-explore `).
+    pub fn insert_selected_agent(&mut self, start_pos: i32, agent_type: &str) {
+        let start = start_pos as usize;
+        let cursor = self.cursor as usize;
+
+        if start >= self.text.len() || cursor > self.text.len() {
+            return;
+        }
+
+        // Build new text: before @ + @agent-type + space + after cursor
+        let before = &self.text[..start];
+        let after = &self.text[cursor..];
+        let mention = format!("agent-{agent_type}");
+        let new_text = format!("{before}@{mention} {after}");
+
+        // Calculate new cursor position: after the inserted agent mention and space
+        let new_cursor = start + 1 + mention.len() + 1;
+
+        self.text = new_text;
+        self.cursor = new_cursor as i32;
+    }
+
+    /// Insert a selected symbol, replacing the current @#query with @filepath:line.
+    ///
+    /// The `start_pos` is the position of the @ character, and `file_path` / `line`
+    /// identify the symbol's location.
+    pub fn insert_selected_symbol(&mut self, start_pos: i32, file_path: &str, line: i32) {
+        let start = start_pos as usize;
+        let cursor = self.cursor as usize;
+
+        if start >= self.text.len() || cursor > self.text.len() {
+            return;
+        }
+
+        // Build new text: before @ + @filepath:line + space + after cursor
+        let before = &self.text[..start];
+        let after = &self.text[cursor..];
+        let mention = format!("{file_path}:{line}");
+        let new_text = format!("{before}@{mention} {after}");
+
+        // Calculate new cursor position: after the inserted mention and space
+        let new_cursor = start + 1 + mention.len() + 1;
+
+        self.text = new_text;
+        self.cursor = new_cursor as i32;
+    }
+
     /// Insert a selected file path, replacing the current @query.
     ///
     /// The `start_pos` is the position of the @ character, and `path` is
     /// the path to insert (without the @).
+    /// If the path contains spaces, it is wrapped in quotes: `@"path with spaces"`.
     pub fn insert_selected_path(&mut self, start_pos: i32, path: &str) {
         let start = start_pos as usize;
         let cursor = self.cursor as usize;
@@ -697,16 +834,22 @@ impl InputState {
             return;
         }
 
-        // Build new text: before @ + @path + after cursor
         let before = &self.text[..start];
         let after = &self.text[cursor..];
-        let new_text = format!("{before}@{path} {after}");
 
-        // Calculate new cursor position: after the inserted path and space
-        let new_cursor = start + 1 + path.len() + 1;
-
-        self.text = new_text;
-        self.cursor = new_cursor as i32;
+        if path.contains(' ') {
+            // Quoted path: @"path with spaces"
+            let new_text = format!("{before}@\"{path}\" {after}");
+            let new_cursor = start + 2 + path.len() + 2; // @" + path + " + space
+            self.text = new_text;
+            self.cursor = new_cursor as i32;
+        } else {
+            // Normal path: @path
+            let new_text = format!("{before}@{path} {after}");
+            let new_cursor = start + 1 + path.len() + 1;
+            self.text = new_text;
+            self.cursor = new_cursor as i32;
+        }
     }
 }
 
@@ -1207,400 +1350,150 @@ pub struct SkillSuggestionItem {
     pub match_indices: Vec<usize>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// State for agent autocomplete suggestions.
+#[derive(Debug, Clone)]
+pub struct AgentSuggestionState {
+    /// The query extracted from @mention (without the @).
+    pub query: String,
+    /// Start position of the @mention in the input text.
+    pub start_pos: i32,
+    /// Current suggestions.
+    pub suggestions: Vec<AgentSuggestionItem>,
+    /// Currently selected index in the dropdown.
+    pub selected: i32,
+}
 
-    #[test]
-    fn test_input_state_insert() {
-        let mut input = InputState::default();
-        input.insert_char('H');
-        input.insert_char('i');
-        assert_eq!(input.text(), "Hi");
-        assert_eq!(input.cursor, 2);
+impl AgentSuggestionState {
+    /// Create a new agent suggestion state.
+    pub fn new(query: String, start_pos: i32) -> Self {
+        Self {
+            query,
+            start_pos,
+            suggestions: Vec::new(),
+            selected: 0,
+        }
     }
 
-    #[test]
-    fn test_input_state_delete() {
-        let mut input = InputState::default();
-        input.set_text("Hello");
-        input.cursor = 3; // After "Hel"
-
-        input.delete_backward();
-        assert_eq!(input.text(), "Helo");
-        assert_eq!(input.cursor, 2);
-
-        input.delete_forward();
-        assert_eq!(input.text(), "Heo");
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
     }
 
-    #[test]
-    fn test_input_state_navigation() {
-        let mut input = InputState::default();
-        input.set_text("Hello");
-
-        input.move_home();
-        assert_eq!(input.cursor, 0);
-
-        input.move_right();
-        assert_eq!(input.cursor, 1);
-
-        input.move_end();
-        assert_eq!(input.cursor, 5);
-
-        input.move_left();
-        assert_eq!(input.cursor, 4);
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = (self.suggestions.len() as i32).saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
     }
 
-    #[test]
-    fn test_input_state_take() {
-        let mut input = InputState::default();
-        input.set_text("Hello");
-
-        let text = input.take();
-        assert_eq!(text, "Hello");
-        assert!(input.is_empty());
-        assert_eq!(input.cursor, 0);
+    /// Get the currently selected suggestion.
+    pub fn selected_suggestion(&self) -> Option<&AgentSuggestionItem> {
+        self.suggestions.get(self.selected as usize)
     }
 
-    #[test]
-    fn test_streaming_state() {
-        let mut ui = UiState::default();
-
-        ui.start_streaming("turn-1".to_string());
-        assert!(ui.streaming.is_some());
-
-        ui.append_streaming("Hello ");
-        ui.append_streaming("World");
-        assert_eq!(
-            ui.streaming.as_ref().map(|s| s.content.as_str()),
-            Some("Hello World")
-        );
-
-        ui.stop_streaming();
-        assert!(ui.streaming.is_none());
-    }
-
-    #[test]
-    fn test_focus_target_default() {
-        assert_eq!(FocusTarget::default(), FocusTarget::Input);
-    }
-
-    #[test]
-    fn test_current_at_token_simple() {
-        let mut input = InputState::default();
-        input.set_text("@src/main");
-
-        let result = input.current_at_token();
-        assert_eq!(result, Some((0, "src/main".to_string())));
-    }
-
-    #[test]
-    fn test_current_at_token_mid_text() {
-        let mut input = InputState::default();
-        input.set_text("read @src/lib.rs please");
-        input.cursor = 16; // After "@src/lib.rs"
-
-        let result = input.current_at_token();
-        assert_eq!(result, Some((5, "src/lib.rs".to_string())));
-    }
-
-    #[test]
-    fn test_current_at_token_no_mention() {
-        let mut input = InputState::default();
-        input.set_text("no mention here");
-
-        let result = input.current_at_token();
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_current_at_token_after_space() {
-        let mut input = InputState::default();
-        input.set_text("@file completed ");
-        input.cursor = 16; // After space
-
-        let result = input.current_at_token();
-        assert_eq!(result, None); // Space breaks the mention
-    }
-
-    #[test]
-    fn test_insert_selected_path() {
-        let mut input = InputState::default();
-        input.set_text("read @src/ please");
-        input.cursor = 10; // After "@src/"
-
-        input.insert_selected_path(5, "src/main.rs");
-
-        assert_eq!(input.text(), "read @src/main.rs  please");
-        assert_eq!(input.cursor, 18); // After "@src/main.rs "
-    }
-
-    #[test]
-    fn test_file_suggestion_state() {
-        let mut state = FileSuggestionState::new("src/".to_string(), 5);
-
-        assert!(state.loading);
-        assert!(state.suggestions.is_empty());
-        assert_eq!(state.selected, 0);
-
-        // Add suggestions
-        state.update_suggestions(vec![
-            FileSuggestionItem {
-                path: "src/main.rs".to_string(),
-                display_text: "src/main.rs".to_string(),
-                score: 100,
-                match_indices: vec![],
-                is_directory: false,
-            },
-            FileSuggestionItem {
-                path: "src/lib.rs".to_string(),
-                display_text: "src/lib.rs".to_string(),
-                score: 90,
-                match_indices: vec![],
-                is_directory: false,
-            },
-        ]);
-
-        assert!(!state.loading);
-        assert_eq!(state.suggestions.len(), 2);
-
-        // Navigate
-        state.move_down();
-        assert_eq!(state.selected, 1);
-
-        state.move_down(); // Should not go past last
-        assert_eq!(state.selected, 1);
-
-        state.move_up();
-        assert_eq!(state.selected, 0);
-
-        state.move_up(); // Should not go negative
-        assert_eq!(state.selected, 0);
-    }
-
-    #[test]
-    fn test_move_word_left() {
-        let mut input = InputState::default();
-        input.set_text("hello world test");
-
-        // Cursor at end
-        assert_eq!(input.cursor, 16);
-
-        input.move_word_left();
-        assert_eq!(input.cursor, 12); // Before "test"
-
-        input.move_word_left();
-        assert_eq!(input.cursor, 6); // Before "world"
-
-        input.move_word_left();
-        assert_eq!(input.cursor, 0); // At start
-
-        input.move_word_left(); // Should stay at 0
-        assert_eq!(input.cursor, 0);
-    }
-
-    #[test]
-    fn test_move_word_right() {
-        let mut input = InputState::default();
-        input.set_text("hello world test");
-        input.cursor = 0;
-
-        input.move_word_right();
-        assert_eq!(input.cursor, 6); // After "hello "
-
-        input.move_word_right();
-        assert_eq!(input.cursor, 12); // After "world "
-
-        input.move_word_right();
-        assert_eq!(input.cursor, 16); // At end
-
-        input.move_word_right(); // Should stay at end
-        assert_eq!(input.cursor, 16);
-    }
-
-    #[test]
-    fn test_delete_word_backward() {
-        let mut input = InputState::default();
-        input.set_text("hello world test");
-
-        input.delete_word_backward();
-        assert_eq!(input.text(), "hello world ");
-        assert_eq!(input.cursor, 12);
-
-        input.delete_word_backward();
-        assert_eq!(input.text(), "hello ");
-        assert_eq!(input.cursor, 6);
-
-        input.delete_word_backward();
-        assert_eq!(input.text(), "");
-        assert_eq!(input.cursor, 0);
-    }
-
-    #[test]
-    fn test_delete_word_forward() {
-        let mut input = InputState::default();
-        input.set_text("hello world test");
-        input.cursor = 0;
-
-        input.delete_word_forward();
-        assert_eq!(input.text(), "world test");
-        assert_eq!(input.cursor, 0);
-
-        input.delete_word_forward();
-        assert_eq!(input.text(), "test");
-        assert_eq!(input.cursor, 0);
-
-        input.delete_word_forward();
-        assert_eq!(input.text(), "");
-        assert_eq!(input.cursor, 0);
-    }
-
-    #[test]
-    fn test_toggle_thinking() {
-        let mut ui = UiState::default();
-        assert!(!ui.show_thinking);
-
-        ui.toggle_thinking();
-        assert!(ui.show_thinking);
-
-        ui.toggle_thinking();
-        assert!(!ui.show_thinking);
-    }
-
-    #[test]
-    fn test_user_scrolled() {
-        let mut ui = UiState::default();
-        assert!(!ui.user_scrolled);
-
-        ui.mark_user_scrolled();
-        assert!(ui.user_scrolled);
-
-        ui.reset_user_scrolled();
-        assert!(!ui.user_scrolled);
-    }
-
-    #[test]
-    fn test_current_slash_token_simple() {
-        let mut input = InputState::default();
-        input.set_text("/commit");
-
-        let result = input.current_slash_token();
-        assert_eq!(result, Some((0, "commit".to_string())));
-    }
-
-    #[test]
-    fn test_current_slash_token_mid_text() {
-        let mut input = InputState::default();
-        input.set_text("run /review file.rs");
-        input.cursor = 11; // After "/review"
-
-        let result = input.current_slash_token();
-        assert_eq!(result, Some((4, "review".to_string())));
-    }
-
-    #[test]
-    fn test_current_slash_token_no_command() {
-        let mut input = InputState::default();
-        input.set_text("no command here");
-
-        let result = input.current_slash_token();
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_current_slash_token_after_space() {
-        let mut input = InputState::default();
-        input.set_text("/commit completed ");
-        input.cursor = 18; // After space
-
-        let result = input.current_slash_token();
-        assert_eq!(result, None); // Space breaks the command
-    }
-
-    #[test]
-    fn test_insert_selected_skill() {
-        let mut input = InputState::default();
-        input.set_text("run /com please");
-        input.cursor = 8; // After "/com"
-
-        input.insert_selected_skill(4, "commit");
-
-        assert_eq!(input.text(), "run /commit  please");
-        assert_eq!(input.cursor, 12); // After "/commit "
-    }
-
-    #[test]
-    fn test_skill_suggestion_state() {
-        let mut state = SkillSuggestionState::new("com".to_string(), 0);
-
-        assert!(!state.loading);
-        assert!(state.suggestions.is_empty());
-        assert_eq!(state.selected, 0);
-
-        // Add suggestions
-        state.update_suggestions(vec![
-            SkillSuggestionItem {
-                name: "commit".to_string(),
-                description: "Generate a commit message".to_string(),
-                score: -100,
-                match_indices: vec![0, 1, 2],
-            },
-            SkillSuggestionItem {
-                name: "config".to_string(),
-                description: "Configure settings".to_string(),
-                score: -98,
-                match_indices: vec![0, 1],
-            },
-        ]);
-
-        assert!(!state.loading);
-        assert_eq!(state.suggestions.len(), 2);
-
-        // Navigate
-        state.move_down();
-        assert_eq!(state.selected, 1);
-
-        state.move_down(); // Should not go past last
-        assert_eq!(state.selected, 1);
-
-        state.move_up();
-        assert_eq!(state.selected, 0);
-
-        state.move_up(); // Should not go negative
-        assert_eq!(state.selected, 0);
-    }
-
-    #[test]
-    fn test_thinking_duration() {
-        let mut ui = UiState::default();
-
-        // Initially not thinking
-        assert!(!ui.is_thinking());
-        assert!(ui.thinking_duration().is_none());
-
-        // Start thinking
-        ui.start_thinking();
-        assert!(ui.is_thinking());
-        assert!(ui.thinking_duration().is_some());
-
-        // Duration should be small (just started)
-        let duration = ui.thinking_duration().unwrap();
-        assert!(duration.as_millis() < 1000);
-
-        // Stop thinking
-        ui.stop_thinking();
-        assert!(!ui.is_thinking());
-        assert!(ui.last_thinking_duration.is_some());
-
-        // Clear thinking duration
-        ui.clear_thinking_duration();
-        assert!(ui.thinking_duration().is_none());
-    }
-
-    #[test]
-    fn test_terminal_focused_default() {
-        let ui = UiState::default();
-        assert!(!ui.terminal_focused);
+    /// Update suggestions from search results.
+    pub fn update_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
+        self.suggestions = suggestions;
+        // Reset selection if out of bounds
+        if self.selected >= self.suggestions.len() as i32 {
+            self.selected = 0;
+        }
     }
 }
+
+/// A single agent suggestion item for display.
+#[derive(Debug, Clone)]
+pub struct AgentSuggestionItem {
+    /// Agent type identifier (e.g., "explore").
+    pub agent_type: String,
+    /// Human-readable name (e.g., "Explore").
+    pub name: String,
+    /// Short description.
+    pub description: String,
+    /// Fuzzy match score (lower = better match).
+    pub score: i32,
+    /// Character indices that matched the query (for highlighting).
+    pub match_indices: Vec<usize>,
+}
+
+/// State for symbol autocomplete suggestions.
+#[derive(Debug, Clone)]
+pub struct SymbolSuggestionState {
+    /// The query extracted from @#mention (without the @#).
+    pub query: String,
+    /// Start position of the @mention in the input text.
+    pub start_pos: i32,
+    /// Current suggestions.
+    pub suggestions: Vec<SymbolSuggestionItem>,
+    /// Currently selected index in the dropdown.
+    pub selected: i32,
+    /// Whether a search is currently in progress.
+    pub loading: bool,
+}
+
+impl SymbolSuggestionState {
+    /// Create a new symbol suggestion state.
+    pub fn new(query: String, start_pos: i32) -> Self {
+        Self {
+            query,
+            start_pos,
+            suggestions: Vec::new(),
+            selected: 0,
+            loading: true,
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = (self.suggestions.len() as i32).saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the currently selected suggestion.
+    pub fn selected_suggestion(&self) -> Option<&SymbolSuggestionItem> {
+        self.suggestions.get(self.selected as usize)
+    }
+
+    /// Update suggestions from search results.
+    pub fn update_suggestions(&mut self, suggestions: Vec<SymbolSuggestionItem>) {
+        self.suggestions = suggestions;
+        self.loading = false;
+        // Reset selection if out of bounds
+        if self.selected >= self.suggestions.len() as i32 {
+            self.selected = 0;
+        }
+    }
+}
+
+/// A single symbol suggestion item for display.
+#[derive(Debug, Clone)]
+pub struct SymbolSuggestionItem {
+    /// Symbol name (original case).
+    pub name: String,
+    /// Kind of symbol.
+    pub kind: cocode_symbol_search::SymbolKind,
+    /// File path relative to root.
+    pub file_path: String,
+    /// Line number (1-indexed).
+    pub line: i32,
+    /// Fuzzy match score (higher = better match).
+    pub score: i32,
+    /// Character indices that matched the query (for highlighting).
+    pub match_indices: Vec<usize>,
+}
+
+#[cfg(test)]
+#[path = "ui.test.rs"]
+mod tests;

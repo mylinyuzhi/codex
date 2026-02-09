@@ -68,13 +68,5 @@ impl Widget for SearchView<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_search_view_creation() {
-        let search = SearchState::default();
-        let event_log = EventLogState::new();
-        let _view = SearchView::new(&search, &event_log);
-    }
-}
+#[path = "search_view.test.rs"]
+mod tests;

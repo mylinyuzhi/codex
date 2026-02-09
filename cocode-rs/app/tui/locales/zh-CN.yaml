@@ -23,6 +23,18 @@ command.select_prev_skill_suggestion: "选择上一个技能建议"
 command.accept_skill_suggestion: "接受技能建议"
 command.dismiss_skill_suggestions: "关闭技能建议"
 
+# Agent 自动补全
+command.select_next_agent_suggestion: "选择下一个代理建议"
+command.select_prev_agent_suggestion: "选择上一个代理建议"
+command.accept_agent_suggestion: "接受代理建议"
+command.dismiss_agent_suggestions: "关闭代理建议"
+
+# 符号自动补全
+command.select_next_symbol_suggestion: "选择下一个符号建议"
+command.select_prev_symbol_suggestion: "选择上一个符号建议"
+command.accept_symbol_suggestion: "接受符号建议"
+command.dismiss_symbol_suggestions: "关闭符号建议"
+
 # 输入操作
 command.submit_input: "提交输入"
 command.interrupt: "中断"

@@ -71,6 +71,31 @@ pub struct SpawnAgentResult {
     pub output_file: Option<PathBuf>,
 }
 
+/// Input for a single-shot model call (no agent loop).
+#[derive(Debug, Clone)]
+pub struct ModelCallInput {
+    /// The object request (messages + JSON schema).
+    pub request: hyper_sdk::ObjectRequest,
+}
+
+/// Result of a single-shot model call.
+#[derive(Debug, Clone)]
+pub struct ModelCallResult {
+    /// The structured object response.
+    pub response: hyper_sdk::ObjectResponse,
+}
+
+/// Lightweight model call callback — single request/response, no agent loop.
+/// Used by SmartEdit for LLM-assisted edit correction.
+pub type ModelCallFn = Arc<
+    dyn Fn(
+            ModelCallInput,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<ModelCallResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Type alias for the agent spawn callback function.
 ///
 /// This callback is provided by the executor layer to enable tools
@@ -370,6 +395,8 @@ pub struct ToolContext {
     pub file_tracker: Arc<Mutex<FileTracker>>,
     /// Optional callback for spawning subagents.
     pub spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional lightweight model call function (for SmartEdit correction).
+    pub model_call_fn: Option<ModelCallFn>,
     /// Whether plan mode is currently active.
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
@@ -425,6 +452,7 @@ impl ToolContext {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
             shell_executor,
@@ -491,6 +519,12 @@ impl ToolContext {
     /// Set the spawn agent callback.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the model call function for single-shot LLM calls.
+    pub fn with_model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
         self
     }
 
@@ -762,6 +796,7 @@ pub struct ToolContextBuilder {
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
     shell_executor: Option<ShellExecutor>,
@@ -792,6 +827,7 @@ impl ToolContextBuilder {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
             shell_executor: None,
@@ -867,6 +903,12 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the model call function for single-shot LLM calls.
+    pub fn model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
+        self
+    }
+
     /// Set plan mode state.
     pub fn plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
         self.is_plan_mode = is_active;
@@ -895,6 +937,15 @@ impl ToolContextBuilder {
     /// Set the hook registry.
     pub fn hook_registry(mut self, registry: Arc<HookRegistry>) -> Self {
         self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set a shared invoked skills tracker.
+    ///
+    /// When set, all tool contexts share the same invoked skills list,
+    /// allowing the driver to read invoked skills after tool execution.
+    pub fn invoked_skills(mut self, skills: Arc<Mutex<Vec<InvokedSkill>>>) -> Self {
+        self.invoked_skills = skills;
         self
     }
 
@@ -950,6 +1001,7 @@ impl ToolContextBuilder {
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
             spawn_agent_fn: self.spawn_agent_fn,
+            model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
             shell_executor,
@@ -967,116 +1019,5 @@ impl ToolContextBuilder {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_approval_store() {
-        let mut store = ApprovalStore::new();
-
-        assert!(!store.is_approved("Bash", "git status"));
-        store.approve_pattern("Bash", "git status");
-        assert!(store.is_approved("Bash", "git status"));
-
-        store.approve_session("Read");
-        assert!(store.is_approved("Read", "any_pattern"));
-    }
-
-    #[test]
-    fn test_approval_store_wildcard() {
-        let mut store = ApprovalStore::new();
-
-        // Prefix wildcard: "git *" matches "git push origin main"
-        store.approve_pattern("Bash", "git *");
-        assert!(store.is_approved("Bash", "git push origin main"));
-        assert!(store.is_approved("Bash", "git status"));
-        assert!(store.is_approved("Bash", "git"));
-        assert!(!store.is_approved("Bash", "gitx"));
-        assert!(!store.is_approved("Bash", "npm install"));
-
-        // Different tool name should not match
-        assert!(!store.is_approved("Edit", "git push"));
-
-        // Glob wildcard: "npm*" matches "npm" and "npx"
-        store.approve_pattern("Bash", "npm*");
-        assert!(store.is_approved("Bash", "npm install"));
-        assert!(store.is_approved("Bash", "npmrc"));
-        assert!(!store.is_approved("Bash", "node index.js"));
-
-        // Universal wildcard
-        store.approve_pattern("Bash", "*");
-        assert!(store.is_approved("Bash", "anything"));
-    }
-
-    #[test]
-    fn test_matches_wildcard() {
-        // Universal
-        assert!(ApprovalStore::matches_wildcard("*", "anything"));
-
-        // Space-star prefix
-        assert!(ApprovalStore::matches_wildcard("git *", "git push"));
-        assert!(ApprovalStore::matches_wildcard("git *", "git"));
-        assert!(!ApprovalStore::matches_wildcard("git *", "gitx"));
-
-        // Trailing star (no space)
-        assert!(ApprovalStore::matches_wildcard("git*", "git"));
-        assert!(ApprovalStore::matches_wildcard("git*", "gitx"));
-        assert!(ApprovalStore::matches_wildcard("git*", "git push"));
-
-        // Exact match
-        assert!(ApprovalStore::matches_wildcard("git status", "git status"));
-        assert!(!ApprovalStore::matches_wildcard("git status", "git push"));
-    }
-
-    #[test]
-    fn test_file_tracker() {
-        let mut tracker = FileTracker::new();
-
-        let path = PathBuf::from("/test/file.txt");
-        assert!(!tracker.was_read(&path));
-
-        tracker.record_read(&path);
-        assert!(tracker.was_read(&path));
-        assert!(!tracker.was_modified(&path));
-
-        tracker.record_modified(&path);
-        assert!(tracker.was_modified(&path));
-    }
-
-    #[tokio::test]
-    async fn test_tool_context() {
-        let ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
-
-        assert_eq!(ctx.call_id, "call-1");
-        assert_eq!(ctx.session_id, "session-1");
-        assert!(!ctx.is_cancelled());
-    }
-
-    #[test]
-    fn test_resolve_path() {
-        let ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/home/user/project"));
-
-        // Relative path
-        assert_eq!(
-            ctx.resolve_path("src/main.rs"),
-            PathBuf::from("/home/user/project/src/main.rs")
-        );
-
-        // Absolute path
-        assert_eq!(
-            ctx.resolve_path("/etc/passwd"),
-            PathBuf::from("/etc/passwd")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_context_builder() {
-        let ctx = ToolContextBuilder::new("call-1", "session-1")
-            .cwd("/tmp")
-            .permission_mode(PermissionMode::Plan)
-            .build();
-
-        assert_eq!(ctx.cwd, PathBuf::from("/tmp"));
-        assert_eq!(ctx.permission_mode, PermissionMode::Plan);
-    }
-}
+#[path = "context.test.rs"]
+mod tests;

@@ -3,10 +3,12 @@
 //! Reads `SKILL.toml` files, resolves prompt content (from external files
 //! or inline), validates the result, and produces [`SkillLoadOutcome`] values.
 
+use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
 use crate::interface::SkillInterface;
 use crate::outcome::SkillLoadOutcome;
 use crate::scanner::SkillScanner;
+use crate::source::LoadedFrom;
 use crate::source::SkillSource;
 use crate::validator;
 
@@ -110,6 +112,17 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
 
     // Determine source based on relationship to root
     let source = determine_source(skill_dir, root);
+    let loaded_from = LoadedFrom::from(&source);
+
+    // Map new interface fields
+    let user_invocable = interface.user_invocable.unwrap_or(true);
+    let disable_model_invocation = interface.disable_model_invocation.unwrap_or(false);
+    let is_hidden = !user_invocable;
+
+    let context = match interface.context.as_deref() {
+        Some("fork") => SkillContext::Fork,
+        _ => SkillContext::Main,
+    };
 
     // Check if skill has hooks
     let has_hooks = interface.hooks.as_ref().is_some_and(|h| !h.is_empty());
@@ -120,6 +133,18 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
             description: interface.description.clone(),
             prompt,
             allowed_tools: interface.allowed_tools.clone(),
+            user_invocable,
+            disable_model_invocation,
+            is_hidden,
+            source: source.clone(),
+            loaded_from,
+            context,
+            agent: interface.agent.clone(),
+            model: interface.model.clone(),
+            base_dir: Some(skill_dir.to_path_buf()),
+            when_to_use: interface.when_to_use.clone(),
+            argument_hint: interface.argument_hint.clone(),
+            aliases: interface.aliases.clone().unwrap_or_default(),
             // Only keep interface if it has hooks (to save memory)
             interface: if has_hooks { Some(interface) } else { None },
         },
@@ -162,216 +187,16 @@ fn determine_source(skill_dir: &Path, root: &Path) -> SkillSource {
     // - Otherwise default to project-local
     let root_str = root.to_string_lossy();
     if root_str.contains(".cocode/skills") || root_str.contains(".cocode\\skills") {
-        SkillSource::ProjectLocal {
+        SkillSource::ProjectSettings {
             path: skill_dir.to_path_buf(),
         }
     } else {
-        SkillSource::UserGlobal {
+        SkillSource::UserSettings {
             path: skill_dir.to_path_buf(),
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_load_skills_from_dir_success() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        let skill_dir = root.join("commit");
-        fs::create_dir_all(&skill_dir).expect("mkdir");
-        fs::write(
-            skill_dir.join("SKILL.toml"),
-            r#"
-name = "commit"
-description = "Generate a commit message"
-prompt_inline = "Look at staged changes and generate a commit message."
-allowed_tools = ["Bash"]
-"#,
-        )
-        .expect("write SKILL.toml");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].is_success());
-        assert_eq!(outcomes[0].skill_name(), Some("commit"));
-    }
-
-    #[test]
-    fn test_load_skills_from_dir_with_prompt_file() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        let skill_dir = root.join("review");
-        fs::create_dir_all(&skill_dir).expect("mkdir");
-        fs::write(
-            skill_dir.join("SKILL.toml"),
-            r#"
-name = "review"
-description = "Review code"
-prompt_file = "prompt.md"
-"#,
-        )
-        .expect("write SKILL.toml");
-        fs::write(
-            skill_dir.join("prompt.md"),
-            "Please review the following code changes carefully.",
-        )
-        .expect("write prompt.md");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].is_success());
-
-        if let SkillLoadOutcome::Success { skill, .. } = &outcomes[0] {
-            assert_eq!(skill.name, "review");
-            assert_eq!(
-                skill.prompt,
-                "Please review the following code changes carefully."
-            );
-        }
-    }
-
-    #[test]
-    fn test_load_skills_from_dir_missing_prompt_file() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        let skill_dir = root.join("bad");
-        fs::create_dir_all(&skill_dir).expect("mkdir");
-        fs::write(
-            skill_dir.join("SKILL.toml"),
-            r#"
-name = "bad"
-description = "Bad skill"
-prompt_file = "nonexistent.md"
-"#,
-        )
-        .expect("write SKILL.toml");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 1);
-        assert!(!outcomes[0].is_success());
-    }
-
-    #[test]
-    fn test_load_skills_from_dir_invalid_toml() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        let skill_dir = root.join("broken");
-        fs::create_dir_all(&skill_dir).expect("mkdir");
-        fs::write(skill_dir.join("SKILL.toml"), "this is not valid toml {{{}}")
-            .expect("write SKILL.toml");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 1);
-        assert!(!outcomes[0].is_success());
-    }
-
-    #[test]
-    fn test_load_skills_from_dir_validation_failure() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        let skill_dir = root.join("invalid");
-        fs::create_dir_all(&skill_dir).expect("mkdir");
-        // Empty name should fail validation
-        fs::write(
-            skill_dir.join("SKILL.toml"),
-            r#"
-name = ""
-description = "Invalid"
-prompt_inline = "text"
-"#,
-        )
-        .expect("write SKILL.toml");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 1);
-        assert!(!outcomes[0].is_success());
-    }
-
-    #[test]
-    fn test_load_skills_fail_open() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let root = tmp.path();
-
-        // Good skill
-        let good = root.join("good");
-        fs::create_dir_all(&good).expect("mkdir");
-        fs::write(
-            good.join("SKILL.toml"),
-            "name = \"good\"\ndescription = \"Works\"\nprompt_inline = \"do it\"",
-        )
-        .expect("write");
-
-        // Bad skill
-        let bad = root.join("bad");
-        fs::create_dir_all(&bad).expect("mkdir");
-        fs::write(bad.join("SKILL.toml"), "garbage {{{}}").expect("write");
-
-        let outcomes = load_skills_from_dir(root);
-        assert_eq!(outcomes.len(), 2);
-
-        let successes: Vec<_> = outcomes.iter().filter(|o| o.is_success()).collect();
-        let failures: Vec<_> = outcomes.iter().filter(|o| !o.is_success()).collect();
-        assert_eq!(successes.len(), 1);
-        assert_eq!(failures.len(), 1);
-    }
-
-    #[test]
-    fn test_load_all_skills_multiple_roots() {
-        let tmp1 = tempfile::tempdir().expect("create temp dir");
-        let tmp2 = tempfile::tempdir().expect("create temp dir");
-
-        let skill1 = tmp1.path().join("s1");
-        fs::create_dir_all(&skill1).expect("mkdir");
-        fs::write(
-            skill1.join("SKILL.toml"),
-            "name = \"s1\"\ndescription = \"d\"\nprompt_inline = \"p\"",
-        )
-        .expect("write");
-
-        let skill2 = tmp2.path().join("s2");
-        fs::create_dir_all(&skill2).expect("mkdir");
-        fs::write(
-            skill2.join("SKILL.toml"),
-            "name = \"s2\"\ndescription = \"d\"\nprompt_inline = \"p\"",
-        )
-        .expect("write");
-
-        let roots = vec![tmp1.path().to_path_buf(), tmp2.path().to_path_buf()];
-        let outcomes = load_all_skills(&roots);
-        assert_eq!(outcomes.len(), 2);
-        assert!(outcomes.iter().all(|o| o.is_success()));
-    }
-
-    #[test]
-    fn test_load_all_skills_nonexistent_root() {
-        let roots = vec![PathBuf::from("/nonexistent/xyz")];
-        let outcomes = load_all_skills(&roots);
-        assert!(outcomes.is_empty());
-    }
-
-    #[test]
-    fn test_determine_source_project_local() {
-        let source = determine_source(
-            Path::new("/project/.cocode/skills/commit"),
-            Path::new("/project/.cocode/skills"),
-        );
-        assert!(matches!(source, SkillSource::ProjectLocal { .. }));
-    }
-
-    #[test]
-    fn test_determine_source_user_global() {
-        let source = determine_source(
-            Path::new("/home/user/.config/cocode/skills/review"),
-            Path::new("/home/user/.config/cocode/skills"),
-        );
-        assert!(matches!(source, SkillSource::UserGlobal { .. }));
-    }
-}
+#[path = "loader.test.rs"]
+mod tests;

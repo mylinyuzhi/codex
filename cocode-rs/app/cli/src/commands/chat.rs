@@ -125,9 +125,5 @@ pub async fn run(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_chat_module_compiles() {
-        assert!(true);
-    }
-}
+#[path = "chat.test.rs"]
+mod tests;

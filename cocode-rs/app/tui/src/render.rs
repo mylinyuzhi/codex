@@ -21,6 +21,7 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::Overlay;
+use crate::widgets::AgentSuggestionPopup;
 use crate::widgets::ChatWidget;
 use crate::widgets::FileSuggestionPopup;
 use crate::widgets::InputWidget;
@@ -28,6 +29,7 @@ use crate::widgets::QueuedListWidget;
 use crate::widgets::SkillSuggestionPopup;
 use crate::widgets::StatusBar;
 use crate::widgets::SubagentPanel;
+use crate::widgets::SymbolSuggestionPopup;
 use crate::widgets::ToastWidget;
 use crate::widgets::ToolPanel;
 
@@ -167,16 +169,22 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState) {
         .placeholder(&placeholder);
     frame.render_widget(input, chunks[input_chunk_index]);
 
-    // File suggestion popup (if active)
-    if let Some(ref suggestions) = state.ui.file_suggestions {
-        let popup = FileSuggestionPopup::new(suggestions);
-        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
-        frame.render_widget(popup, popup_area);
-    }
-
-    // Skill suggestion popup (if active)
+    // Suggestion popups are mutually exclusive — only render one at a time.
+    // Priority: skill > agent > symbol > file (matches key event handling order).
     if let Some(ref suggestions) = state.ui.skill_suggestions {
         let popup = SkillSuggestionPopup::new(suggestions);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+        frame.render_widget(popup, popup_area);
+    } else if let Some(ref suggestions) = state.ui.agent_suggestions {
+        let popup = AgentSuggestionPopup::new(suggestions);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+        frame.render_widget(popup, popup_area);
+    } else if let Some(ref suggestions) = state.ui.symbol_suggestions {
+        let popup = SymbolSuggestionPopup::new(suggestions);
+        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+        frame.render_widget(popup, popup_area);
+    } else if let Some(ref suggestions) = state.ui.file_suggestions {
+        let popup = FileSuggestionPopup::new(suggestions);
         let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
         frame.render_widget(popup, popup_area);
     }
@@ -644,136 +652,5 @@ fn render_error_overlay(frame: &mut Frame, area: Rect, message: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    fn create_test_terminal() -> Terminal<TestBackend> {
-        let backend = TestBackend::new(80, 24);
-        Terminal::new(backend).expect("Failed to create test terminal")
-    }
-
-    #[test]
-    fn test_render_empty_state() {
-        let mut terminal = create_test_terminal();
-        let state = AppState::new();
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-
-        // Just verify it doesn't panic
-    }
-
-    #[test]
-    fn test_render_with_messages() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state
-            .session
-            .add_message(crate::state::ChatMessage::user("1", "Hello"));
-        state
-            .session
-            .add_message(crate::state::ChatMessage::assistant("2", "Hi there!"));
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-
-    #[test]
-    fn test_render_with_streaming() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state.ui.start_streaming("turn-1".to_string());
-        state.ui.append_streaming("Streaming content...");
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-
-    #[test]
-    fn test_render_with_tools() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state
-            .session
-            .start_tool("call-1".to_string(), "bash".to_string());
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-
-    #[test]
-    fn test_render_with_permission_overlay() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state
-            .ui
-            .set_overlay(Overlay::Permission(crate::state::PermissionOverlay::new(
-                cocode_protocol::ApprovalRequest {
-                    request_id: "req-1".to_string(),
-                    tool_name: "bash".to_string(),
-                    description: "Run command: ls -la".to_string(),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            )));
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-
-    #[test]
-    fn test_render_with_model_picker() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state
-            .ui
-            .set_overlay(Overlay::ModelPicker(crate::state::ModelPickerOverlay::new(
-                vec!["claude-sonnet-4".to_string(), "claude-opus-4".to_string()],
-            )));
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-
-    #[test]
-    fn test_render_with_error_overlay() {
-        let mut terminal = create_test_terminal();
-        let mut state = AppState::new();
-
-        state
-            .ui
-            .set_overlay(Overlay::Error("Something went wrong".to_string()));
-
-        terminal
-            .draw(|frame| {
-                render(frame, &state);
-            })
-            .expect("Failed to render");
-    }
-}
+#[path = "render.test.rs"]
+mod tests;

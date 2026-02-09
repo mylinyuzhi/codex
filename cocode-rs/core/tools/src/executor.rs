@@ -12,6 +12,7 @@
 
 use crate::context::ApprovalStore;
 use crate::context::FileTracker;
+use crate::context::ModelCallFn;
 use crate::context::SpawnAgentFn;
 use crate::context::ToolContext;
 use crate::context::ToolContextBuilder;
@@ -175,6 +176,8 @@ pub struct StreamingToolExecutor {
     shell_executor: ShellExecutor,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional model call function for single-shot LLM calls.
+    model_call_fn: Option<ModelCallFn>,
     /// Optional skill manager for the Skill tool.
     skill_manager: Option<Arc<cocode_skill::SkillManager>>,
     /// Parent selections for subagent isolation.
@@ -192,6 +195,17 @@ pub struct StreamingToolExecutor {
     /// When `Some`, only these tools can be executed; all others get `NotFound`.
     /// When `None` (default), all registered tools are executable.
     allowed_tool_names: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
+    /// Shared invoked skills tracker across all tool contexts.
+    ///
+    /// When skills are invoked via the Skill tool, they are tracked here
+    /// so the driver can inject them into system reminders.
+    invoked_skills: Arc<Mutex<Vec<crate::context::InvokedSkill>>>,
+    /// Skill-level tool restriction.
+    ///
+    /// When a skill with `allowed_tools` is invoked, this is set to restrict
+    /// which tools can be used during the skill execution. Applied as an
+    /// intersection with `allowed_tool_names`.
+    skill_allowed_tools: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
 }
 
 impl StreamingToolExecutor {
@@ -216,11 +230,14 @@ impl StreamingToolExecutor {
             completed_results: Arc::new(Mutex::new(Vec::new())),
             shell_executor,
             spawn_agent_fn: None,
+            model_call_fn: None,
             skill_manager: None,
             parent_selections: None,
             permission_requester: None,
             permission_evaluator: None,
             allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
+            invoked_skills: Arc::new(Mutex::new(Vec::new())),
+            skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -257,6 +274,12 @@ impl StreamingToolExecutor {
     /// Set the spawn agent callback for the Task tool.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the model call function for single-shot LLM calls (SmartEdit).
+    pub fn with_model_call_fn(mut self, f: ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
         self
     }
 
@@ -314,12 +337,31 @@ impl StreamingToolExecutor {
         *self.allowed_tool_names.write().unwrap() = Some(names);
     }
 
-    /// Check if a tool name is allowed by the current allowlist.
+    /// Set skill-level tool restrictions.
     ///
-    /// Returns `true` if no allowlist is set (all tools allowed) or the name
-    /// is in the allowlist.
+    /// When a skill specifies `allowed_tools`, only those tools (plus "Skill")
+    /// are allowed during the skill's execution.
+    pub fn set_skill_allowed_tools(&self, tools: Option<HashSet<String>>) {
+        *self.skill_allowed_tools.write().unwrap() = tools;
+    }
+
+    /// Check if a tool name is allowed by both the model allowlist and skill restrictions.
+    ///
+    /// Returns `true` only if the tool passes both checks:
+    /// 1. Model allowlist: no allowlist set (all tools allowed) or the name is in the set
+    /// 2. Skill restriction: no restriction set or the name is in the skill's allowed set
     fn is_tool_allowed(&self, name: &str) -> bool {
-        match self.allowed_tool_names.read().unwrap().as_ref() {
+        // Check model-level allowlist
+        let model_allowed = match self.allowed_tool_names.read().unwrap().as_ref() {
+            None => true,
+            Some(set) => set.contains(name),
+        };
+        if !model_allowed {
+            return false;
+        }
+
+        // Check skill-level restriction
+        match self.skill_allowed_tools.read().unwrap().as_ref() {
             None => true,
             Some(set) => set.contains(name),
         }
@@ -744,6 +786,21 @@ impl StreamingToolExecutor {
         self.pending_unsafe.lock().await.len()
     }
 
+    /// Set a shared invoked skills tracker.
+    ///
+    /// The driver passes its own Arc so invoked skills persist across turns.
+    pub fn set_invoked_skills(&mut self, skills: Arc<Mutex<Vec<crate::context::InvokedSkill>>>) {
+        self.invoked_skills = skills;
+    }
+
+    /// Get the shared invoked skills tracker.
+    ///
+    /// Returns the Arc to the invoked skills list. After tool execution,
+    /// the driver can read this to inject invoked skills into system reminders.
+    pub fn invoked_skills(&self) -> &Arc<Mutex<Vec<crate::context::InvokedSkill>>> {
+        &self.invoked_skills
+    }
+
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
@@ -754,11 +811,17 @@ impl StreamingToolExecutor {
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
             .features(self.config.features.clone())
-            .shell_executor(self.shell_executor.clone());
+            .shell_executor(self.shell_executor.clone())
+            .invoked_skills(self.invoked_skills.clone());
 
         // Add spawn_agent_fn if available
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Add model_call_fn if available
+        if let Some(ref call_fn) = self.model_call_fn {
+            builder = builder.model_call_fn(call_fn.clone());
         }
 
         // Add skill_manager if available
@@ -956,7 +1019,10 @@ async fn execute_tool(
 
 /// Check if a tool name is an edit/write tool (for AcceptEdits mode).
 fn is_edit_tool(name: &str) -> bool {
-    matches!(name, "Edit" | "Write" | "NotebookEdit" | "ApplyPatch")
+    matches!(
+        name,
+        "Edit" | "SmartEdit" | "Write" | "NotebookEdit" | "ApplyPatch"
+    )
 }
 
 /// Check if a tool name is read-only or a plan mode control tool.
@@ -1294,275 +1360,5 @@ impl std::fmt::Debug for StreamingToolExecutor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tool::Tool;
-    use async_trait::async_trait;
-    use serde_json::Value;
-
-    struct SafeTool;
-
-    #[async_trait]
-    impl Tool for SafeTool {
-        fn name(&self) -> &str {
-            "safe_tool"
-        }
-        fn description(&self) -> &str {
-            "A safe tool"
-        }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({"type": "object"})
-        }
-        fn concurrency_safety(&self) -> ConcurrencySafety {
-            ConcurrencySafety::Safe
-        }
-        async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
-            Ok(ToolOutput::text("safe result"))
-        }
-    }
-
-    struct UnsafeTool;
-
-    #[async_trait]
-    impl Tool for UnsafeTool {
-        fn name(&self) -> &str {
-            "unsafe_tool"
-        }
-        fn description(&self) -> &str {
-            "An unsafe tool"
-        }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({"type": "object"})
-        }
-        fn concurrency_safety(&self) -> ConcurrencySafety {
-            ConcurrencySafety::Unsafe
-        }
-        async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
-            Ok(ToolOutput::text("unsafe result"))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_executor_safe_tool() {
-        let mut registry = ToolRegistry::new();
-        registry.register(SafeTool);
-
-        let executor =
-            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
-
-        let tool_call = ToolCall::new("call-1", "safe_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        // Safe tool should start immediately
-        assert_eq!(executor.active_count().await, 1);
-        assert_eq!(executor.pending_count().await, 0);
-
-        let results = executor.drain().await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_executor_unsafe_tool() {
-        let mut registry = ToolRegistry::new();
-        registry.register(UnsafeTool);
-
-        let executor =
-            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
-
-        let tool_call = ToolCall::new("call-1", "unsafe_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        // Unsafe tool should be queued
-        assert_eq!(executor.active_count().await, 0);
-        assert_eq!(executor.pending_count().await, 1);
-
-        // Execute pending
-        executor.execute_pending_unsafe().await;
-
-        let results = executor.drain().await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].result.is_ok());
-    }
-
-    /// A tool gated on a feature flag.
-    struct FeatureGatedTool;
-
-    #[async_trait]
-    impl Tool for FeatureGatedTool {
-        fn name(&self) -> &str {
-            "gated_tool"
-        }
-        fn description(&self) -> &str {
-            "A feature-gated tool"
-        }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({"type": "object"})
-        }
-        fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
-            Some(cocode_protocol::Feature::Ls)
-        }
-        async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
-            Ok(ToolOutput::text("gated result"))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_feature_gated_tool_rejected_when_disabled() {
-        let mut registry = ToolRegistry::new();
-        registry.register(FeatureGatedTool);
-
-        // Disable the Ls feature
-        let mut features = cocode_protocol::Features::with_defaults();
-        features.disable(cocode_protocol::Feature::Ls);
-
-        let config = ExecutorConfig {
-            features,
-            ..ExecutorConfig::default()
-        };
-        let executor = StreamingToolExecutor::new(Arc::new(registry), config, None);
-
-        let tool_call = ToolCall::new("call-1", "gated_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-        executor.execute_pending_unsafe().await;
-
-        let results = executor.drain().await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].result.is_err());
-        let err = results[0].result.as_ref().unwrap_err().to_string();
-        assert!(
-            err.contains("not found") || err.contains("NotFound"),
-            "Expected NotFound error, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_executor_not_found() {
-        let registry = ToolRegistry::new();
-        let executor =
-            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
-
-        let tool_call = ToolCall::new("call-1", "nonexistent", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        // Should be queued since tool not found
-        assert_eq!(executor.pending_count().await, 1);
-
-        // Execute pending - should fail
-        executor.execute_pending_unsafe().await;
-
-        let results = executor.drain().await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_allowed_tool_names_rejects_unlisted_tool() {
-        let mut registry = ToolRegistry::new();
-        registry.register(SafeTool);
-        registry.register(UnsafeTool);
-
-        let executor =
-            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
-
-        // Only allow safe_tool — unsafe_tool is registered but not in the allowlist
-        executor.set_allowed_tool_names(vec!["safe_tool".to_string()].into_iter().collect());
-
-        // safe_tool → should succeed
-        let tool_call = ToolCall::new("call-1", "safe_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        // unsafe_tool → should be rejected immediately by allowlist
-        let tool_call = ToolCall::new("call-2", "unsafe_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        executor.execute_pending_unsafe().await;
-        let results = executor.drain().await;
-
-        assert_eq!(results.len(), 2);
-
-        let safe_result = results.iter().find(|r| r.call_id == "call-1").unwrap();
-        assert!(safe_result.result.is_ok(), "safe_tool should succeed");
-
-        let unsafe_result = results.iter().find(|r| r.call_id == "call-2").unwrap();
-        assert!(
-            unsafe_result.result.is_err(),
-            "unsafe_tool should be rejected"
-        );
-        let err = unsafe_result.result.as_ref().unwrap_err().to_string();
-        assert!(
-            err.contains("not found") || err.contains("NotFound"),
-            "Expected NotFound error, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_no_allowlist_allows_all_tools() {
-        let mut registry = ToolRegistry::new();
-        registry.register(SafeTool);
-
-        let executor =
-            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
-
-        // No allowlist set → all registered tools should work
-        let tool_call = ToolCall::new("call-1", "safe_tool", serde_json::json!({}));
-        executor.on_tool_complete(tool_call).await;
-
-        let results = executor.drain().await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].result.is_ok());
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_bash_command() {
-        let input = serde_json::json!({"command": "git push origin main"});
-        assert_eq!(
-            extract_prefix_pattern("Bash", &input),
-            Some("git *".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_bash_single_word() {
-        let input = serde_json::json!({"command": "ls"});
-        assert_eq!(
-            extract_prefix_pattern("Bash", &input),
-            Some("ls *".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_non_bash_tool() {
-        let input = serde_json::json!({"command": "git push"});
-        assert_eq!(extract_prefix_pattern("Read", &input), None);
-        assert_eq!(extract_prefix_pattern("Edit", &input), None);
-        assert_eq!(extract_prefix_pattern("Write", &input), None);
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_missing_command() {
-        let input = serde_json::json!({"file_path": "/tmp/test"});
-        assert_eq!(extract_prefix_pattern("Bash", &input), None);
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_empty_command() {
-        let input = serde_json::json!({"command": ""});
-        assert_eq!(extract_prefix_pattern("Bash", &input), None);
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_whitespace_only() {
-        let input = serde_json::json!({"command": "   "});
-        assert_eq!(extract_prefix_pattern("Bash", &input), None);
-    }
-
-    #[test]
-    fn test_extract_prefix_pattern_complex_command() {
-        let input = serde_json::json!({"command": "cargo test --no-fail-fast -- -q"});
-        assert_eq!(
-            extract_prefix_pattern("Bash", &input),
-            Some("cargo *".to_string())
-        );
-    }
-}
+#[path = "executor.test.rs"]
+mod tests;

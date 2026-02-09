@@ -43,11 +43,16 @@ use cocode_system_reminder::generators::HOOK_BLOCKING_KEY;
 use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
 use cocode_system_reminder::generators::HookBlockingInfo;
 use cocode_system_reminder::generators::HookContextInfo;
+use cocode_system_reminder::generators::INVOKED_SKILLS_KEY;
+use cocode_system_reminder::generators::InvokedSkillInfo;
 use cocode_system_reminder::generators::SkillInfo;
 use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
 use cocode_tools::FileTracker as ToolsFileTracker;
+use cocode_tools::ModelCallFn;
+use cocode_tools::ModelCallInput;
+use cocode_tools::ModelCallResult;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::StreamingToolExecutor;
 use cocode_tools::ToolExecutionResult;
@@ -170,6 +175,13 @@ pub struct AgentLoop {
     // Skill system
     /// Optional skill manager for loading and executing skills.
     skill_manager: Option<Arc<SkillManager>>,
+    /// Shared tracker for skills invoked via the Skill tool during execution.
+    /// Persists across turns so invoked skills can be injected into system reminders.
+    invoked_skills_tracker: Arc<tokio::sync::Mutex<Vec<cocode_tools::InvokedSkill>>>,
+    /// Active skill-level tool restrictions.
+    /// Set when a skill with `allowed_tools` is invoked via the Skill tool.
+    /// Applied to the executor on the next turn iteration.
+    active_skill_allowed_tools: Option<std::collections::HashSet<String>>,
 
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
@@ -478,6 +490,8 @@ impl AgentLoopBuilder {
             shell_executor,
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
+            invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            active_skill_allowed_tools: None,
             queued_commands: self.queued_commands,
             features: self.features,
             permission_rules: self.permission_rules,
@@ -794,9 +808,11 @@ impl AgentLoop {
         }
 
         // Add available skills to generator context for system reminders
+        // Use llm_invocable_skills() to filter out hidden and disable_model_invocation skills
         if let Some(ref sm) = self.skill_manager {
             let skill_infos: Vec<SkillInfo> = sm
-                .all()
+                .llm_invocable_skills()
+                .into_iter()
                 .map(|skill| SkillInfo {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
@@ -805,6 +821,24 @@ impl AgentLoop {
 
             if !skill_infos.is_empty() {
                 gen_ctx_builder = gen_ctx_builder.extension(AVAILABLE_SKILLS_KEY, skill_infos);
+            }
+        }
+
+        // Add invoked skills to generator context for system reminders.
+        // Skills are tracked by the Skill tool via the shared invoked_skills_tracker.
+        {
+            let invoked = self.invoked_skills_tracker.lock().await;
+            if !invoked.is_empty() {
+                let skill_infos: Vec<InvokedSkillInfo> = invoked
+                    .iter()
+                    .map(|skill| InvokedSkillInfo {
+                        name: skill.name.clone(),
+                        // The prompt content was already injected as a tool result;
+                        // here we just note which skills are active for the system reminder.
+                        prompt_content: String::new(),
+                    })
+                    .collect();
+                gen_ctx_builder = gen_ctx_builder.extension(INVOKED_SKILLS_KEY, skill_infos);
             }
         }
 
@@ -896,9 +930,39 @@ impl AgentLoop {
             executor = executor.with_spawn_agent_fn(spawn_fn.clone());
         }
 
+        // Wire model_call_fn for SmartEdit LLM correction (prefer Fast model, fallback to Main)
+        {
+            let hub = self.model_hub.clone();
+            let sels = self.selections.clone();
+            let model_call_fn: ModelCallFn = std::sync::Arc::new(move |input: ModelCallInput| {
+                let hub = hub.clone();
+                let sels = sels.clone();
+                Box::pin(async move {
+                    let (model, _provider) = hub
+                        .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
+                        .map_err(|e| anyhow::anyhow!("Failed to get model: {e}"))?;
+                    let response = model
+                        .generate_object(input.request)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("generate_object failed: {e}"))?;
+                    Ok(ModelCallResult { response })
+                })
+            });
+            executor = executor.with_model_call_fn(model_call_fn);
+        }
+
         // Add skill_manager if available for Skill tool
         if let Some(ref sm) = self.skill_manager {
             executor = executor.with_skill_manager(sm.clone());
+        }
+
+        // Share invoked skills tracker with the executor so the driver
+        // can read which skills were invoked during tool execution
+        executor.set_invoked_skills(self.invoked_skills_tracker.clone());
+
+        // Apply active skill-level tool restrictions if set
+        if let Some(ref allowed) = self.active_skill_allowed_tools {
+            executor.set_skill_allowed_tools(Some(allowed.clone()));
         }
 
         // Pass parent selections for subagent isolation
@@ -2243,6 +2307,22 @@ impl AgentLoop {
                         "Applied PermissionGranted modifier"
                     );
                 }
+                ContextModifier::SkillAllowedTools {
+                    skill_name,
+                    allowed_tools,
+                } => {
+                    // Set skill-level tool restrictions for subsequent tool execution.
+                    // Always include "Skill" itself so nested skill invocations work.
+                    let mut allowed: std::collections::HashSet<String> =
+                        allowed_tools.iter().cloned().collect();
+                    allowed.insert("Skill".to_string());
+                    self.active_skill_allowed_tools = Some(allowed);
+                    debug!(
+                        skill = %skill_name,
+                        tools = ?allowed_tools,
+                        "Applied SkillAllowedTools modifier"
+                    );
+                }
             }
         }
     }
@@ -2334,6 +2414,7 @@ impl AgentLoop {
 /// This ensures each model only sees tools it supports:
 /// - `shell_type`: `Disabled` removes shell-related tools (`Bash`, `shell`, `TaskOutput`, `TaskStop`)
 /// - `apply_patch`: controlled by `ModelInfo.apply_patch_tool_type`
+/// - `excluded_tools`: blacklist filter removing named tools
 /// - experimental tools: controlled by `ModelInfo.experimental_supported_tools`
 ///
 /// Feature-gated tools are already filtered by `ToolRegistry::definitions_filtered()`.
@@ -2379,7 +2460,14 @@ fn select_tools_for_model(
         }
     }
 
-    // 3. Handle experimental_supported_tools (whitelist filter)
+    // 3. Handle excluded_tools (blacklist filter)
+    if let Some(ref excluded) = model_info.excluded_tools {
+        if !excluded.is_empty() {
+            defs.retain(|d| !excluded.contains(&d.name));
+        }
+    }
+
+    // 4. Handle experimental_supported_tools (whitelist filter)
     if let Some(ref supported) = model_info.experimental_supported_tools {
         if !supported.is_empty() {
             defs.retain(|d| supported.contains(&d.name));
@@ -2390,160 +2478,5 @@ fn select_tools_for_model(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::result::StopReason;
-
-    #[test]
-    fn test_default_config() {
-        let config = LoopConfig::default();
-        assert_eq!(config.max_turns, None);
-        assert!(!config.enable_streaming_tools);
-        assert!(!config.enable_micro_compaction);
-    }
-
-    #[test]
-    fn test_builder_defaults() {
-        let builder = AgentLoopBuilder::new();
-        assert!(builder.api_client.is_none());
-        assert!(builder.tool_registry.is_none());
-        assert!(builder.context.is_none());
-        assert!(builder.event_tx.is_none());
-    }
-
-    #[test]
-    fn test_loop_result_constructors() {
-        let completed = LoopResult::completed(5, 1000, 500, "text".to_string(), vec![]);
-        assert_eq!(completed.turns_completed, 5);
-        assert!(matches!(completed.stop_reason, StopReason::ModelStopSignal));
-
-        let max = LoopResult::max_turns_reached(10, 2000, 1000);
-        assert!(matches!(max.stop_reason, StopReason::MaxTurnsReached));
-
-        let interrupted = LoopResult::interrupted(3, 500, 200);
-        assert!(matches!(
-            interrupted.stop_reason,
-            StopReason::UserInterrupted
-        ));
-
-        let err = LoopResult::error(1, 100, 50, "boom".to_string());
-        assert!(matches!(err.stop_reason, StopReason::Error { .. }));
-    }
-
-    #[test]
-    fn test_constants() {
-        assert_eq!(cocode_protocol::DEFAULT_MIN_BLOCKING_OFFSET, 13_000);
-        assert_eq!(MAX_OUTPUT_TOKEN_RECOVERY, 3);
-    }
-
-    #[test]
-    fn test_micro_compact_empty_history() {
-        // Cannot construct a full AgentLoop without a model, but we can test
-        // the candidate finder directly.
-        let messages: Vec<serde_json::Value> = vec![];
-        let candidates = crate::compaction::micro_compact_candidates(&messages);
-        assert!(candidates.is_empty());
-    }
-
-    mod select_tools_for_model_tests {
-        use super::*;
-        use cocode_protocol::ApplyPatchToolType;
-        use cocode_protocol::ModelInfo;
-        use cocode_tools::builtin::ApplyPatchTool;
-
-        fn sample_defs() -> Vec<ToolDefinition> {
-            vec![
-                ToolDefinition::new("Read", serde_json::json!({})),
-                ToolDefinition::new("Edit", serde_json::json!({})),
-                ToolDefinition::new("apply_patch", serde_json::json!({})),
-            ]
-        }
-
-        #[test]
-        fn function_variant_replaces_registry_default() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-            assert_eq!(ap.parameters["type"], "object");
-            assert!(ap.parameters["properties"]["input"].is_object());
-        }
-
-        #[test]
-        fn freeform_variant_uses_custom_tool() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-            assert!(ap.custom_format.is_some());
-            assert_eq!(ap.custom_format.as_ref().unwrap()["type"], "grammar");
-        }
-
-        #[test]
-        fn shell_variant_excludes_apply_patch() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            assert!(result.iter().all(|d| d.name != "apply_patch"));
-            assert_eq!(result.len(), 2); // Read, Edit
-        }
-
-        #[test]
-        fn none_excludes_apply_patch() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: None,
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            assert!(result.iter().all(|d| d.name != "apply_patch"));
-            assert_eq!(result.len(), 2);
-        }
-
-        #[test]
-        fn experimental_supported_tools_whitelist() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-                experimental_supported_tools: Some(vec![
-                    "Read".to_string(),
-                    "apply_patch".to_string(),
-                ]),
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            assert_eq!(result.len(), 2);
-            assert!(result.iter().any(|d| d.name == "Read"));
-            assert!(result.iter().any(|d| d.name == "apply_patch"));
-            assert!(result.iter().all(|d| d.name != "Edit"));
-        }
-
-        #[test]
-        fn empty_supported_tools_does_not_filter() {
-            let model_info = ModelInfo {
-                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-                experimental_supported_tools: Some(vec![]),
-                ..Default::default()
-            };
-            let result = select_tools_for_model(sample_defs(), &model_info);
-            // Empty whitelist = no filtering
-            assert_eq!(result.len(), 3);
-        }
-
-        #[test]
-        fn static_definitions_match_expected() {
-            let func_def = ApplyPatchTool::function_definition();
-            assert_eq!(func_def.name, "apply_patch");
-            assert_eq!(func_def.parameters["type"], "object");
-
-            let free_def = ApplyPatchTool::freeform_definition();
-            assert_eq!(free_def.name, "apply_patch");
-            assert!(free_def.custom_format.is_some());
-            assert_eq!(free_def.custom_format.as_ref().unwrap()["type"], "grammar");
-        }
-    }
-}
+#[path = "driver.test.rs"]
+mod tests;

@@ -38,6 +38,7 @@
 // Initialize i18n at crate root - this generates the _rust_i18n_t function
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub mod agent_search;
 pub mod app;
 pub mod clipboard_paste;
 pub mod command;
@@ -49,6 +50,7 @@ pub mod paste;
 pub mod render;
 pub mod skill_search;
 pub mod state;
+pub mod symbol_search;
 pub mod terminal;
 pub mod theme;
 pub mod update;
@@ -78,6 +80,15 @@ pub use file_search::create_file_search_channel;
 pub use skill_search::SkillInfo;
 pub use skill_search::SkillSearchManager;
 
+// Agent search for @agent-* autocomplete
+pub use agent_search::AgentInfo;
+pub use agent_search::AgentSearchManager;
+
+// Symbol search for @# autocomplete
+pub use symbol_search::SymbolSearchEvent;
+pub use symbol_search::SymbolSearchManager;
+pub use symbol_search::create_symbol_search_channel;
+
 // External editor support
 pub use editor::edit_in_external_editor;
 
@@ -96,10 +107,5 @@ pub use cocode_protocol::CorrelatedEvent;
 pub use cocode_protocol::SubmissionId;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_crate_compiles() {
-        // Basic smoke test to ensure the crate compiles
-        assert!(true);
-    }
-}
+#[path = "lib.test.rs"]
+mod tests;

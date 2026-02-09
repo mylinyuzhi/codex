@@ -23,9 +23,13 @@ cocode-utils-common = { workspace = true }
 
 # Internal - utils
 cocode-file-search = { workspace = true }
+cocode-symbol-search = { workspace = true }
 
 # Internal - features
 cocode-skill = { workspace = true }
+
+# Internal - core (for agent definitions)
+cocode-subagent = { workspace = true }
 
 # Internal - core
 cocode-loop = { workspace = true }

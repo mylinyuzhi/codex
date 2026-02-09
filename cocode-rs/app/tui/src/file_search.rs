@@ -233,36 +233,39 @@ async fn search_files_fuzzy(
     query: &str,
 ) -> Vec<FileSuggestionItem> {
     use std::num::NonZero;
-    use std::sync::atomic::AtomicBool;
 
     // Use the file-search crate's run function
-    let cancel_flag = Arc::new(AtomicBool::new(false));
     let limit = NonZero::new(MAX_SUGGESTIONS as usize).expect("MAX_SUGGESTIONS > 0");
 
     match cocode_file_search::run(
         query,
-        limit,
-        cwd,
-        vec![],
-        NonZero::new(2).expect("2 > 0"),
-        cancel_flag,
-        true, // compute_indices for highlighting
-        true, // respect_gitignore
+        vec![cwd.clone()],
+        cocode_file_search::FileSearchOptions {
+            limit,
+            exclude: vec![],
+            threads: NonZero::new(2).expect("2 > 0"),
+            compute_indices: true,
+            respect_gitignore: true,
+        },
+        None,
     ) {
         Ok(results) => results
             .matches
             .into_iter()
-            .map(|m| FileSuggestionItem {
-                path: m.path.clone(),
-                display_text: m.path,
-                score: m.score,
-                match_indices: m
-                    .indices
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|i| i as i32)
-                    .collect(),
-                is_directory: false,
+            .map(|m| {
+                let path_str = m.path.to_string_lossy().into_owned();
+                FileSuggestionItem {
+                    display_text: path_str.clone(),
+                    path: path_str,
+                    score: m.score,
+                    match_indices: m
+                        .indices
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|i| i as i32)
+                        .collect(),
+                    is_directory: false,
+                }
             })
             .collect(),
         Err(e) => {
@@ -305,33 +308,5 @@ pub fn create_file_search_channel() -> (
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_file_index_cache_validity() {
-        let cache = FileIndexCache::default();
-        assert!(!cache.is_valid());
-    }
-
-    #[tokio::test]
-    async fn test_create_file_search_manager() {
-        let (tx, _rx) = create_file_search_channel();
-        let manager = FileSearchManager::new(PathBuf::from("/tmp"), tx);
-        assert_eq!(manager.cwd(), &PathBuf::from("/tmp"));
-    }
-
-    #[tokio::test]
-    async fn test_cancel_pending_search() {
-        let (tx, _rx) = create_file_search_channel();
-        let mut manager = FileSearchManager::new(PathBuf::from("/tmp"), tx);
-
-        // Schedule a search
-        manager.on_query("test".to_string(), 0);
-        assert!(manager.pending_search.is_some());
-
-        // Cancel it
-        manager.cancel();
-        assert!(manager.pending_search.is_none());
-    }
-}
+#[path = "file_search.test.rs"]
+mod tests;

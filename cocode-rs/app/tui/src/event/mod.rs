@@ -13,6 +13,7 @@ mod stream;
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
 pub use handler::handle_key_event_full;
+pub use handler::handle_key_event_full_with_symbols;
 pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
@@ -139,6 +140,32 @@ pub enum TuiCommand {
     /// Dismiss skill suggestions.
     DismissSkillSuggestions,
 
+    // ========== Agent Autocomplete ==========
+    /// Select next agent suggestion.
+    SelectNextAgentSuggestion,
+
+    /// Select previous agent suggestion.
+    SelectPrevAgentSuggestion,
+
+    /// Accept the current agent suggestion.
+    AcceptAgentSuggestion,
+
+    /// Dismiss agent suggestions.
+    DismissAgentSuggestions,
+
+    // ========== Symbol Autocomplete ==========
+    /// Select next symbol suggestion.
+    SelectNextSymbolSuggestion,
+
+    /// Select previous symbol suggestion.
+    SelectPrevSymbolSuggestion,
+
+    /// Accept the current symbol suggestion.
+    AcceptSymbolSuggestion,
+
+    /// Dismiss symbol suggestions.
+    DismissSymbolSuggestions,
+
     // ========== Editing ==========
     /// Insert a character at the cursor.
     InsertChar(char),
@@ -263,6 +290,30 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::DismissSkillSuggestions => {
                 write!(f, "{}", t!("command.dismiss_skill_suggestions"))
             }
+            TuiCommand::SelectNextAgentSuggestion => {
+                write!(f, "{}", t!("command.select_next_agent_suggestion"))
+            }
+            TuiCommand::SelectPrevAgentSuggestion => {
+                write!(f, "{}", t!("command.select_prev_agent_suggestion"))
+            }
+            TuiCommand::AcceptAgentSuggestion => {
+                write!(f, "{}", t!("command.accept_agent_suggestion"))
+            }
+            TuiCommand::DismissAgentSuggestions => {
+                write!(f, "{}", t!("command.dismiss_agent_suggestions"))
+            }
+            TuiCommand::SelectNextSymbolSuggestion => {
+                write!(f, "{}", t!("command.select_next_symbol_suggestion"))
+            }
+            TuiCommand::SelectPrevSymbolSuggestion => {
+                write!(f, "{}", t!("command.select_prev_symbol_suggestion"))
+            }
+            TuiCommand::AcceptSymbolSuggestion => {
+                write!(f, "{}", t!("command.accept_symbol_suggestion"))
+            }
+            TuiCommand::DismissSymbolSuggestions => {
+                write!(f, "{}", t!("command.dismiss_symbol_suggestions"))
+            }
             TuiCommand::SubmitInput => write!(f, "{}", t!("command.submit_input")),
             TuiCommand::Interrupt => write!(f, "{}", t!("command.interrupt")),
             TuiCommand::ClearScreen => write!(f, "{}", t!("command.clear_screen")),
@@ -307,37 +358,5 @@ impl std::fmt::Display for TuiCommand {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tui_command_display() {
-        // Test that Display impl produces non-empty translated strings
-        assert!(!TuiCommand::TogglePlanMode.to_string().is_empty());
-        assert!(!TuiCommand::InsertChar('a').to_string().is_empty());
-        assert!(!TuiCommand::Quit.to_string().is_empty());
-        assert!(!TuiCommand::WordLeft.to_string().is_empty());
-        assert!(!TuiCommand::WordRight.to_string().is_empty());
-        assert!(!TuiCommand::DeleteWordBackward.to_string().is_empty());
-        assert!(!TuiCommand::DeleteWordForward.to_string().is_empty());
-        assert!(!TuiCommand::ShowHelp.to_string().is_empty());
-        assert!(!TuiCommand::ToggleThinking.to_string().is_empty());
-    }
-
-    #[test]
-    fn test_tui_event_variants() {
-        // Verify we can create all event variants
-        let _key = TuiEvent::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('a'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        let _resize = TuiEvent::Resize {
-            width: 80,
-            height: 24,
-        };
-        let _draw = TuiEvent::Draw;
-        let _tick = TuiEvent::Tick;
-        let _paste = TuiEvent::Paste("test".to_string());
-        let _command = TuiEvent::Command(TuiCommand::Quit);
-    }
-}
+#[path = "mod.test.rs"]
+mod tests;
