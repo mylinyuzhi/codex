@@ -107,10 +107,5 @@ pub use cocode_protocol::CorrelatedEvent;
 pub use cocode_protocol::SubmissionId;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_crate_compiles() {
-        // Basic smoke test to ensure the crate compiles
-        assert!(true);
-    }
-}
+#[path = "lib.test.rs"]
+mod tests;
