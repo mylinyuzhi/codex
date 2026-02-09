@@ -85,7 +85,9 @@ pub fn dedup_skills(skills: Vec<SkillLoadOutcome>) -> Vec<SkillLoadOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::SkillContext;
     use crate::command::SkillPromptCommand;
+    use crate::source::LoadedFrom;
     use crate::source::SkillSource;
     use std::path::PathBuf;
 
@@ -96,6 +98,18 @@ mod tests {
                 description: "desc".to_string(),
                 prompt: "prompt".to_string(),
                 allowed_tools: None,
+                user_invocable: true,
+                disable_model_invocation: false,
+                is_hidden: false,
+                source: SkillSource::Bundled,
+                loaded_from: LoadedFrom::Bundled,
+                context: SkillContext::Main,
+                agent: None,
+                model: None,
+                base_dir: None,
+                when_to_use: None,
+                argument_hint: None,
+                aliases: Vec::new(),
                 interface: None,
             },
             source: SkillSource::Bundled,
@@ -153,9 +167,23 @@ mod tests {
                     description: "first".to_string(),
                     prompt: "first prompt".to_string(),
                     allowed_tools: None,
+                    user_invocable: true,
+                    disable_model_invocation: false,
+                    is_hidden: false,
+                    source: SkillSource::ProjectSettings {
+                        path: PathBuf::from("/first"),
+                    },
+                    loaded_from: LoadedFrom::ProjectSettings,
+                    context: SkillContext::Main,
+                    agent: None,
+                    model: None,
+                    base_dir: None,
+                    when_to_use: None,
+                    argument_hint: None,
+                    aliases: Vec::new(),
                     interface: None,
                 },
-                source: SkillSource::ProjectLocal {
+                source: SkillSource::ProjectSettings {
                     path: PathBuf::from("/first"),
                 },
             },
@@ -165,9 +193,23 @@ mod tests {
                     description: "second".to_string(),
                     prompt: "second prompt".to_string(),
                     allowed_tools: None,
+                    user_invocable: true,
+                    disable_model_invocation: false,
+                    is_hidden: false,
+                    source: SkillSource::UserSettings {
+                        path: PathBuf::from("/second"),
+                    },
+                    loaded_from: LoadedFrom::UserSettings,
+                    context: SkillContext::Main,
+                    agent: None,
+                    model: None,
+                    base_dir: None,
+                    when_to_use: None,
+                    argument_hint: None,
+                    aliases: Vec::new(),
                     interface: None,
                 },
-                source: SkillSource::UserGlobal {
+                source: SkillSource::UserSettings {
                     path: PathBuf::from("/second"),
                 },
             },

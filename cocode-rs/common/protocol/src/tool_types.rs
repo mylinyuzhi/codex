@@ -143,6 +143,14 @@ pub enum ContextModifier {
         /// Pattern for allowed operations.
         pattern: String,
     },
+    /// A skill restricts which tools can be used.
+    SkillAllowedTools {
+        /// The skill name that set the restriction.
+        skill_name: String,
+        /// Tools allowed by the skill. Only these tools (plus "Skill" itself)
+        /// should be executable while the skill is active.
+        allowed_tools: Vec<String>,
+    },
 }
 
 /// Result of validating tool input.

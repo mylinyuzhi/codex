@@ -3,10 +3,12 @@
 //! Reads `SKILL.toml` files, resolves prompt content (from external files
 //! or inline), validates the result, and produces [`SkillLoadOutcome`] values.
 
+use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
 use crate::interface::SkillInterface;
 use crate::outcome::SkillLoadOutcome;
 use crate::scanner::SkillScanner;
+use crate::source::LoadedFrom;
 use crate::source::SkillSource;
 use crate::validator;
 
@@ -110,6 +112,17 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
 
     // Determine source based on relationship to root
     let source = determine_source(skill_dir, root);
+    let loaded_from = LoadedFrom::from(&source);
+
+    // Map new interface fields
+    let user_invocable = interface.user_invocable.unwrap_or(true);
+    let disable_model_invocation = interface.disable_model_invocation.unwrap_or(false);
+    let is_hidden = !user_invocable;
+
+    let context = match interface.context.as_deref() {
+        Some("fork") => SkillContext::Fork,
+        _ => SkillContext::Main,
+    };
 
     // Check if skill has hooks
     let has_hooks = interface.hooks.as_ref().is_some_and(|h| !h.is_empty());
@@ -120,6 +133,18 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
             description: interface.description.clone(),
             prompt,
             allowed_tools: interface.allowed_tools.clone(),
+            user_invocable,
+            disable_model_invocation,
+            is_hidden,
+            source: source.clone(),
+            loaded_from,
+            context,
+            agent: interface.agent.clone(),
+            model: interface.model.clone(),
+            base_dir: Some(skill_dir.to_path_buf()),
+            when_to_use: interface.when_to_use.clone(),
+            argument_hint: interface.argument_hint.clone(),
+            aliases: interface.aliases.clone().unwrap_or_default(),
             // Only keep interface if it has hooks (to save memory)
             interface: if has_hooks { Some(interface) } else { None },
         },
@@ -162,11 +187,11 @@ fn determine_source(skill_dir: &Path, root: &Path) -> SkillSource {
     // - Otherwise default to project-local
     let root_str = root.to_string_lossy();
     if root_str.contains(".cocode/skills") || root_str.contains(".cocode\\skills") {
-        SkillSource::ProjectLocal {
+        SkillSource::ProjectSettings {
             path: skill_dir.to_path_buf(),
         }
     } else {
-        SkillSource::UserGlobal {
+        SkillSource::UserSettings {
             path: skill_dir.to_path_buf(),
         }
     }
@@ -358,20 +383,95 @@ prompt_inline = "text"
     }
 
     #[test]
-    fn test_determine_source_project_local() {
+    fn test_determine_source_project_settings() {
         let source = determine_source(
             Path::new("/project/.cocode/skills/commit"),
             Path::new("/project/.cocode/skills"),
         );
-        assert!(matches!(source, SkillSource::ProjectLocal { .. }));
+        assert!(matches!(source, SkillSource::ProjectSettings { .. }));
     }
 
     #[test]
-    fn test_determine_source_user_global() {
+    fn test_determine_source_user_settings() {
         let source = determine_source(
             Path::new("/home/user/.config/cocode/skills/review"),
             Path::new("/home/user/.config/cocode/skills"),
         );
-        assert!(matches!(source, SkillSource::UserGlobal { .. }));
+        assert!(matches!(source, SkillSource::UserSettings { .. }));
+    }
+
+    #[test]
+    fn test_load_skill_maps_new_fields() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let root = tmp.path();
+
+        let skill_dir = root.join("deploy");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.toml"),
+            r#"
+name = "deploy"
+description = "Deploy to staging"
+prompt_inline = "Deploy the app"
+user_invocable = false
+disable_model_invocation = true
+model = "sonnet"
+context = "fork"
+agent = "deploy-agent"
+argument_hint = "<environment>"
+when_to_use = "When deploying"
+aliases = ["dep", "ship"]
+"#,
+        )
+        .expect("write SKILL.toml");
+
+        let outcomes = load_skills_from_dir(root);
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].is_success());
+
+        if let SkillLoadOutcome::Success { skill, .. } = &outcomes[0] {
+            assert_eq!(skill.name, "deploy");
+            assert!(!skill.user_invocable);
+            assert!(skill.disable_model_invocation);
+            assert!(skill.is_hidden);
+            assert_eq!(skill.model, Some("sonnet".to_string()));
+            assert_eq!(skill.context, SkillContext::Fork);
+            assert_eq!(skill.agent, Some("deploy-agent".to_string()));
+            assert_eq!(skill.argument_hint, Some("<environment>".to_string()));
+            assert_eq!(skill.when_to_use, Some("When deploying".to_string()));
+            assert_eq!(skill.aliases, vec!["dep".to_string(), "ship".to_string()]);
+            assert!(skill.base_dir.is_some());
+        }
+    }
+
+    #[test]
+    fn test_load_skill_defaults() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let root = tmp.path();
+
+        let skill_dir = root.join("simple");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.toml"),
+            r#"
+name = "simple"
+description = "Simple skill"
+prompt_inline = "Do it"
+"#,
+        )
+        .expect("write SKILL.toml");
+
+        let outcomes = load_skills_from_dir(root);
+        assert!(outcomes[0].is_success());
+
+        if let SkillLoadOutcome::Success { skill, .. } = &outcomes[0] {
+            assert!(skill.user_invocable);
+            assert!(!skill.disable_model_invocation);
+            assert!(!skill.is_hidden);
+            assert_eq!(skill.context, SkillContext::Main);
+            assert!(skill.model.is_none());
+            assert!(skill.agent.is_none());
+            assert!(skill.aliases.is_empty());
+        }
     }
 }

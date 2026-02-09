@@ -371,6 +371,54 @@ impl SessionState {
         Ok(TurnResult::from_loop_result(&result))
     }
 
+    /// Run a skill turn with optional model override.
+    ///
+    /// When `model_override` is provided, temporarily switches the main model
+    /// for this turn. The model override can be:
+    /// - A full spec like "provider/model"
+    /// - A short name like "sonnet" (resolved using current provider)
+    pub async fn run_skill_turn(
+        &mut self,
+        prompt: &str,
+        model_override: Option<&str>,
+    ) -> anyhow::Result<TurnResult> {
+        // If model override is requested, temporarily switch the main selection
+        let saved_selection = if let Some(model_name) = model_override {
+            let current = self.session.selections.get(ModelRole::Main).cloned();
+            let spec = if model_name.contains('/') {
+                model_name
+                    .parse::<cocode_protocol::model::ModelSpec>()
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+            } else {
+                // Use current provider with the given model name
+                let provider = self.provider().to_string();
+                cocode_protocol::model::ModelSpec::new(provider, model_name)
+            };
+            info!(
+                model = %spec,
+                "Overriding model for skill turn"
+            );
+            self.session
+                .selections
+                .set(ModelRole::Main, RoleSelection::new(spec));
+            current
+        } else {
+            None
+        };
+
+        let result = self.run_turn(prompt).await;
+
+        // Restore original selection if we overrode it
+        if let Some(original) = saved_selection {
+            self.session.selections.set(ModelRole::Main, original);
+        } else if model_override.is_some() {
+            // Edge case: there was no previous main selection (shouldn't happen)
+            // Just leave the new one in place
+        }
+
+        result
+    }
+
     /// Handle a loop event (logging).
     fn handle_event(event: &LoopEvent) {
         match event {

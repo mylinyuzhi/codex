@@ -43,6 +43,8 @@ use cocode_system_reminder::generators::HOOK_BLOCKING_KEY;
 use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
 use cocode_system_reminder::generators::HookBlockingInfo;
 use cocode_system_reminder::generators::HookContextInfo;
+use cocode_system_reminder::generators::INVOKED_SKILLS_KEY;
+use cocode_system_reminder::generators::InvokedSkillInfo;
 use cocode_system_reminder::generators::SkillInfo;
 use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
@@ -173,6 +175,13 @@ pub struct AgentLoop {
     // Skill system
     /// Optional skill manager for loading and executing skills.
     skill_manager: Option<Arc<SkillManager>>,
+    /// Shared tracker for skills invoked via the Skill tool during execution.
+    /// Persists across turns so invoked skills can be injected into system reminders.
+    invoked_skills_tracker: Arc<tokio::sync::Mutex<Vec<cocode_tools::InvokedSkill>>>,
+    /// Active skill-level tool restrictions.
+    /// Set when a skill with `allowed_tools` is invoked via the Skill tool.
+    /// Applied to the executor on the next turn iteration.
+    active_skill_allowed_tools: Option<std::collections::HashSet<String>>,
 
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
@@ -481,6 +490,8 @@ impl AgentLoopBuilder {
             shell_executor,
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
+            invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            active_skill_allowed_tools: None,
             queued_commands: self.queued_commands,
             features: self.features,
             permission_rules: self.permission_rules,
@@ -797,9 +808,11 @@ impl AgentLoop {
         }
 
         // Add available skills to generator context for system reminders
+        // Use llm_invocable_skills() to filter out hidden and disable_model_invocation skills
         if let Some(ref sm) = self.skill_manager {
             let skill_infos: Vec<SkillInfo> = sm
-                .all()
+                .llm_invocable_skills()
+                .into_iter()
                 .map(|skill| SkillInfo {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
@@ -808,6 +821,24 @@ impl AgentLoop {
 
             if !skill_infos.is_empty() {
                 gen_ctx_builder = gen_ctx_builder.extension(AVAILABLE_SKILLS_KEY, skill_infos);
+            }
+        }
+
+        // Add invoked skills to generator context for system reminders.
+        // Skills are tracked by the Skill tool via the shared invoked_skills_tracker.
+        {
+            let invoked = self.invoked_skills_tracker.lock().await;
+            if !invoked.is_empty() {
+                let skill_infos: Vec<InvokedSkillInfo> = invoked
+                    .iter()
+                    .map(|skill| InvokedSkillInfo {
+                        name: skill.name.clone(),
+                        // The prompt content was already injected as a tool result;
+                        // here we just note which skills are active for the system reminder.
+                        prompt_content: String::new(),
+                    })
+                    .collect();
+                gen_ctx_builder = gen_ctx_builder.extension(INVOKED_SKILLS_KEY, skill_infos);
             }
         }
 
@@ -923,6 +954,15 @@ impl AgentLoop {
         // Add skill_manager if available for Skill tool
         if let Some(ref sm) = self.skill_manager {
             executor = executor.with_skill_manager(sm.clone());
+        }
+
+        // Share invoked skills tracker with the executor so the driver
+        // can read which skills were invoked during tool execution
+        executor.set_invoked_skills(self.invoked_skills_tracker.clone());
+
+        // Apply active skill-level tool restrictions if set
+        if let Some(ref allowed) = self.active_skill_allowed_tools {
+            executor.set_skill_allowed_tools(Some(allowed.clone()));
         }
 
         // Pass parent selections for subagent isolation
@@ -2265,6 +2305,22 @@ impl AgentLoop {
                         tool = %tool,
                         pattern = %pattern,
                         "Applied PermissionGranted modifier"
+                    );
+                }
+                ContextModifier::SkillAllowedTools {
+                    skill_name,
+                    allowed_tools,
+                } => {
+                    // Set skill-level tool restrictions for subsequent tool execution.
+                    // Always include "Skill" itself so nested skill invocations work.
+                    let mut allowed: std::collections::HashSet<String> =
+                        allowed_tools.iter().cloned().collect();
+                    allowed.insert("Skill".to_string());
+                    self.active_skill_allowed_tools = Some(allowed);
+                    debug!(
+                        skill = %skill_name,
+                        tools = ?allowed_tools,
+                        "Applied SkillAllowedTools modifier"
                     );
                 }
             }

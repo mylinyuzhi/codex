@@ -940,6 +940,15 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set a shared invoked skills tracker.
+    ///
+    /// When set, all tool contexts share the same invoked skills list,
+    /// allowing the driver to read invoked skills after tool execution.
+    pub fn invoked_skills(mut self, skills: Arc<Mutex<Vec<InvokedSkill>>>) -> Self {
+        self.invoked_skills = skills;
+        self
+    }
+
     /// Set the session directory for persisting large tool results.
     pub fn session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.session_dir = Some(dir.into());

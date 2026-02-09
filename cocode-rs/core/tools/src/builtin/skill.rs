@@ -86,22 +86,39 @@ impl Tool for SkillTool {
             .build()
         })?;
 
-        // Look up the skill
-        let skill = skill_manager.get(skill_name).ok_or_else(|| {
-            crate::error::tool_error::NotFoundSnafu {
-                name: format!("skill '{skill_name}'"),
-            }
-            .build()
-        })?;
+        // Look up the skill by name or alias
+        let skill = skill_manager
+            .find_by_name_or_alias(skill_name)
+            .ok_or_else(|| {
+                crate::error::tool_error::NotFoundSnafu {
+                    name: format!("skill '{skill_name}'"),
+                }
+                .build()
+            })?;
+
+        // Check if the LLM is allowed to invoke this skill
+        if skill.disable_model_invocation {
+            return Ok(ToolOutput::error(format!(
+                "Skill '{skill_name}' cannot be invoked by the model (disable_model_invocation is set)"
+            )));
+        }
 
         // Build the prompt with argument substitution
-        let prompt = if skill.prompt.contains("$ARGUMENTS") {
+        let mut prompt = if skill.prompt.contains("$ARGUMENTS") {
             skill.prompt.replace("$ARGUMENTS", args)
         } else if args.is_empty() {
             skill.prompt.clone()
         } else {
             format!("{}\n\nArguments: {}", skill.prompt, args)
         };
+
+        // Inject base directory prefix if available
+        if let Some(ref base_dir) = skill.base_dir {
+            prompt = format!(
+                "Base directory for this skill: {}\n\n{prompt}",
+                base_dir.display()
+            );
+        }
 
         // Register skill hooks if the skill has an interface with hooks
         if let Some(ref interface) = skill.interface {
@@ -119,37 +136,68 @@ impl Tool for SkillTool {
             });
         }
 
-        // Return the skill prompt wrapped in XML tags for the model
-        Ok(ToolOutput::text(format!(
+        // Build the output with optional tool restriction modifier
+        let mut output = ToolOutput::text(format!(
             "<skill-invoked name=\"{skill_name}\">\n{prompt}\n</skill-invoked>"
-        )))
+        ));
+
+        // If the skill specifies allowed_tools, add a context modifier
+        // so the driver can restrict tool execution
+        if let Some(ref allowed_tools) = skill.allowed_tools {
+            output
+                .modifiers
+                .push(cocode_protocol::ContextModifier::SkillAllowedTools {
+                    skill_name: skill_name.to_string(),
+                    allowed_tools: allowed_tools.clone(),
+                });
+        }
+
+        Ok(output)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cocode_skill::LoadedFrom;
+    use cocode_skill::SkillContext;
     use cocode_skill::SkillManager;
     use cocode_skill::SkillPromptCommand;
+    use cocode_skill::SkillSource;
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    fn make_test_skill(name: &str, prompt: &str) -> SkillPromptCommand {
+        SkillPromptCommand {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            prompt: prompt.to_string(),
+            allowed_tools: None,
+            user_invocable: true,
+            disable_model_invocation: false,
+            is_hidden: false,
+            source: SkillSource::Bundled,
+            loaded_from: LoadedFrom::Bundled,
+            context: SkillContext::Main,
+            agent: None,
+            model: None,
+            base_dir: None,
+            when_to_use: None,
+            argument_hint: None,
+            aliases: Vec::new(),
+            interface: None,
+        }
+    }
+
     fn make_skill_manager() -> Arc<SkillManager> {
         let mut manager = SkillManager::new();
-        manager.register(SkillPromptCommand {
-            name: "commit".to_string(),
-            description: "Generate a commit message".to_string(),
-            prompt: "Analyze the changes and generate a commit message".to_string(),
-            allowed_tools: None,
-            interface: None,
-        });
-        manager.register(SkillPromptCommand {
-            name: "review-pr".to_string(),
-            description: "Review a pull request".to_string(),
-            prompt: "Review PR #$ARGUMENTS".to_string(),
-            allowed_tools: None,
-            interface: None,
-        });
+        manager.register(make_test_skill(
+            "commit",
+            "Analyze the changes and generate a commit message",
+        ));
+        let mut review = make_test_skill("review-pr", "Review PR #$ARGUMENTS");
+        review.aliases = vec!["rp".to_string()];
+        manager.register(review);
         Arc::new(manager)
     }
 
@@ -199,6 +247,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_skill_tool_by_alias() {
+        let tool = SkillTool::new();
+        let mut ctx = make_context();
+
+        let input = serde_json::json!({
+            "skill": "rp",
+            "args": "456"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+        let text = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("Review PR #456"));
+    }
+
+    #[tokio::test]
     async fn test_skill_not_found() {
         let tool = SkillTool::new();
         let mut ctx = make_context();
@@ -223,6 +290,54 @@ mod tests {
 
         let result = tool.execute(input, &mut ctx).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_skill_disable_model_invocation() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_test_skill("internal", "Internal only");
+        skill.disable_model_invocation = true;
+        manager.register(skill);
+
+        let tool = SkillTool::new();
+        let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+            .with_skill_manager(Arc::new(manager));
+
+        let input = serde_json::json!({
+            "skill": "internal"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(result.is_error);
+        let text = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("cannot be invoked by the model"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_base_dir_injection() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_test_skill("deploy", "Deploy the app");
+        skill.base_dir = Some(PathBuf::from("/project/skills/deploy"));
+        manager.register(skill);
+
+        let tool = SkillTool::new();
+        let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+            .with_skill_manager(Arc::new(manager));
+
+        let input = serde_json::json!({
+            "skill": "deploy"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let text = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("Base directory for this skill: /project/skills/deploy"));
+        assert!(text.contains("Deploy the app"));
     }
 
     #[test]

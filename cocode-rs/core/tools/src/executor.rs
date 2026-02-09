@@ -195,6 +195,17 @@ pub struct StreamingToolExecutor {
     /// When `Some`, only these tools can be executed; all others get `NotFound`.
     /// When `None` (default), all registered tools are executable.
     allowed_tool_names: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
+    /// Shared invoked skills tracker across all tool contexts.
+    ///
+    /// When skills are invoked via the Skill tool, they are tracked here
+    /// so the driver can inject them into system reminders.
+    invoked_skills: Arc<Mutex<Vec<crate::context::InvokedSkill>>>,
+    /// Skill-level tool restriction.
+    ///
+    /// When a skill with `allowed_tools` is invoked, this is set to restrict
+    /// which tools can be used during the skill execution. Applied as an
+    /// intersection with `allowed_tool_names`.
+    skill_allowed_tools: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
 }
 
 impl StreamingToolExecutor {
@@ -225,6 +236,8 @@ impl StreamingToolExecutor {
             permission_requester: None,
             permission_evaluator: None,
             allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
+            invoked_skills: Arc::new(Mutex::new(Vec::new())),
+            skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -324,12 +337,31 @@ impl StreamingToolExecutor {
         *self.allowed_tool_names.write().unwrap() = Some(names);
     }
 
-    /// Check if a tool name is allowed by the current allowlist.
+    /// Set skill-level tool restrictions.
     ///
-    /// Returns `true` if no allowlist is set (all tools allowed) or the name
-    /// is in the allowlist.
+    /// When a skill specifies `allowed_tools`, only those tools (plus "Skill")
+    /// are allowed during the skill's execution.
+    pub fn set_skill_allowed_tools(&self, tools: Option<HashSet<String>>) {
+        *self.skill_allowed_tools.write().unwrap() = tools;
+    }
+
+    /// Check if a tool name is allowed by both the model allowlist and skill restrictions.
+    ///
+    /// Returns `true` only if the tool passes both checks:
+    /// 1. Model allowlist: no allowlist set (all tools allowed) or the name is in the set
+    /// 2. Skill restriction: no restriction set or the name is in the skill's allowed set
     fn is_tool_allowed(&self, name: &str) -> bool {
-        match self.allowed_tool_names.read().unwrap().as_ref() {
+        // Check model-level allowlist
+        let model_allowed = match self.allowed_tool_names.read().unwrap().as_ref() {
+            None => true,
+            Some(set) => set.contains(name),
+        };
+        if !model_allowed {
+            return false;
+        }
+
+        // Check skill-level restriction
+        match self.skill_allowed_tools.read().unwrap().as_ref() {
             None => true,
             Some(set) => set.contains(name),
         }
@@ -754,6 +786,21 @@ impl StreamingToolExecutor {
         self.pending_unsafe.lock().await.len()
     }
 
+    /// Set a shared invoked skills tracker.
+    ///
+    /// The driver passes its own Arc so invoked skills persist across turns.
+    pub fn set_invoked_skills(&mut self, skills: Arc<Mutex<Vec<crate::context::InvokedSkill>>>) {
+        self.invoked_skills = skills;
+    }
+
+    /// Get the shared invoked skills tracker.
+    ///
+    /// Returns the Arc to the invoked skills list. After tool execution,
+    /// the driver can read this to inject invoked skills into system reminders.
+    pub fn invoked_skills(&self) -> &Arc<Mutex<Vec<crate::context::InvokedSkill>>> {
+        &self.invoked_skills
+    }
+
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
@@ -764,7 +811,8 @@ impl StreamingToolExecutor {
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
             .features(self.config.features.clone())
-            .shell_executor(self.shell_executor.clone());
+            .shell_executor(self.shell_executor.clone())
+            .invoked_skills(self.invoked_skills.clone());
 
         // Add spawn_agent_fn if available
         if let Some(ref spawn_fn) = self.spawn_agent_fn {

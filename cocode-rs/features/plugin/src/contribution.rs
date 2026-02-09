@@ -159,6 +159,18 @@ mod tests {
             description: "Test skill".to_string(),
             prompt: "Do something".to_string(),
             allowed_tools: None,
+            user_invocable: true,
+            disable_model_invocation: false,
+            is_hidden: false,
+            source: cocode_skill::SkillSource::Bundled,
+            loaded_from: cocode_skill::LoadedFrom::Bundled,
+            context: cocode_skill::SkillContext::Main,
+            agent: None,
+            model: None,
+            base_dir: None,
+            when_to_use: None,
+            argument_hint: None,
+            aliases: Vec::new(),
             interface: None,
         };
 

@@ -182,6 +182,14 @@ mod tests {
             prompt_file: None,
             prompt_inline: Some("test prompt".to_string()),
             allowed_tools: None,
+            when_to_use: None,
+            user_invocable: None,
+            disable_model_invocation: None,
+            model: None,
+            context: None,
+            agent: None,
+            argument_hint: None,
+            aliases: None,
             hooks: Some(hooks),
         }
     }
@@ -232,6 +240,14 @@ mod tests {
             prompt_file: None,
             prompt_inline: Some("test".to_string()),
             allowed_tools: None,
+            when_to_use: None,
+            user_invocable: None,
+            disable_model_invocation: None,
+            model: None,
+            context: None,
+            agent: None,
+            argument_hint: None,
+            aliases: None,
             hooks: None,
         };
         let defs = convert_skill_hooks(&interface);

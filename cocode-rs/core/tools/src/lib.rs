@@ -108,6 +108,7 @@ pub mod tool;
 pub use context::ApprovalStore;
 pub use context::FileReadState;
 pub use context::FileTracker;
+pub use context::InvokedSkill;
 pub use context::ModelCallFn;
 pub use context::ModelCallInput;
 pub use context::ModelCallResult;

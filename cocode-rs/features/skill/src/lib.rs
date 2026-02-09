@@ -37,6 +37,7 @@ pub use bundled::BundledSkill;
 pub use bundled::bundled_skills;
 pub use bundled::compute_fingerprint;
 pub use command::CommandType;
+pub use command::SkillContext;
 pub use command::SkillPromptCommand;
 pub use command::SlashCommand;
 pub use dedup::SkillDeduplicator;

@@ -51,6 +51,40 @@ pub struct SkillInterface {
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
 
+    /// Guidance for the LLM on when to invoke this skill.
+    #[serde(default)]
+    pub when_to_use: Option<String>,
+
+    /// Whether this skill can be invoked by the user as a `/command`.
+    /// Defaults to `true` if not specified.
+    #[serde(default)]
+    pub user_invocable: Option<bool>,
+
+    /// Whether to block the LLM from invoking this skill via the Skill tool.
+    /// Defaults to `false` if not specified.
+    #[serde(default)]
+    pub disable_model_invocation: Option<bool>,
+
+    /// Model override for this skill (e.g., "sonnet", "opus", "haiku", "inherit").
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Execution context: "main" (default) or "fork".
+    #[serde(default)]
+    pub context: Option<String>,
+
+    /// Agent type to use when `context = "fork"`.
+    #[serde(default)]
+    pub agent: Option<String>,
+
+    /// Usage hint shown in help output (e.g., "<pr-number>").
+    #[serde(default)]
+    pub argument_hint: Option<String>,
+
+    /// Alternative command names for this skill.
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
+
     /// Hooks that are registered when this skill starts and removed when it ends.
     ///
     /// The key is the event type (e.g., "PreToolUse", "PostToolUse"), and the
@@ -165,6 +199,39 @@ description = "A test skill"
     }
 
     #[test]
+    fn test_deserialize_new_fields() {
+        let toml_str = r#"
+name = "deploy"
+description = "Deploy to staging"
+prompt_inline = "Deploy the app"
+user_invocable = true
+disable_model_invocation = true
+model = "sonnet"
+context = "fork"
+agent = "deploy-agent"
+argument_hint = "<environment>"
+when_to_use = "When the user wants to deploy"
+aliases = ["dep", "ship"]
+"#;
+        let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+        assert_eq!(iface.name, "deploy");
+        assert_eq!(iface.user_invocable, Some(true));
+        assert_eq!(iface.disable_model_invocation, Some(true));
+        assert_eq!(iface.model, Some("sonnet".to_string()));
+        assert_eq!(iface.context, Some("fork".to_string()));
+        assert_eq!(iface.agent, Some("deploy-agent".to_string()));
+        assert_eq!(iface.argument_hint, Some("<environment>".to_string()));
+        assert_eq!(
+            iface.when_to_use,
+            Some("When the user wants to deploy".to_string())
+        );
+        assert_eq!(
+            iface.aliases,
+            Some(vec!["dep".to_string(), "ship".to_string()])
+        );
+    }
+
+    #[test]
     fn test_serialize_roundtrip() {
         let iface = SkillInterface {
             name: "roundtrip".to_string(),
@@ -172,6 +239,14 @@ description = "A test skill"
             prompt_file: None,
             prompt_inline: Some("Do things".to_string()),
             allowed_tools: Some(vec!["Bash".to_string()]),
+            when_to_use: None,
+            user_invocable: None,
+            disable_model_invocation: None,
+            model: None,
+            context: None,
+            agent: None,
+            argument_hint: None,
+            aliases: None,
             hooks: None,
         };
         let serialized = toml::to_string(&iface).expect("serialize");

@@ -3,14 +3,18 @@
 //! The [`SkillManager`] provides a convenient interface for:
 //! - Loading bundled skills
 //! - Loading skills from configured directories
-//! - Looking up skills by name
+//! - Looking up skills by name or alias
+//! - Filtering skills by invocability and visibility
 //! - Executing skill commands by injecting prompts
 
 use crate::bundled::bundled_skills;
+use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
 use crate::dedup::dedup_skills;
 use crate::loader::load_all_skills;
 use crate::outcome::SkillLoadOutcome;
+use crate::source::LoadedFrom;
+use crate::source::SkillSource;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,8 +43,8 @@ impl SkillLoadResult {
 /// Manages loaded skills and provides lookup/execution functionality.
 ///
 /// The manager loads skills from configured directories and provides
-/// efficient lookup by name. Skills are deduplicated by name, with
-/// later-loaded skills taking precedence.
+/// efficient lookup by name or alias. Skills are deduplicated by name,
+/// with later-loaded skills taking precedence.
 #[derive(Default)]
 pub struct SkillManager {
     /// Loaded skills indexed by name.
@@ -83,6 +87,18 @@ impl SkillManager {
                         description: bundled.description,
                         prompt: bundled.prompt,
                         allowed_tools: None,
+                        user_invocable: true,
+                        disable_model_invocation: false,
+                        is_hidden: false,
+                        source: SkillSource::Bundled,
+                        loaded_from: LoadedFrom::Bundled,
+                        context: SkillContext::Main,
+                        agent: None,
+                        model: None,
+                        base_dir: None,
+                        when_to_use: None,
+                        argument_hint: None,
+                        aliases: Vec::new(),
                         interface: None,
                     },
                 );
@@ -155,6 +171,21 @@ impl SkillManager {
         self.skills.get(name)
     }
 
+    /// Look up a skill by name or alias.
+    ///
+    /// First checks for an exact name match, then searches aliases.
+    pub fn find_by_name_or_alias(&self, name: &str) -> Option<&SkillPromptCommand> {
+        // Direct name lookup first
+        if let Some(skill) = self.skills.get(name) {
+            return Some(skill);
+        }
+
+        // Search aliases
+        self.skills
+            .values()
+            .find(|skill| skill.aliases.iter().any(|alias| alias == name))
+    }
+
     /// Check if a skill exists.
     pub fn has(&self, name: &str) -> bool {
         self.skills.contains_key(name)
@@ -170,6 +201,31 @@ impl SkillManager {
     /// Get all skills.
     pub fn all(&self) -> impl Iterator<Item = &SkillPromptCommand> {
         self.skills.values()
+    }
+
+    /// Get skills that can be invoked by the LLM via the Skill tool.
+    ///
+    /// Filters out skills that have `disable_model_invocation` set, builtin
+    /// skills, and skills without a description or `when_to_use` hint.
+    pub fn llm_invocable_skills(&self) -> Vec<&SkillPromptCommand> {
+        self.skills
+            .values()
+            .filter(|s| {
+                !s.disable_model_invocation
+                    && s.source != SkillSource::Builtin
+                    && (!s.description.is_empty() || s.when_to_use.is_some())
+            })
+            .collect()
+    }
+
+    /// Get skills that should be visible to users in help and command lists.
+    ///
+    /// Filters out hidden skills and builtin skills.
+    pub fn user_visible_skills(&self) -> Vec<&SkillPromptCommand> {
+        self.skills
+            .values()
+            .filter(|s| !s.is_hidden && s.source != SkillSource::Builtin)
+            .collect()
     }
 
     /// Get the number of loaded skills.
@@ -202,6 +258,18 @@ pub struct SkillExecutionResult {
 
     /// Arguments passed to the skill (from the command line).
     pub args: String,
+
+    /// Model override for this skill.
+    pub model: Option<String>,
+
+    /// Execution context.
+    pub context: SkillContext,
+
+    /// Agent type for fork context.
+    pub agent: Option<String>,
+
+    /// Base directory of the skill.
+    pub base_dir: Option<PathBuf>,
 }
 
 /// Parse a skill command from user input.
@@ -238,8 +306,11 @@ pub fn parse_skill_command(input: &str) -> Option<(&str, &str)> {
 
 /// Execute a skill command.
 ///
-/// Parses the input, looks up the skill, and returns the execution result
-/// containing the prompt to inject.
+/// Parses the input, looks up the skill (by name or alias), and returns
+/// the execution result containing the prompt to inject.
+///
+/// Returns `None` if the skill is not found or if the skill is not
+/// user-invocable.
 ///
 /// # Arguments
 ///
@@ -248,15 +319,21 @@ pub fn parse_skill_command(input: &str) -> Option<(&str, &str)> {
 ///
 /// # Returns
 ///
-/// Returns `Some(SkillExecutionResult)` if the skill was found, `None` otherwise.
+/// Returns `Some(SkillExecutionResult)` if the skill was found and is
+/// user-invocable, `None` otherwise.
 pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecutionResult> {
     let (name, args) = parse_skill_command(input)?;
 
-    let skill = manager.get(name)?;
+    let skill = manager.find_by_name_or_alias(name)?;
+
+    // Check user_invocable flag
+    if !skill.is_user_invocable() {
+        return None;
+    }
 
     // Build the prompt, potentially incorporating arguments
     // If prompt contains $ARGUMENTS placeholder, replace it; otherwise append args
-    let prompt = if skill.prompt.contains("$ARGUMENTS") {
+    let mut prompt = if skill.prompt.contains("$ARGUMENTS") {
         skill.prompt.replace("$ARGUMENTS", args)
     } else if args.is_empty() {
         skill.prompt.clone()
@@ -265,11 +342,23 @@ pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecuti
         format!("{}\n\nArguments: {}", skill.prompt, args)
     };
 
+    // Inject base directory prefix if available
+    if let Some(ref base_dir) = skill.base_dir {
+        prompt = format!(
+            "Base directory for this skill: {}\n\n{prompt}",
+            base_dir.display()
+        );
+    }
+
     Some(SkillExecutionResult {
         skill_name: skill.name.clone(),
         prompt,
         allowed_tools: skill.allowed_tools.clone(),
         args: args.to_string(),
+        model: skill.model.clone(),
+        context: skill.context,
+        agent: skill.agent.clone(),
+        base_dir: skill.base_dir.clone(),
     })
 }
 
@@ -283,6 +372,18 @@ mod tests {
             description: format!("{name} description"),
             prompt: prompt.to_string(),
             allowed_tools: None,
+            user_invocable: true,
+            disable_model_invocation: false,
+            is_hidden: false,
+            source: SkillSource::Bundled,
+            loaded_from: LoadedFrom::Bundled,
+            context: SkillContext::Main,
+            agent: None,
+            model: None,
+            base_dir: None,
+            when_to_use: None,
+            argument_hint: None,
+            aliases: Vec::new(),
             interface: None,
         }
     }
@@ -349,13 +450,9 @@ mod tests {
     #[test]
     fn test_execute_skill_with_arguments_placeholder() {
         let mut manager = SkillManager::new();
-        manager.register(SkillPromptCommand {
-            name: "review".to_string(),
-            description: "Review PR".to_string(),
-            prompt: "Review PR #$ARGUMENTS".to_string(),
-            allowed_tools: None,
-            interface: None,
-        });
+        let mut skill = make_skill("review", "Review PR #$ARGUMENTS");
+        skill.prompt = "Review PR #$ARGUMENTS".to_string();
+        manager.register(skill);
 
         // With placeholder and args
         let result = execute_skill(&manager, "/review 123").unwrap();
@@ -389,5 +486,120 @@ mod tests {
         // User skill should still be there, not overridden
         let skill = manager.get("output-style").unwrap();
         assert_eq!(skill.prompt, "User's custom output-style");
+    }
+
+    #[test]
+    fn test_find_by_name_or_alias() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_skill("commit", "Generate commit message");
+        skill.aliases = vec!["ci".to_string(), "cm".to_string()];
+        manager.register(skill);
+
+        // By name
+        assert!(manager.find_by_name_or_alias("commit").is_some());
+        // By alias
+        assert!(manager.find_by_name_or_alias("ci").is_some());
+        assert!(manager.find_by_name_or_alias("cm").is_some());
+        // Not found
+        assert!(manager.find_by_name_or_alias("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_execute_skill_by_alias() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_skill("commit", "Generate commit message");
+        skill.aliases = vec!["ci".to_string()];
+        manager.register(skill);
+
+        let result = execute_skill(&manager, "/ci").unwrap();
+        assert_eq!(result.skill_name, "commit");
+    }
+
+    #[test]
+    fn test_execute_skill_not_user_invocable() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_skill("internal", "Internal skill");
+        skill.user_invocable = false;
+        manager.register(skill);
+
+        // Should return None for non-user-invocable skills
+        assert!(execute_skill(&manager, "/internal").is_none());
+    }
+
+    #[test]
+    fn test_llm_invocable_skills() {
+        let mut manager = SkillManager::new();
+
+        // Normal skill - should be included
+        manager.register(make_skill("commit", "Generate commit"));
+
+        // Disabled model invocation - should be excluded
+        let mut disabled = make_skill("internal", "Internal");
+        disabled.disable_model_invocation = true;
+        manager.register(disabled);
+
+        // Builtin skill - should be excluded
+        let mut builtin = make_skill("builtin", "Builtin");
+        builtin.source = SkillSource::Builtin;
+        manager.register(builtin);
+
+        let invocable = manager.llm_invocable_skills();
+        assert_eq!(invocable.len(), 1);
+        assert_eq!(invocable[0].name, "commit");
+    }
+
+    #[test]
+    fn test_user_visible_skills() {
+        let mut manager = SkillManager::new();
+
+        // Normal skill - should be visible
+        manager.register(make_skill("commit", "Generate commit"));
+
+        // Hidden skill - should not be visible
+        let mut hidden = make_skill("hidden", "Hidden");
+        hidden.is_hidden = true;
+        manager.register(hidden);
+
+        // Builtin skill - should not be visible
+        let mut builtin = make_skill("builtin", "Builtin");
+        builtin.source = SkillSource::Builtin;
+        manager.register(builtin);
+
+        let visible = manager.user_visible_skills();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "commit");
+    }
+
+    #[test]
+    fn test_execute_skill_with_base_dir() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_skill("deploy", "Deploy the app");
+        skill.base_dir = Some(PathBuf::from("/project/skills/deploy"));
+        manager.register(skill);
+
+        let result = execute_skill(&manager, "/deploy").unwrap();
+        assert!(
+            result
+                .prompt
+                .contains("Base directory for this skill: /project/skills/deploy")
+        );
+        assert!(result.prompt.contains("Deploy the app"));
+    }
+
+    #[test]
+    fn test_execution_result_fields() {
+        let mut manager = SkillManager::new();
+        let mut skill = make_skill("deploy", "Deploy");
+        skill.model = Some("sonnet".to_string());
+        skill.context = SkillContext::Fork;
+        skill.agent = Some("deploy-agent".to_string());
+        skill.base_dir = Some(PathBuf::from("/skills/deploy"));
+        manager.register(skill);
+
+        let result = execute_skill(&manager, "/deploy").unwrap();
+        assert_eq!(result.model, Some("sonnet".to_string()));
+        assert_eq!(result.context, SkillContext::Fork);
+        assert_eq!(result.agent, Some("deploy-agent".to_string()));
+        assert_eq!(result.base_dir, Some(PathBuf::from("/skills/deploy")));
     }
 }
