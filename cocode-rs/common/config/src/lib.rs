@@ -36,7 +36,7 @@
 //!
 //! // Get resolved model info
 //! let info = manager.resolve_model_info("anthropic", "claude-sonnet-4-20250514")?;
-//! println!("Context window: {}", info.context_window);
+//! println!("Context window: {:?}", info.context_window);
 //! # Ok(())
 //! # }
 //! ```
