@@ -94,14 +94,5 @@ pub async fn run_tui_default() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_view_mode_exports() {
-        // Ensure exports work
-        let _ = ViewMode::Search;
-        let _ = ViewMode::Index;
-        let _ = ViewMode::RepoMap;
-    }
-}
+#[path = "mod.test.rs"]
+mod tests;

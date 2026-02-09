@@ -33,12 +33,5 @@ impl Widget for DebugView<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_debug_view_creation() {
-        let event_log = EventLogState::new();
-        let _view = DebugView::new(&event_log);
-    }
-}
+#[path = "debug_view.test.rs"]
+mod tests;

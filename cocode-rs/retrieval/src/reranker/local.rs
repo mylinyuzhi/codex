@@ -139,7 +139,5 @@ impl Reranker for LocalReranker {
 }
 
 #[cfg(test)]
-mod tests {
-    // Tests require the neural-reranker feature and model download
-    // Run with: cargo test -p codex-retrieval --features neural-reranker
-}
+#[path = "local.test.rs"]
+mod tests;
