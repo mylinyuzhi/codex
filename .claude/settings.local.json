@@ -121,7 +121,8 @@
       "Bash(while read path)",
       "Bash(if [ -f \"/Users/linyuzhi/codespace/myagent/codex/$path\" ])",
       "Bash(full_path=\"/Users/linyuzhi/codespace/myagent/codex/$path\")",
-      "Bash(if [ -f \"$full_path\" ])"
+      "Bash(if [ -f \"$full_path\" ])",
+      "Bash(xxd:*)"
     ],
     "deny": [],
     "ask": []

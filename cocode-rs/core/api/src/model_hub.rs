@@ -617,12 +617,13 @@ impl ModelHub {
         }
 
         // Phase 2: Resolve provider info and create provider
-        let provider_info = self.config.resolve_provider(provider_name).ok_or_else(|| {
-            HubError::ProviderResolution {
-                provider: provider_name.to_string(),
-                source: anyhow::anyhow!("Provider '{}' not found in config", provider_name),
-            }
-        })?;
+        let provider_info =
+            self.config
+                .provider(provider_name)
+                .ok_or_else(|| HubError::ProviderResolution {
+                    provider: provider_name.to_string(),
+                    source: anyhow::anyhow!("Provider '{}' not found in config", provider_name),
+                })?;
 
         info!(provider = %provider_name, "Creating provider");
         let provider = provider_factory::create_provider(provider_info).map_err(|e| {

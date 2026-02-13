@@ -17,11 +17,11 @@ use crate::error::config_error::ConfigValidationSnafu;
 use crate::error::config_error::NotFoundSnafu;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
-use crate::types::ProviderType;
 use crate::types::ProvidersFile;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
 use cocode_protocol::ProviderModel;
+use cocode_protocol::ProviderType;
 use snafu::OptionExt;
 use std::collections::HashMap;
 use std::env;
@@ -112,24 +112,24 @@ impl ConfigResolver {
         Ok(config)
     }
 
-    /// Resolve model info without a provider config (fallback path).
-    fn resolve_model_info_no_provider(&self, slug: &str) -> ModelInfo {
-        // Start with built-in defaults
+    /// Resolve base model info from built-in defaults and user config (layers 1-2).
+    fn resolve_base_model_info(&self, slug: &str) -> ModelInfo {
         let mut config = builtin::get_model_defaults(slug).unwrap_or_default();
         config.slug = slug.to_string();
-
-        // Layer 2: User model config from models.json
         if let Some(user_config) = self.models.get(slug) {
             config.merge_from(user_config);
             debug!(slug = slug, "Applied user model config");
         }
+        config
+    }
 
-        // Resolve base_instructions: file takes precedence over inline
+    /// Resolve model info without a provider config (fallback path).
+    fn resolve_model_info_no_provider(&self, slug: &str) -> ModelInfo {
+        let mut config = self.resolve_base_model_info(slug);
         if let Some(resolved_instructions) = self.resolve_base_instructions(&config) {
             config.base_instructions = Some(resolved_instructions);
             config.base_instructions_file = None;
         }
-
         config
     }
 
@@ -290,41 +290,28 @@ impl ConfigResolver {
         provider_config: &ProviderConfig,
         slug: &str,
     ) -> ModelInfo {
-        // Start with built-in defaults
-        let mut config = builtin::get_model_defaults(slug).unwrap_or_default();
-        config.slug = slug.to_string();
-
-        // Layer 2: User model config from models.json
-        if let Some(user_config) = self.models.get(slug) {
-            config.merge_from(user_config);
-            debug!(slug = slug, "Applied user model config");
-        }
+        let mut config = self.resolve_base_model_info(slug);
 
         // Layer 3: Model entry config and options
         if let Some(model_entry) = provider_config.find_model(slug) {
-            // Apply flattened ModelInfo fields
             config.merge_from(&model_entry.model_info);
-            debug!(slug = slug, "Applied model entry config");
-
-            // Merge model-specific options directly into ModelInfo.options
             if !model_entry.model_options.is_empty() {
                 let opts = config.options.get_or_insert_with(HashMap::new);
                 for (k, v) in &model_entry.model_options {
                     opts.insert(k.clone(), v.clone());
                 }
-                debug!(slug = slug, "Applied model-specific options");
             }
         }
 
-        // Resolve timeout_secs: use model config or fall back to provider default
+        // Timeout fallback
         if config.timeout_secs.is_none() {
             config.timeout_secs = Some(provider_config.timeout_secs);
         }
 
-        // Resolve base_instructions: file takes precedence over inline
+        // Resolve base_instructions
         if let Some(resolved_instructions) = self.resolve_base_instructions(&config) {
             config.base_instructions = Some(resolved_instructions);
-            config.base_instructions_file = None; // Already resolved
+            config.base_instructions_file = None;
         }
 
         config

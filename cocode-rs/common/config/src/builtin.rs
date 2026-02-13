@@ -15,11 +15,11 @@ const OUTPUT_STYLE_EXPLANATORY: &str = include_str!("../output_style_explanatory
 const OUTPUT_STYLE_LEARNING: &str = include_str!("../output_style_learning.md");
 
 use crate::types::ProviderConfig;
-use crate::types::ProviderType;
 use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::Capability;
 use cocode_protocol::ConfigShellToolType;
 use cocode_protocol::ModelInfo;
+use cocode_protocol::ProviderType;
 use cocode_protocol::ThinkingLevel;
 use std::collections::HashMap;
 use std::fs;
@@ -515,7 +515,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
 }
 
 fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
-    use crate::types::WireApi;
+    use cocode_protocol::WireApi;
 
     let mut providers = HashMap::new();
 

@@ -1,8 +1,8 @@
 use super::*;
 use crate::types::ProviderModelEntry;
-use crate::types::ProviderType;
-use crate::types::WireApi;
 use cocode_protocol::Capability;
+use cocode_protocol::ProviderType;
+use cocode_protocol::WireApi;
 
 fn create_test_resolver() -> ConfigResolver {
     let mut models = HashMap::new();
