@@ -211,6 +211,7 @@ pub async fn run_tui(
     let agent_handle = tokio::spawn(run_agent_driver(
         command_rx,
         agent_tx,
+        snapshot.clone(),
         config.clone(),
         initial_selection,
         title,
@@ -251,6 +252,7 @@ pub async fn run_tui(
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<LoopEvent>,
+    snapshot: Arc<Config>,
     config: ConfigManager,
     initial_selection: RoleSelection,
     title: Option<String>,
@@ -264,25 +266,6 @@ async fn run_agent_driver(
     if let Some(t) = title {
         session.set_title(t);
     }
-
-    // Build Config snapshot for session
-    let snapshot =
-        match config.build_config(ConfigOverrides::default().with_cwd(working_dir.clone())) {
-            Ok(cfg) => Arc::new(cfg),
-            Err(e) => {
-                error!("Failed to build config snapshot: {e}");
-                let _ = event_tx
-                    .send(LoopEvent::Error {
-                        error: LoopError {
-                            code: "config_error".to_string(),
-                            message: format!("Failed to build config: {e}"),
-                            recoverable: false,
-                        },
-                    })
-                    .await;
-                return;
-            }
-        };
 
     // Create session state from config snapshot
     let state_result = cocode_session::SessionState::new(session, snapshot).await;

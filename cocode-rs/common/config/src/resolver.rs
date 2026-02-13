@@ -243,6 +243,74 @@ impl ConfigResolver {
         Ok(info)
     }
 
+    /// Resolve provider using pre-resolved model cache (avoids redundant model resolution).
+    ///
+    /// This is used by `build_config()` to avoid re-resolving models that were already
+    /// resolved in the role resolution phase. The cache is keyed by (provider, model).
+    pub fn resolve_provider_with_cache(
+        &self,
+        provider_name: &str,
+        model_cache: &HashMap<(String, String), ModelInfo>,
+    ) -> Result<ProviderInfo, ConfigError> {
+        let provider_config = self.providers.get(provider_name).context(NotFoundSnafu {
+            kind: NotFoundKind::Provider,
+            name: provider_name.to_string(),
+        })?;
+
+        // Resolve API key: env var takes precedence
+        let api_key = self.resolve_api_key(provider_config).ok_or_else(|| {
+            let env_hint = provider_config
+                .env_key
+                .as_ref()
+                .map(|k| format!(" (set {k} or api_key in config)"))
+                .unwrap_or_default();
+            AuthSnafu {
+                message: format!("API key not found for provider '{provider_name}'{env_hint}"),
+            }
+            .build()
+        })?;
+
+        // Build models using cache instead of re-resolving
+        let mut models = HashMap::new();
+        for model_entry in &provider_config.models {
+            let slug = model_entry.slug();
+            let cache_key = (provider_name.to_string(), slug.to_string());
+
+            // Look up model info from cache; fall back to resolution if not in cache
+            let model_info = if let Some(cached_info) = model_cache.get(&cache_key) {
+                cached_info.clone()
+            } else {
+                // This shouldn't happen if the cache is built correctly, but handle it gracefully
+                self.resolve_model_info_for_provider(provider_config, slug)
+            };
+
+            // Create ProviderModel with model_alias preserved
+            let provider_model = if let Some(alias) = &model_entry.model_alias {
+                ProviderModel::with_alias(model_info, alias)
+            } else {
+                ProviderModel::new(model_info)
+            };
+            models.insert(slug.to_string(), provider_model);
+        }
+
+        let mut info = ProviderInfo::new(
+            &provider_config.name,
+            provider_config.provider_type,
+            &provider_config.base_url,
+        )
+        .with_api_key(api_key)
+        .with_timeout(provider_config.timeout_secs)
+        .with_streaming(provider_config.streaming)
+        .with_wire_api(provider_config.wire_api)
+        .with_models(models);
+
+        if let Some(extra) = &provider_config.options {
+            info = info.with_options(extra.clone());
+        }
+
+        Ok(info)
+    }
+
     /// Resolve and merge model config layers, returning a `ModelInfo`.
     ///
     /// This is used when building `ProviderInfo.models` to store fully resolved configs.

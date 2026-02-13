@@ -541,10 +541,9 @@ impl ModelHub {
         // Phase 3: Resolve model info and alias.
         // Note: Phase 2 already did a full resolve_provider() inside get_or_create_provider()
         // (genuinely needed to build the HTTP client). This phase only does lightweight lookups.
-        let model_info = self
+        let provider_model = self
             .config
-            .resolve_model_info(&spec.provider, &spec.model)
-            .cloned()
+            .resolve_provider_model(&spec.provider, &spec.model)
             .ok_or_else(|| HubError::ModelInfoResolution {
                 model: spec.to_string(),
                 source: anyhow::anyhow!(
@@ -554,9 +553,8 @@ impl ModelHub {
                 ),
             })?;
 
-        // Get the actual API model name (handles aliases — O(1) lookup, avoids a second
-        // resolve_provider() that the old code used just for ProviderInfo::api_model_name())
-        let api_model_name = self.config.resolve_model_alias(&spec.provider, &spec.model);
+        let model_info = provider_model.info.clone();
+        let api_model_name = provider_model.api_model_name();
 
         info!(
             provider = %spec.provider,

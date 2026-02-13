@@ -268,6 +268,20 @@ impl Config {
         self.providers.get(name)
     }
 
+    /// Get complete ProviderModel (ModelInfo + alias) for a provider/model.
+    ///
+    /// This is a more efficient alternative to calling both `resolve_model_info()`
+    /// and `resolve_model_alias()` separately, as it performs a single lookup.
+    pub fn resolve_provider_model(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Option<&cocode_protocol::ProviderModel> {
+        self.providers
+            .get(provider)
+            .and_then(|p| p.models.get(model))
+    }
+
     /// Get `ModelInfo` for a specific provider/model (for ModelHub model creation).
     pub fn resolve_model_info(&self, provider: &str, model: &str) -> Option<&ModelInfo> {
         self.providers

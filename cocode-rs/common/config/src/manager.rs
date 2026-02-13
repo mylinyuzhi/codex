@@ -241,6 +241,24 @@ impl ConfigManager {
         resolver.resolve_provider(provider)
     }
 
+    /// Resolve provider using pre-resolved model cache (avoids redundant model resolution).
+    ///
+    /// This is used by `build_config()` to avoid re-resolving models that were already
+    /// resolved in the role resolution phase. The cache is keyed by (provider, model).
+    pub(crate) fn resolve_provider_with_cache(
+        &self,
+        provider: &str,
+        model_cache: &HashMap<(String, String), ModelInfo>,
+    ) -> Result<ProviderInfo, ConfigError> {
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+        resolver.resolve_provider_with_cache(provider, model_cache)
+    }
+
     /// Get the current active provider and model.
     ///
     /// Resolution order (highest to lowest precedence):
@@ -810,20 +828,48 @@ impl ConfigManager {
             models.merge(override_models);
         }
 
-        // Resolve all configured roles -> ModelInfo
-        let mut resolved_models = HashMap::new();
+        // PHASE 1: Collect all unique (provider, model) pairs from roles AND providers
+        let mut model_keys = std::collections::HashSet::new();
+
+        // 1a. From configured roles
         for role in ModelRole::all() {
             if let Some(spec) = models.get(*role) {
-                if let Ok(info) = self.resolve_model_info(&spec.provider, &spec.model) {
-                    resolved_models.insert(*role, info);
+                model_keys.insert((spec.provider.clone(), spec.model.clone()));
+            }
+        }
+
+        // 1b. From all providers (to build ProviderInfo.models)
+        for summary in self.list_providers() {
+            if let Ok(slugs) = self.list_model_slugs(&summary.name) {
+                for slug in slugs {
+                    model_keys.insert((summary.name.clone(), slug));
                 }
             }
         }
 
-        // Resolve all providers
+        // PHASE 2: Resolve each unique model ONCE into a cache
+        let mut model_cache: HashMap<(String, String), ModelInfo> = HashMap::new();
+        for (provider, model) in model_keys {
+            if let Ok(info) = self.resolve_model_info(&provider, &model) {
+                model_cache.insert((provider.clone(), model.clone()), info);
+            }
+        }
+
+        // PHASE 3: Build resolved_models from cache (for role lookups)
+        let mut resolved_models = HashMap::new();
+        for role in ModelRole::all() {
+            if let Some(spec) = models.get(*role) {
+                let key = (spec.provider.clone(), spec.model.clone());
+                if let Some(info) = model_cache.get(&key) {
+                    resolved_models.insert(*role, info.clone());
+                }
+            }
+        }
+
+        // PHASE 4: Build providers using cached model resolutions
         let mut providers = HashMap::new();
         for summary in self.list_providers() {
-            if let Ok(info) = self.resolve_provider(&summary.name) {
+            if let Ok(info) = self.resolve_provider_with_cache(&summary.name, &model_cache) {
                 providers.insert(summary.name.clone(), info);
             }
         }
