@@ -1,5 +1,6 @@
 use super::*;
 use crate::loader::CONFIG_FILE;
+use cocode_protocol::model::ModelSpec;
 use tempfile::TempDir;
 
 fn create_test_manager() -> (TempDir, ConfigManager) {
@@ -42,27 +43,28 @@ fn test_from_default_succeeds() {
 #[test]
 fn test_empty_manager() {
     let manager = ConfigManager::empty();
-    let (provider, model) = manager.current();
-    assert_eq!(provider, "openai");
-    assert_eq!(model, "gpt-5");
+    let spec = manager.current_spec();
+    assert_eq!(spec.provider, "openai");
+    assert_eq!(spec.model, "gpt-5");
 }
 
 #[test]
 fn test_current_from_config() {
     let (_temp, manager) = create_test_manager();
-    let (provider, model) = manager.current();
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5");
+    let spec = manager.current_spec();
+    assert_eq!(spec.provider, "test-openai");
+    assert_eq!(spec.model, "gpt-5");
 }
 
 #[test]
 fn test_switch_provider_model() {
     let (_temp, manager) = create_test_manager();
 
-    manager.switch("test-openai", "gpt-5-mini").unwrap();
-    let (provider, model) = manager.current();
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5-mini");
+    let spec = ModelSpec::new("test-openai", "gpt-5-mini");
+    manager.switch_spec(&spec).unwrap();
+    let current = manager.current_spec();
+    assert_eq!(current.provider, "test-openai");
+    assert_eq!(current.model, "gpt-5-mini");
 }
 
 #[test]
@@ -111,9 +113,9 @@ fn test_reload() {
     // Reset runtime overrides to use JSON config
     manager.set_runtime_overrides(RuntimeOverrides::default());
 
-    let (provider, model) = manager.current();
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5-mini");
+    let spec = manager.current_spec();
+    assert_eq!(spec.provider, "test-openai");
+    assert_eq!(spec.model, "gpt-5-mini");
 }
 
 #[test]
@@ -139,17 +141,18 @@ fn test_get_model_config() {
 fn test_runtime_switch_is_in_memory() {
     let (temp_dir, manager) = create_test_manager();
 
-    manager.switch("test-openai", "gpt-5-mini").unwrap();
-    let (provider, model) = manager.current();
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5-mini");
+    let spec = ModelSpec::new("test-openai", "gpt-5-mini");
+    manager.switch_spec(&spec).unwrap();
+    let current = manager.current_spec();
+    assert_eq!(current.provider, "test-openai");
+    assert_eq!(current.model, "gpt-5-mini");
 
     // Create new manager - switch should NOT persist (in-memory only)
     let manager2 = ConfigManager::from_path(temp_dir.path()).unwrap();
-    let (provider2, model2) = manager2.current();
+    let current2 = manager2.current_spec();
     // Should fall back to JSON config
-    assert_eq!(provider2, "test-openai");
-    assert_eq!(model2, "gpt-5"); // Default from config.json, not gpt-5-mini
+    assert_eq!(current2.provider, "test-openai");
+    assert_eq!(current2.model, "gpt-5"); // Default from config.json, not gpt-5-mini
 }
 
 // ==========================================================
@@ -307,19 +310,18 @@ fn test_switch_role() {
     let (_temp, manager) = create_test_manager();
 
     // Switch fast role
-    manager
-        .switch_role(ModelRole::Fast, "test-openai", "gpt-5-mini")
-        .unwrap();
+    let spec = ModelSpec::new("test-openai", "gpt-5-mini");
+    manager.switch_role_spec(ModelRole::Fast, &spec).unwrap();
 
     // Fast role should use the new model
-    let (provider, model) = manager.current_for_role(ModelRole::Fast);
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5-mini");
+    let fast_spec = manager.current_spec_for_role(ModelRole::Fast);
+    assert_eq!(fast_spec.provider, "test-openai");
+    assert_eq!(fast_spec.model, "gpt-5-mini");
 
     // Main role should be unchanged
-    let (provider, model) = manager.current_for_role(ModelRole::Main);
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5");
+    let main_spec = manager.current_spec_for_role(ModelRole::Main);
+    assert_eq!(main_spec.provider, "test-openai");
+    assert_eq!(main_spec.model, "gpt-5");
 }
 
 #[test]
@@ -327,13 +329,10 @@ fn test_switch_role_with_thinking() {
     let (_temp, manager) = create_test_manager();
 
     // Switch with thinking level
+    let spec = ModelSpec::new("test-openai", "gpt-5");
+    let thinking_level = ThinkingLevel::high().set_budget(32000);
     manager
-        .switch_role_with_thinking(
-            ModelRole::Main,
-            "test-openai",
-            "gpt-5",
-            ThinkingLevel::high().set_budget(32000),
-        )
+        .switch_role_spec_with_thinking(ModelRole::Main, &spec, thinking_level)
         .unwrap();
 
     // Check the selection
@@ -351,9 +350,8 @@ fn test_switch_thinking_level() {
     let (_temp, manager) = create_test_manager();
 
     // First set up a role
-    manager
-        .switch_role(ModelRole::Main, "test-openai", "gpt-5")
-        .unwrap();
+    let spec = ModelSpec::new("test-openai", "gpt-5");
+    manager.switch_role_spec(ModelRole::Main, &spec).unwrap();
 
     // Switch just the thinking level
     let updated = manager
@@ -388,11 +386,13 @@ fn test_current_selections() {
     let (_temp, manager) = create_test_manager();
 
     // Set up multiple roles
+    let main_spec = ModelSpec::new("test-openai", "gpt-5");
     manager
-        .switch_role(ModelRole::Main, "test-openai", "gpt-5")
+        .switch_role_spec(ModelRole::Main, &main_spec)
         .unwrap();
+    let fast_spec = ModelSpec::new("test-openai", "gpt-5-mini");
     manager
-        .switch_role(ModelRole::Fast, "test-openai", "gpt-5-mini")
+        .switch_role_spec(ModelRole::Fast, &fast_spec)
         .unwrap();
 
     let selections = manager.current_selections();
@@ -406,12 +406,11 @@ fn test_role_fallback_to_main() {
     let (_temp, manager) = create_test_manager();
 
     // Only set main role
-    manager
-        .switch_role(ModelRole::Main, "test-openai", "gpt-5-mini")
-        .unwrap();
+    let spec = ModelSpec::new("test-openai", "gpt-5-mini");
+    manager.switch_role_spec(ModelRole::Main, &spec).unwrap();
 
     // Fast role should fallback to main
-    let (provider, model) = manager.current_for_role(ModelRole::Fast);
-    assert_eq!(provider, "test-openai");
-    assert_eq!(model, "gpt-5-mini");
+    let fast_spec = manager.current_spec_for_role(ModelRole::Fast);
+    assert_eq!(fast_spec.provider, "test-openai");
+    assert_eq!(fast_spec.model, "gpt-5-mini");
 }

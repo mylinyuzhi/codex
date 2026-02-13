@@ -22,17 +22,19 @@
 //! ```no_run
 //! use cocode_config::ConfigManager;
 //! use cocode_config::error::ConfigError;
+//! use cocode_protocol::model::ModelSpec;
 //!
 //! # fn example() -> Result<(), ConfigError> {
 //! // Load from default path (~/.cocode)
 //! let manager = ConfigManager::from_default()?;
 //!
 //! // Get current provider/model
-//! let (provider, model) = manager.current();
-//! println!("Using: {provider}/{model}");
+//! let spec = manager.current_spec();
+//! println!("Using: {}/{}", spec.provider, spec.model);
 //!
 //! // Switch to a different provider/model
-//! manager.switch("anthropic", "claude-sonnet-4-20250514")?;
+//! let new_spec = ModelSpec::new("anthropic", "claude-sonnet-4-20250514");
+//! manager.switch_spec(&new_spec)?;
 //!
 //! // Get resolved model info
 //! let info = manager.resolve_model_info("anthropic", "claude-sonnet-4-20250514")?;

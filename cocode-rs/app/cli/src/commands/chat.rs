@@ -79,16 +79,16 @@ pub async fn run(
         Arc::new(config.build_config(ConfigOverrides::default().with_cwd(working_dir.clone()))?);
 
     // Use current config (profile-based)
-    let (provider_name, model_name) = config.current();
+    let spec = config.current_spec();
 
     // Get provider type from snapshot
     let provider_type = snapshot
-        .provider_type(&provider_name)
+        .provider_type(&spec.provider)
         .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
 
     // Create session with the model spec
-    let spec = ModelSpec::with_type(&provider_name, provider_type, &model_name);
-    let selection = RoleSelection::new(spec);
+    let spec_with_type = ModelSpec::with_type(&spec.provider, provider_type, &spec.model);
+    let selection = RoleSelection::new(spec_with_type);
     let mut session = Session::new(working_dir, selection);
 
     if let Some(t) = title {

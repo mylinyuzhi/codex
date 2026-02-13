@@ -46,43 +46,32 @@ pub struct RuntimeOverrides {
     pub selections: RoleSelections,
 }
 
-impl RuntimeOverrides {
-    /// Get the main model override (for backward compatibility).
-    pub fn main(&self) -> Option<&ModelSpec> {
-        self.selections.get(ModelRole::Main).map(|s| &s.model)
-    }
-
-    /// Set the main model override (for backward compatibility).
-    pub fn set_main(&mut self, spec: ModelSpec) {
-        self.selections
-            .set(ModelRole::Main, RoleSelection::new(spec));
-    }
-}
-
 /// Configuration manager for multi-provider setup.
 ///
 /// Provides thread-safe configuration management with:
 /// - Lazy loading from JSON and TOML files
 /// - Caching with manual reload
-/// - Runtime provider/model switching
-/// - Layered resolution: Runtime > TOML > Built-in
+/// - Runtime provider/model switching via `ModelSpec`
+/// - Layered resolution: Runtime > JSON Config > Built-in Defaults
 ///
 /// # Example
 ///
 /// ```no_run
 /// use cocode_config::ConfigManager;
 /// use cocode_config::error::ConfigError;
+/// use cocode_protocol::model::ModelSpec;
 ///
 /// # fn example() -> Result<(), ConfigError> {
 /// // Load from default path (~/.cocode)
 /// let manager = ConfigManager::from_default()?;
 ///
 /// // Get current provider/model
-/// let (provider, model) = manager.current();
-/// println!("Current: {provider}/{model}");
+/// let spec = manager.current_spec();
+/// println!("Current: {}/{}", spec.provider, spec.model);
 ///
 /// // Switch to a different model
-/// manager.switch("anthropic", "claude-sonnet-4-20250514")?;
+/// let new_spec = ModelSpec::new("anthropic", "claude-sonnet-4-20250514");
+/// manager.switch_spec(&new_spec)?;
 ///
 /// // Get resolved model info
 /// let info = manager.resolve_model_info("anthropic", "claude-sonnet-4-20250514")?;
@@ -229,32 +218,28 @@ impl ConfigManager {
         resolver.resolve_provider_with_cache(provider, model_cache)
     }
 
-    /// Get the current active provider and model.
+    /// Get the current active provider and model as a typed `ModelSpec`.
     ///
     /// Resolution order (highest to lowest precedence):
-    /// 1. Runtime overrides (set via `set_runtime_overrides()`)
+    /// 1. Runtime overrides (set via `switch_spec()`)
     /// 2. JSON config with profile resolution (`config.json`)
     /// 3. Built-in defaults ("openai", "gpt-5")
-    pub fn current(&self) -> (String, String) {
-        self.current_for_role(ModelRole::Main)
+    pub fn current_spec(&self) -> ModelSpec {
+        self.current_spec_for_role(ModelRole::Main)
     }
 
-    /// Get the current active provider and model for a specific role.
+    /// Get the current active provider and model for a specific role as a `ModelSpec`.
     ///
     /// Resolution order (highest to lowest precedence):
     /// 1. Runtime overrides (per-role selections)
     /// 2. JSON config with profile resolution (`config.json`)
     /// 3. Built-in defaults ("openai", "gpt-5")
-    pub fn current_for_role(&self, role: ModelRole) -> (String, String) {
+    pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
         // 1. Check runtime overrides first (supports all roles)
         {
             let runtime = self.runtime_overrides.read().unwrap();
-            // First try exact role, then fallback to main
             if let Some(selection) = runtime.selections.get_or_main(role) {
-                return (
-                    selection.model.provider.clone(),
-                    selection.model.model.clone(),
-                );
+                return selection.model.clone();
             }
         }
 
@@ -262,54 +247,83 @@ impl ConfigManager {
         let config = self.config.read().unwrap();
         let resolved = config.resolve();
         if let Some(spec) = resolved.models.get(role) {
-            return (spec.provider.clone(), spec.model.clone());
+            return spec.clone();
         }
         drop(config);
 
         // 3. Fallback to built-in default
-        ("openai".to_string(), "gpt-5".to_string())
-    }
-
-    /// Get the current active provider and model as a typed `ModelSpec`.
-    ///
-    /// Returns the same value as `current()` but as a `ModelSpec` for type safety.
-    pub fn current_spec(&self) -> ModelSpec {
-        let (provider, model) = self.current();
-        ModelSpec::new(&provider, &model)
-    }
-
-    /// Get the current active provider and model for a specific role as a `ModelSpec`.
-    ///
-    /// Returns the same value as `current_for_role()` but as a `ModelSpec` for type safety.
-    pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
-        let (provider, model) = self.current_for_role(role);
-        ModelSpec::new(&provider, &model)
+        ModelSpec::new("openai", "gpt-5")
     }
 
     /// Switch to a specific provider and model using a typed `ModelSpec`.
     ///
-    /// This is the type-safe version of `switch()` that accepts a `ModelSpec` directly.
+    /// This updates the runtime overrides (in-memory only).
+    /// To persist, edit `config.toml` directly.
     pub fn switch_spec(&self, spec: &ModelSpec) -> Result<(), ConfigError> {
-        self.switch(&spec.provider, &spec.model)
+        // Validate the provider
+        self.validate_provider(&spec.provider)?;
+
+        // Update runtime overrides (in-memory)
+        let mut runtime = self.write_runtime()?;
+        runtime
+            .selections
+            .set(ModelRole::Main, RoleSelection::new(spec.clone()));
+
+        info!(provider = %spec.provider, model = %spec.model, "Switched to new model");
+        Ok(())
     }
 
     /// Switch model for a specific role using a typed `ModelSpec`.
     ///
-    /// This is the type-safe version of `switch_role()` that accepts a `ModelSpec` directly.
+    /// This updates the runtime overrides for the specified role.
+    /// To persist, edit the config file directly.
     pub fn switch_role_spec(&self, role: ModelRole, spec: &ModelSpec) -> Result<(), ConfigError> {
-        self.switch_role(role, &spec.provider, &spec.model)
+        // Validate the provider
+        self.validate_provider(&spec.provider)?;
+
+        // Update runtime overrides
+        let mut runtime = self.write_runtime()?;
+        runtime
+            .selections
+            .set(role, RoleSelection::new(spec.clone()));
+
+        info!(
+            provider = %spec.provider,
+            model = %spec.model,
+            role = %role,
+            "Switched model for role"
+        );
+        Ok(())
     }
 
     /// Switch model and thinking level for a specific role using a typed `ModelSpec`.
     ///
-    /// This is the type-safe version of `switch_role_with_thinking()` that accepts a `ModelSpec` directly.
+    /// This updates the runtime overrides for the specified role with
+    /// both model and thinking level.
     pub fn switch_role_spec_with_thinking(
         &self,
         role: ModelRole,
         spec: &ModelSpec,
         thinking_level: ThinkingLevel,
     ) -> Result<(), ConfigError> {
-        self.switch_role_with_thinking(role, &spec.provider, &spec.model, thinking_level)
+        // Validate the provider
+        self.validate_provider(&spec.provider)?;
+
+        // Update runtime overrides
+        let mut runtime = self.write_runtime()?;
+        runtime.selections.set(
+            role,
+            RoleSelection::with_thinking(spec.clone(), thinking_level.clone()),
+        );
+
+        info!(
+            provider = %spec.provider,
+            model = %spec.model,
+            role = %role,
+            thinking = %thinking_level,
+            "Switched model with thinking level for role"
+        );
+        Ok(())
     }
 
     /// Set runtime overrides for provider/model selection.
@@ -398,81 +412,6 @@ impl ConfigManager {
         self.features().enabled(feature)
     }
 
-    /// Switch to a specific provider and model.
-    ///
-    /// This updates the runtime overrides (in-memory only).
-    /// To persist, edit `config.toml` directly.
-    pub fn switch(&self, provider: &str, model: &str) -> Result<(), ConfigError> {
-        // Validate the provider
-        self.validate_provider(provider)?;
-
-        // Update runtime overrides (in-memory)
-        let mut runtime = self.write_runtime()?;
-        runtime.set_main(ModelSpec::new(provider, model));
-
-        info!(provider = provider, model = model, "Switched to new model");
-        Ok(())
-    }
-
-    /// Switch model for a specific role (in-memory only).
-    ///
-    /// This updates the runtime overrides for the specified role.
-    /// To persist, edit the config file directly.
-    pub fn switch_role(
-        &self,
-        role: ModelRole,
-        provider: &str,
-        model: &str,
-    ) -> Result<(), ConfigError> {
-        // Validate the provider
-        self.validate_provider(provider)?;
-
-        // Update runtime overrides
-        let mut runtime = self.write_runtime()?;
-        runtime
-            .selections
-            .set(role, RoleSelection::new(ModelSpec::new(provider, model)));
-
-        info!(
-            provider = provider,
-            model = model,
-            role = %role,
-            "Switched model for role"
-        );
-        Ok(())
-    }
-
-    /// Switch model and thinking level for a specific role (in-memory only).
-    ///
-    /// This updates the runtime overrides for the specified role with
-    /// both model and thinking level.
-    pub fn switch_role_with_thinking(
-        &self,
-        role: ModelRole,
-        provider: &str,
-        model: &str,
-        thinking_level: ThinkingLevel,
-    ) -> Result<(), ConfigError> {
-        // Validate the provider
-        self.validate_provider(provider)?;
-
-        // Update runtime overrides
-        let mut runtime = self.write_runtime()?;
-        runtime.selections.set(
-            role,
-            RoleSelection::with_thinking(ModelSpec::new(provider, model), thinking_level.clone()),
-        );
-
-        info!(
-            provider = provider,
-            model = model,
-            role = %role,
-            thinking = %thinking_level,
-            "Switched model with thinking level for role"
-        );
-        Ok(())
-    }
-
     /// Switch only the thinking level for a specific role (in-memory only).
     ///
     /// Keeps the current model but updates the thinking level.
@@ -531,9 +470,9 @@ impl ConfigManager {
 
     /// Build a `RoleSelection` for the current main model.
     pub fn current_main_selection(&self) -> RoleSelection {
-        let (provider, model) = self.current();
-        self.resolve_selection(&provider, &model)
-            .unwrap_or_else(|_| RoleSelection::new(ModelSpec::new(&provider, &model)))
+        let spec = self.current_spec();
+        self.resolve_selection(&spec.provider, &spec.model)
+            .unwrap_or_else(|_| RoleSelection::new(spec))
     }
 
     /// Build `RoleSelection`s for all configured models across all providers.

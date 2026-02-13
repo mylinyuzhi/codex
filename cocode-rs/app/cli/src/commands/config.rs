@@ -2,6 +2,7 @@
 
 use cocode_config::ConfigManager;
 use cocode_protocol::all_features;
+use cocode_protocol::model::ModelSpec;
 
 use crate::ConfigAction;
 
@@ -16,14 +17,14 @@ pub async fn run(action: ConfigAction, config: &ConfigManager) -> anyhow::Result
 
 /// Show current configuration.
 fn show_config(config: &ConfigManager) -> anyhow::Result<()> {
-    let (provider, model) = config.current();
+    let spec = config.current_spec();
 
     println!("Configuration");
     println!("─────────────");
     println!();
     println!("Current:");
-    println!("  Provider: {provider}");
-    println!("  Model:    {model}");
+    println!("  Provider: {}", spec.provider);
+    println!("  Model:    {}", spec.model);
     println!();
     println!("Config Path: {}", config.config_path().display());
     println!();
@@ -80,13 +81,15 @@ fn set_config(key: &str, value: &str, config: &ConfigManager) -> anyhow::Result<
         "model" => {
             // Parse provider/model format
             if let Some((provider, model)) = value.split_once('/') {
-                config.switch(provider, model)?;
+                let spec = ModelSpec::new(provider, model);
+                config.switch_spec(&spec)?;
                 println!("Switched to {provider}/{model}");
             } else {
                 // Just model name, use current provider
-                let (current_provider, _) = config.current();
-                config.switch(&current_provider, value)?;
-                println!("Switched to {current_provider}/{value}");
+                let current_spec = config.current_spec();
+                let spec = ModelSpec::new(&current_spec.provider, value);
+                config.switch_spec(&spec)?;
+                println!("Switched to {}/{value}", current_spec.provider);
             }
         }
         "provider" => {
@@ -95,7 +98,8 @@ fn set_config(key: &str, value: &str, config: &ConfigManager) -> anyhow::Result<
                 return Err(anyhow::anyhow!("No models found for provider: {value}"));
             }
             let default_model = &models[0].id;
-            config.switch(value, default_model)?;
+            let spec = ModelSpec::new(value, default_model);
+            config.switch_spec(&spec)?;
             println!("Switched to {value}/{default_model}");
         }
         _ => {

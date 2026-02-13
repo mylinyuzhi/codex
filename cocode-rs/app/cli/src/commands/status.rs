@@ -5,12 +5,12 @@ use cocode_protocol::all_features;
 
 /// Run the status command.
 pub async fn run(config: &ConfigManager) -> anyhow::Result<()> {
-    let (provider, model) = config.current();
+    let spec = config.current_spec();
 
     println!("Current Configuration");
     println!("─────────────────────");
-    println!("Provider: {provider}");
-    println!("Model:    {model}");
+    println!("Provider: {}", spec.provider);
+    println!("Model:    {}", spec.model);
 
     // Show config path
     let config_path = config.config_path();
