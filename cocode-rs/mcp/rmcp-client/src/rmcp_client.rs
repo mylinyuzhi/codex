@@ -179,12 +179,13 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        cocode_home: PathBuf,
     ) -> Result<Self> {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
 
         let initial_oauth_tokens = match bearer_token {
             Some(_) => None,
-            None => match load_oauth_tokens(server_name, url, store_mode) {
+            None => match load_oauth_tokens(server_name, url, store_mode, &cocode_home) {
                 Ok(tokens) => tokens,
                 Err(err) => {
                     warn!("failed to read tokens for server `{server_name}`: {err}");
@@ -200,6 +201,7 @@ impl RmcpClient {
                 initial_tokens,
                 store_mode,
                 default_headers.clone(),
+                cocode_home,
             )
             .await?;
             PendingTransport::StreamableHttpWithOAuth {
@@ -492,6 +494,7 @@ async fn create_oauth_transport_and_runtime(
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
+    cocode_home: PathBuf,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
     OAuthPersistor,
@@ -528,6 +531,7 @@ async fn create_oauth_transport_and_runtime(
         url.to_string(),
         auth_manager,
         credentials_store,
+        cocode_home,
         Some(initial_tokens),
     );
 

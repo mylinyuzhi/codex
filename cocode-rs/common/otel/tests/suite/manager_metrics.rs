@@ -15,7 +15,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[("service", "codex-cli")])?;
     let manager = OtelManager::new(
         "test-conversation-id",
-        "gpt-5.1",
+        "openai",
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
@@ -51,6 +51,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         ),
         ("auth_mode".to_string(), "api_key".to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
+        ("provider".to_string(), "openai".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("source".to_string(), "tui".to_string()),
     ]);
@@ -65,7 +66,7 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let manager = OtelManager::new(
         "test-conversation-id",
-        "gpt-4o",
+        "openai",
         "gpt-4o",
         Some("account-id".to_string()),
         None,

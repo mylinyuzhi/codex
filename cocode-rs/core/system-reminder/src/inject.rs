@@ -117,10 +117,12 @@ pub fn create_injected_messages(reminders: Vec<SystemReminder>) -> Vec<InjectedM
         match reminder.output {
             ReminderOutput::Text(content) => {
                 let wrapped = wrap_with_tag(&content, xml_tag);
+                let char_count = wrapped.chars().count();
+                let preview: String = wrapped.chars().take(50).collect();
+                let ellipsis = if char_count > 50 { "..." } else { "" };
                 debug!(
-                    "Creating UserText injection for {} ({} bytes)",
-                    attachment_type,
-                    wrapped.len()
+                    "Creating UserText injection for {} ({} chars): {}{}",
+                    attachment_type, char_count, preview, ellipsis
                 );
                 result.push(InjectedMessage::UserText {
                     content: wrapped,
@@ -192,10 +194,12 @@ pub fn inject_reminders(reminders: Vec<SystemReminder>) -> Vec<String> {
 
     for reminder in reminders {
         if let Some(wrapped) = reminder.wrapped_content() {
+            let char_count = wrapped.chars().count();
+            let preview: String = wrapped.chars().take(50).collect();
+            let ellipsis = if char_count > 50 { "..." } else { "" };
             debug!(
-                "Injecting {} reminder ({} bytes)",
-                reminder.attachment_type,
-                wrapped.len()
+                "Injecting {} reminder ({} chars): {}{}",
+                reminder.attachment_type, char_count, preview, ellipsis
             );
             result.push(wrapped);
         } else {

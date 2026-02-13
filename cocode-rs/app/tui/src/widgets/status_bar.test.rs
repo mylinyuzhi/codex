@@ -93,34 +93,6 @@ fn test_thinking_duration_display() {
 }
 
 #[test]
-fn test_thinking_budget_display() {
-    let usage = TokenUsage::default();
-    let thinking = ThinkingLevel::default();
-
-    // No budget, no tokens used - should not display
-    let bar = StatusBar::new("model", &thinking, false, &usage);
-    assert!(bar.format_thinking_budget().is_none());
-
-    // With budget and usage (total < 1000, uses plain format)
-    let bar = StatusBar::new("model", &thinking, false, &usage).thinking_budget(300, Some(400));
-    let span = bar.format_thinking_budget().unwrap();
-    assert!(span.content.contains("300"));
-    assert!(span.content.contains("700")); // 300 + 400 = 700
-
-    // With large numbers (k format, total >= 1000)
-    let bar =
-        StatusBar::new("model", &thinking, false, &usage).thinking_budget(5000, Some(5000));
-    let span = bar.format_thinking_budget().unwrap();
-    assert!(span.content.contains("5.0k"));
-    assert!(span.content.contains("10.0k"));
-
-    // Tokens used without budget
-    let bar = StatusBar::new("model", &thinking, false, &usage).thinking_budget(250, None);
-    let span = bar.format_thinking_budget().unwrap();
-    assert!(span.content.contains("250"));
-}
-
-#[test]
 fn test_queue_status_display() {
     let usage = TokenUsage::default();
     let thinking = ThinkingLevel::default();

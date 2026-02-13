@@ -31,8 +31,8 @@ pub struct OtelEventMetadata {
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
+    pub(crate) provider: String,
     pub(crate) model: String,
-    pub(crate) slug: String,
     pub(crate) log_user_prompts: bool,
     pub(crate) app_version: &'static str,
     pub(crate) terminal_type: String,
@@ -47,9 +47,9 @@ pub struct OtelManager {
 }
 
 impl OtelManager {
-    pub fn with_model(mut self, model: &str, slug: &str) -> Self {
+    pub fn with_model(mut self, provider: &str, model: &str) -> Self {
+        self.metadata.provider = provider.to_owned();
         self.metadata.model = model.to_owned();
-        self.metadata.slug = slug.to_owned();
         self
     }
 
@@ -152,6 +152,7 @@ impl OtelManager {
         }
         let mut tags = Vec::with_capacity(5);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
+        Self::push_metadata_tag(&mut tags, "provider", Some(self.metadata.provider.as_str()))?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)

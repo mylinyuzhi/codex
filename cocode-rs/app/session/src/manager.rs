@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cocode_config::ConfigManager;
+use std::sync::Arc;
+
+use cocode_config::Config;
 use cocode_protocol::ModelSpec;
 use cocode_protocol::ProviderType;
 use cocode_protocol::RoleSelection;
@@ -52,11 +54,13 @@ pub struct SessionSummary {
 ///
 /// ```ignore
 /// use cocode_session::SessionManager;
-/// use cocode_config::ConfigManager;
+/// use cocode_config::{ConfigManager, ConfigOverrides};
 /// use cocode_protocol::{ProviderType, ModelSpec, RoleSelection};
+/// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///
-/// let config = ConfigManager::from_default()?;
+/// let manager_cfg = ConfigManager::from_default()?;
+/// let config = Arc::new(manager_cfg.build_config(ConfigOverrides::default())?);
 /// let mut manager = SessionManager::new();
 ///
 /// // Create a new session
@@ -64,7 +68,7 @@ pub struct SessionSummary {
 ///     PathBuf::from("."),
 ///     "gpt-5",
 ///     ProviderType::Openai,
-///     &config,
+///     config.clone(),
 /// ).await?;
 ///
 /// // Get the session
@@ -108,7 +112,7 @@ impl SessionManager {
         working_dir: PathBuf,
         model: &str,
         provider_type: ProviderType,
-        config: &ConfigManager,
+        config: Arc<Config>,
     ) -> anyhow::Result<String> {
         // Create ModelSpec with the provider type's name and the model
         let provider_name = provider_type.to_string();
@@ -136,11 +140,12 @@ impl SessionManager {
         working_dir: PathBuf,
         model: &str,
         provider: &str,
-        config: &ConfigManager,
+        config: Arc<Config>,
     ) -> anyhow::Result<String> {
-        // Resolve provider type from name
-        let provider_info = config.resolve_provider(provider)?;
-        let provider_type = provider_info.provider_type;
+        // Resolve provider type from Config snapshot
+        let provider_type = config
+            .provider_type(provider)
+            .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found in config", provider))?;
 
         // Create ModelSpec with explicit provider type
         let spec = ModelSpec::with_type(provider, provider_type, model);
@@ -170,7 +175,7 @@ impl SessionManager {
         &mut self,
         working_dir: PathBuf,
         selections: RoleSelections,
-        config: &ConfigManager,
+        config: Arc<Config>,
     ) -> anyhow::Result<String> {
         let session = Session::with_selections(working_dir, selections);
         let session_id = session.id.clone();
@@ -287,7 +292,7 @@ impl SessionManager {
     }
 
     /// Load a session from disk.
-    pub async fn load_session(&mut self, id: &str, config: &ConfigManager) -> anyhow::Result<()> {
+    pub async fn load_session(&mut self, id: &str, config: Arc<Config>) -> anyhow::Result<()> {
         let path = self.storage_dir.join(format!("{id}.json"));
 
         if !session_exists(&path).await {

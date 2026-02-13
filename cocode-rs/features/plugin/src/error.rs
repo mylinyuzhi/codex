@@ -70,6 +70,66 @@ pub enum PluginError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Marketplace not found.
+    #[snafu(display("Marketplace not found: {name}"))]
+    MarketplaceNotFound {
+        name: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Marketplace already exists.
+    #[snafu(display("Marketplace already exists: {name}"))]
+    MarketplaceAlreadyExists {
+        name: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Plugin not installed.
+    #[snafu(display("Plugin not installed: {plugin_id}"))]
+    PluginNotInstalled {
+        plugin_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Installation failed.
+    #[snafu(display("Installation failed for {plugin_id}: {message}"))]
+    InstallationFailed {
+        plugin_id: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Git clone failed.
+    #[snafu(display("Git clone failed for {url}: {message}"))]
+    GitCloneFailed {
+        url: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Cache error.
+    #[snafu(display("Cache error at {}: {message}", path.display()))]
+    CacheError {
+        path: PathBuf,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Registry corrupted.
+    #[snafu(display("Registry corrupted at {}: {message}", path.display()))]
+    RegistryCorrupted {
+        path: PathBuf,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for PluginError {
@@ -82,6 +142,13 @@ impl ErrorExt for PluginError {
             Self::Io { .. } => StatusCode::IoError,
             Self::PathTraversal { .. } => StatusCode::PermissionDenied,
             Self::InvalidVersion { .. } => StatusCode::InvalidConfig,
+            Self::MarketplaceNotFound { .. } => StatusCode::FileNotFound,
+            Self::MarketplaceAlreadyExists { .. } => StatusCode::InvalidArguments,
+            Self::PluginNotInstalled { .. } => StatusCode::FileNotFound,
+            Self::InstallationFailed { .. } => StatusCode::IoError,
+            Self::GitCloneFailed { .. } => StatusCode::IoError,
+            Self::CacheError { .. } => StatusCode::IoError,
+            Self::RegistryCorrupted { .. } => StatusCode::InvalidConfig,
         }
     }
 

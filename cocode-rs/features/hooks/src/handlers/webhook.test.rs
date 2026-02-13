@@ -62,8 +62,7 @@ fn test_parse_webhook_response_invalid() {
 async fn test_execute_nonexistent_url() {
     let ctx = make_ctx();
     // Use a non-routable IP to ensure quick failure
-    let result =
-        WebhookHandler::execute_with_timeout("http://192.0.2.1:9999/hook", &ctx, 1).await;
+    let result = WebhookHandler::execute_with_timeout("http://192.0.2.1:9999/hook", &ctx, 1).await;
     assert!(matches!(result, HookResult::Continue));
 }
 

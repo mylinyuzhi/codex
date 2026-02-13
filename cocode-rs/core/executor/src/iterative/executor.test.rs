@@ -30,8 +30,8 @@ fn test_context_passing_config() {
         auto_commit: true,
         enable_complexity_assessment: false,
     };
-    let executor = IterativeExecutor::new(IterationCondition::Count { max: 3 })
-        .with_context_passing(config);
+    let executor =
+        IterativeExecutor::new(IterationCondition::Count { max: 3 }).with_context_passing(config);
     assert!(executor.context_passing_enabled());
 }
 

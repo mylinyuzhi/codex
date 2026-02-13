@@ -31,8 +31,7 @@ async fn test_cleanup_removes_old_snapshots() {
             tv_nsec: 0,
         };
         let times = [ts, ts];
-        let c_path =
-            std::ffi::CString::new(old_snapshot.as_os_str().as_bytes()).expect("cstring");
+        let c_path = std::ffi::CString::new(old_snapshot.as_os_str().as_bytes()).expect("cstring");
         unsafe {
             libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0);
         }
@@ -86,10 +85,9 @@ async fn test_cleanup_removes_invalid_filenames() {
     let invalid = snapshot_dir.join("no-extension");
     fs::write(&invalid, "# invalid").await.expect("write");
 
-    let removed =
-        cleanup_stale_snapshots(snapshot_dir, "other-session", Duration::from_secs(0))
-            .await
-            .expect("cleanup");
+    let removed = cleanup_stale_snapshots(snapshot_dir, "other-session", Duration::from_secs(0))
+        .await
+        .expect("cleanup");
 
     assert_eq!(removed, 1);
     assert!(!invalid.exists());

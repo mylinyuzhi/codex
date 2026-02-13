@@ -393,14 +393,12 @@ fn test_rules_from_config_integrated() {
     let evaluator = PermissionRuleEvaluator::with_rules(rules);
 
     // "git status" should be allowed
-    let decision =
-        evaluator.evaluate_behavior("Bash", None, RuleAction::Allow, Some("git status"));
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Allow, Some("git status"));
     assert!(decision.is_some());
     assert!(decision.unwrap().result.is_allowed());
 
     // "rm -rf /" should be denied
-    let decision =
-        evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("rm -rf /"));
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("rm -rf /"));
     assert!(decision.is_some());
     assert!(decision.unwrap().result.is_denied());
 }
@@ -415,13 +413,11 @@ fn test_evaluate_behavior_with_command_input() {
     }]);
 
     // "rm -rf /" should be denied
-    let decision =
-        evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("rm -rf /"));
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("rm -rf /"));
     assert!(decision.is_some());
     assert!(decision.unwrap().result.is_denied());
 
     // "git status" should NOT be denied (pattern doesn't match)
-    let decision =
-        evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("git status"));
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("git status"));
     assert!(decision.is_none());
 }

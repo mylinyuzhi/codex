@@ -173,9 +173,9 @@ fn test_find_ignore_files_nested() {
     // Should find all 3 ignore files
     assert!(files.len() >= 3);
     assert!(
-        files.iter().any(|f| {
-            f.ends_with(".ignore") && f.parent().map(|p| p == dir).unwrap_or(false)
-        })
+        files
+            .iter()
+            .any(|f| { f.ends_with(".ignore") && f.parent().map(|p| p == dir).unwrap_or(false) })
     );
     assert!(files.iter().any(|f| {
         f.ends_with(".ignore")

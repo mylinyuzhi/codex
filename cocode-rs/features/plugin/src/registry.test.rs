@@ -17,6 +17,7 @@ fn make_plugin(name: &str, scope: PluginScope) -> LoadedPlugin {
                 min_cocode_version: None,
             },
             contributions: PluginContributions::default(),
+            user_config: std::collections::HashMap::new(),
         },
         path: PathBuf::from(format!("/plugins/{name}")),
         scope,

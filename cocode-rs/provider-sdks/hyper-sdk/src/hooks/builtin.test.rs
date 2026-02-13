@@ -28,8 +28,8 @@ async fn test_response_id_hook_openai() {
 async fn test_response_id_hook_other_provider() {
     let hook = ResponseIdHook::new();
     let mut request = GenerateRequest::new(vec![Message::user("Hello")]);
-    let mut context = HookContext::with_provider("anthropic", "claude-3")
-        .previous_response_id("resp_prev_123");
+    let mut context =
+        HookContext::with_provider("anthropic", "claude-3").previous_response_id("resp_prev_123");
 
     hook.on_request(&mut request, &mut context).await.unwrap();
 

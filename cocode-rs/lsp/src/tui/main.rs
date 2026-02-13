@@ -126,10 +126,11 @@ async fn main() -> Result<()> {
     // Canonicalize the workspace path
     let workspace = args.workspace.canonicalize().unwrap_or(args.workspace);
 
-    // Initialize file-based logging to codex_home/log/lsp.log
-    let log_dir = cocode_lsp::config::find_codex_home()
-        .expect("Could not determine codex home directory")
-        .join("log");
+    // Resolve cocode home directory
+    let cocode_home = cocode_lsp::find_cocode_home();
+
+    // Initialize file-based logging to cocode_home/log/lsp.log
+    let log_dir = cocode_home.join("log");
     std::fs::create_dir_all(&log_dir)?;
 
     let mut log_file_opts = OpenOptions::new();
@@ -175,6 +176,7 @@ async fn main() -> Result<()> {
     // Initialize LSP manager
     let diagnostics = Arc::new(DiagnosticsStore::new());
     let manager = Arc::new(LspServerManager::with_auto_config(
+        Some(&cocode_home),
         Some(&workspace),
         diagnostics.clone(),
     ));
@@ -183,7 +185,7 @@ async fn main() -> Result<()> {
     let mut terminal = setup_terminal()?;
 
     // Create app state
-    let mut app = App::new(workspace, manager, diagnostics);
+    let mut app = App::new(cocode_home, workspace, manager, diagnostics);
 
     // Set initial file if provided
     if let Some(file) = args.file {

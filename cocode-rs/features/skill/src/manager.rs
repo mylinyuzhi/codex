@@ -8,10 +8,15 @@
 //! - Executing skill commands by injecting prompts
 
 use crate::bundled::bundled_skills;
+use crate::command::CommandType;
 use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
+use crate::command::SlashCommand;
 use crate::dedup::dedup_skills;
+use crate::interface::SkillInterface;
 use crate::loader::load_all_skills;
+use crate::local::builtin_local_commands;
+use crate::local::find_local_command;
 use crate::outcome::SkillLoadOutcome;
 use crate::source::LoadedFrom;
 use crate::source::SkillSource;
@@ -242,6 +247,59 @@ impl SkillManager {
     pub fn clear(&mut self) {
         self.skills.clear();
     }
+
+    /// Get all commands (both prompt skills and local commands) as a unified list.
+    ///
+    /// Returns local commands first, then user-visible prompt skills.
+    pub fn all_commands(&self) -> Vec<SlashCommand> {
+        let mut commands: Vec<SlashCommand> = builtin_local_commands()
+            .iter()
+            .map(|cmd| cmd.to_slash_command())
+            .collect();
+
+        for skill in self.user_visible_skills() {
+            commands.push(SlashCommand {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                command_type: CommandType::Prompt,
+            });
+        }
+
+        commands
+    }
+
+    /// Find a command by name across all types (local + prompt skills).
+    ///
+    /// Checks local commands first (by name and alias), then prompt skills.
+    pub fn find_command(&self, name: &str) -> Option<SlashCommand> {
+        // Check local commands first
+        if let Some(cmd) = find_local_command(name) {
+            return Some(cmd.to_slash_command());
+        }
+
+        // Then check prompt skills
+        if let Some(skill) = self.find_by_name_or_alias(name) {
+            if skill.is_user_invocable() {
+                return Some(SlashCommand {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    command_type: CommandType::Prompt,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Check if a command exists (local or prompt skill).
+    pub fn has_command(&self, name: &str) -> bool {
+        find_local_command(name).is_some() || self.has(name)
+    }
+
+    /// Check if a command name refers to a local (built-in) command.
+    pub fn is_local_command(&self, name: &str) -> bool {
+        find_local_command(name).is_some()
+    }
 }
 
 /// Result of executing a skill command.
@@ -270,6 +328,12 @@ pub struct SkillExecutionResult {
 
     /// Base directory of the skill.
     pub base_dir: Option<PathBuf>,
+
+    /// The skill interface (SKILL.toml metadata) for hook registration.
+    ///
+    /// Callers can use this to register skill-scoped hooks via
+    /// [`register_skill_hooks`](crate::register_skill_hooks).
+    pub interface: Option<SkillInterface>,
 }
 
 /// Parse a skill command from user input.
@@ -299,9 +363,22 @@ pub fn parse_skill_command(input: &str) -> Option<(&str, &str)> {
     let mut parts = without_slash.splitn(2, char::is_whitespace);
 
     let name = parts.next()?;
+    if !is_valid_command_name(name) {
+        return None;
+    }
     let args = parts.next().unwrap_or("").trim();
 
     Some((name, args))
+}
+
+/// Check if a command name contains only safe characters.
+///
+/// Valid names consist of ASCII alphanumeric characters, hyphens, underscores, and colons.
+fn is_valid_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
 }
 
 /// Execute a skill command.
@@ -359,6 +436,7 @@ pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecuti
         context: skill.context,
         agent: skill.agent.clone(),
         base_dir: skill.base_dir.clone(),
+        interface: skill.interface.clone(),
     })
 }
 

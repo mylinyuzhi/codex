@@ -86,22 +86,12 @@ pub struct PasteManager {
     pill_regex: Regex,
 }
 
-impl Default for PasteManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PasteManager {
     /// Create a new paste manager.
     ///
-    /// Uses `~/.cocode/paste-cache/` for disk storage.
-    pub fn new() -> Self {
-        let cache_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cocode")
-            .join("paste-cache");
-
+    /// Uses `<cocode_home>/paste-cache/` for disk storage.
+    pub fn new(cocode_home: &std::path::Path) -> Self {
+        let cache_dir = cocode_home.join("paste-cache");
         Self::with_cache_dir(cache_dir)
     }
 

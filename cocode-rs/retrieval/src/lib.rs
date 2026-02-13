@@ -20,7 +20,7 @@
 //!
 //! [retrieval]
 //! enabled = true
-//! data_dir = "~/.codex/retrieval"
+//! data_dir = "~/.cocode/retrieval"
 //! ```
 
 // Core modules
@@ -125,13 +125,38 @@ pub use events::SearchResultSummary;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Resolve the cocode home directory.
+///
+/// Standalone helper for binary entry points.
+/// Library APIs (`RetrievalConfig::load`, `RetrievalFacade::for_workdir`) accept
+/// `cocode_home` as a parameter instead — callers are responsible for resolving it.
+///
+/// Checks `COCODE_HOME` env var first, falls back to `~/.cocode`.
+/// This is a standalone implementation to avoid depending on `cocode-config`.
+pub fn find_cocode_home() -> PathBuf {
+    std::env::var("COCODE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".cocode")
+        })
+}
+
 /// Create a RetrievalFacade for the given working directory.
 ///
 /// This is a convenience function for creating a facade without going through
-/// the global cache. Returns None if retrieval is not enabled in config.
-pub async fn create_manager(cwd: Option<PathBuf>) -> Option<Arc<RetrievalFacade>> {
+/// the global cache. Returns None if retrieval is not enabled in config or
+/// if `cocode_home` is None.
+pub async fn create_manager(
+    cwd: Option<PathBuf>,
+    cocode_home: Option<&std::path::Path>,
+) -> Option<Arc<RetrievalFacade>> {
     let workdir = cwd?;
-    let config = RetrievalConfig::load(&workdir).ok()?;
+    let cocode_home = cocode_home?;
+    let config = RetrievalConfig::load(&workdir, cocode_home).ok()?;
     if !config.enabled {
         return None;
     }

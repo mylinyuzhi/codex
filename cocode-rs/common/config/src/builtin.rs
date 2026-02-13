@@ -232,16 +232,16 @@ fn load_single_style(path: &Path) -> Option<CustomOutputStyle> {
 
 /// Get the default output styles directory.
 ///
-/// Returns `~/.cocode/output-styles/` on Unix-like systems.
-pub fn default_output_styles_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".cocode").join("output-styles"))
+/// Returns `{cocode_home}/output-styles/`.
+pub fn default_output_styles_dir(cocode_home: &std::path::Path) -> PathBuf {
+    cocode_home.join("output-styles")
 }
 
 /// Load all output styles (built-in + custom).
 ///
 /// Returns a combined list with built-in styles first, then custom styles.
 /// Custom styles can shadow built-in styles with the same name.
-pub fn load_all_output_styles() -> Vec<OutputStyleInfo> {
+pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleInfo> {
     let mut styles = Vec::new();
 
     // Add built-in styles
@@ -257,15 +257,14 @@ pub fn load_all_output_styles() -> Vec<OutputStyleInfo> {
     }
 
     // Add custom styles from default directory
-    if let Some(dir) = default_output_styles_dir() {
-        for custom in load_custom_output_styles(&dir) {
-            styles.push(OutputStyleInfo {
-                name: custom.name,
-                description: custom.description,
-                content: custom.content,
-                source: OutputStyleSource::Custom(custom.path),
-            });
-        }
+    let dir = default_output_styles_dir(cocode_home);
+    for custom in load_custom_output_styles(&dir) {
+        styles.push(OutputStyleInfo {
+            name: custom.name,
+            description: custom.description,
+            content: custom.content,
+            source: OutputStyleSource::Custom(custom.path),
+        });
     }
 
     styles
@@ -318,20 +317,19 @@ impl OutputStyleSource {
 ///
 /// Searches both built-in and custom styles. Custom styles take precedence
 /// when there's a name conflict.
-pub fn find_output_style(name: &str) -> Option<OutputStyleInfo> {
+pub fn find_output_style(name: &str, cocode_home: &std::path::Path) -> Option<OutputStyleInfo> {
     let name_lower = name.to_lowercase();
 
     // Check custom styles first (they take precedence)
-    if let Some(dir) = default_output_styles_dir() {
-        for custom in load_custom_output_styles(&dir) {
-            if custom.name.to_lowercase() == name_lower {
-                return Some(OutputStyleInfo {
-                    name: custom.name,
-                    description: custom.description,
-                    content: custom.content,
-                    source: OutputStyleSource::Custom(custom.path),
-                });
-            }
+    let dir = default_output_styles_dir(cocode_home);
+    for custom in load_custom_output_styles(&dir) {
+        if custom.name.to_lowercase() == name_lower {
+            return Some(OutputStyleInfo {
+                name: custom.name,
+                description: custom.description,
+                content: custom.content,
+                source: OutputStyleSource::Custom(custom.path),
+            });
         }
     }
 

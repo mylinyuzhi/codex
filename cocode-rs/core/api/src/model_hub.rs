@@ -55,7 +55,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use cocode_config::ConfigManager;
+use cocode_config::Config;
 use cocode_protocol::ProviderType;
 use cocode_protocol::execution::AgentKind;
 use cocode_protocol::execution::ExecutionIdentity;
@@ -242,7 +242,7 @@ struct CachedModel {
 /// Uses `RwLock` for caches to allow concurrent reads with exclusive writes.
 /// Model/provider creation happens outside locks to avoid blocking.
 pub struct ModelHub {
-    config: Arc<ConfigManager>,
+    config: Arc<Config>,
     /// Cached providers keyed by provider name.
     providers: RwLock<HashMap<String, CachedProvider>>,
     /// Cached models keyed by ModelSpec.
@@ -251,7 +251,7 @@ pub struct ModelHub {
 
 impl ModelHub {
     /// Create a new model hub.
-    pub fn new(config: Arc<ConfigManager>) -> Self {
+    pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,
             providers: RwLock::new(HashMap::new()),
@@ -538,27 +538,25 @@ impl ModelHub {
         // Phase 2: Get or create provider
         let (provider, provider_type) = self.get_or_create_provider(&spec.provider)?;
 
-        // Phase 3: Resolve provider info and model info
-        let provider_info = self.config.resolve_provider(&spec.provider).map_err(|e| {
-            HubError::ProviderResolution {
-                provider: spec.provider.clone(),
-                source: e.into(),
-            }
-        })?;
-
-        // Get model info from config
+        // Phase 3: Resolve model info and alias.
+        // Note: Phase 2 already did a full resolve_provider() inside get_or_create_provider()
+        // (genuinely needed to build the HTTP client). This phase only does lightweight lookups.
         let model_info = self
             .config
             .resolve_model_info(&spec.provider, &spec.model)
-            .map_err(|e| HubError::ModelInfoResolution {
+            .cloned()
+            .ok_or_else(|| HubError::ModelInfoResolution {
                 model: spec.to_string(),
-                source: e.into(),
+                source: anyhow::anyhow!(
+                    "Model '{}' not found in provider '{}'",
+                    spec.model,
+                    spec.provider
+                ),
             })?;
 
-        // Get the actual API model name (handles aliases)
-        let api_model_name = provider_info
-            .api_model_name(&spec.model)
-            .unwrap_or(&spec.model);
+        // Get the actual API model name (handles aliases — O(1) lookup, avoids a second
+        // resolve_provider() that the old code used just for ProviderInfo::api_model_name())
+        let api_model_name = self.config.resolve_model_alias(&spec.provider, &spec.model);
 
         info!(
             provider = %spec.provider,
@@ -568,7 +566,7 @@ impl ModelHub {
         );
 
         let model = provider
-            .model(api_model_name)
+            .model(&api_model_name)
             .map_err(|e| HubError::ModelCreation {
                 provider: spec.provider.clone(),
                 model: spec.model.clone(),
@@ -621,15 +619,15 @@ impl ModelHub {
         }
 
         // Phase 2: Resolve provider info and create provider
-        let provider_info = self.config.resolve_provider(provider_name).map_err(|e| {
+        let provider_info = self.config.resolve_provider(provider_name).ok_or_else(|| {
             HubError::ProviderResolution {
                 provider: provider_name.to_string(),
-                source: e.into(),
+                source: anyhow::anyhow!("Provider '{}' not found in config", provider_name),
             }
         })?;
 
         info!(provider = %provider_name, "Creating provider");
-        let provider = provider_factory::create_provider(&provider_info).map_err(|e| {
+        let provider = provider_factory::create_provider(provider_info).map_err(|e| {
             HubError::ProviderCreation {
                 provider: provider_name.to_string(),
                 source: e,

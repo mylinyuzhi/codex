@@ -66,7 +66,7 @@ impl Tool for KillShellTool {
 
         ctx.emit_progress(format!("Stopping task {task_id}")).await;
 
-        // Get final output before stopping
+        // Try shell background registry first
         let final_output = ctx
             .shell_executor
             .background_registry
@@ -74,18 +74,28 @@ impl Tool for KillShellTool {
             .await
             .unwrap_or_default();
 
-        // Stop the task
         let was_running = ctx.shell_executor.background_registry.stop(task_id).await;
 
         if was_running {
-            Ok(ToolOutput::text(format!(
+            return Ok(ToolOutput::text(format!(
                 "Task {task_id} stopped successfully.\n\nFinal output:\n{final_output}"
-            )))
-        } else {
-            Ok(ToolOutput::error(format!(
-                "Task {task_id} not found. It may have already completed or never started."
-            )))
+            )));
         }
+
+        // Fall through to check background agents via cancel token registry
+        {
+            let mut tokens = ctx.agent_cancel_tokens.lock().await;
+            if let Some(token) = tokens.remove(task_id) {
+                token.cancel();
+                return Ok(ToolOutput::text(format!(
+                    "Agent {task_id} cancelled successfully."
+                )));
+            }
+        }
+
+        Ok(ToolOutput::error(format!(
+            "Task {task_id} not found. It may have already completed or never started."
+        )))
     }
 }
 

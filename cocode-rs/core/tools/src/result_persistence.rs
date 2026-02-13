@@ -1,19 +1,24 @@
 //! Large tool result persistence.
 //!
-//! When tools return very large results (>400K characters by default), this module
-//! persists the full result to disk and returns a truncated preview to save
-//! context window tokens.
+//! When a tool's output exceeds its per-tool `max_result_size_chars()` limit,
+//! this module persists the full result to disk and returns a truncated preview
+//! to save context window tokens.
 //!
 //! ## Usage
+//!
+//! Called from `execute_tool_inner` **before** truncation so the full output
+//! is saved to disk. The per-tool limit (e.g. 30K for Bash, 100K for Read)
+//! is used as the persistence threshold.
 //!
 //! ```ignore
 //! use cocode_tools::result_persistence::persist_if_needed;
 //!
-//! let output = tool.execute(input, ctx).await?;
+//! let per_tool_limit = tool.max_result_size_chars() as usize;
 //! let output = persist_if_needed(
 //!     output,
 //!     &tool_call.id,
 //!     session_dir,
+//!     per_tool_limit,
 //!     &tool_config,
 //! ).await;
 //! ```
@@ -35,7 +40,7 @@ const PERSISTED_OUTPUT_END: &str = "</persisted-output>";
 
 /// Persist large tool result to disk if needed.
 ///
-/// If the result content exceeds `config.max_result_size`, saves the full result
+/// If the result content exceeds `per_tool_limit`, saves the full result
 /// to disk and returns a modified `ToolOutput` containing:
 /// - The file path where the full result was saved
 /// - A preview of the first `config.result_preview_size` characters
@@ -48,7 +53,8 @@ const PERSISTED_OUTPUT_END: &str = "</persisted-output>";
 /// * `output` - The tool execution output
 /// * `tool_use_id` - Unique identifier for this tool call (used as filename)
 /// * `session_dir` - Session directory for storing results
-/// * `config` - Tool configuration with size thresholds
+/// * `per_tool_limit` - Per-tool threshold from `Tool::max_result_size_chars()`
+/// * `config` - Tool configuration for `enable_result_persistence` and `result_preview_size`
 ///
 /// # Returns
 ///
@@ -58,6 +64,7 @@ pub async fn persist_if_needed(
     output: ToolOutput,
     tool_use_id: &str,
     session_dir: &Path,
+    per_tool_limit: usize,
     config: &ToolConfig,
 ) -> ToolOutput {
     // Early return if persistence is disabled
@@ -71,9 +78,8 @@ pub async fn persist_if_needed(
         ToolResultContent::Structured(v) => v.to_string(),
     };
 
-    // Check if content exceeds threshold
-    let max_size = config.max_result_size as usize;
-    if content.len() <= max_size {
+    // Check if content exceeds per-tool threshold
+    if content.len() <= per_tool_limit {
         return output;
     }
 

@@ -23,6 +23,7 @@ fn test_spawn_input_with_identity() {
         max_turns: Some(20),
         run_in_background: true,
         allowed_tools: Some(vec!["Read".to_string(), "Glob".to_string()]),
+        resume_from: None,
     };
     let json = serde_json::to_string(&input).expect("serialize");
     let back: SpawnInput = serde_json::from_str(&json).expect("deserialize");
@@ -43,6 +44,7 @@ fn test_spawn_input_inherit_identity() {
         max_turns: None,
         run_in_background: false,
         allowed_tools: None,
+        resume_from: None,
     };
     assert!(matches!(input.identity, Some(ExecutionIdentity::Inherit)));
 }
@@ -57,6 +59,7 @@ fn test_spawn_input_spec_identity() {
         max_turns: None,
         run_in_background: false,
         allowed_tools: None,
+        resume_from: None,
     };
     if let Some(ExecutionIdentity::Spec(s)) = &input.identity {
         assert_eq!(s, &spec);

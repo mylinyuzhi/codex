@@ -102,8 +102,7 @@ async fn test_stream_idle_timeout_triggers() {
     drop(tx); // Don't send more events, but also don't close cleanly
 
     // Use a very short timeout for testing
-    let mut stream_response =
-        StreamResponse::new(stream).idle_timeout(Duration::from_millis(1));
+    let mut stream_response = StreamResponse::new(stream).idle_timeout(Duration::from_millis(1));
 
     // First event should succeed
     let first = stream_response.next_event().await;

@@ -54,6 +54,8 @@ struct ServerInfo {
 pub struct LspServerManager {
     /// Configuration (RwLock for runtime reload support)
     config: tokio::sync::RwLock<LspServersConfig>,
+    /// Cocode home directory for config reload
+    cocode_home: Option<PathBuf>,
     /// Project root for config reload
     project_root: Option<PathBuf>,
     diagnostics: Arc<DiagnosticsStore>,
@@ -69,11 +71,13 @@ impl LspServerManager {
     /// Create a new server manager with explicit config
     pub fn new(
         config: LspServersConfig,
+        cocode_home: Option<PathBuf>,
         project_root: Option<PathBuf>,
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
         Self {
             config: tokio::sync::RwLock::new(config),
+            cocode_home,
             project_root,
             diagnostics,
             clients: Arc::new(Mutex::new(HashMap::new())),
@@ -84,21 +88,25 @@ impl LspServerManager {
 
     /// Create a new server manager, auto-loading config from standard locations
     pub fn with_auto_config(
+        cocode_home: Option<&Path>,
         project_root: Option<&Path>,
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
-        let codex_home = crate::config::find_codex_home();
-        let config = LspServersConfig::load(codex_home.as_deref(), project_root);
-        Self::new(config, project_root.map(Path::to_path_buf), diagnostics)
+        let config = LspServersConfig::load(cocode_home, project_root);
+        Self::new(
+            config,
+            cocode_home.map(Path::to_path_buf),
+            project_root.map(Path::to_path_buf),
+            diagnostics,
+        )
     }
 
     /// Reload configuration from disk
     ///
     /// This updates the in-memory config to reflect changes made to config files.
     pub async fn reload_config(&self) {
-        let codex_home = crate::config::find_codex_home();
         let new_config =
-            LspServersConfig::load(codex_home.as_deref(), self.project_root.as_deref());
+            LspServersConfig::load(self.cocode_home.as_deref(), self.project_root.as_deref());
         let mut config = self.config.write().await;
         *config = new_config;
         debug!("LSP configuration reloaded");
@@ -782,7 +790,7 @@ impl LspServerManager {
     ///
     /// # Example
     /// ```ignore
-    /// let manager = LspServerManager::new(config, None, diagnostics);
+    /// let manager = LspServerManager::new(config, None, None, diagnostics);
     /// let warmed = manager.prewarm(&[".rs", ".go"], project_root).await;
     /// ```
     pub async fn prewarm(&self, extensions: &[&str], project_root: &Path) -> Vec<String> {

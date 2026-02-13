@@ -33,6 +33,7 @@
 //! ```
 
 use crate::json_config::LoggingConfig;
+use crate::json_config::PermissionsConfig;
 use cocode_protocol::AttachmentConfig;
 use cocode_protocol::CompactConfig;
 use cocode_protocol::Features;
@@ -40,8 +41,12 @@ use cocode_protocol::ModelInfo;
 use cocode_protocol::PathConfig;
 use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderType;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::SandboxMode;
 use cocode_protocol::ToolConfig;
+use cocode_protocol::WebFetchConfig;
+use cocode_protocol::WebSearchConfig;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelRoles;
 use cocode_protocol::model::ModelSpec;
@@ -152,6 +157,36 @@ pub struct Config {
     // ============================================================
     /// Extended path configuration.
     pub path_config: PathConfig,
+
+    // ============================================================
+    // 13. Web Search
+    // ============================================================
+    /// Web search configuration (provider, api_key, max_results).
+    pub web_search_config: WebSearchConfig,
+
+    // ============================================================
+    // 14. Web Fetch
+    // ============================================================
+    /// Web fetch configuration (timeout, max_content_length, user_agent).
+    pub web_fetch_config: WebFetchConfig,
+
+    // ============================================================
+    // 15. Permissions
+    // ============================================================
+    /// Permission rules from config (allow/deny/ask patterns).
+    pub permissions: Option<PermissionsConfig>,
+
+    // ============================================================
+    // 16. Hooks
+    // ============================================================
+    /// Hook definitions from config.json.
+    pub hooks: Vec<crate::json_config::HookConfig>,
+
+    // ============================================================
+    // 17. OpenTelemetry
+    // ============================================================
+    /// OpenTelemetry settings (resolved from JSON config + env vars).
+    pub otel: Option<cocode_otel::config::OtelSettings>,
 }
 
 impl Config {
@@ -228,6 +263,57 @@ impl Config {
         self.sandbox_mode.allows_write()
     }
 
+    /// Get `ProviderInfo` by name (for ModelHub provider creation).
+    pub fn resolve_provider(&self, name: &str) -> Option<&ProviderInfo> {
+        self.providers.get(name)
+    }
+
+    /// Get `ModelInfo` for a specific provider/model (for ModelHub model creation).
+    pub fn resolve_model_info(&self, provider: &str, model: &str) -> Option<&ModelInfo> {
+        self.providers
+            .get(provider)
+            .and_then(|p| p.models.get(model))
+            .map(|m| &m.info)
+    }
+
+    /// Get API model name (alias) for a provider/model (for ModelHub model creation).
+    ///
+    /// Returns the alias if set and non-empty, otherwise returns the slug.
+    pub fn resolve_model_alias<'a>(&'a self, provider: &str, model: &'a str) -> &'a str {
+        self.providers
+            .get(provider)
+            .and_then(|p| p.models.get(model))
+            .and_then(|m| m.model_alias.as_deref())
+            .unwrap_or(model)
+    }
+
+    /// Get `ProviderType` by name.
+    pub fn provider_type(&self, name: &str) -> Option<ProviderType> {
+        self.providers.get(name).map(|p| p.provider_type)
+    }
+
+    /// Build `RoleSelection`s for all configured models across all providers.
+    ///
+    /// Used by the TUI model picker.
+    pub fn all_model_selections(&self) -> Vec<RoleSelection> {
+        let mut selections = Vec::new();
+        for (provider_name, provider_info) in &self.providers {
+            for (slug, provider_model) in &provider_info.models {
+                let info = &provider_model.info;
+                let spec = ModelSpec::with_type(provider_name, provider_info.provider_type, slug)
+                    .with_display_name(info.display_name_or_slug());
+
+                let mut selection = match info.default_thinking_level {
+                    Some(ref level) => RoleSelection::with_thinking(spec, level.clone()),
+                    None => RoleSelection::new(spec),
+                };
+                selection.supported_thinking_levels = info.supported_thinking_levels.clone();
+                selections.push(selection);
+            }
+        }
+        selections
+    }
+
     /// Check if a path is writable under current sandbox mode.
     pub fn is_path_writable(&self, path: &std::path::Path) -> bool {
         match self.sandbox_mode {
@@ -263,6 +349,11 @@ impl Default for Config {
             plan_config: PlanModeConfig::default(),
             attachment_config: AttachmentConfig::default(),
             path_config: PathConfig::default(),
+            web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
+            permissions: None,
+            hooks: Vec::new(),
+            otel: None,
         }
     }
 }

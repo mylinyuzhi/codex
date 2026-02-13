@@ -256,6 +256,10 @@ pub enum TuiCommand {
     /// steering system-reminder that asks the model to address the message.
     QueueInput,
 
+    // ========== Background ==========
+    /// Background all running foreground tasks (Ctrl+B).
+    BackgroundAllTasks,
+
     // ========== Quit ==========
     /// Request to quit the application.
     Quit,
@@ -352,6 +356,9 @@ impl std::fmt::Display for TuiCommand {
                 write!(f, "{}", t!("command.paste_from_clipboard"))
             }
             TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
+            TuiCommand::BackgroundAllTasks => {
+                write!(f, "{}", t!("command.background_all_tasks"))
+            }
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }

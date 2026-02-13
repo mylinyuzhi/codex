@@ -1,5 +1,6 @@
 use super::*;
 use cocode_protocol::ReasoningEffort;
+use cocode_protocol::model::ModelSpec;
 
 #[test]
 fn test_user_command_display() {
@@ -21,7 +22,7 @@ fn test_user_command_display() {
     assert!(cmd.to_string().contains("High"));
 
     let cmd = UserCommand::SetModel {
-        model: "claude-sonnet-4".to_string(),
+        selection: RoleSelection::new(ModelSpec::new("anthropic", "claude-sonnet-4")),
     };
     assert!(cmd.to_string().contains("claude-sonnet-4"));
 
@@ -100,7 +101,7 @@ fn test_triggers_turn() {
     assert!(!UserCommand::SetPlanMode { active: true }.triggers_turn());
     assert!(
         !UserCommand::SetModel {
-            model: "test".to_string()
+            selection: RoleSelection::new(ModelSpec::new("test", "test"))
         }
         .triggers_turn()
     );

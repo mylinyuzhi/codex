@@ -6,6 +6,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
+use std::hash::Hash;
 use std::str::FromStr;
 
 /// Resolve a provider string to a ProviderType enum.
@@ -54,7 +55,7 @@ pub fn resolve_provider_type(provider: &str) -> ProviderType {
 /// assert_eq!(spec.provider_type, ProviderType::Anthropic);
 /// assert_eq!(spec.to_string(), "anthropic/claude-opus-4");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct ModelSpec {
     /// Provider name (e.g., "anthropic", "openai", "genai").
     pub provider: String,
@@ -62,6 +63,27 @@ pub struct ModelSpec {
     pub provider_type: ProviderType,
     /// Model ID (e.g., "claude-opus-4", "gpt-5").
     pub model: String,
+    /// Human-readable display name (e.g., "GPT-5"). Defaults to slug.
+    /// Not part of identity (excluded from PartialEq/Hash/Serialize).
+    pub display_name: String,
+}
+
+impl PartialEq for ModelSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.provider == other.provider
+            && self.provider_type == other.provider_type
+            && self.model == other.model
+    }
+}
+
+impl Eq for ModelSpec {}
+
+impl Hash for ModelSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.provider.hash(state);
+        self.provider_type.hash(state);
+        self.model.hash(state);
+    }
 }
 
 impl ModelSpec {
@@ -71,10 +93,13 @@ impl ModelSpec {
     pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
         let provider = provider.into();
         let provider_type = resolve_provider_type(&provider);
+        let model = model.into();
+        let display_name = model.clone();
         Self {
             provider,
             provider_type,
-            model: model.into(),
+            model,
+            display_name,
         }
     }
 
@@ -87,11 +112,20 @@ impl ModelSpec {
         provider_type: ProviderType,
         model: impl Into<String>,
     ) -> Self {
+        let model = model.into();
+        let display_name = model.clone();
         Self {
             provider: provider.into(),
             provider_type,
-            model: model.into(),
+            model,
+            display_name,
         }
+    }
+
+    /// Set a custom display name.
+    pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = name.into();
+        self
     }
 }
 
@@ -130,7 +164,13 @@ impl FromStr for ModelSpec {
 
 impl From<(String, ProviderType, String)> for ModelSpec {
     fn from((provider, provider_type, model): (String, ProviderType, String)) -> Self {
-        Self::with_type(provider, provider_type, model)
+        let display_name = model.clone();
+        Self {
+            provider,
+            provider_type,
+            model,
+            display_name,
+        }
     }
 }
 

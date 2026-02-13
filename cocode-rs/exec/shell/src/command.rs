@@ -92,6 +92,22 @@ pub struct CommandInput {
     pub run_in_background: bool,
 }
 
+/// Result of a foreground command execution that may be backgrounded mid-flight.
+///
+/// Used by [`ShellExecutor::execute_backgroundable`] to indicate whether
+/// the command completed normally or was transitioned to background by the
+/// user (e.g. via Ctrl+B).
+#[derive(Debug)]
+pub enum ExecuteResult {
+    /// Command completed normally.
+    Completed(CommandResult),
+    /// Command was transitioned to background by user (Ctrl+B).
+    Backgrounded {
+        /// The background task ID assigned to the command.
+        task_id: String,
+    },
+}
+
 #[cfg(test)]
 #[path = "command.test.rs"]
 mod tests;

@@ -311,8 +311,7 @@ fn test_load_custom_output_styles_with_files() {
     let tmp = tempfile::tempdir().expect("create temp dir");
 
     // Create a simple style file
-    std::fs::write(tmp.path().join("concise.md"), "Be concise and direct.")
-        .expect("write file");
+    std::fs::write(tmp.path().join("concise.md"), "Be concise and direct.").expect("write file");
 
     // Create a style with frontmatter
     std::fs::write(
@@ -363,7 +362,8 @@ fn test_load_custom_output_styles_ignores_non_md() {
 
 #[test]
 fn test_find_output_style_builtin() {
-    let style = find_output_style("explanatory").unwrap();
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let style = find_output_style("explanatory", tmp.path()).unwrap();
     assert_eq!(style.name, "explanatory");
     assert!(style.source.is_builtin());
     assert!(style.content.contains("Explanatory Style Active"));
@@ -371,9 +371,10 @@ fn test_find_output_style_builtin() {
 
 #[test]
 fn test_find_output_style_case_insensitive() {
-    let style1 = find_output_style("EXPLANATORY").unwrap();
-    let style2 = find_output_style("Explanatory").unwrap();
-    let style3 = find_output_style("explanatory").unwrap();
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let style1 = find_output_style("EXPLANATORY", tmp.path()).unwrap();
+    let style2 = find_output_style("Explanatory", tmp.path()).unwrap();
+    let style3 = find_output_style("explanatory", tmp.path()).unwrap();
 
     assert_eq!(style1.content, style2.content);
     assert_eq!(style2.content, style3.content);
@@ -381,7 +382,8 @@ fn test_find_output_style_case_insensitive() {
 
 #[test]
 fn test_find_output_style_not_found() {
-    let style = find_output_style("nonexistent-style");
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let style = find_output_style("nonexistent-style", tmp.path());
     assert!(style.is_none());
 }
 
@@ -398,7 +400,8 @@ fn test_output_style_source() {
 
 #[test]
 fn test_load_all_output_styles() {
-    let styles = load_all_output_styles();
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let styles = load_all_output_styles(tmp.path());
 
     // Should have at least the built-in styles
     assert!(styles.len() >= 2);

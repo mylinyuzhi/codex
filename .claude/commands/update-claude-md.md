@@ -1,217 +1,132 @@
 ---
-allowed-tools: Read, Glob, Grep, Write
-description: Optimize CLAUDE.md for better LLM project understanding
+allowed-tools: Read, Glob, Grep, Write, Bash(ls *), Bash(wc *)
+description: Regenerate CLAUDE.md from workspace discovery (zero hardcoded content)
 argument-hint: [target-file-path]
 ---
 
 ## Context
 
 - Target file: $ARGUMENTS (default: CLAUDE.md in project root)
-- Workspace Cargo.toml: !`cat cocode-rs/Cargo.toml | head -60`
-- Existing CLAUDE.md files: !`find cocode-rs -name "CLAUDE.md" -type f 2>/dev/null`
-- Current CLAUDE.md line count: !`wc -l CLAUDE.md 2>/dev/null || echo "not found"`
+- Workspace root: !`ls cocode-rs/Cargo.toml`
+- Existing CLAUDE.md line count: !`wc -l CLAUDE.md`
 
 ## Goal
 
-Optimize the CLAUDE.md file to **maximize LLM's ability to understand and work with the project**.
+Regenerate CLAUDE.md by **discovering** all project structure at runtime. This command contains **zero hardcoded crate names, layer names, or architecture content** — everything is derived from the workspace.
 
-## Optimization Principles
+## Principles
 
-Apply these principles to maximize LLM understanding:
+- **Concise but informative**: tables over prose; include key types for non-trivial crates, but cover every crate
+- **No arbitrary line limit**: completeness over brevity. A 56-crate workspace needs more room than a 10-crate one
+- **Progressive disclosure**: main file gives overview, links to detailed docs
+- **Single source of truth**: reference AGENTS.md for conventions, don't duplicate
+- **No inline code examples**: link to source instead
 
-### 1. Conciseness (Context Window Efficiency)
-- **Target**: <200 lines
-- Remove inline code examples (link to source instead)
-- Remove duplicated content (reference AGENTS.md for conventions)
+## Procedure
 
-### 2. Progressive Disclosure
-- Main file gives overview, links to detailed docs
-- LLM can read specialized docs only when needed
-- Link to component-specific CLAUDE.md files
+### Step 1: Discover Workspace
 
-### 3. Structured Navigation
-- Use tables for crate purposes, not prose
-- One-line descriptions per crate
-- Group crates by layer
+1. **Parse crate list**: Read `cocode-rs/Cargo.toml`, extract all paths from `[workspace] members` (resolve globs by listing matching directories)
 
-### 4. Architecture Visibility
-- Include ASCII art layer diagram
-- Show dependency flow: Common → Core → App
+2. **Gather crate metadata**: For each crate path, determine its name, purpose, and key types:
+   - First: read the crate's `Cargo.toml` for `name` and `description` fields
+   - Fallback: read `src/lib.rs` (or `src/main.rs`) first 10 lines for Rust crate-level doc comments
+   - Last resort: infer purpose from the crate name itself
+   - **Key types discovery** (non-Utils crates only): scan `src/lib.rs` for `pub struct`, `pub trait`, `pub enum`, and `pub use` (re-exports) to identify the primary public types. Record the most important ones (aim for 3-8 per crate) to populate the `Key Types` column in crate tables. Include brief parenthetical notes for the most important types (e.g. `ConfigManager (thread-safe, RwLock)`).
 
-### 5. Complete Coverage
-- Document ALL workspace crates
-- No blind spots for LLM
+3. **Auto-derive layers**: Group crates by their first path component (e.g. `common/`, `core/`, `app/`, `provider-sdks/`, `utils/`, `exec/`, `features/`, `mcp/`). Crates at the top level of `cocode-rs/` (not in a subdirectory group) form a "Standalone" layer. Derive layer display names from the path prefix (e.g. `provider-sdks` → "Provider SDKs"). Sort layers in dependency order: Common → Provider SDKs → Core → App, with others (Features, Exec, MCP, Standalone, Utils) in between as appropriate.
 
-### 6. No Duplication
-- Reference AGENTS.md for code conventions
-- Single source of truth per topic
+4. **Find specialized docs**: Glob for `cocode-rs/**/CLAUDE.md` — these get linked in a "Specialized Documentation" table.
 
-## Task
+5. **Read dev commands**: Read `cocode-rs/justfile` to extract the key development commands (fmt, pre-commit, test, help, etc.).
 
-### Step 1: Analyze Current State
+6. **Scan error patterns**: For each layer, check whether crates use `snafu` or `anyhow` by grepping their `Cargo.toml` dependencies. Summarize as a table.
 
-1. Read existing CLAUDE.md (if exists) and note:
-   - Current line count (target: <200)
-   - Which crates are documented
-   - Any duplicated content (should reference AGENTS.md instead)
-   - Any inline code examples (should be removed or linked)
+7. **Preserve human-authored sections**: Read the existing CLAUDE.md. Identify sections that contain human-authored design decisions, references, or notes that are NOT auto-generated crate tables. Preserve their content in the regenerated file.
 
-2. Read `cocode-rs/Cargo.toml` to get complete crate list from `[workspace] members`
+8. **Discover data flows**: Read key orchestration files to identify the major request lifecycle paths through the system. Focus on:
+   - The agent loop driver (in `core/loop`) — trace the multi-turn cycle from user input through system reminders, prompt building, tool definitions, API streaming, tool execution, hooks, message history, compaction, and loop events
+   - The configuration resolution chain (in `common/config`) — trace from JSON files + env vars through loading, resolving, and runtime overrides to config snapshots consumed by core
+   - The provider call chain (from `common/config` through `provider-sdks/hyper-sdk` to `core/api`) — trace how a provider is resolved, a model instantiated, and a streaming request made with retry/fallback
+   - The shell execution flow (from tools through `exec/shell`) — trace command safety analysis, sandbox checking, shell spawning, and CWD tracking
 
-3. Identify gaps:
-   - Undocumented crates
-   - Missing architecture overview
-   - Missing links to specialized CLAUDE.md files
+   For each flow, produce an ASCII flow diagram showing crate names and key types at each stage. These diagrams should be **discovered from the actual code**, not hardcoded.
 
-### Step 2: Discover Project Structure
+9. **Discover design patterns**: Scan the workspace for cross-cutting design patterns by grepping for characteristic signatures:
+   - `Arc<Mutex` / `Arc<RwLock` → shared state pattern (note which crates use it heavily)
+   - `CancellationToken` → cancellation pattern
+   - `mpsc::Sender` / `watch::Sender` → event-driven pattern
+   - Builder structs (types ending in `Builder`) → builder pattern
+   - `#[async_trait]` + `pub trait` → trait abstraction pattern
+   - `is_meta` / meta messages → meta message pattern
+   - Callback function types (`Fn`, `Box<dyn Fn`) → callback decoupling pattern
+   - Facade types → facade pattern
 
-1. Parse workspace members from Cargo.toml
-2. Group crates by layer (infer from path):
+   Summarize as a "Key Design Patterns" table with columns: Pattern | Where | Details. Only include patterns that are actually found in the codebase.
 
-| Path Prefix | Layer | Purpose |
-|-------------|-------|---------|
-| `common/` | Common | Foundational types, errors, config |
-| `provider-sdks/` | Provider SDKs | LLM provider API clients |
-| `core/` | Core | Business logic, agent loop |
-| `app/` | App | User-facing (CLI, TUI) |
-| `exec/` | Exec | Execution environment |
-| `features/` | Features | Optional capabilities |
-| `mcp/` | MCP | Model Context Protocol |
-| `utils/` | Utils | Utilities |
-| Top-level | Standalone | Independent components |
+### Step 2: Generate Architecture Diagram
 
-3. For each crate, determine purpose from:
-   - Cargo.toml `description` field (if present)
-   - Crate name (descriptive)
-   - Key dependencies (infer purpose)
+Build an ASCII art layer diagram **from the discovered layers and crate names**. Do NOT use a static template. The diagram should:
+- Show layers as horizontal bands, ordered by dependency (bottom = foundational)
+- List crate names within each layer
+- Show key dependency arrows where obvious (e.g. loop → executor → api)
+- For layers with many crates (e.g. Utils), show a count instead of listing all names
 
-4. Find specialized CLAUDE.md files: `cocode-rs/**/CLAUDE.md`
+### Step 3: Compose CLAUDE.md
 
-### Step 3: Generate Optimized CLAUDE.md
+Assemble the file in this section order:
 
-Create the file with this structure (~150-180 lines):
-
-```
-# CLAUDE.md
-
-[One-liner description]
-
-**Read `AGENTS.md` for Rust conventions.** This file covers architecture and crate navigation.
-
-## Commands
-
-Run from `cocode-rs/` directory:
-
-```bash
-just fmt          # After Rust changes (auto-approve)
-just pre-commit   # REQUIRED before commit
-just test         # If changed provider-sdks or core crates
-just help         # All commands
-```
-
-## Architecture
-
-[ASCII art diagram showing layers and dependencies]
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  App Layer: cli, tui, session                                   │
-├─────────────────────────────────────────────────────────────────┤
-│  Core Layer: loop → executor → api                              │
-│              ↓         ↓                                        │
-│           tools ← context ← prompt                              │
-│              ↓                                                  │
-│        message, system-reminder, subagent                       │
-├─────────────────────────────────────────────────────────────────┤
-│  Features: skill, hooks, plugin, plan-mode                      │
-│  Exec: shell, sandbox, arg0                                     │
-│  MCP: mcp-types, rmcp-client                                    │
-│  Standalone: retrieval, lsp                                     │
-├─────────────────────────────────────────────────────────────────┤
-│  Provider SDKs: hyper-sdk → anthropic, openai, google-genai,    │
-│                             volcengine-ark, z-ai                │
-├─────────────────────────────────────────────────────────────────┤
-│  Common: protocol, config, error, otel                          │
-│  Utils: [count] utility crates                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Crate Guide ([total] crates)
-
-### Common ([count])
-| Crate | Purpose |
-|-------|---------|
-| ... | ... |
-
-### Provider SDKs ([count])
-| Crate | Purpose |
-|-------|---------|
-| ... | ... |
-
-### Core ([count])
-| Crate | Purpose |
-|-------|---------|
-| ... | ... |
-
-[Continue for all layers...]
-
-## Error Handling
-
-| Layer | Error Type |
-|-------|------------|
-| common/, core/ | `cocode-error` + snafu |
-| provider-sdks/, utils/ | `anyhow::Result` |
-
-See [common/error/README.md](cocode-rs/common/error/README.md) for patterns and StatusCode list.
-
-## Specialized Documentation
-
-| Component | Guide |
-|-----------|-------|
-| TUI | [app/tui/CLAUDE.md](cocode-rs/app/tui/CLAUDE.md) |
-| ... | ... |
-
-## References
-
-- **Code conventions**: `AGENTS.md`
-- **Error codes**: `cocode-rs/common/error/README.md`
-- **User docs**: `docs/` (getting-started.md, config.md, sandbox.md)
-```
+1. **Title + one-liner** — e.g. "Multi-provider LLM SDK and CLI. All development in `cocode-rs/`."
+2. **AGENTS.md reference** — "Read `AGENTS.md` for Rust conventions."
+3. **Commands** — from justfile discovery (Step 1.5)
+4. **Architecture** — generated diagram (Step 2)
+5. **Key Data Flows** — ASCII flow diagrams for agent turn lifecycle, configuration resolution, provider call chain, and shell execution flow (Step 1.8)
+6. **Crate Guide** — one table per layer. For non-Utils layers, use columns: `Crate | Purpose | Key Types` (from Step 1.2). For Utils layer, use columns: `Crate | Purpose` (too many small crates for type enumeration). Include layer crate count in heading.
+7. **Key Design Patterns** — table from Step 1.9 with columns: Pattern | Where | Details
+8. **Error Handling** — from error pattern scan (Step 1.6)
+9. **Specialized Documentation** — table linking all discovered CLAUDE.md files (Step 1.4)
+10. **Preserved sections** — Design Decisions, References, or any other human-authored sections from Step 1.7
+11. **References** — links to AGENTS.md, error docs, user docs
 
 ### Step 4: Write and Verify
 
-1. Write the optimized CLAUDE.md to the target file
-2. Count lines (must be <200)
-3. Verify all workspace crates are documented
-4. Verify all linked CLAUDE.md files exist
+Write the file, then verify:
 
-### Step 5: Report Results
+1. **Crate coverage**: count of crates in generated file == count of workspace members (exact match). List any missing crates as errors.
+2. **Link check**: every file path referenced in the CLAUDE.md actually exists on disk.
+3. **CLAUDE.md coverage**: every discovered `**/CLAUDE.md` file is linked in the Specialized Documentation table.
+4. **Data flow coverage**: at least 3 data flow diagrams are present in the Key Data Flows section.
+5. **Key types coverage**: every non-Utils crate table has a `Key Types` column with entries for each crate.
+
+If any check fails, fix the issue and re-verify before proceeding.
+
+### Step 5: Report
 
 Output a summary:
 
 ```
-## CLAUDE.md Optimization Complete
+## CLAUDE.md Regeneration Complete
 
 | Metric | Before | After |
 |--------|--------|-------|
 | Line count | X | Y |
-| Crates documented | X | Y (all) |
+| Crates documented | X/N | Y/N |
 | Specialized docs linked | X | Y |
 
-### Changes Applied
-- [List of optimizations made]
-
 ### Verification
-- [ ] Line count < 200
-- [ ] All workspace crates documented
-- [ ] All linked files exist
-- [ ] No duplicated content from AGENTS.md
+- [ ] All workspace crates documented (exact match)
+- [ ] All file links valid
+- [ ] All CLAUDE.md files linked
+- [ ] At least 3 data flow diagrams present
+- [ ] Non-Utils crate tables include Key Types column
 ```
 
-## Important Notes
+## Important Rules
 
-- Do NOT duplicate content from AGENTS.md (code conventions, error patterns)
-- Do NOT include inline code examples (link to source files instead)
-- Do NOT use prose descriptions for crates (use tables)
-- Do NOT skip any workspace crates (complete coverage)
-- Each crate description should be ONE LINE maximum
+- Do NOT hardcode any crate names, layer names, or architecture content in this command
+- Do NOT duplicate content from AGENTS.md
+- Do NOT include inline code examples (link to source files)
+- Do NOT use prose for crate descriptions (use tables; concise but informative entries with key types for non-Utils crates)
+- Do NOT skip any workspace crate (complete coverage is mandatory)
+- Do NOT impose an arbitrary line limit — let completeness drive length
+- DO preserve human-authored sections (Design Decisions, etc.) from the existing file

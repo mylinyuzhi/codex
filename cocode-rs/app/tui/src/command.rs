@@ -4,6 +4,7 @@
 //! to the core agent loop for processing.
 
 use cocode_protocol::ApprovalDecision;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::SubmissionId;
 use cocode_protocol::ThinkingLevel;
 use hyper_sdk::ContentBlock;
@@ -41,8 +42,8 @@ pub enum UserCommand {
 
     /// Set the model to use.
     SetModel {
-        /// The model identifier.
-        model: String,
+        /// The complete model selection (provider + model + optional thinking level).
+        selection: RoleSelection,
     },
 
     /// Respond to a permission/approval request.
@@ -69,6 +70,11 @@ pub enum UserCommand {
         /// The prompt to queue.
         prompt: String,
     },
+
+    /// Background all running foreground tasks (Ctrl+B).
+    ///
+    /// Transitions all foreground subagents to background execution.
+    BackgroundAllTasks,
 
     /// Clear all queued commands.
     ClearQueues,
@@ -129,7 +135,9 @@ impl std::fmt::Display for UserCommand {
             UserCommand::SetThinkingLevel { level } => {
                 write!(f, "SetThinkingLevel({:?})", level.effort)
             }
-            UserCommand::SetModel { model } => write!(f, "SetModel({model})"),
+            UserCommand::SetModel { selection } => {
+                write!(f, "SetModel({})", selection.model)
+            }
             UserCommand::ApprovalResponse {
                 request_id,
                 decision,
@@ -151,6 +159,7 @@ impl std::fmt::Display for UserCommand {
                 };
                 write!(f, "QueueCommand({preview:?})")
             }
+            UserCommand::BackgroundAllTasks => write!(f, "BackgroundAllTasks"),
             UserCommand::ClearQueues => write!(f, "ClearQueues"),
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }

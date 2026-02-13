@@ -44,6 +44,7 @@ pub use crate::theme::Theme;
 pub use crate::theme::ThemeName;
 
 use cocode_protocol::ReasoningEffort;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::ThinkingLevel;
 
 /// The complete application state.
@@ -72,10 +73,10 @@ impl AppState {
         }
     }
 
-    /// Create a new application state with the specified model.
-    pub fn with_model(model: impl Into<String>) -> Self {
+    /// Create a new application state with the specified selection.
+    pub fn with_selection(selection: RoleSelection) -> Self {
         let mut state = Self::new();
-        state.session.current_model = model.into();
+        state.session.current_selection = Some(selection);
         state
     }
 
@@ -90,19 +91,54 @@ impl AppState {
         tracing::info!(plan_mode = self.session.plan_mode, "Plan mode toggled");
     }
 
-    /// Cycle to the next thinking level.
+    /// Cycle to the next thinking level (model-aware).
     pub fn cycle_thinking_level(&mut self) {
-        let next_effort = match self.session.thinking_level.effort {
-            ReasoningEffort::None => ReasoningEffort::Low,
-            ReasoningEffort::Minimal => ReasoningEffort::Low,
-            ReasoningEffort::Low => ReasoningEffort::Medium,
-            ReasoningEffort::Medium => ReasoningEffort::High,
-            ReasoningEffort::High => ReasoningEffort::XHigh,
-            ReasoningEffort::XHigh => ReasoningEffort::None,
+        let Some(ref mut selection) = self.session.current_selection else {
+            return;
         };
-        self.session.thinking_level = ThinkingLevel::new(next_effort);
+
+        let current_effort = selection.effective_thinking_level().effort;
+
+        // Supported efforts from model; if unspecified, use full set
+        let supported: Vec<ReasoningEffort> = selection
+            .supported_thinking_levels
+            .as_ref()
+            .map(|levels| levels.iter().map(|l| l.effort).collect())
+            .unwrap_or_else(|| {
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::XHigh,
+                ]
+            });
+        if supported.is_empty() {
+            return;
+        }
+
+        // Cycle: None → supported[0] → ... → supported[N-1] → None
+        let next_effort = if current_effort == ReasoningEffort::None {
+            Some(supported[0])
+        } else {
+            match supported.iter().position(|&e| e == current_effort) {
+                Some(i) if i + 1 < supported.len() => Some(supported[i + 1]),
+                _ => None,
+            }
+        };
+
+        match next_effort {
+            Some(effort) => {
+                let level = selection
+                    .supported_thinking_levels
+                    .as_ref()
+                    .and_then(|levels| levels.iter().find(|l| l.effort == effort).cloned())
+                    .unwrap_or_else(|| ThinkingLevel::new(effort));
+                selection.set_thinking_level(level);
+            }
+            None => selection.clear_thinking_level(),
+        }
         tracing::info!(
-            thinking_level = ?self.session.thinking_level.effort,
+            thinking_level = ?selection.effective_thinking_level().effort,
             "Thinking level cycled"
         );
     }

@@ -17,6 +17,7 @@ use crate::error::config_error::ConfigValidationSnafu;
 use crate::error::config_error::NotFoundSnafu;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
+use crate::types::ProviderType;
 use crate::types::ProvidersFile;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
@@ -308,6 +309,15 @@ impl ConfigResolver {
 
         // Fall back to config
         config.api_key.clone()
+    }
+
+    /// Get the provider type by name (O(1) HashMap lookup, no resolution).
+    pub fn provider_type(&self, provider_name: &str) -> Result<ProviderType, ConfigError> {
+        let config = self.providers.get(provider_name).context(NotFoundSnafu {
+            kind: NotFoundKind::Provider,
+            name: provider_name.to_string(),
+        })?;
+        Ok(config.provider_type)
     }
 
     /// Check if a provider is configured.

@@ -303,8 +303,7 @@ fn run_returns_matches_for_query() {
         compute_indices: false,
         respect_gitignore: true,
     };
-    let results =
-        run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");
+    let results = run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");
 
     assert!(!results.matches.is_empty());
     assert!(results.total_match_count >= results.matches.len());

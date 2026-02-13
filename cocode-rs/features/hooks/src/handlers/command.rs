@@ -65,6 +65,13 @@ pub struct HookOutput {
     /// delivered via system reminders when it completes.
     #[serde(default, rename = "async")]
     pub is_async: bool,
+
+    /// Permission decision override for PreToolUse hooks.
+    ///
+    /// When set to "allow", auto-approves the tool without user confirmation.
+    /// When set to "deny", blocks the tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<String>,
 }
 
 impl HookOutput {
@@ -76,6 +83,14 @@ impl HookOutput {
             return HookResult::Async {
                 task_id,
                 hook_name: hook_name.unwrap_or("unknown").to_string(),
+            };
+        }
+
+        // Permission decision override (PreToolUse hooks)
+        if let Some(decision) = self.permission_decision {
+            return HookResult::PermissionOverride {
+                decision,
+                reason: self.stop_reason,
             };
         }
 

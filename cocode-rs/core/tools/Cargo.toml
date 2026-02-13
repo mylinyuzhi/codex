@@ -20,6 +20,7 @@ cocode-file-ignore.workspace = true
 cocode-plan-mode.workspace = true
 cocode-lsp.workspace = true
 cocode-skill.workspace = true
+cocode-otel.workspace = true
 hyper-sdk.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
@@ -36,7 +37,11 @@ snafu.workspace = true
 snafu-virtstack.workspace = true
 anyhow.workspace = true
 regex-lite.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+lru.workspace = true
+urlencoding.workspace = true
 sha2.workspace = true
+html2text.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -6,6 +6,7 @@
 //! supporting apply_patch and sandbox invocation via PATH hijacking.
 
 mod commands;
+mod otel_init;
 mod output;
 mod repl;
 mod tui_runner;

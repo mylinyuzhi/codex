@@ -82,12 +82,24 @@ pub enum ToolError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Tool execution was cancelled via CancellationToken.
+    #[snafu(display("Cancelled"))]
+    Cancelled {
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ToolError {
     /// Check if this is a retriable error.
     pub fn is_retriable(&self) -> bool {
         matches!(self, ToolError::Timeout { .. } | ToolError::Io { .. })
+    }
+
+    /// Check if this error is a cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, ToolError::Cancelled { .. })
     }
 
     /// Convert to tool output error message.
@@ -108,6 +120,7 @@ impl ErrorExt for ToolError {
             ToolError::Io { .. } => StatusCode::IoError,
             ToolError::Internal { .. } => StatusCode::Internal,
             ToolError::HookRejected { .. } => StatusCode::PermissionDenied, // Hook rejection is a form of denial
+            ToolError::Cancelled { .. } => StatusCode::Cancelled,
         }
     }
 

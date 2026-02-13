@@ -179,6 +179,52 @@ impl ConfigManager {
         resolver.resolve_model_info(provider, model)
     }
 
+    /// Get the provider type by name (O(1) HashMap lookup, no resolution).
+    ///
+    /// This is much cheaper than `resolve_provider()` when you only need
+    /// the `ProviderType` — it skips API key validation and model resolution.
+    pub fn provider_type(&self, provider: &str) -> Result<ProviderType, ConfigError> {
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+        resolver.provider_type(provider)
+    }
+
+    /// Resolve a model alias to its API model name (O(1) lookup, no resolution).
+    ///
+    /// Returns the alias if set and non-empty, otherwise returns the slug.
+    /// The result is an owned `String` because the resolver is behind a `RwLock`.
+    pub fn resolve_model_alias(&self, provider: &str, model: &str) -> Result<String, ConfigError> {
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+        Ok(resolver.resolve_model_alias(provider, model).to_string())
+    }
+
+    /// List model slugs configured for a provider (O(1) lookup, no resolution).
+    ///
+    /// This is cheaper than `list_models()` which resolves each model's full
+    /// `ModelInfo`. Use this when you only need the slug strings.
+    pub fn list_model_slugs(&self, provider: &str) -> Result<Vec<String>, ConfigError> {
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+        Ok(resolver
+            .list_models(provider)
+            .into_iter()
+            .map(String::from)
+            .collect())
+    }
+
     /// Resolve provider configuration into a complete `ProviderInfo`.
     ///
     /// The returned `ProviderInfo` contains:
@@ -506,6 +552,58 @@ impl ConfigManager {
         }
 
         Ok(updated)
+    }
+
+    /// Build a `RoleSelection` for a provider/model pair, resolving provider_type
+    /// and the model's default thinking level from `ModelInfo`.
+    pub fn resolve_selection(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<RoleSelection, ConfigError> {
+        let provider_type = self.provider_type(provider)?;
+        let mut spec = ModelSpec::with_type(provider, provider_type, model);
+        let model_info = self.resolve_model_info(provider, model).ok();
+
+        if let Some(ref info) = model_info {
+            spec.display_name = info.display_name_or_slug().to_string();
+        }
+
+        let mut selection = match model_info
+            .as_ref()
+            .and_then(|i| i.default_thinking_level.clone())
+        {
+            Some(level) => RoleSelection::with_thinking(spec, level),
+            None => RoleSelection::new(spec),
+        };
+
+        if let Some(info) = model_info {
+            selection.supported_thinking_levels = info.supported_thinking_levels;
+        }
+
+        Ok(selection)
+    }
+
+    /// Build a `RoleSelection` for the current main model.
+    pub fn current_main_selection(&self) -> RoleSelection {
+        let (provider, model) = self.current();
+        self.resolve_selection(&provider, &model)
+            .unwrap_or_else(|_| RoleSelection::new(ModelSpec::new(&provider, &model)))
+    }
+
+    /// Build `RoleSelection`s for all configured models across all providers.
+    ///
+    /// Used for the model picker.
+    pub fn all_model_selections(&self) -> Vec<RoleSelection> {
+        let mut selections = Vec::new();
+        for summary in self.list_providers() {
+            for slug in self.list_model_slugs(&summary.name).unwrap_or_default() {
+                if let Ok(selection) = self.resolve_selection(&summary.name, &slug) {
+                    selections.push(selection);
+                }
+            }
+        }
+        selections
     }
 
     /// Get current selection for a role.
@@ -904,6 +1002,19 @@ impl ConfigManager {
             }
         }
 
+        // Web search config: JSON > default
+        let web_search_config = resolved.web_search.clone().unwrap_or_default();
+
+        // Web fetch config: JSON > default
+        let web_fetch_config = resolved.web_fetch.clone().unwrap_or_default();
+
+        // OTel config: resolve from JSON + env vars
+        let otel = resolved
+            .otel
+            .as_ref()
+            .filter(|c| c.is_enabled())
+            .map(|c| c.to_otel_settings(&self.config_path));
+
         Ok(Config {
             models,
             providers,
@@ -922,6 +1033,11 @@ impl ConfigManager {
             plan_config,
             attachment_config,
             path_config,
+            web_search_config,
+            web_fetch_config,
+            permissions: resolved.permissions.clone(),
+            hooks: resolved.hooks.clone(),
+            otel,
         })
     }
 }

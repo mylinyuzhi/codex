@@ -3,6 +3,8 @@
 //! Each plugin contains a `PLUGIN.toml` manifest that declares its metadata
 //! and contributions.
 
+use std::collections::HashMap;
+
 use crate::contribution::PluginContributions;
 use crate::error::Result;
 use crate::error::plugin_error::InvalidManifestSnafu;
@@ -71,6 +73,25 @@ pub struct PluginManifest {
     /// Plugin contributions (skills, hooks, agents).
     #[serde(default)]
     pub contributions: PluginContributions,
+
+    /// User-configurable settings schema for this plugin.
+    ///
+    /// Keys are config field names, values describe defaults or types.
+    /// Users can override these via `PluginSettings::set_config()`.
+    #[serde(default)]
+    pub user_config: HashMap<String, UserConfigField>,
+}
+
+/// A user-configurable field declared by a plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserConfigField {
+    /// Human-readable description of this config field.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Default value.
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
 }
 
 /// Core plugin metadata.

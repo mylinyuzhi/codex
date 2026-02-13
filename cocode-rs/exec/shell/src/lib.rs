@@ -96,12 +96,14 @@ pub mod executor;
 pub mod path_extractor;
 pub mod readonly;
 pub mod shell_types;
+pub mod signal;
 pub mod snapshot;
 
 pub use background::BackgroundProcess;
 pub use background::BackgroundTaskRegistry;
 pub use command::CommandInput;
 pub use command::CommandResult;
+pub use command::ExecuteResult;
 pub use command::ExtractedPaths;
 pub use executor::ShellExecutor;
 pub use path_extractor::MAX_EXTRACTION_OUTPUT_CHARS;

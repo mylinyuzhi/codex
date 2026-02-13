@@ -22,12 +22,14 @@ use tokio::sync::Notify;
 use crate::background::BackgroundProcess;
 use crate::background::BackgroundTaskRegistry;
 use crate::command::CommandResult;
+use crate::command::ExecuteResult;
 use crate::command::ExtractedPaths;
 use crate::path_extractor::PathExtractor;
 use crate::path_extractor::filter_existing_files;
 use crate::path_extractor::truncate_for_extraction;
 use crate::shell_types::Shell;
 use crate::shell_types::default_user_shell;
+use crate::signal;
 use crate::snapshot::ShellSnapshot;
 use crate::snapshot::SnapshotConfig;
 
@@ -431,6 +433,350 @@ impl ShellExecutor {
         result
     }
 
+    /// Executes a command that can be transitioned to background mid-flight.
+    ///
+    /// This method registers the command as backgroundable using the given
+    /// `signal_id`, then runs the command. If the user triggers a background
+    /// signal (e.g. via Ctrl+B), the child process is handed off to the
+    /// `BackgroundTaskRegistry` and `ExecuteResult::Backgrounded` is returned.
+    ///
+    /// Otherwise the command completes normally and `ExecuteResult::Completed`
+    /// is returned with the usual `CommandResult`.
+    pub async fn execute_backgroundable(
+        &self,
+        command: &str,
+        timeout_secs: i64,
+        signal_id: &str,
+    ) -> ExecuteResult {
+        let start = Instant::now();
+        let timeout = if timeout_secs > 0 {
+            timeout_secs
+        } else {
+            self.default_timeout_secs
+        };
+
+        // Register for background signal
+        let bg_rx = signal::register_backgroundable_bash(signal_id.to_string());
+
+        let args = self.get_shell_args(command);
+        let args = self.maybe_wrap_shell_lc_with_snapshot(args);
+        let cwd = self.cwd.lock().unwrap().clone();
+
+        // Wrap the script to capture CWD after execution
+        let wrapped_script = format!(
+            "{}; __cocode_exit=$?; echo '{}' \"$(pwd)\" '{}'; exit $__cocode_exit",
+            &args[2], CWD_MARKER_START, CWD_MARKER_END
+        );
+        let shell_args = vec![args[0].clone(), args[1].clone(), wrapped_script];
+
+        let child = tokio::process::Command::new(&shell_args[0])
+            .args(&shell_args[1..])
+            .current_dir(&cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                signal::unregister_backgroundable_bash(signal_id);
+                return ExecuteResult::Completed(CommandResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Failed to spawn command: {e}"),
+                    duration_ms: 0,
+                    truncated: false,
+                    new_cwd: None,
+                    extracted_paths: None,
+                });
+            }
+        };
+
+        // Take stdout/stderr handles and spawn async readers into shared buffers
+        let stdout_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let stderr_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+        let stdout_handle = if let Some(mut stdout) = child.stdout.take() {
+            let buf = Arc::clone(&stdout_buf);
+            Some(tokio::spawn(async move {
+                let mut tmp = vec![0u8; 4096];
+                loop {
+                    match stdout.read(&mut tmp).await {
+                        Ok(0) => break,
+                        Ok(n) => buf.lock().await.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
+            let buf = Arc::clone(&stderr_buf);
+            Some(tokio::spawn(async move {
+                let mut tmp = vec![0u8; 4096];
+                loop {
+                    match stderr.read(&mut tmp).await {
+                        Ok(0) => break,
+                        Ok(n) => buf.lock().await.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        // Race: process completion vs background signal vs timeout
+        let timeout_dur = std::time::Duration::from_secs(timeout as u64);
+
+        tokio::select! {
+            // Background signal received — transition to background.
+            // Only act on Ok(()) — Err means the sender was dropped (not a real signal).
+            result = bg_rx => {
+                if result.is_ok() {
+                    signal::unregister_backgroundable_bash(signal_id);
+                    let task_id = self
+                        .transition_to_background(
+                            command,
+                            child,
+                            Arc::clone(&stdout_buf),
+                            Arc::clone(&stderr_buf),
+                        )
+                        .await;
+                    return ExecuteResult::Backgrounded { task_id };
+                }
+
+                // Sender dropped without signaling — fall through to wait for completion
+                signal::unregister_backgroundable_bash(signal_id);
+                let status = child.wait().await;
+
+                if let Some(h) = stdout_handle { let _ = h.await; }
+                if let Some(h) = stderr_handle { let _ = h.await; }
+
+                let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+                let duration_ms = start.elapsed().as_millis() as i64;
+
+                let raw_stdout_bytes = stdout_buf.lock().await;
+                let raw_stderr_bytes = stderr_buf.lock().await;
+
+                let (raw_stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
+                let (stderr, truncated_stderr) = truncate_output(&raw_stderr_bytes);
+                let (stdout, new_cwd) = extract_cwd_from_output(&raw_stdout);
+
+                ExecuteResult::Completed(CommandResult {
+                    exit_code,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                    truncated: truncated_stdout || truncated_stderr,
+                    new_cwd,
+                    extracted_paths: None,
+                })
+            }
+
+            // Process completed
+            status = child.wait() => {
+                signal::unregister_backgroundable_bash(signal_id);
+
+                // Wait for readers to finish
+                if let Some(h) = stdout_handle { let _ = h.await; }
+                if let Some(h) = stderr_handle { let _ = h.await; }
+
+                let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+                let duration_ms = start.elapsed().as_millis() as i64;
+
+                let raw_stdout_bytes = stdout_buf.lock().await;
+                let raw_stderr_bytes = stderr_buf.lock().await;
+
+                let (raw_stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
+                let (stderr, truncated_stderr) = truncate_output(&raw_stderr_bytes);
+                let (stdout, new_cwd) = extract_cwd_from_output(&raw_stdout);
+
+                ExecuteResult::Completed(CommandResult {
+                    exit_code,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                    truncated: truncated_stdout || truncated_stderr,
+                    new_cwd,
+                    extracted_paths: None,
+                })
+            }
+
+            // Timeout
+            _ = tokio::time::sleep(timeout_dur) => {
+                signal::unregister_backgroundable_bash(signal_id);
+                // child is dropped here → kill_on_drop triggers
+                drop(child);
+                let duration_ms = start.elapsed().as_millis() as i64;
+                ExecuteResult::Completed(CommandResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Command timed out after {timeout} seconds"),
+                    duration_ms,
+                    truncated: false,
+                    new_cwd: None,
+                    extracted_paths: None,
+                })
+            }
+        }
+    }
+
+    /// Transition a running child process to the background task registry.
+    ///
+    /// Seeds the background output with any content already captured in
+    /// stdout/stderr, then spawns a task that continues reading and waits
+    /// for the process to complete.
+    async fn transition_to_background(
+        &self,
+        command: &str,
+        mut child: tokio::process::Child,
+        stdout_buf: Arc<Mutex<Vec<u8>>>,
+        stderr_buf: Arc<Mutex<Vec<u8>>>,
+    ) -> String {
+        let task_id = format!("bg-{}", uuid_simple());
+
+        // Seed combined output with what we have so far
+        let combined_output = Arc::new(Mutex::new(String::new()));
+        {
+            let stdout_data = stdout_buf.lock().await;
+            let stderr_data = stderr_buf.lock().await;
+            let mut out = combined_output.lock().await;
+            let stdout_str = String::from_utf8_lossy(&stdout_data);
+            let stderr_str = String::from_utf8_lossy(&stderr_data);
+            if !stdout_str.is_empty() {
+                out.push_str(&stdout_str);
+            }
+            if !stderr_str.is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&stderr_str);
+            }
+        }
+
+        let completed = Arc::new(Notify::new());
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let process = BackgroundProcess {
+            id: task_id.clone(),
+            command: command.to_string(),
+            output: Arc::clone(&combined_output),
+            completed: Arc::clone(&completed),
+            cancel_token: cancel_token.clone(),
+        };
+
+        self.background_registry
+            .register(task_id.clone(), process)
+            .await;
+
+        let registry = self.background_registry.clone();
+        let bg_task_id = task_id.clone();
+
+        tokio::spawn(async move {
+            // Continue reading from stdout/stderr buffers and syncing to combined
+            // output. The reader tasks spawned earlier are still running.
+            let sync_output = Arc::clone(&combined_output);
+            let sync_stdout = Arc::clone(&stdout_buf);
+            let sync_stderr = Arc::clone(&stderr_buf);
+
+            // Periodically sync buffer contents into the combined output
+            let sync_task = tokio::spawn(async move {
+                let mut last_stdout_len = 0usize;
+                let mut last_stderr_len = 0usize;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    let stdout_data = sync_stdout.lock().await;
+                    let stderr_data = sync_stderr.lock().await;
+
+                    let new_stdout = stdout_data.len().saturating_sub(last_stdout_len);
+                    let new_stderr = stderr_data.len().saturating_sub(last_stderr_len);
+
+                    if new_stdout > 0 || new_stderr > 0 {
+                        let mut out = sync_output.lock().await;
+                        if new_stdout > 0 {
+                            let chunk = String::from_utf8_lossy(&stdout_data[last_stdout_len..]);
+                            out.push_str(&chunk);
+                            last_stdout_len = stdout_data.len();
+                        }
+                        if new_stderr > 0 {
+                            let chunk = String::from_utf8_lossy(&stderr_data[last_stderr_len..]);
+                            out.push_str(&chunk);
+                            last_stderr_len = stderr_data.len();
+                        }
+                    }
+                }
+            });
+
+            tokio::select! {
+                _ = child.wait() => {}
+                _ = cancel_token.cancelled() => {}
+            }
+
+            sync_task.abort();
+
+            // Final sync of remaining data — strip CWD markers from stdout
+            {
+                let stdout_data = stdout_buf.lock().await;
+                let stderr_data = stderr_buf.lock().await;
+                let mut out = combined_output.lock().await;
+                out.clear();
+                let raw_stdout = String::from_utf8_lossy(&stdout_data);
+                let (clean_stdout, _cwd) = extract_cwd_from_output(&raw_stdout);
+                let stderr_str = String::from_utf8_lossy(&stderr_data);
+                if !clean_stdout.is_empty() {
+                    out.push_str(&clean_stdout);
+                }
+                if !stderr_str.is_empty() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&stderr_str);
+                }
+            }
+
+            completed.notify_waiters();
+            registry.stop(&bg_task_id).await;
+        });
+
+        task_id
+    }
+
+    /// Executes a command with backgrounding support and CWD tracking.
+    ///
+    /// Combines `execute_backgroundable()` with CWD update on completion.
+    pub async fn execute_backgroundable_with_cwd_tracking(
+        &mut self,
+        command: &str,
+        timeout_secs: i64,
+        signal_id: &str,
+    ) -> ExecuteResult {
+        let result = self
+            .execute_backgroundable(command, timeout_secs, signal_id)
+            .await;
+
+        if let ExecuteResult::Completed(ref cmd_result) = result {
+            if cmd_result.exit_code == 0 {
+                if let Some(ref new_cwd) = cmd_result.new_cwd {
+                    let current_cwd = self.cwd.lock().unwrap().clone();
+                    if new_cwd.exists() && *new_cwd != current_cwd {
+                        tracing::debug!(
+                            "CWD changed: {} -> {}",
+                            current_cwd.display(),
+                            new_cwd.display()
+                        );
+                        *self.cwd.lock().unwrap() = new_cwd.clone();
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     /// POSIX-only: rewrite login shell commands to source snapshot.
     ///
     /// For commands of the form `[shell, "-lc", "<script>"]`, when a snapshot
@@ -472,12 +818,14 @@ impl ShellExecutor {
         let task_id = format!("bg-{}", uuid_simple());
         let output = Arc::new(Mutex::new(String::new()));
         let completed = Arc::new(Notify::new());
+        let cancel_token = tokio_util::sync::CancellationToken::new();
 
         let process = BackgroundProcess {
             id: task_id.clone(),
             command: command.to_string(),
             output: Arc::clone(&output),
             completed: Arc::clone(&completed),
+            cancel_token: cancel_token.clone(),
         };
 
         self.background_registry
@@ -503,7 +851,7 @@ impl ShellExecutor {
                 Ok(mut child) => {
                     // Read stdout
                     if let Some(mut stdout) = child.stdout.take() {
-                        let output = Arc::clone(&output);
+                        let output_stdout = Arc::clone(&output);
                         tokio::spawn(async move {
                             let mut buf = vec![0u8; 4096];
                             loop {
@@ -511,8 +859,7 @@ impl ShellExecutor {
                                     Ok(0) => break,
                                     Ok(n) => {
                                         if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
-                                            let mut out = output.lock().await;
-                                            out.push_str(&text);
+                                            output_stdout.lock().await.push_str(&text);
                                         }
                                     }
                                     Err(_) => break,
@@ -521,8 +868,33 @@ impl ShellExecutor {
                         });
                     }
 
-                    // Wait for process to complete
-                    let _ = child.wait().await;
+                    // Read stderr
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let output_stderr = Arc::clone(&output);
+                        tokio::spawn(async move {
+                            let mut buf = vec![0u8; 4096];
+                            loop {
+                                match stderr.read(&mut buf).await {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
+                                            output_stderr.lock().await.push_str(&text);
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        });
+                    }
+
+                    // Wait for process to complete or cancellation
+                    tokio::select! {
+                        _ = child.wait() => {}
+                        _ = cancel_token.cancelled() => {
+                            // Token cancelled via stop() — child will be killed
+                            // on drop due to kill_on_drop(true)
+                        }
+                    }
                 }
                 Err(e) => {
                     let mut out = output.lock().await;

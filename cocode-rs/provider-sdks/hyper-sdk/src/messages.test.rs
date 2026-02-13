@@ -199,11 +199,10 @@ fn test_tool_calls_cross_provider() {
 #[test]
 fn test_provider_options_handling() {
     // Message with OpenAI-specific options
-    let openai_opts: crate::options::ProviderOptions =
-        Box::new(crate::options::OpenAIOptions {
-            previous_response_id: Some("resp_123".to_string()),
-            ..Default::default()
-        });
+    let openai_opts: crate::options::ProviderOptions = Box::new(crate::options::OpenAIOptions {
+        previous_response_id: Some("resp_123".to_string()),
+        ..Default::default()
+    });
 
     let mut msg = Message::assistant("Response")
         .with_source("openai", "gpt-4o")
@@ -501,8 +500,8 @@ fn test_tool_call_continuity_across_providers() {
         Message::tool_result("call_001", ToolResultContent::text("Weather: Sunny, 72°F"));
 
     // OpenAI continues with tool result
-    let openai_followup = Message::assistant("The weather in NYC is sunny and 72°F.")
-        .with_source("openai", "gpt-4o");
+    let openai_followup =
+        Message::assistant("The weather in NYC is sunny and 72°F.").with_source("openai", "gpt-4o");
 
     // Now switch to Anthropic for the next turn
     let mut history = vec![

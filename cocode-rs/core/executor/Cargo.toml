@@ -14,6 +14,7 @@ cocode-hooks.workspace = true
 cocode-subagent.workspace = true
 cocode-git.workspace = true
 cocode-error.workspace = true
+cocode-otel.workspace = true
 hyper-sdk.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt-multi-thread"] }

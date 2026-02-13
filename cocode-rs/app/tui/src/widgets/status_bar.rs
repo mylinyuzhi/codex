@@ -44,10 +44,6 @@ pub struct StatusBar<'a> {
     show_thinking_enabled: bool,
     /// Current or last thinking duration.
     thinking_duration: Option<Duration>,
-    /// Thinking tokens used in current turn.
-    thinking_tokens_used: i32,
-    /// Thinking budget remaining (if set).
-    thinking_budget_remaining: Option<i32>,
     /// Current phase in plan mode.
     plan_phase: Option<PlanPhase>,
     /// Number of connected MCP servers.
@@ -72,8 +68,6 @@ impl<'a> StatusBar<'a> {
             is_thinking: false,
             show_thinking_enabled: false,
             thinking_duration: None,
-            thinking_tokens_used: 0,
-            thinking_budget_remaining: None,
             plan_phase: None,
             mcp_server_count: 0,
             queued_count: 0,
@@ -95,13 +89,6 @@ impl<'a> StatusBar<'a> {
     /// Set the thinking duration (current or last completed).
     pub fn thinking_duration(mut self, duration: Option<Duration>) -> Self {
         self.thinking_duration = duration;
-        self
-    }
-
-    /// Set thinking budget info.
-    pub fn thinking_budget(mut self, used: i32, remaining: Option<i32>) -> Self {
-        self.thinking_tokens_used = used;
-        self.thinking_budget_remaining = remaining;
         self
     }
 
@@ -260,40 +247,6 @@ impl<'a> StatusBar<'a> {
             None
         }
     }
-
-    /// Format the thinking budget display.
-    fn format_thinking_budget(&self) -> Option<Span<'static>> {
-        // Only show if we have a budget set or if we've used thinking tokens
-        if self.thinking_budget_remaining.is_none() && self.thinking_tokens_used == 0 {
-            return None;
-        }
-
-        let text = if let Some(remaining) = self.thinking_budget_remaining {
-            let used = self.thinking_tokens_used;
-            let total = remaining + used;
-            // Format with k suffix for thousands
-            if total >= 1000 {
-                format!(
-                    " 🧠 {:.1}k/{:.1}k ",
-                    used as f64 / 1000.0,
-                    total as f64 / 1000.0
-                )
-            } else {
-                format!(" 🧠 {used}/{total} ")
-            }
-        } else if self.thinking_tokens_used > 0 {
-            // No budget, just show used
-            if self.thinking_tokens_used >= 1000 {
-                format!(" 🧠 {:.1}k ", self.thinking_tokens_used as f64 / 1000.0)
-            } else {
-                format!(" 🧠 {} ", self.thinking_tokens_used)
-            }
-        } else {
-            return None;
-        };
-
-        Some(Span::raw(text).cyan())
-    }
 }
 
 impl Widget for StatusBar<'_> {
@@ -328,12 +281,6 @@ impl Widget for StatusBar<'_> {
         // Thinking toggle indicator (if enabled)
         if let Some(toggle_span) = self.format_thinking_toggle() {
             spans.push(toggle_span);
-            spans.push(Span::raw("│").dim());
-        }
-
-        // Thinking budget (if set or tokens used)
-        if let Some(budget_span) = self.format_thinking_budget() {
-            spans.push(budget_span);
             spans.push(Span::raw("│").dim());
         }
 

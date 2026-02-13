@@ -8,20 +8,26 @@ description = "Plugin system for cocode-rs"
 [dependencies]
 cocode-error.workspace = true
 cocode-hooks.workspace = true
+cocode-mcp-types.workspace = true
+cocode-rmcp-client.workspace = true
 cocode-skill.workspace = true
 cocode-subagent.workspace = true
+cocode-tools.workspace = true
 anyhow.workspace = true
-dirs.workspace = true
+chrono.workspace = true
+futures.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
+tokio = { workspace = true, features = ["process", "fs"] }
 toml.workspace = true
 tracing.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

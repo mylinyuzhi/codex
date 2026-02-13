@@ -15,7 +15,6 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 cocode-keyring-store = { workspace = true }
 cocode-protocol = { workspace = true }
-dirs = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
 cocode-mcp-types = { workspace = true }

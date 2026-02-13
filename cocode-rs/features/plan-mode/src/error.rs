@@ -44,13 +44,6 @@ pub enum PlanModeError {
         location: Location,
     },
 
-    /// No home directory found.
-    #[snafu(display("Could not determine home directory"))]
-    NoHomeDir {
-        #[snafu(implicit)]
-        location: Location,
-    },
-
     /// Slug generation failed after max retries.
     #[snafu(display("Failed to generate unique slug after {max_retries} attempts"))]
     SlugCollision {
@@ -65,7 +58,6 @@ impl ErrorExt for PlanModeError {
         match self {
             Self::CreateDir { .. } | Self::WriteFile { .. } => StatusCode::IoError,
             Self::ReadFile { .. } => StatusCode::FileNotFound,
-            Self::NoHomeDir { .. } => StatusCode::InvalidConfig,
             Self::SlugCollision { .. } => StatusCode::Internal,
         }
     }

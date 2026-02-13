@@ -87,7 +87,7 @@ impl Tool for ExitPlanModeTool {
         };
 
         // Get plan file path and content
-        let plan_path = manager.path().ok();
+        let plan_path = Some(manager.path());
         let plan_content = manager.read();
 
         // Log plan submission

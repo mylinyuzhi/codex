@@ -32,6 +32,12 @@ pub struct SpawnResult {
 
     /// Background agent info (only for background agents).
     pub background: Option<BackgroundAgent>,
+
+    /// Cancellation token for the spawned agent.
+    ///
+    /// Callers should register this in the shared `agent_cancel_tokens`
+    /// map so TaskStop can cancel the agent by ID.
+    pub cancel_token: Option<CancellationToken>,
 }
 
 /// A live subagent instance.
@@ -122,6 +128,11 @@ impl SubagentManager {
         self
     }
 
+    /// Get registered agent type definitions.
+    pub fn definitions(&self) -> &[AgentDefinition] {
+        &self.definitions
+    }
+
     /// Register a new agent type definition.
     pub fn register_agent_type(&mut self, definition: AgentDefinition) {
         tracing::info!(agent_type = %definition.agent_type, "Registering agent type");
@@ -140,6 +151,7 @@ impl SubagentManager {
             max_turns: None,
             run_in_background: false,
             allowed_tools: None,
+            resume_from: None,
         };
         let result = self.spawn_full(input).await?;
         Ok(result.agent_id)
@@ -150,9 +162,10 @@ impl SubagentManager {
     /// This is the main entry point for spawning subagents:
     /// 1. Resolves the agent definition
     /// 2. Filters tools based on definition and spawn input
-    /// 3. Executes the agent (foreground or background)
-    /// 4. Returns the result
-    pub async fn spawn_full(&mut self, input: SpawnInput) -> anyhow::Result<SpawnResult> {
+    /// 3. If resuming, loads prior output and prepends to prompt
+    /// 4. Executes the agent (foreground or background)
+    /// 5. Returns the result
+    pub async fn spawn_full(&mut self, mut input: SpawnInput) -> anyhow::Result<SpawnResult> {
         let definition = self
             .definitions
             .iter()
@@ -160,12 +173,55 @@ impl SubagentManager {
             .ok_or_else(|| anyhow::anyhow!("Unknown agent type: {}", input.agent_type))?
             .clone();
 
+        // Handle resume: load prior output and prepend to prompt
+        if let Some(ref resume_id) = input.resume_from {
+            let output_file = self.output_dir.join(format!("{resume_id}.jsonl"));
+            if output_file.exists() {
+                match tokio::fs::read_to_string(&output_file).await {
+                    Ok(content) => {
+                        // Parse the JSONL to extract the prior output
+                        let prior_output = if let Ok(entry) =
+                            serde_json::from_str::<serde_json::Value>(&content)
+                        {
+                            entry["output"].as_str().unwrap_or(&content).to_string()
+                        } else {
+                            content
+                        };
+                        input.prompt = format!(
+                            "[Resuming from previous agent {resume_id}]\n\
+                             Previous output:\n{prior_output}\n\n\
+                             Continue with: {}",
+                            input.prompt
+                        );
+                        tracing::info!(
+                            resume_id = %resume_id,
+                            prior_len = prior_output.len(),
+                            "Resuming agent with prior context"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            resume_id = %resume_id,
+                            error = %e,
+                            "Failed to read prior agent output, starting fresh"
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    resume_id = %resume_id,
+                    "Prior agent output file not found, starting fresh"
+                );
+            }
+        }
+
         let agent_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             agent_id = %agent_id,
             agent_type = %input.agent_type,
             prompt_len = input.prompt.len(),
             background = input.run_in_background,
+            resume_from = ?input.resume_from,
             "Spawning subagent"
         );
 
@@ -224,6 +280,7 @@ impl SubagentManager {
                 let prompt = input.prompt.clone();
                 let agent_type = input.agent_type.clone();
                 let output_file_clone = output_file.clone();
+                let task_cancel_token = cancel_token.clone();
 
                 tokio::spawn(async move {
                     let result = execute_fn(
@@ -232,7 +289,7 @@ impl SubagentManager {
                         identity,
                         max_turns,
                         filtered_tools,
-                        cancel_token,
+                        task_cancel_token,
                     )
                     .await;
 
@@ -269,6 +326,7 @@ impl SubagentManager {
                 agent_id,
                 output: None,
                 background: Some(bg_agent),
+                cancel_token: Some(cancel_token),
             })
         } else {
             // Foreground execution
@@ -287,18 +345,19 @@ impl SubagentManager {
 
             // Execute the agent if we have an execute function
             let output = if let Some(execute_fn) = &self.execute_fn {
-                let execute_future = execute_fn(
+                // Pin the future so it can be moved into a background task on Ctrl+B
+                let mut execute_future = Box::pin(execute_fn(
                     input.agent_type.clone(),
                     input.prompt.clone(),
                     identity.clone(),
                     max_turns,
                     filtered_tools.clone(),
                     cancel_token.clone(),
-                );
+                ));
 
                 // Use select! to handle both normal completion and background signal
                 tokio::select! {
-                    result = execute_future => {
+                    result = &mut execute_future => {
                         // Normal completion - unregister from background signals
                         crate::signal::unregister_backgroundable_agent(&agent_id);
 
@@ -328,29 +387,24 @@ impl SubagentManager {
                         // Create output file for background results
                         let output_file = self.output_dir.join(format!("{agent_id}.jsonl"));
 
+                        // Ensure output directory exists
+                        if let Err(e) = tokio::fs::create_dir_all(&self.output_dir).await {
+                            tracing::warn!(error = %e, "Failed to create output directory");
+                        }
+
                         // Update instance to background status
                         if let Some(instance) = self.agents.get_mut(&agent_id) {
                             instance.status = AgentStatus::Backgrounded;
                             instance.output_file = Some(output_file.clone());
                         }
 
-                        // Spawn background task to continue execution
-                        let execute_fn = execute_fn.clone();
+                        // Move the in-flight future into a background task
+                        // (continues existing execution instead of restarting)
                         let agent_id_clone = agent_id.clone();
-                        let agent_type = input.agent_type.clone();
-                        let prompt = input.prompt.clone();
                         let output_file_clone = output_file.clone();
 
                         tokio::spawn(async move {
-                            let result = execute_fn(
-                                agent_type,
-                                prompt,
-                                identity,
-                                max_turns,
-                                filtered_tools,
-                                cancel_token,
-                            )
-                            .await;
+                            let result = execute_future.await;
 
                             // Write result to output file
                             let entry = match &result {
@@ -386,6 +440,7 @@ impl SubagentManager {
                             agent_id,
                             output: None,
                             background: Some(bg_agent),
+                            cancel_token: Some(cancel_token),
                         });
                     }
                 }
@@ -411,6 +466,8 @@ impl SubagentManager {
                 agent_id,
                 output,
                 background: None,
+                // Foreground agents have completed — no token needed
+                cancel_token: None,
             })
         }
     }

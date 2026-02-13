@@ -90,8 +90,7 @@ fn test_render_full_tree() {
     ];
 
     let chat_files: HashSet<String> = ["src/file_1.rs".to_string()].into_iter().collect();
-    let (output, rendered_files) =
-        renderer.render(&symbols, &chat_files, 2, Path::new("/project"));
+    let (output, rendered_files) = renderer.render(&symbols, &chat_files, 2, Path::new("/project"));
 
     // Should have file headers and symbol lines
     assert!(output.contains(".rs:"));

@@ -21,12 +21,7 @@ fn make_test_chunk(id: &str, filepath: &str, content: &str) -> CodeChunk {
 }
 
 /// Helper to create a test chunk with parent symbol context.
-fn make_test_chunk_with_parent(
-    id: &str,
-    filepath: &str,
-    content: &str,
-    parent: &str,
-) -> CodeChunk {
+fn make_test_chunk_with_parent(id: &str, filepath: &str, content: &str, parent: &str) -> CodeChunk {
     CodeChunk {
         id: id.to_string(),
         source_id: "test".to_string(),

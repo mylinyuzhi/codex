@@ -14,6 +14,8 @@ use cocode_protocol::Features;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::RoleSelections;
+use cocode_protocol::WebFetchConfig;
+use cocode_protocol::WebSearchConfig;
 use cocode_shell::ShellExecutor;
 use cocode_skill::SkillManager;
 use serde::Deserialize;
@@ -58,6 +60,12 @@ pub struct SpawnAgentInput {
     /// this mode instead of inheriting from the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<cocode_protocol::PermissionMode>,
+    /// Agent ID to resume from a previous invocation.
+    ///
+    /// When set, the agent continues from the previous execution's output,
+    /// prepending the prior context to the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<String>,
 }
 
 /// Result of spawning a subagent.
@@ -69,6 +77,12 @@ pub struct SpawnAgentResult {
     pub output: Option<String>,
     /// Background agent output file path.
     pub output_file: Option<PathBuf>,
+    /// Cancellation token for the spawned agent.
+    ///
+    /// Present for background agents so the caller can register it
+    /// in `agent_cancel_tokens` for TaskStop to cancel by ID.
+    #[serde(skip)]
+    pub cancel_token: Option<CancellationToken>,
 }
 
 /// Input for a single-shot model call (no agent loop).
@@ -95,6 +109,13 @@ pub type ModelCallFn = Arc<
         + Send
         + Sync,
 >;
+
+/// Shared registry of cancellation tokens for background agents.
+///
+/// When a subagent is spawned, its `CancellationToken` is registered here.
+/// TaskStop can look up the token by agent ID and cancel it directly,
+/// without needing a callback to the SubagentManager.
+pub type AgentCancelTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
 /// Type alias for the agent spawn callback function.
 ///
@@ -395,6 +416,16 @@ pub struct ToolContext {
     pub file_tracker: Arc<Mutex<FileTracker>>,
     /// Optional callback for spawning subagents.
     pub spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Shared registry of cancellation tokens for background agents.
+    ///
+    /// TaskStop uses this to cancel agents by ID. Tokens are registered
+    /// by the executor when spawning subagents.
+    pub agent_cancel_tokens: AgentCancelTokens,
+    /// Base directory for background agent output files.
+    ///
+    /// Used by TaskOutput to find agent output JSONL files. When set, this
+    /// takes precedence over the fallback session_dir and temp_dir checks.
+    pub agent_output_dir: Option<PathBuf>,
     /// Optional lightweight model call function (for SmartEdit correction).
     pub model_call_fn: Option<ModelCallFn>,
     /// Whether plan mode is currently active.
@@ -433,6 +464,10 @@ pub struct ToolContext {
     pub permission_evaluator: Option<PermissionRuleEvaluator>,
     /// Feature flags for tool enablement checks.
     pub features: Features,
+    /// Web search configuration.
+    pub web_search_config: WebSearchConfig,
+    /// Web fetch configuration.
+    pub web_fetch_config: WebFetchConfig,
 }
 
 impl ToolContext {
@@ -452,6 +487,8 @@ impl ToolContext {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
@@ -465,6 +502,8 @@ impl ToolContext {
             permission_requester: None,
             permission_evaluator: None,
             features: Features::with_defaults(),
+            web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
         }
     }
 
@@ -519,6 +558,18 @@ impl ToolContext {
     /// Set the spawn agent callback.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the shared agent cancel token registry.
+    pub fn with_agent_cancel_tokens(mut self, tokens: AgentCancelTokens) -> Self {
+        self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the agent output directory.
+    pub fn with_agent_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.agent_output_dir = Some(dir.into());
         self
     }
 
@@ -796,6 +847,8 @@ pub struct ToolContextBuilder {
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    agent_cancel_tokens: AgentCancelTokens,
+    agent_output_dir: Option<PathBuf>,
     model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
@@ -809,6 +862,8 @@ pub struct ToolContextBuilder {
     permission_requester: Option<Arc<dyn PermissionRequester>>,
     permission_evaluator: Option<PermissionRuleEvaluator>,
     features: Features,
+    web_search_config: WebSearchConfig,
+    web_fetch_config: WebFetchConfig,
 }
 
 impl ToolContextBuilder {
@@ -827,6 +882,8 @@ impl ToolContextBuilder {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
+            agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
@@ -840,6 +897,8 @@ impl ToolContextBuilder {
             permission_requester: None,
             permission_evaluator: None,
             features: Features::with_defaults(),
+            web_search_config: WebSearchConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
         }
     }
 
@@ -900,6 +959,18 @@ impl ToolContextBuilder {
     /// Set the spawn agent callback.
     pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the shared agent cancel token registry.
+    pub fn agent_cancel_tokens(mut self, tokens: AgentCancelTokens) -> Self {
+        self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the agent output directory.
+    pub fn agent_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.agent_output_dir = Some(dir.into());
         self
     }
 
@@ -983,6 +1054,18 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the web search configuration.
+    pub fn web_search_config(mut self, config: WebSearchConfig) -> Self {
+        self.web_search_config = config;
+        self
+    }
+
+    /// Set the web fetch configuration.
+    pub fn web_fetch_config(mut self, config: WebFetchConfig) -> Self {
+        self.web_fetch_config = config;
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         let shell_executor = self
@@ -1001,6 +1084,8 @@ impl ToolContextBuilder {
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
             spawn_agent_fn: self.spawn_agent_fn,
+            agent_cancel_tokens: self.agent_cancel_tokens,
+            agent_output_dir: self.agent_output_dir,
             model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
@@ -1014,6 +1099,8 @@ impl ToolContextBuilder {
             permission_requester: self.permission_requester,
             permission_evaluator: self.permission_evaluator,
             features: self.features,
+            web_search_config: self.web_search_config,
+            web_fetch_config: self.web_fetch_config,
         }
     }
 }

@@ -58,6 +58,7 @@ async fn test_spawn_full_with_stub() {
         max_turns: None,
         run_in_background: false,
         allowed_tools: None,
+        resume_from: None,
     };
 
     let result = mgr.spawn_full(input).await.expect("spawn_full");
@@ -78,6 +79,7 @@ async fn test_spawn_full_background() {
         max_turns: None,
         run_in_background: true,
         allowed_tools: None,
+        resume_from: None,
     };
 
     let result = mgr.spawn_full(input).await.expect("spawn_full");

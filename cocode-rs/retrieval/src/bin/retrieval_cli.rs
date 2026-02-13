@@ -19,7 +19,7 @@
 //!
 //! ## Logging
 //!
-//! Logs are written to `~/.codex/log/retrieval.log` by default.
+//! Logs are written to `~/.cocode/log/retrieval.log` by default.
 //! Use `-v` flags to control verbosity in CLI mode.
 
 use std::fs::OpenOptions;
@@ -77,7 +77,7 @@ struct Cli {
     #[arg(default_value = ".")]
     workdir: PathBuf,
 
-    /// Path to config file (default: {workdir}/.codex/retrieval.toml or ~/.codex/retrieval.toml)
+    /// Path to config file (default: {workdir}/.cocode/retrieval.toml or ~/.cocode/retrieval.toml)
     #[arg(short, long)]
     config: Option<PathBuf>,
 
@@ -178,18 +178,21 @@ async fn main() -> anyhow::Result<()> {
     // Canonicalize workdir early for config loading
     let workdir = cli.workdir.canonicalize().unwrap_or(cli.workdir.clone());
 
+    // Resolve cocode home directory
+    let cocode_home = cocode_retrieval::find_cocode_home();
+
     // Load config from specified file or default locations
     // Config is loaded before tracing so we can use config.logging
     let config = if let Some(config_path) = &cli.config {
         // Use explicit config file - returns default if not found (with warning)
         RetrievalConfig::load_with_config_file(config_path)?
     } else {
-        RetrievalConfig::load(&workdir)?
+        RetrievalConfig::load(&workdir, &cocode_home)?
     };
 
     // Initialize tracing with config.logging (keep guard alive for logging)
     // Priority: RUST_LOG > CLI -v flags > config.logging.level > fallback "info"
-    let _log_guard = init_tracing(&config.logging, cli.verbose);
+    let _log_guard = init_tracing(&config.logging, cli.verbose, &cocode_home);
 
     // Register LoggingConsumer to sync events with tracing logs
     event_emitter::EventEmitter::register_consumer(Arc::new(std::sync::RwLock::new(
@@ -287,7 +290,7 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
         "Retrieval not enabled. Set 'enabled = true' in your config file.".to_string()
     } else {
         format!(
-            "Retrieval not enabled. Create config at {}/.codex/retrieval.toml or ~/.codex/retrieval.toml",
+            "Retrieval not enabled. Create config at {}/.cocode/retrieval.toml or ~/.cocode/retrieval.toml",
             workdir.display()
         )
     }
@@ -295,7 +298,7 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
 
 /// Initialize tracing with file-based logging.
 ///
-/// Logs are written to `~/.codex/log/retrieval.log`.
+/// Logs are written to `{cocode_home}/log/retrieval.log`.
 /// Returns a guard that must be kept alive for the duration of logging.
 ///
 /// Priority chain for log level:
@@ -306,14 +309,13 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
 fn init_tracing(
     config_logging: &cocode_utils_common::LoggingConfig,
     verbose: u8,
+    cocode_home: &Path,
 ) -> Option<WorkerGuard> {
     use tracing_appender::non_blocking;
     use tracing_subscriber::prelude::*;
 
-    // Determine log directory: codex_home/log/ (respects CODEX_HOME)
-    let log_dir = cocode_retrieval::config::find_codex_home()
-        .map(|h| h.join("log"))
-        .unwrap_or_else(|| PathBuf::from(".codex/log"));
+    // Determine log directory
+    let log_dir = cocode_home.join("log");
 
     // Create log directory if it doesn't exist
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -435,7 +437,7 @@ fn print_not_enabled(workdir: &Path, config_path: Option<&PathBuf>) {
         println!("Set 'enabled = true' in your config file.");
     } else {
         println!(
-            "Create a config file at: {}/.codex/retrieval.toml",
+            "Create a config file at: {}/.cocode/retrieval.toml",
             workdir.display()
         );
         println!("\nExample config:");
@@ -494,7 +496,7 @@ async fn run_repl(
         println!("Config: {}", path.display());
     } else {
         println!(
-            "Config: {}/.codex/retrieval.toml (or ~/.codex/retrieval.toml)",
+            "Config: {}/.cocode/retrieval.toml (or ~/.cocode/retrieval.toml)",
             workdir.display()
         );
     }

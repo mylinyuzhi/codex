@@ -16,6 +16,7 @@ use cocode_protocol::RiskType;
 use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use cocode_shell::CommandResult;
+use cocode_shell::ExecuteResult;
 use serde_json::Value;
 
 /// Default timeout in seconds.
@@ -44,36 +45,65 @@ pub fn is_read_only_command(command: &str) -> bool {
     let trimmed = command.trim();
     let first_word = trimmed.split_whitespace().next().unwrap_or("");
 
-    matches!(
-        first_word,
-        "ls" | "cat"
-            | "head"
-            | "tail"
-            | "wc"
-            | "grep"
-            | "rg"
-            | "find"
-            | "which"
-            | "whoami"
-            | "pwd"
-            | "echo"
-            | "date"
-            | "env"
-            | "printenv"
-            | "uname"
-            | "hostname"
-            | "df"
-            | "du"
-            | "file"
-            | "stat"
-            | "type"
-            | "git"
-    ) && !trimmed.contains("&&")
+    let is_simple = !trimmed.contains("&&")
         && !trimmed.contains("||")
         && !trimmed.contains(';')
         && !trimmed.contains('|')
         && !trimmed.contains('>')
-        && !trimmed.contains('<')
+        && !trimmed.contains('<');
+
+    if !is_simple {
+        return false;
+    }
+
+    match first_word {
+        "git" => {
+            // Only read-only git subcommands are safe for concurrent execution
+            let subcommand = trimmed.split_whitespace().nth(1).unwrap_or("");
+            matches!(
+                subcommand,
+                "status"
+                    | "log"
+                    | "diff"
+                    | "show"
+                    | "branch"
+                    | "tag"
+                    | "remote"
+                    | "rev-parse"
+                    | "describe"
+                    | "ls-files"
+                    | "ls-tree"
+                    | "cat-file"
+                    | "config"
+                    | "blame"
+                    | "shortlog"
+            )
+        }
+        _ => matches!(
+            first_word,
+            "ls" | "cat"
+                | "head"
+                | "tail"
+                | "wc"
+                | "grep"
+                | "rg"
+                | "find"
+                | "which"
+                | "whoami"
+                | "pwd"
+                | "echo"
+                | "date"
+                | "env"
+                | "printenv"
+                | "uname"
+                | "hostname"
+                | "df"
+                | "du"
+                | "file"
+                | "stat"
+                | "type"
+        ),
+    }
 }
 
 #[async_trait]
@@ -287,19 +317,27 @@ impl Tool for BashTool {
             )));
         }
 
-        // Foreground execution — delegate to ShellExecutor with CWD tracking
-        let result = ctx
+        // Foreground execution — delegate to ShellExecutor with backgrounding support
+        match ctx
             .shell_executor
-            .execute_with_cwd_tracking(command, timeout_secs)
-            .await;
-
-        // Sync CWD back to ctx
-        if let Some(ref new_cwd) = result.new_cwd {
-            ctx.cwd = new_cwd.clone();
+            .execute_backgroundable_with_cwd_tracking(command, timeout_secs, &ctx.call_id)
+            .await
+        {
+            ExecuteResult::Completed(result) => {
+                // Sync CWD back to ctx only on success
+                if result.exit_code == 0 {
+                    if let Some(ref new_cwd) = result.new_cwd {
+                        ctx.cwd = new_cwd.clone();
+                    }
+                }
+                format_command_result(&result)
+            }
+            ExecuteResult::Backgrounded { task_id } => Ok(ToolOutput::text(format!(
+                "Command was backgrounded by user (Ctrl+B).\n\
+                 Background task ID: {task_id}\n\
+                 Use TaskOutput tool with task_id=\"{task_id}\" to retrieve output."
+            ))),
         }
-
-        // Convert CommandResult → ToolOutput
-        format_command_result(&result)
     }
 }
 

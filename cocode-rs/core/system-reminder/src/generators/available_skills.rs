@@ -23,6 +23,8 @@ pub struct SkillInfo {
     pub name: String,
     /// Human-readable description.
     pub description: String,
+    /// Guidance for the LLM on when to invoke this skill.
+    pub when_to_use: Option<String>,
 }
 
 /// Generator for available skills reminder.
@@ -73,6 +75,9 @@ impl AttachmentGenerator for AvailableSkillsGenerator {
 
         for skill in skills.iter() {
             content.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+            if let Some(ref when) = skill.when_to_use {
+                content.push_str(&format!("  When to use: {when}\n"));
+            }
         }
 
         Ok(Some(SystemReminder::new(

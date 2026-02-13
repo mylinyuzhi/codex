@@ -54,6 +54,8 @@ use cocode_protocol::Features;
 use cocode_protocol::PathConfig;
 use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ToolConfig;
+use cocode_protocol::WebFetchConfig;
+use cocode_protocol::WebSearchConfig;
 use cocode_protocol::model::ModelRoles;
 use serde::Deserialize;
 use serde::Serialize;
@@ -188,6 +190,77 @@ pub struct AppConfig {
     /// Permission rules for tool execution.
     #[serde(default)]
     pub permissions: Option<PermissionsConfig>,
+
+    /// Web search configuration (provider, api_key, max_results).
+    #[serde(default)]
+    pub web_search: Option<WebSearchConfig>,
+
+    /// Web fetch configuration (timeout, max_content_length, user_agent).
+    #[serde(default)]
+    pub web_fetch: Option<WebFetchConfig>,
+
+    /// Hook definitions for event interception.
+    ///
+    /// # Example
+    ///
+    /// ```json
+    /// {
+    ///   "hooks": [
+    ///     {
+    ///       "event": "pre_tool_use",
+    ///       "matcher": "Bash",
+    ///       "hooks": [
+    ///         { "type": "command", "command": "my-lint-check" }
+    ///       ]
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    #[serde(default)]
+    pub hooks: Vec<HookConfig>,
+
+    /// OpenTelemetry configuration.
+    #[serde(default)]
+    pub otel: Option<OtelJsonConfig>,
+}
+
+/// A single hook configuration entry in config.json.
+///
+/// Matches Claude Code v2.1.7 hook format.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct HookConfig {
+    /// Event type: "pre_tool_use", "post_tool_use", "session_start", etc.
+    pub event: String,
+
+    /// Tool name pattern to match (exact match or pipe-separated "A|B").
+    /// If empty or absent, matches all tools for tool events.
+    #[serde(default)]
+    pub matcher: Option<String>,
+
+    /// List of hook handlers to execute for this event.
+    #[serde(default)]
+    pub hooks: Vec<HookHandlerConfig>,
+}
+
+/// A single hook handler in config.json.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HookHandlerConfig {
+    /// Execute a shell command.
+    Command {
+        /// Command to execute.
+        command: String,
+        /// Optional arguments.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Timeout in seconds (default: 30).
+        #[serde(default = "default_hook_timeout")]
+        timeout_secs: i32,
+    },
+}
+
+fn default_hook_timeout() -> i32 {
+    30
 }
 
 /// Resolved configuration with profile applied.
@@ -214,6 +287,16 @@ pub struct ResolvedAppConfig {
     pub paths: Option<PathConfig>,
     /// Effective language preference.
     pub language_preference: Option<String>,
+    /// Effective permission rules.
+    pub permissions: Option<PermissionsConfig>,
+    /// Effective web search configuration.
+    pub web_search: Option<WebSearchConfig>,
+    /// Effective web fetch configuration.
+    pub web_fetch: Option<WebFetchConfig>,
+    /// Effective hook definitions.
+    pub hooks: Vec<HookConfig>,
+    /// Effective OTel configuration.
+    pub otel: Option<OtelJsonConfig>,
 }
 
 impl AppConfig {
@@ -236,6 +319,11 @@ impl AppConfig {
             attachment: self.attachment.clone(),
             paths: self.paths.clone(),
             language_preference: self.language_preference.clone(),
+            permissions: self.permissions.clone(),
+            web_search: self.web_search.clone(),
+            web_fetch: self.web_fetch.clone(),
+            hooks: self.hooks.clone(),
+            otel: self.otel.clone(),
         }
     }
 
@@ -424,6 +512,130 @@ impl FeaturesConfig {
             .filter(|k| !cocode_protocol::is_known_feature_key(k))
             .cloned()
             .collect()
+    }
+}
+
+/// OpenTelemetry configuration section.
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "otel": {
+///     "enabled": true,
+///     "exporter": "otlp_http",
+///     "endpoint": "http://localhost:4318",
+///     "event_log_file": true
+///   }
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct OtelJsonConfig {
+    /// Enable OTel (defaults to false if not set).
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Environment name (e.g., "production", "staging").
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// Service name (defaults to "cocode").
+    #[serde(default)]
+    pub service_name: Option<String>,
+    /// Log exporter: "none" | "otlp_http" | "otlp_grpc"
+    #[serde(default)]
+    pub exporter: Option<String>,
+    /// Trace exporter: "none" | "otlp_http" | "otlp_grpc"
+    #[serde(default)]
+    pub trace_exporter: Option<String>,
+    /// Metrics exporter: "none" | "otlp_http" | "otlp_grpc"
+    #[serde(default)]
+    pub metrics_exporter: Option<String>,
+    /// OTLP endpoint (overridden by OTEL_EXPORTER_OTLP_ENDPOINT env var).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Extra headers as key=value pairs.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    /// Enable file-based event log output to ~/.cocode/log/otel-events.log.
+    #[serde(default)]
+    pub event_log_file: Option<bool>,
+}
+
+impl OtelJsonConfig {
+    /// Convert to `OtelSettings` with env var resolution.
+    ///
+    /// Standard OTel env vars override config values:
+    /// - `OTEL_EXPORTER_OTLP_ENDPOINT` overrides `endpoint`
+    /// - `OTEL_EXPORTER_OTLP_HEADERS` overrides `headers`
+    /// - `OTEL_SERVICE_NAME` overrides `service_name`
+    pub fn to_otel_settings(
+        &self,
+        cocode_home: &std::path::Path,
+    ) -> cocode_otel::config::OtelSettings {
+        use cocode_otel::config::OtelExporter;
+        use cocode_otel::config::OtelHttpProtocol;
+        use cocode_otel::config::OtelSettings;
+
+        let service_name = std::env::var("OTEL_SERVICE_NAME")
+            .ok()
+            .or_else(|| self.service_name.clone())
+            .unwrap_or_else(|| "cocode".to_string());
+
+        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .ok()
+            .or_else(|| self.endpoint.clone())
+            .unwrap_or_else(|| "http://localhost:4318".to_string());
+
+        let headers = std::env::var("OTEL_EXPORTER_OTLP_HEADERS")
+            .ok()
+            .map(|h| {
+                h.split(',')
+                    .filter_map(|pair| {
+                        let mut parts = pair.splitn(2, '=');
+                        let key = parts.next()?.trim().to_string();
+                        let value = parts.next()?.trim().to_string();
+                        Some((key, value))
+                    })
+                    .collect()
+            })
+            .or_else(|| self.headers.clone())
+            .unwrap_or_default();
+
+        let environment = self
+            .environment
+            .clone()
+            .unwrap_or_else(|| "development".to_string());
+
+        let parse_exporter = |name: Option<&str>| -> OtelExporter {
+            match name {
+                Some("otlp_http") => OtelExporter::OtlpHttp {
+                    endpoint: endpoint.clone(),
+                    headers: headers.clone(),
+                    protocol: OtelHttpProtocol::Binary,
+                    tls: None,
+                },
+                Some("otlp_grpc") => OtelExporter::OtlpGrpc {
+                    endpoint: endpoint.clone(),
+                    headers: headers.clone(),
+                    tls: None,
+                },
+                _ => OtelExporter::None,
+            }
+        };
+
+        OtelSettings {
+            environment,
+            service_name,
+            service_version: env!("CARGO_PKG_VERSION").to_string(),
+            home_dir: cocode_home.to_path_buf(),
+            exporter: parse_exporter(self.exporter.as_deref()),
+            trace_exporter: parse_exporter(self.trace_exporter.as_deref()),
+            metrics_exporter: parse_exporter(self.metrics_exporter.as_deref()),
+        }
+    }
+
+    /// Check if OTel should be enabled based on this config.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(false)
     }
 }
 

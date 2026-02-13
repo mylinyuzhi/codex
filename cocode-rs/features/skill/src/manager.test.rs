@@ -35,6 +35,17 @@ fn test_parse_skill_command() {
     );
     assert_eq!(parse_skill_command("not a command"), None);
     assert_eq!(parse_skill_command(""), None);
+
+    // Namespaced command with colon
+    assert_eq!(
+        parse_skill_command("/ns:cmd args"),
+        Some(("ns:cmd", "args"))
+    );
+
+    // Invalid command names are rejected
+    assert_eq!(parse_skill_command("/bad!name"), None);
+    assert_eq!(parse_skill_command("/bad@name"), None);
+    assert_eq!(parse_skill_command("/ "), None);
 }
 
 #[test]

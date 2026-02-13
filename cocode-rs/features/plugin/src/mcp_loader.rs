@@ -85,9 +85,19 @@ pub fn load_mcp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginCon
 }
 
 /// Load a single MCP server configuration from a TOML file.
+///
+/// Resolves variable substitution patterns (`${COCODE_PLUGIN_ROOT}`, `${env.VAR}`)
+/// using the parent plugin directory as the plugin root.
 fn load_mcp_server_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContribution> {
     let content = std::fs::read_to_string(path)?;
-    let config: McpServerConfig = toml::from_str(&content)?;
+    let mut config: McpServerConfig = toml::from_str(&content)?;
+
+    // Resolve variables using the plugin directory as root.
+    // The plugin root is the grandparent of the MCP.toml file (plugin_dir/mcp/server/MCP.toml).
+    // Walk up to find the directory that contains PLUGIN.toml.
+    let plugin_root =
+        find_plugin_root(path).unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf());
+    config.resolve_variables(&plugin_root, None);
 
     debug!(
         plugin = %plugin_name,
@@ -99,6 +109,18 @@ fn load_mcp_server_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<P
         config,
         plugin_name: plugin_name.to_string(),
     })
+}
+
+/// Walk up from a path to find the nearest directory containing PLUGIN.toml.
+fn find_plugin_root(from: &Path) -> Option<std::path::PathBuf> {
+    let mut current = from.parent();
+    while let Some(dir) = current {
+        if dir.join("PLUGIN.toml").exists() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
 }
 
 #[cfg(test)]

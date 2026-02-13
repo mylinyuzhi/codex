@@ -307,7 +307,6 @@ async fn test_processor_with_custom_timeout() {
 async fn test_processor_idle_timeout_builder() {
     let events = vec![StreamEvent::response_created("resp_1")];
 
-    let processor =
-        StreamProcessor::new(make_stream(events)).idle_timeout(Duration::from_secs(30));
+    let processor = StreamProcessor::new(make_stream(events)).idle_timeout(Duration::from_secs(30));
     assert_eq!(processor.config().idle_timeout, Duration::from_secs(30));
 }

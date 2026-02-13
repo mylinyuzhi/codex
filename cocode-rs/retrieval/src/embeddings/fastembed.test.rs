@@ -8,8 +8,8 @@ fn test_parse_model_name() {
     assert_eq!(dim, 768);
     assert!(matches!(model, EmbeddingModel::NomicEmbedTextV15));
 
-    let (model, dim) = FastembedEmbeddingProvider::parse_model_name("bge-small-en-v1.5")
-        .expect("should parse");
+    let (model, dim) =
+        FastembedEmbeddingProvider::parse_model_name("bge-small-en-v1.5").expect("should parse");
     assert_eq!(dim, 384);
     assert!(matches!(model, EmbeddingModel::BGESmallENV15));
 

@@ -151,7 +151,13 @@ impl Tool for TodoWriteTool {
             output.push_str(&format!("{marker} {id}: {title}\n"));
         }
 
-        Ok(ToolOutput::text(output))
+        Ok(
+            ToolOutput::text(output).with_modifier(
+                cocode_protocol::ContextModifier::TodosUpdated {
+                    todos: serde_json::Value::Array(todos.clone()),
+                },
+            ),
+        )
     }
 }
 

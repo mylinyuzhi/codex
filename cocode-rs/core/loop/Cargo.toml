@@ -15,6 +15,7 @@ cocode-context.workspace = true
 cocode-prompt.workspace = true
 cocode-hooks.workspace = true
 cocode-system-reminder.workspace = true
+cocode-otel.workspace = true
 cocode-skill.workspace = true
 hyper-sdk.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

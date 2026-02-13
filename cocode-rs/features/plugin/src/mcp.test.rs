@@ -102,6 +102,136 @@ MCP_DEBUG = "true"
 }
 
 #[test]
+fn test_resolve_variables_plugin_root() {
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "${COCODE_PLUGIN_ROOT}/bin/server".to_string(),
+            args: vec![
+                "--config".to_string(),
+                "${COCODE_PLUGIN_ROOT}/config.json".to_string(),
+            ],
+        },
+        env: {
+            let mut map = HashMap::new();
+            map.insert(
+                "PLUGIN_DIR".to_string(),
+                "${COCODE_PLUGIN_ROOT}".to_string(),
+            );
+            map
+        },
+        auto_start: true,
+    };
+
+    config.resolve_variables(std::path::Path::new("/plugins/my-plugin"), None);
+
+    if let McpTransport::Stdio { command, args } = &config.transport {
+        assert_eq!(command, "/plugins/my-plugin/bin/server");
+        assert_eq!(args[1], "/plugins/my-plugin/config.json");
+    } else {
+        panic!("Expected Stdio transport");
+    }
+    assert_eq!(
+        config.env.get("PLUGIN_DIR"),
+        Some(&"/plugins/my-plugin".to_string())
+    );
+}
+
+#[test]
+fn test_resolve_variables_env() {
+    // SAFETY: test-only, single-threaded test environment.
+    unsafe { std::env::set_var("COCODE_TEST_VAR_12345", "hello-world") };
+
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "node".to_string(),
+            args: vec!["--token=${env.COCODE_TEST_VAR_12345}".to_string()],
+        },
+        env: HashMap::new(),
+        auto_start: true,
+    };
+
+    config.resolve_variables(std::path::Path::new("/tmp"), None);
+
+    if let McpTransport::Stdio { args, .. } = &config.transport {
+        assert_eq!(args[0], "--token=hello-world");
+    }
+
+    // SAFETY: test-only, single-threaded test environment.
+    unsafe { std::env::remove_var("COCODE_TEST_VAR_12345") };
+}
+
+#[test]
+fn test_resolve_variables_http_url() {
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Http {
+            url: "http://${env.MCP_HOST_ABSENT}:8080".to_string(),
+        },
+        env: HashMap::new(),
+        auto_start: true,
+    };
+
+    config.resolve_variables(std::path::Path::new("/tmp"), None);
+
+    if let McpTransport::Http { url } = &config.transport {
+        // Missing env var resolves to empty string
+        assert_eq!(url, "http://:8080");
+    }
+}
+
+#[test]
+fn test_resolve_variables_user_config() {
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "server".to_string(),
+            args: vec!["--api-key=${user_config.api_key}".to_string()],
+        },
+        env: HashMap::new(),
+        auto_start: true,
+    };
+
+    let mut user_config = HashMap::new();
+    user_config.insert(
+        "api_key".to_string(),
+        serde_json::Value::String("sk-123".to_string()),
+    );
+
+    config.resolve_variables(std::path::Path::new("/tmp"), Some(&user_config));
+
+    if let McpTransport::Stdio { args, .. } = &config.transport {
+        assert_eq!(args[0], "--api-key=sk-123");
+    }
+}
+
+#[test]
+fn test_resolve_variables_no_patterns() {
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "node".to_string(),
+            args: vec!["server.js".to_string()],
+        },
+        env: HashMap::new(),
+        auto_start: true,
+    };
+
+    config.resolve_variables(std::path::Path::new("/tmp"), None);
+
+    if let McpTransport::Stdio { command, args } = &config.transport {
+        assert_eq!(command, "node");
+        assert_eq!(args[0], "server.js");
+    }
+}
+
+#[test]
 fn test_mcp_server_defaults() {
     let toml_str = r#"
 name = "minimal"

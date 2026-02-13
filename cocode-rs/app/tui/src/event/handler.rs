@@ -252,6 +252,9 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
         // Model cycle/picker (Ctrl+M)
         (KeyModifiers::CONTROL, KeyCode::Char('m')) => Some(TuiCommand::CycleModel),
 
+        // Background all tasks (Ctrl+B)
+        (KeyModifiers::CONTROL, KeyCode::Char('b')) => Some(TuiCommand::BackgroundAllTasks),
+
         // Interrupt (Ctrl+C)
         (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(TuiCommand::Interrupt),
 

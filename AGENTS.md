@@ -15,6 +15,7 @@ General Rust coding conventions for cocode-rs development.
   ```
 - Always collapse if statements per [collapsible_if](https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if)
 - Use method references over closures when possible per [redundant_closure_for_method_calls](https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls)
+- When possible, make `match` statements exhaustive and avoid wildcard arms
 
 ### Integer Types
 
@@ -56,9 +57,22 @@ General Rust coding conventions for cocode-rs development.
 
 ### Test Organization
 
-- Unit tests in same file with `#[cfg(test)]` module
+- **Separate test files** using `#[path]` attribute to keep source files focused:
+  ```rust
+  // At the end of implementation.rs
+  #[cfg(test)]
+  #[path = "implementation.test.rs"]
+  mod tests;
+  ```
+  Tests go in the companion `implementation.test.rs` file in the same directory.
 - Integration tests in `tests/` directory
 - Use descriptive test names: `test_<function>_<scenario>_<expected>`
+
+### Test & Lint Workflow
+
+- Test the specific changed crate first: `just test-crate cocode-<name>`
+- Only run full `just test` if changes affect shared crates (common/, core/, protocol/)
+- Use `just fix -p cocode-<name>` for scoped clippy fixes; only run `just fix` without `-p` if you changed shared crates
 
 ## Async Conventions
 

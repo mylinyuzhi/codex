@@ -133,3 +133,34 @@ fn test_hash() {
     assert!(set.contains(&ModelSpec::new("anthropic", "claude-opus-4")));
     assert!(!set.contains(&ModelSpec::new("genai", "gemini-3")));
 }
+
+#[test]
+fn test_display_name_defaults_to_slug() {
+    let spec = ModelSpec::new("openai", "gpt-5");
+    assert_eq!(spec.display_name, "gpt-5");
+}
+
+#[test]
+fn test_display_name_custom() {
+    let spec = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    assert_eq!(spec.display_name, "GPT-5");
+}
+
+#[test]
+fn test_display_name_excluded_from_equality() {
+    let a = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    let b = ModelSpec::new("openai", "gpt-5").with_display_name("Different Name");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn test_display_name_excluded_from_hash() {
+    use std::collections::HashSet;
+
+    let a = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    let b = ModelSpec::new("openai", "gpt-5").with_display_name("Different Name");
+
+    let mut set = HashSet::new();
+    set.insert(a);
+    assert!(set.contains(&b));
+}

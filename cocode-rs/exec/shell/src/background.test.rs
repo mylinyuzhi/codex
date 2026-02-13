@@ -6,6 +6,7 @@ fn make_process(id: &str, command: &str) -> BackgroundProcess {
         command: command.to_string(),
         output: Arc::new(Mutex::new(String::new())),
         completed: Arc::new(Notify::new()),
+        cancel_token: CancellationToken::new(),
     }
 }
 

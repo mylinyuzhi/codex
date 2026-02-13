@@ -24,8 +24,7 @@ async fn test_execute_echo_command() {
 async fn test_execute_nonexistent_command() {
     let ctx = make_ctx();
     let result =
-        CommandHandler::execute("this-command-definitely-does-not-exist-12345", &[], &ctx)
-            .await;
+        CommandHandler::execute("this-command-definitely-does-not-exist-12345", &[], &ctx).await;
     assert!(matches!(result, HookResult::Continue));
 }
 
@@ -44,6 +43,7 @@ fn test_hook_output_continue() {
         updated_input: None,
         additional_context: None,
         is_async: false,
+        permission_decision: None,
     };
     let result: HookResult = output.into();
     assert!(matches!(result, HookResult::Continue));
@@ -57,6 +57,7 @@ fn test_hook_output_reject() {
         updated_input: None,
         additional_context: None,
         is_async: false,
+        permission_decision: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -74,6 +75,7 @@ fn test_hook_output_reject_default_reason() {
         updated_input: None,
         additional_context: None,
         is_async: false,
+        permission_decision: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -91,6 +93,7 @@ fn test_hook_output_modify_input() {
         updated_input: Some(serde_json::json!({"modified": true})),
         additional_context: None,
         is_async: false,
+        permission_decision: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ModifyInput { new_input } = result {
@@ -108,6 +111,7 @@ fn test_hook_output_additional_context() {
         updated_input: None,
         additional_context: Some("Extra info".to_string()),
         is_async: false,
+        permission_decision: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ContinueWithContext { additional_context } = result {
@@ -125,6 +129,7 @@ fn test_hook_output_async() {
         updated_input: None,
         additional_context: None,
         is_async: true,
+        permission_decision: None,
     };
     let result = output.into_result(Some("test-hook"));
     if let HookResult::Async { task_id, hook_name } = result {
@@ -182,6 +187,7 @@ fn test_hook_output_serde() {
         updated_input: Some(serde_json::json!({"key": "value"})),
         additional_context: Some("context".to_string()),
         is_async: false,
+        permission_decision: None,
     };
     let json = serde_json::to_string(&output).expect("serialize");
     let parsed: HookOutput = serde_json::from_str(&json).expect("deserialize");

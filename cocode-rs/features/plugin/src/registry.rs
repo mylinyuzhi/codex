@@ -220,7 +220,7 @@ impl PluginRegistry {
     }
 
     /// Apply all hook contributions to a hook registry.
-    pub fn apply_hooks_to(&self, registry: &mut HookRegistry) {
+    pub fn apply_hooks_to(&self, registry: &HookRegistry) {
         let hooks = self.hook_contributions();
         let count = hooks.len();
 
@@ -255,6 +255,80 @@ impl PluginRegistry {
 
         if count > 0 {
             info!(count = count, "Applied agents from plugins");
+        }
+    }
+
+    /// Apply command contributions to skill manager and subagent manager.
+    ///
+    /// Commands with `Skill` handlers are registered as skills.
+    /// Commands with `Agent` handlers register agent definitions in the
+    /// subagent manager (if provided).
+    pub fn apply_commands_to(
+        &self,
+        skill_manager: &mut SkillManager,
+        mut subagent_manager: Option<&mut SubagentManager>,
+    ) {
+        use crate::command::CommandHandler;
+
+        let commands = self.command_contributions();
+        if commands.is_empty() {
+            return;
+        }
+
+        let mut skills_added = 0;
+        let mut agents_added = 0;
+
+        for (cmd, plugin_name) in commands {
+            match &cmd.handler {
+                CommandHandler::Skill { skill_name } => {
+                    // Look up the skill by name; if it exists, register a command alias
+                    if let Some(skill) = skill_manager.get(skill_name) {
+                        let mut alias = skill.clone();
+                        alias.name = cmd.name.clone();
+                        alias.description = cmd.description.clone();
+                        skill_manager.register(alias);
+                        skills_added += 1;
+                    } else {
+                        debug!(
+                            command = %cmd.name,
+                            skill = %skill_name,
+                            plugin = %plugin_name,
+                            "Command references unknown skill"
+                        );
+                    }
+                }
+                CommandHandler::Agent { agent_type } => {
+                    if let Some(ref mut manager) = subagent_manager {
+                        let definition = AgentDefinition {
+                            name: cmd.name.clone(),
+                            description: cmd.description.clone(),
+                            agent_type: agent_type.clone(),
+                            tools: Vec::new(),
+                            disallowed_tools: Vec::new(),
+                            identity: None,
+                            max_turns: None,
+                            permission_mode: None,
+                        };
+                        manager.register_agent_type(definition);
+                        agents_added += 1;
+                    }
+                }
+                CommandHandler::Shell { .. } => {
+                    debug!(
+                        command = %cmd.name,
+                        plugin = %plugin_name,
+                        "Shell commands not yet wired"
+                    );
+                }
+            }
+        }
+
+        if skills_added > 0 || agents_added > 0 {
+            info!(
+                skills = skills_added,
+                agents = agents_added,
+                "Applied commands from plugins"
+            );
         }
     }
 

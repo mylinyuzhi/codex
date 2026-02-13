@@ -2,48 +2,28 @@ use super::*;
 use anyhow::Result;
 use keyring::Error as KeyringError;
 use pretty_assertions::assert_eq;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::OnceLock;
-use std::sync::PoisonError;
 use tempfile::tempdir;
 
 use cocode_keyring_store::tests::MockKeyringStore;
 
-struct TempCodexHome {
-    _guard: MutexGuard<'static, ()>,
-    _dir: tempfile::TempDir,
+struct TempCocodeHome {
+    dir: tempfile::TempDir,
 }
 
-impl TempCodexHome {
+impl TempCocodeHome {
     fn new() -> Self {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = LOCK
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let dir = tempdir().expect("create CODEX_HOME temp dir");
-        unsafe {
-            std::env::set_var("CODEX_HOME", dir.path());
-        }
-        Self {
-            _guard: guard,
-            _dir: dir,
-        }
+        let dir = tempdir().expect("create cocode_home temp dir");
+        Self { dir }
     }
-}
 
-impl Drop for TempCodexHome {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("CODEX_HOME");
-        }
+    fn path(&self) -> &std::path::Path {
+        self.dir.path()
     }
 }
 
 #[test]
 fn load_oauth_tokens_reads_from_keyring_when_available() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let _home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let expected = tokens.clone();
@@ -51,26 +31,26 @@ fn load_oauth_tokens_reads_from_keyring_when_available() -> Result<()> {
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
     store.save(KEYRING_SERVICE, &key, &serialized)?;
 
-    let loaded =
-        super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
-            .expect("tokens should load from keyring");
+    let loaded = super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
+        .expect("tokens should load from keyring");
     assert_tokens_match_without_expiry(&loaded, &expected);
     Ok(())
 }
 
 #[test]
 fn load_oauth_tokens_falls_back_when_missing_in_keyring() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let expected = tokens.clone();
 
-    super::save_oauth_tokens_to_file(&tokens)?;
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
 
     let loaded = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
         &store,
         &tokens.server_name,
         &tokens.url,
+        home.path(),
     )?
     .expect("tokens should load from fallback");
     assert_tokens_match_without_expiry(&loaded, &expected);
@@ -79,19 +59,20 @@ fn load_oauth_tokens_falls_back_when_missing_in_keyring() -> Result<()> {
 
 #[test]
 fn load_oauth_tokens_falls_back_when_keyring_errors() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let expected = tokens.clone();
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
     store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
 
-    super::save_oauth_tokens_to_file(&tokens)?;
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
 
     let loaded = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
         &store,
         &tokens.server_name,
         &tokens.url,
+        home.path(),
     )?
     .expect("tokens should load from fallback");
     assert_tokens_match_without_expiry(&loaded, &expected);
@@ -100,20 +81,21 @@ fn load_oauth_tokens_falls_back_when_keyring_errors() -> Result<()> {
 
 #[test]
 fn save_oauth_tokens_prefers_keyring_when_available() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
 
-    super::save_oauth_tokens_to_file(&tokens)?;
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
 
     super::save_oauth_tokens_with_keyring_with_fallback_to_file(
         &store,
         &tokens.server_name,
         &tokens,
+        home.path(),
     )?;
 
-    let fallback_path = super::fallback_file_path()?;
+    let fallback_path = super::fallback_file_path(home.path())?;
     assert!(!fallback_path.exists(), "fallback file should be removed");
     let stored = store.saved_value(&key).expect("value saved to keyring");
     assert_eq!(serde_json::from_str::<StoredOAuthTokens>(&stored)?, tokens);
@@ -122,7 +104,7 @@ fn save_oauth_tokens_prefers_keyring_when_available() -> Result<()> {
 
 #[test]
 fn save_oauth_tokens_writes_fallback_when_keyring_fails() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
@@ -132,11 +114,12 @@ fn save_oauth_tokens_writes_fallback_when_keyring_fails() -> Result<()> {
         &store,
         &tokens.server_name,
         &tokens,
+        home.path(),
     )?;
 
-    let fallback_path = super::fallback_file_path()?;
+    let fallback_path = super::fallback_file_path(home.path())?;
     assert!(fallback_path.exists(), "fallback file should be created");
-    let saved = super::read_fallback_file()?.expect("fallback file should load");
+    let saved = super::read_fallback_file(home.path())?.expect("fallback file should load");
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
     let entry = saved.get(&key).expect("entry for key");
     assert_eq!(entry.server_name, tokens.server_name);
@@ -152,29 +135,30 @@ fn save_oauth_tokens_writes_fallback_when_keyring_fails() -> Result<()> {
 
 #[test]
 fn delete_oauth_tokens_removes_all_storage() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let serialized = serde_json::to_string(&tokens)?;
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
     store.save(KEYRING_SERVICE, &key, &serialized)?;
-    super::save_oauth_tokens_to_file(&tokens)?;
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
 
     let removed = super::delete_oauth_tokens_from_keyring_and_file(
         &store,
         OAuthCredentialsStoreMode::Auto,
         &tokens.server_name,
         &tokens.url,
+        home.path(),
     )?;
     assert!(removed);
     assert!(!store.contains(&key));
-    assert!(!super::fallback_file_path()?.exists());
+    assert!(!super::fallback_file_path(home.path())?.exists());
     Ok(())
 }
 
 #[test]
 fn delete_oauth_tokens_file_mode_removes_keyring_only_entry() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let serialized = serde_json::to_string(&tokens)?;
@@ -187,30 +171,32 @@ fn delete_oauth_tokens_file_mode_removes_keyring_only_entry() -> Result<()> {
         OAuthCredentialsStoreMode::Auto,
         &tokens.server_name,
         &tokens.url,
+        home.path(),
     )?;
     assert!(removed);
     assert!(!store.contains(&key));
-    assert!(!super::fallback_file_path()?.exists());
+    assert!(!super::fallback_file_path(home.path())?.exists());
     Ok(())
 }
 
 #[test]
 fn delete_oauth_tokens_propagates_keyring_errors() -> Result<()> {
-    let _env = TempCodexHome::new();
+    let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();
     let tokens = sample_tokens();
     let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
     store.set_error(&key, KeyringError::Invalid("error".into(), "delete".into()));
-    super::save_oauth_tokens_to_file(&tokens).unwrap();
+    super::save_oauth_tokens_to_file(&tokens, home.path()).unwrap();
 
     let result = super::delete_oauth_tokens_from_keyring_and_file(
         &store,
         OAuthCredentialsStoreMode::Auto,
         &tokens.server_name,
         &tokens.url,
+        home.path(),
     );
     assert!(result.is_err());
-    assert!(super::fallback_file_path().unwrap().exists());
+    assert!(super::fallback_file_path(home.path()).unwrap().exists());
     Ok(())
 }
 
@@ -251,18 +237,12 @@ fn refresh_expires_in_from_timestamp_clears_expired_tokens() {
     assert!(tokens.token_response.0.expires_in().is_none());
 }
 
-fn assert_tokens_match_without_expiry(
-    actual: &StoredOAuthTokens,
-    expected: &StoredOAuthTokens,
-) {
+fn assert_tokens_match_without_expiry(actual: &StoredOAuthTokens, expected: &StoredOAuthTokens) {
     assert_eq!(actual.server_name, expected.server_name);
     assert_eq!(actual.url, expected.url);
     assert_eq!(actual.client_id, expected.client_id);
     assert_eq!(actual.expires_at, expected.expires_at);
-    assert_token_response_match_without_expiry(
-        &actual.token_response,
-        &expected.token_response,
-    );
+    assert_token_response_match_without_expiry(&actual.token_response, &expected.token_response);
 }
 
 fn assert_token_response_match_without_expiry(

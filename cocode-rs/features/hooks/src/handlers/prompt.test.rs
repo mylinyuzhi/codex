@@ -2,8 +2,7 @@ use super::*;
 
 #[test]
 fn test_simple_substitution() {
-    let result =
-        PromptHandler::execute("Review: $ARGUMENTS", &serde_json::json!({"file": "a.rs"}));
+    let result = PromptHandler::execute("Review: $ARGUMENTS", &serde_json::json!({"file": "a.rs"}));
     if let HookResult::ModifyInput { new_input } = result {
         let text = new_input.as_str().expect("should be a string");
         assert!(text.starts_with("Review: "));

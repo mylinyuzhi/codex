@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cocode-error = { path = "../error" }
+cocode-otel = { path = "../otel" }
 cocode-protocol = { path = "../protocol" }
 cocode-utils-common = { workspace = true }
 hyper-sdk = { workspace = true }

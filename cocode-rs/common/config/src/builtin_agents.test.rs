@@ -81,7 +81,8 @@ fn test_is_builtin_agent() {
 
 #[test]
 fn test_load_nonexistent_file() {
-    let config = load_builtin_agents_config();
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let config = load_builtin_agents_config(tmp.path());
     // Should return empty map, not error
     assert!(config.is_empty());
 }

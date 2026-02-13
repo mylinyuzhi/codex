@@ -11,7 +11,8 @@ fn all_tools() -> Vec<String> {
         "Task".to_string(),
         "EnterPlanMode".to_string(),
         "ExitPlanMode".to_string(),
-        "UserInput".to_string(),
+        "TaskStop".to_string(),
+        "AskUserQuestion".to_string(),
     ]
 }
 
@@ -35,6 +36,8 @@ fn test_system_blocked_always_removed() {
     assert!(!filtered.contains(&"Task".to_string()));
     assert!(!filtered.contains(&"EnterPlanMode".to_string()));
     assert!(!filtered.contains(&"ExitPlanMode".to_string()));
+    assert!(!filtered.contains(&"TaskStop".to_string()));
+    assert!(!filtered.contains(&"AskUserQuestion".to_string()));
 }
 
 #[test]
@@ -65,14 +68,16 @@ fn test_combined_allow_deny() {
 fn test_background_blocks_interactive() {
     let def = make_def(vec![], vec![]);
     let filtered = filter_tools_for_agent(&all_tools(), &def, true);
-    assert!(!filtered.contains(&"UserInput".to_string()));
+    // AskUserQuestion is system-blocked for ALL subagents (foreground + background)
+    assert!(!filtered.contains(&"AskUserQuestion".to_string()));
 }
 
 #[test]
-fn test_background_false_keeps_interactive() {
+fn test_ask_user_blocked_for_all_subagents() {
     let def = make_def(vec![], vec![]);
+    // AskUserQuestion is blocked even for foreground subagents
     let filtered = filter_tools_for_agent(&all_tools(), &def, false);
-    assert!(filtered.contains(&"UserInput".to_string()));
+    assert!(!filtered.contains(&"AskUserQuestion".to_string()));
 }
 
 #[test]

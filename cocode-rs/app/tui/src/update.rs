@@ -5,6 +5,7 @@
 //! functions take the current state and an event, and return the new state.
 
 use cocode_protocol::LoopEvent;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::ToolResultContent;
 use tokio::sync::mpsc;
 
@@ -30,7 +31,7 @@ pub async fn handle_command(
     state: &mut AppState,
     cmd: TuiCommand,
     command_tx: &mpsc::Sender<UserCommand>,
-    available_models: &[String],
+    available_models: &[RoleSelection],
     paste_manager: &PasteManager,
 ) {
     match cmd {
@@ -45,11 +46,13 @@ pub async fn handle_command(
         }
         TuiCommand::CycleThinkingLevel => {
             state.cycle_thinking_level();
-            let _ = command_tx
-                .send(UserCommand::SetThinkingLevel {
-                    level: state.session.thinking_level.clone(),
-                })
-                .await;
+            if let Some(ref sel) = state.session.current_selection {
+                let _ = command_tx
+                    .send(UserCommand::SetThinkingLevel {
+                        level: sel.effective_thinking_level(),
+                    })
+                    .await;
+            }
         }
         TuiCommand::CycleModel => {
             // Show model picker overlay
@@ -62,6 +65,7 @@ pub async fn handle_command(
             }
         }
         TuiCommand::ShowModelPicker => {
+            // Show model picker overlay
             if !available_models.is_empty() {
                 state
                     .ui
@@ -75,33 +79,59 @@ pub async fn handle_command(
         TuiCommand::SubmitInput => {
             let raw_message = state.ui.input.take();
             if !raw_message.trim().is_empty() {
-                // Resolve paste pills to content blocks for API
-                let content = paste_manager.resolve_to_blocks(&raw_message);
+                // Check if this is a slash command (skill or local command)
+                let parsed_cmd = cocode_skill::parse_skill_command(raw_message.trim())
+                    .map(|(n, a)| (n.to_string(), a.to_string()));
 
-                // Keep original text (with pills) for display in chat history
-                let display_text = raw_message.clone();
+                if let Some((name, args)) = parsed_cmd {
+                    // Check if this is a local (built-in) command
+                    if let Some(local_cmd) = cocode_skill::find_local_command(&name) {
+                        handle_local_command(state, local_cmd, &args, command_tx, available_models)
+                            .await;
+                    } else {
+                        // Prompt skill — send to agent driver
+                        let msg_id = format!("user-{}", state.session.messages.len());
+                        state
+                            .session
+                            .add_message(ChatMessage::user(&msg_id, &raw_message));
 
-                // Add user message to chat (display version)
-                let msg_id = format!("user-{}", state.session.messages.len());
-                state
-                    .session
-                    .add_message(ChatMessage::user(&msg_id, &display_text));
+                        state.ui.input.add_to_history(raw_message);
+                        state.ui.input.history_index = None;
 
-                // Save to history with frecency tracking
-                state.ui.input.add_to_history(raw_message);
-                state.ui.input.history_index = None;
+                        let _ = command_tx
+                            .send(UserCommand::ExecuteSkill { name, args })
+                            .await;
 
-                // Send to core with resolved content blocks
-                let _ = command_tx
-                    .send(UserCommand::SubmitInput {
-                        content,
-                        display_text,
-                    })
-                    .await;
+                        state.ui.scroll_offset = 0;
+                        state.ui.reset_user_scrolled();
+                    }
+                } else {
+                    // Regular message — resolve paste pills and send as input
+                    let content = paste_manager.resolve_to_blocks(&raw_message);
+                    let display_text = raw_message.clone();
 
-                // Auto-scroll to bottom and reset user scroll state
-                state.ui.scroll_offset = 0;
-                state.ui.reset_user_scrolled();
+                    // Add user message to chat (display version)
+                    let msg_id = format!("user-{}", state.session.messages.len());
+                    state
+                        .session
+                        .add_message(ChatMessage::user(&msg_id, &display_text));
+
+                    // Save to history with frecency tracking
+                    state.ui.input.add_to_history(raw_message);
+                    state.ui.input.history_index = None;
+
+                    // Send to core with resolved content blocks
+                    let _ = command_tx
+                        .send(UserCommand::SubmitInput {
+                            content,
+                            display_text,
+                        })
+                        .await;
+
+                    // Auto-scroll to bottom and reset user scroll state
+                    state.ui.scroll_offset = 0;
+                    state.ui.reset_user_scrolled();
+                }
             }
         }
         TuiCommand::Interrupt => {
@@ -289,11 +319,11 @@ pub async fn handle_command(
                 state.ui.clear_overlay();
             } else if let Some(Overlay::ModelPicker(ref picker)) = state.ui.overlay {
                 // Select current model
-                let filtered = picker.filtered_models();
-                if let Some(model) = filtered.get(picker.selected as usize) {
-                    let model = model.to_string();
-                    state.session.current_model = model.clone();
-                    let _ = command_tx.send(UserCommand::SetModel { model }).await;
+                let filtered = picker.filtered_items();
+                if let Some(selection) = filtered.get(picker.selected as usize) {
+                    let selection = (*selection).clone();
+                    state.session.current_selection = Some(selection.clone());
+                    let _ = command_tx.send(UserCommand::SetModel { selection }).await;
                 }
                 state.ui.clear_overlay();
             } else if let Some(Overlay::CommandPalette(ref palette)) = state.ui.overlay {
@@ -517,9 +547,120 @@ pub async fn handle_command(
             state.ui.toggle_thinking();
         }
 
+        // ========== Background ==========
+        TuiCommand::BackgroundAllTasks => {
+            let mut count = 0;
+
+            // Background agents
+            for id in cocode_subagent::signal::backgroundable_agent_ids() {
+                if cocode_subagent::signal::trigger_background_transition(&id) {
+                    count += 1;
+                    tracing::info!(agent_id = %id, "Agent transitioned to background");
+                }
+            }
+
+            // Background bash commands
+            for id in cocode_shell::signal::backgroundable_bash_ids() {
+                if cocode_shell::signal::trigger_bash_background(&id) {
+                    count += 1;
+                    tracing::info!(bash_id = %id, "Bash command transitioned to background");
+                }
+            }
+
+            if count > 0 {
+                state
+                    .ui
+                    .toast_info(t!("toast.tasks_backgrounded", count = count).to_string());
+                let _ = command_tx.send(UserCommand::BackgroundAllTasks).await;
+            } else {
+                tracing::debug!("Ctrl+B: no backgroundable tasks");
+            }
+        }
+
         // ========== Quit ==========
         TuiCommand::Quit => {
             state.quit();
+        }
+    }
+}
+
+/// Handle a local (built-in) slash command in the TUI.
+async fn handle_local_command(
+    state: &mut AppState,
+    local_cmd: &cocode_skill::LocalCommandDef,
+    _args: &str,
+    command_tx: &mpsc::Sender<UserCommand>,
+    available_models: &[RoleSelection],
+) {
+    match local_cmd.name {
+        "help" => {
+            state.ui.set_overlay(Overlay::Help);
+        }
+        "clear" => {
+            state.session.messages.clear();
+            state.ui.scroll_offset = 0;
+            state.ui.reset_user_scrolled();
+            tracing::debug!("Screen cleared via /clear command");
+        }
+        "model" => {
+            // Show model picker overlay
+            if !available_models.is_empty() {
+                state
+                    .ui
+                    .set_overlay(Overlay::ModelPicker(ModelPickerOverlay::new(
+                        available_models.to_vec(),
+                    )));
+            }
+        }
+        "status" => {
+            // Show status as a system-style message in chat
+            let model_display = state
+                .session
+                .current_selection
+                .as_ref()
+                .map(|s| s.model.display_name.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let thinking = state
+                .session
+                .current_selection
+                .as_ref()
+                .map(|s| format!("{:?}", s.effective_thinking_level().effort))
+                .unwrap_or_else(|| "none".to_string());
+            let status = format!(
+                "Model: {model_display}\nThinking: {thinking}\nPlan mode: {}",
+                if state.session.plan_mode { "on" } else { "off" },
+            );
+            let msg_id = format!("status-{}", state.session.messages.len());
+            state
+                .session
+                .add_message(ChatMessage::assistant(&msg_id, &status));
+        }
+        "exit" | "quit" => {
+            state.quit();
+        }
+        "cancel" => {
+            let _ = command_tx.send(UserCommand::Interrupt).await;
+        }
+        // Commands that need the agent driver: dispatch via ExecuteSkill
+        "compact" | "skills" | "todos" => {
+            let msg_id = format!("user-{}", state.session.messages.len());
+            let display = format!("/{}", local_cmd.name);
+            state
+                .session
+                .add_message(ChatMessage::user(&msg_id, &display));
+            let _ = command_tx
+                .send(UserCommand::ExecuteSkill {
+                    name: local_cmd.name.to_string(),
+                    args: _args.to_string(),
+                })
+                .await;
+            state.ui.scroll_offset = 0;
+            state.ui.reset_user_scrolled();
+        }
+        _ => {
+            state
+                .ui
+                .toast_info(format!("/{} is not yet supported in TUI.", local_cmd.name));
         }
     }
 }
@@ -543,11 +684,13 @@ async fn execute_command_action(
         }
         CommandAction::CycleThinkingLevel => {
             state.cycle_thinking_level();
-            let _ = command_tx
-                .send(UserCommand::SetThinkingLevel {
-                    level: state.session.thinking_level.clone(),
-                })
-                .await;
+            if let Some(ref sel) = state.session.current_selection {
+                let _ = command_tx
+                    .send(UserCommand::SetThinkingLevel {
+                        level: sel.effective_thinking_level(),
+                    })
+                    .await;
+            }
         }
         CommandAction::ShowModelPicker => {
             // Don't have available_models here, so just log
@@ -994,6 +1137,18 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                     .ui
                     .toast_error(t!("toast.mcp_error", name = name, error = error).to_string());
             }
+        }
+
+        // ========== Hooks ==========
+        LoopEvent::HookExecuted {
+            hook_type,
+            hook_name,
+        } => {
+            tracing::debug!(
+                hook_type = %hook_type,
+                hook_name = %hook_name,
+                "Hook executed"
+            );
         }
 
         // Other events we don't need to handle in the TUI

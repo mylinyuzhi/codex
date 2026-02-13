@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use cocode_api::ApiClient;
 use cocode_api::ModelHub;
-use cocode_config::ConfigManager;
+use cocode_config::Config;
 use cocode_context::ContextInjection;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
@@ -26,10 +26,15 @@ use cocode_protocol::RoleSelections;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
+use cocode_rmcp_client::RmcpClient;
 use cocode_shell::ShellExecutor;
 use cocode_skill::SkillInterface;
+use cocode_skill::SkillManager;
+use cocode_subagent::SubagentManager;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
+
+use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -90,18 +95,15 @@ impl TurnResult {
 ///
 /// ```ignore
 /// use cocode_session::{Session, SessionState};
-/// use cocode_config::ConfigManager;
+/// use cocode_config::{ConfigManager, ConfigOverrides};
 /// use cocode_protocol::ProviderType;
+/// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///
-/// let session = Session::new(
-///     PathBuf::from("."),
-///     "gpt-5",
-///     ProviderType::Openai,
-/// );
-///
-/// let config = ConfigManager::from_default()?;
-/// let mut state = SessionState::new(session, &config).await?;
+/// let session = Session::new(PathBuf::from("."), "gpt-5", ProviderType::Openai);
+/// let manager = ConfigManager::from_default()?;
+/// let config = Arc::new(manager.build_config(ConfigOverrides::default())?);
+/// let mut state = SessionState::new(session, config).await?;
 ///
 /// // Run a turn
 /// let result = state.run_turn("Hello!").await?;
@@ -125,6 +127,12 @@ pub struct SessionState {
 
     /// Loaded skills.
     pub skills: Vec<SkillInterface>,
+
+    /// Skill manager for loading and executing skills.
+    skill_manager: Arc<SkillManager>,
+
+    /// Plugin registry for tracking loaded plugins.
+    plugin_registry: Option<cocode_plugin::PluginRegistry>,
 
     /// API client for model inference.
     api_client: ApiClient,
@@ -162,17 +170,31 @@ pub struct SessionState {
     shell_executor: ShellExecutor,
 
     /// Queued commands for real-time steering (Enter during streaming).
-    /// Consumed once in the agent loop and injected as steering system-reminders.
-    queued_commands: Vec<QueuedCommandInfo>,
+    /// Shared via `Arc<Mutex>` with the running `AgentLoop` so the TUI driver
+    /// can push commands while a turn is executing. Drained once per iteration
+    /// in Step 6.5 and injected as steering system-reminders.
+    queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
 
     /// Optional suffix appended to the end of the system prompt.
     system_prompt_suffix: Option<String>,
 
-    /// Feature flags for tool enablement.
-    features: cocode_protocol::Features,
+    /// Subagent manager for Task tool agent spawning.
+    subagent_manager: SubagentManager,
+
+    /// Active MCP clients from plugin servers (kept alive for session lifetime).
+    _mcp_clients: Vec<Arc<RmcpClient>>,
+
+    /// Configuration snapshot (immutable for session lifetime).
+    config: Arc<Config>,
 
     /// Pre-configured permission rules loaded from config.
     permission_rules: Vec<cocode_tools::PermissionRule>,
+
+    /// Current task list (updated by TodoWrite tool via ContextModifier).
+    todos: serde_json::Value,
+
+    /// Optional OTel manager for metrics and traces.
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 impl SessionState {
@@ -183,13 +205,13 @@ impl SessionState {
     /// - Tool registry with built-in tools
     /// - Hook registry (empty by default)
     /// - Skills (loaded from project/user directories)
-    pub async fn new(session: Session, config: &ConfigManager) -> anyhow::Result<Self> {
+    pub async fn new(session: Session, config: Arc<Config>) -> anyhow::Result<Self> {
         // Get the primary model info from session
         let primary_model = session
             .primary_model()
             .ok_or_else(|| anyhow::anyhow!("Session has no main model configured"))?;
-        let provider_name = primary_model.provider();
-        let model_name = primary_model.model_name();
+        let provider_name = primary_model.provider().to_string();
+        let model_name = primary_model.model_name().to_string();
 
         info!(
             session_id = %session.id,
@@ -198,46 +220,111 @@ impl SessionState {
             "Creating session state"
         );
 
-        // Resolve provider info
-        let provider_info = config.resolve_provider(provider_name)?;
-        let provider_type = provider_info.provider_type;
+        // Get provider type from session's ModelSpec.
+        // IMPORTANT: This assumes the caller used ModelSpec::with_type() (not ModelSpec::new())
+        // so that provider_type comes from config, not from string-based heuristic resolution.
+        // All current callers (tui_runner, chat, session manager) satisfy this requirement.
+        let provider_type = primary_model.model.provider_type;
 
-        // Get model context window (default to 200k if not specified)
-        let context_window = provider_info
-            .get_model(model_name)
-            .and_then(|m| m.info.context_window)
-            .unwrap_or(200_000) as i32;
+        // Get model context window from Config snapshot (default to 200k)
+        let context_window = config
+            .resolve_model_info(&provider_name, &model_name)
+            .and_then(|info| info.context_window)
+            .map(|cw| cw as i32)
+            .unwrap_or(200_000);
 
         // Create API client
         let api_client = ApiClient::new();
 
-        // Merge config defaults into session.selections (session is the single source of truth)
-        // Start with config defaults, then apply session's existing selections on top
-        let mut merged_selections = config.current_selections();
-        merged_selections.merge(&session.selections);
-
-        // Ensure main model is set
-        let main_spec = cocode_protocol::model::ModelSpec::new(provider_name, model_name);
-        if merged_selections.get(ModelRole::Main).is_none() {
-            merged_selections.set(ModelRole::Main, RoleSelection::new(main_spec));
+        // Ensure main model is set in session selections
+        let mut session = session;
+        let main_spec = cocode_protocol::model::ModelSpec::new(&provider_name, &model_name);
+        if session.selections.get(ModelRole::Main).is_none() {
+            session
+                .selections
+                .set(ModelRole::Main, RoleSelection::new(main_spec));
         }
 
-        // Update session with merged selections (session owns the selections)
-        let mut session = session;
-        session.selections = merged_selections;
-
-        // Create ModelHub (role-agnostic, just for model caching)
-        let model_hub = Arc::new(ModelHub::new(Arc::new(config.clone())));
+        // Create ModelHub with Config snapshot (role-agnostic, just for model caching)
+        let model_hub = Arc::new(ModelHub::new(config.clone()));
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
         cocode_tools::builtin::register_builtin_tools(&mut tool_registry);
 
-        // Create hook registry (empty for now)
+        // Create hook registry and load hooks from config
         let hook_registry = HookRegistry::new();
+        let config_hooks = convert_config_hooks(&config.hooks);
+        if !config_hooks.is_empty() {
+            tracing::info!(count = config_hooks.len(), "Loaded hooks from config");
+            hook_registry.register_all(config_hooks);
+        }
+
+        // Load hooks from TOML file if it exists (~/.cocode/hooks.toml)
+        let hooks_toml_path = config.cocode_home.join("hooks.toml");
+        if hooks_toml_path.is_file() {
+            match cocode_hooks::load_hooks_from_toml(&hooks_toml_path) {
+                Ok(toml_hooks) => {
+                    tracing::info!(
+                        count = toml_hooks.len(),
+                        path = %hooks_toml_path.display(),
+                        "Loaded hooks from TOML"
+                    );
+                    hook_registry.register_all(toml_hooks);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load hooks.toml");
+                }
+            }
+        }
 
         // Load skills (empty for now, can be populated later)
         let skills = Vec::new();
+
+        // Create skill manager and load skills from standard directories
+        let mut skill_manager = SkillManager::with_bundled();
+        let mut skill_roots = Vec::new();
+        // Project-local skills: <working_dir>/.cocode/skills/
+        let project_skills = session.working_dir.join(".cocode").join("skills");
+        if project_skills.is_dir() {
+            skill_roots.push(project_skills);
+        }
+        // User-global skills: ~/.cocode/skills/
+        let user_skills = config.cocode_home.join("skills");
+        if user_skills.is_dir() {
+            skill_roots.push(user_skills);
+        }
+        if !skill_roots.is_empty() {
+            skill_manager.load_from_roots(&skill_roots);
+        }
+
+        // Create subagent manager for plugin agent contributions
+        let mut subagent_manager = SubagentManager::new();
+
+        // Load plugins from standard directories and installed plugin cache
+        let plugin_config = cocode_plugin::PluginIntegrationConfig::with_defaults(
+            &config.cocode_home,
+            Some(&session.working_dir),
+        );
+        let plugin_registry = cocode_plugin::integrate_plugins(
+            &plugin_config,
+            &mut skill_manager,
+            &hook_registry,
+            Some(&mut subagent_manager),
+        );
+        let plugin_registry = if plugin_registry.is_empty() {
+            None
+        } else {
+            Some(plugin_registry)
+        };
+
+        // Connect plugin MCP servers (async: starts server processes and registers tools)
+        let mcp_clients = if let Some(ref pr) = plugin_registry {
+            cocode_plugin::connect_plugin_mcp_servers(pr, &mut tool_registry, &config.cocode_home)
+                .await
+        } else {
+            Vec::new()
+        };
 
         // Build loop config from session
         let loop_config = LoopConfig {
@@ -245,26 +332,50 @@ impl SessionState {
             ..LoopConfig::default()
         };
 
-        // Resolve features from config
-        let features = config.features();
-
-        // Load permission rules from config
-        let permission_rules = {
-            let app_config = config.app_config();
-            match app_config.permissions {
-                Some(ref perms) => cocode_tools::PermissionRuleEvaluator::rules_from_config(
-                    perms,
-                    cocode_protocol::RuleSource::User,
-                ),
-                None => Vec::new(),
-            }
+        // Load permission rules from config snapshot
+        let permission_rules = match config.permissions {
+            Some(ref perms) => cocode_tools::PermissionRuleEvaluator::rules_from_config(
+                perms,
+                cocode_protocol::RuleSource::User,
+            ),
+            None => Vec::new(),
         };
 
         // Create shell executor with default shell and start snapshotting
         let mut shell_executor = ShellExecutor::with_default_shell(session.working_dir.clone());
-        if let Some(cocode_home) = dirs::home_dir().map(|h| h.join(".cocode")) {
-            shell_executor.start_snapshotting(cocode_home, &session.id.to_string());
-        }
+        shell_executor.start_snapshotting(config.cocode_home.clone(), &session.id.to_string());
+
+        // Create OTel manager if OTel is configured
+        let otel_manager = config.otel.as_ref().map(|_| {
+            let mgr = Arc::new(cocode_otel::OtelManager::new(
+                &session.id,
+                &provider_name,
+                &model_name,
+                None,
+                None,
+                None,
+                false,
+                "tui".to_string(),
+                "session",
+            ));
+            // Record session start events
+            mgr.counter(
+                "cocode.session.started",
+                1,
+                &[("provider", &provider_name), ("model", &model_name)],
+            );
+            mgr.conversation_starts(
+                &provider_name,
+                None,
+                "",
+                Some(context_window as i64),
+                "default",
+                &format!("{:?}", config.sandbox_mode),
+                vec![],
+                config.active_profile.clone(),
+            );
+            mgr
+        });
 
         Ok(Self {
             session,
@@ -272,8 +383,12 @@ impl SessionState {
             tool_registry: Arc::new(tool_registry),
             hook_registry: Arc::new(hook_registry),
             skills,
+            skill_manager: Arc::new(skill_manager),
+            plugin_registry,
             api_client,
             model_hub,
+            subagent_manager,
+            _mcp_clients: mcp_clients,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
@@ -282,10 +397,12 @@ impl SessionState {
             context_window,
             provider_type,
             shell_executor,
-            queued_commands: Vec::new(),
+            queued_commands: Arc::new(Mutex::new(Vec::new())),
             system_prompt_suffix: None,
-            features,
+            config,
             permission_rules,
+            todos: serde_json::json!([]),
+            otel_manager,
         })
     }
 
@@ -352,12 +469,22 @@ impl SessionState {
             .hooks(self.hook_registry.clone())
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
-            .features(self.features.clone())
+            .queued_commands(self.queued_commands.clone())
+            .features(self.config.features.clone())
+            .web_search_config(self.config.web_search_config.clone())
+            .web_fetch_config(self.config.web_fetch_config.clone())
             .permission_rules(self.permission_rules.clone())
             .shell_executor(self.shell_executor.clone())
+            .skill_manager(self.skill_manager.clone())
+            .otel_manager(self.otel_manager.clone())
             .build();
 
         let result = loop_instance.run(user_input).await?;
+
+        // Extract todos state before dropping the loop
+        if let Some(todos) = loop_instance.take_todos() {
+            self.todos = todos;
+        }
 
         // Drop the event sender to signal end of events, then wait for task to complete
         drop(loop_instance);
@@ -419,6 +546,46 @@ impl SessionState {
         result
     }
 
+    /// Run a skill turn with optional model override, streaming events.
+    ///
+    /// Same as [`run_skill_turn`] but forwards events to the provided channel.
+    pub async fn run_skill_turn_streaming(
+        &mut self,
+        prompt: &str,
+        model_override: Option<&str>,
+        event_tx: mpsc::Sender<LoopEvent>,
+    ) -> anyhow::Result<TurnResult> {
+        let saved_selection = if let Some(model_name) = model_override {
+            let current = self.session.selections.get(ModelRole::Main).cloned();
+            let spec = if model_name.contains('/') {
+                model_name
+                    .parse::<cocode_protocol::model::ModelSpec>()
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+            } else {
+                let provider = self.provider().to_string();
+                cocode_protocol::model::ModelSpec::new(provider, model_name)
+            };
+            info!(
+                model = %spec,
+                "Overriding model for skill turn (streaming)"
+            );
+            self.session
+                .selections
+                .set(ModelRole::Main, RoleSelection::new(spec));
+            current
+        } else {
+            None
+        };
+
+        let result = self.run_turn_streaming(prompt, event_tx).await;
+
+        if let Some(original) = saved_selection {
+            self.session.selections.set(ModelRole::Main, original);
+        }
+
+        result
+    }
+
     /// Handle a loop event (logging).
     fn handle_event(event: &LoopEvent) {
         match event {
@@ -452,6 +619,11 @@ impl SessionState {
         }
     }
 
+    /// Get the OTel manager (if configured).
+    pub fn otel_manager(&self) -> Option<&Arc<cocode_otel::OtelManager>> {
+        self.otel_manager.as_ref()
+    }
+
     /// Cancel the current operation.
     pub fn cancel(&self) {
         info!(session_id = %self.session.id, "Cancelling session");
@@ -461,6 +633,22 @@ impl SessionState {
     /// Check if the session is cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.is_cancelled()
+    }
+
+    /// Get a clone of the cancellation token.
+    ///
+    /// The TUI driver uses this to cancel the running turn directly,
+    /// bypassing the command channel for immediate effect.
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    /// Replace the cancellation token with a fresh one.
+    ///
+    /// Call this after a turn is cancelled so the next turn can proceed.
+    /// `CancellationToken` is one-shot — once cancelled it stays cancelled.
+    pub fn reset_cancel_token(&mut self) {
+        self.cancel_token = CancellationToken::new();
     }
 
     /// Get the session ID.
@@ -512,6 +700,19 @@ impl SessionState {
         self.hook_registry = hooks;
     }
 
+    /// Execute SessionEnd hooks and perform cleanup.
+    ///
+    /// Call this before dropping the session state to give hooks a chance
+    /// to run (e.g., saving state, logging).
+    pub async fn close(&self) {
+        let ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::SessionEnd,
+            self.session.id.clone(),
+            self.session.working_dir.clone(),
+        );
+        self.hook_registry.execute(&ctx).await;
+    }
+
     /// Add a skill to the session.
     pub fn add_skill(&mut self, skill: SkillInterface) {
         self.skills.push(skill);
@@ -520,6 +721,26 @@ impl SessionState {
     /// Get the loaded skills.
     pub fn skills(&self) -> &[SkillInterface] {
         &self.skills
+    }
+
+    /// Get the skill manager.
+    pub fn skill_manager(&self) -> &Arc<SkillManager> {
+        &self.skill_manager
+    }
+
+    /// Get the plugin registry, if any plugins are loaded.
+    pub fn plugin_registry(&self) -> Option<&cocode_plugin::PluginRegistry> {
+        self.plugin_registry.as_ref()
+    }
+
+    /// Get the subagent manager.
+    pub fn subagent_manager(&self) -> &SubagentManager {
+        &self.subagent_manager
+    }
+
+    /// Get mutable access to the subagent manager.
+    pub fn subagent_manager_mut(&mut self) -> &mut SubagentManager {
+        &mut self.subagent_manager
     }
 
     /// Update the loop configuration.
@@ -712,12 +933,12 @@ impl SessionState {
 
     /// Queue a command for real-time steering.
     ///
-    /// Queued commands are consumed once in the agent loop and injected as
-    /// steering system-reminders that ask the model to address the message
-    /// and continue (consume-then-remove pattern).
+    /// Thread-safe: can be called while a turn is running. The shared mutex
+    /// ensures commands queued here are visible to the running `AgentLoop`
+    /// at its next Step 6.5 drain.
     ///
     /// Returns the command ID.
-    pub fn queue_command(&mut self, prompt: impl Into<String>) -> String {
+    pub fn queue_command(&self, prompt: impl Into<String>) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -728,23 +949,61 @@ impl SessionState {
             prompt: prompt.into(),
             queued_at: now,
         };
-        self.queued_commands.push(cmd);
+        self.queued_commands.lock().unwrap().push(cmd);
         id
     }
 
     /// Get the number of queued commands.
     pub fn queued_count(&self) -> usize {
-        self.queued_commands.len()
+        self.queued_commands.lock().unwrap().len()
     }
 
     /// Take all queued commands (for passing to AgentLoop).
-    pub fn take_queued_commands(&mut self) -> Vec<QueuedCommandInfo> {
-        std::mem::take(&mut self.queued_commands)
+    pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
+        std::mem::take(&mut *self.queued_commands.lock().unwrap())
     }
 
     /// Clear all queued commands.
-    pub fn clear_queued_commands(&mut self) {
-        self.queued_commands.clear();
+    pub fn clear_queued_commands(&self) {
+        self.queued_commands.lock().unwrap().clear();
+    }
+
+    /// Get a shared handle to the queued commands.
+    ///
+    /// The TUI driver uses this to push commands while a turn is running,
+    /// without needing `&mut self`.
+    pub fn shared_queued_commands(&self) -> Arc<Mutex<Vec<QueuedCommandInfo>>> {
+        self.queued_commands.clone()
+    }
+
+    /// Get the current task list from the most recent TodoWrite tool call.
+    ///
+    /// Reads from the dedicated `todos` field, updated by `ContextModifier::TodosUpdated`
+    /// after each agent loop turn.
+    pub fn current_todos(&self) -> String {
+        let todos = match self.todos.as_array() {
+            Some(arr) if !arr.is_empty() => arr,
+            _ => return "No tasks.".to_string(),
+        };
+        let mut output = String::new();
+        for (i, todo) in todos.iter().enumerate() {
+            let id = todo["id"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| format!("{}", i + 1));
+            let title = todo["subject"]
+                .as_str()
+                .or_else(|| todo["content"].as_str())
+                .unwrap_or("?");
+            let status = todo["status"].as_str().unwrap_or("?");
+            let marker = match status {
+                "completed" => "[x]",
+                "in_progress" => "[>]",
+                _ => "[ ]",
+            };
+            output.push_str(&format!("{marker} {id}: {title}\n"));
+        }
+        output
     }
 
     // ==========================================================
@@ -824,19 +1083,26 @@ impl SessionState {
             .hooks(self.hook_registry.clone())
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
-            .queued_commands(std::mem::take(&mut self.queued_commands))
-            .features(self.features.clone())
+            .queued_commands(self.queued_commands.clone())
+            .features(self.config.features.clone())
+            .web_search_config(self.config.web_search_config.clone())
+            .web_fetch_config(self.config.web_fetch_config.clone())
             .permission_rules(self.permission_rules.clone())
+            .skill_manager(self.skill_manager.clone())
+            .otel_manager(self.otel_manager.clone())
             .build();
 
         // Queued commands are consumed as steering in core_message_loop Step 6.5.
         // No post-idle re-execution needed — steering asks the model to address
         // each message ("Please address this message and continue").
+        // The shared Arc<Mutex> means any commands queued by the TUI driver during
+        // the turn are visible to the loop immediately — no take-back needed.
         let result = loop_instance.run_and_process_queue(user_input).await?;
 
-        // After Step 6.5 drains the queue for steering, this will normally be empty.
-        // Kept as safety net to recover any edge-case residuals.
-        self.queued_commands = loop_instance.take_queued_commands();
+        // Extract todos state from the loop
+        if let Some(todos) = loop_instance.take_todos() {
+            self.todos = todos;
+        }
 
         // Update totals
         self.total_turns += result.turns_completed;
@@ -845,6 +1111,85 @@ impl SessionState {
 
         Ok(TurnResult::from_loop_result(&result))
     }
+}
+
+/// Convert config hook entries to hook definitions.
+///
+/// Each `HookConfig` can contain multiple handlers; each handler becomes
+/// a separate `HookDefinition`.
+fn convert_config_hooks(
+    configs: &[cocode_config::json_config::HookConfig],
+) -> Vec<cocode_hooks::HookDefinition> {
+    use cocode_config::json_config::HookHandlerConfig;
+
+    let mut defs = Vec::new();
+    for (idx, cfg) in configs.iter().enumerate() {
+        // Parse event type
+        let event_type = match cfg.event.as_str() {
+            "pre_tool_use" => cocode_hooks::HookEventType::PreToolUse,
+            "post_tool_use" => cocode_hooks::HookEventType::PostToolUse,
+            "post_tool_use_failure" => cocode_hooks::HookEventType::PostToolUseFailure,
+            "user_prompt_submit" => cocode_hooks::HookEventType::UserPromptSubmit,
+            "session_start" => cocode_hooks::HookEventType::SessionStart,
+            "session_end" => cocode_hooks::HookEventType::SessionEnd,
+            "stop" => cocode_hooks::HookEventType::Stop,
+            "subagent_start" => cocode_hooks::HookEventType::SubagentStart,
+            "subagent_stop" => cocode_hooks::HookEventType::SubagentStop,
+            "pre_compact" => cocode_hooks::HookEventType::PreCompact,
+            "notification" => cocode_hooks::HookEventType::Notification,
+            "permission_request" => cocode_hooks::HookEventType::PermissionRequest,
+            other => {
+                tracing::warn!(event = %other, "Unknown hook event type in config, skipping");
+                continue;
+            }
+        };
+
+        // Parse matcher: pipe-separated pattern becomes Or matcher
+        let matcher = cfg.matcher.as_deref().map(|m| {
+            if m.contains('|') {
+                let parts: Vec<cocode_hooks::HookMatcher> = m
+                    .split('|')
+                    .map(|p| cocode_hooks::HookMatcher::Exact {
+                        value: p.trim().to_string(),
+                    })
+                    .collect();
+                cocode_hooks::HookMatcher::Or { matchers: parts }
+            } else {
+                cocode_hooks::HookMatcher::Exact {
+                    value: m.to_string(),
+                }
+            }
+        });
+
+        // Each handler becomes a separate HookDefinition
+        for (h_idx, handler_cfg) in cfg.hooks.iter().enumerate() {
+            let (handler, timeout_secs) = match handler_cfg {
+                HookHandlerConfig::Command {
+                    command,
+                    args,
+                    timeout_secs,
+                } => (
+                    cocode_hooks::HookHandler::Command {
+                        command: command.clone(),
+                        args: args.clone(),
+                    },
+                    *timeout_secs,
+                ),
+            };
+
+            defs.push(cocode_hooks::HookDefinition {
+                name: format!("config-hook-{idx}-{h_idx}"),
+                event_type: event_type.clone(),
+                matcher: matcher.clone(),
+                handler,
+                source: cocode_hooks::HookSource::Session,
+                enabled: true,
+                timeout_secs,
+                once: false,
+            });
+        }
+    }
+    defs
 }
 
 #[cfg(test)]
