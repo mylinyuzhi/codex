@@ -22,11 +22,7 @@ impl Tool for DummyTool {
         })
     }
 
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &mut ToolContext,
-    ) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput, ToolError> {
         let message = input["message"].as_str().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {
                 message: "message must be a string",

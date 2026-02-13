@@ -116,10 +116,7 @@ mod select_tools_for_model_tests {
     fn experimental_supported_tools_whitelist() {
         let model_info = ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-            experimental_supported_tools: Some(vec![
-                "Read".to_string(),
-                "apply_patch".to_string(),
-            ]),
+            experimental_supported_tools: Some(vec!["Read".to_string(), "apply_patch".to_string()]),
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);

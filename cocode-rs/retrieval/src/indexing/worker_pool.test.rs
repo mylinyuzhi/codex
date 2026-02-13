@@ -26,11 +26,7 @@ impl CountingProcessor {
 impl EventProcessor for CountingProcessor {
     type EventData = WatchEventKind;
 
-    async fn process(
-        &self,
-        _path: &Path,
-        _event: &TrackedEvent<Self::EventData>,
-    ) -> Result<()> {
+    async fn process(&self, _path: &Path, _event: &TrackedEvent<Self::EventData>) -> Result<()> {
         self.count.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -238,8 +234,7 @@ async fn test_worker_pool_lag_tracking() {
 
     // Push events
     for (i, seq) in seqs.iter().enumerate() {
-        let event =
-            TrackedEvent::new(WatchEventKind::Changed, None, *seq, format!("trace-{i}"));
+        let event = TrackedEvent::new(WatchEventKind::Changed, None, *seq, format!("trace-{i}"));
         queue
             .push(PathBuf::from(format!("file{i}.rs")), event)
             .await;

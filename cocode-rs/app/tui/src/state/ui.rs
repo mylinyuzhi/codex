@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cocode_protocol::ApprovalRequest;
+use cocode_protocol::RoleSelection;
 
 use crate::theme::Theme;
 use crate::widgets::Toast;
@@ -918,8 +919,8 @@ impl PermissionOverlay {
 /// Model picker overlay state.
 #[derive(Debug, Clone)]
 pub struct ModelPickerOverlay {
-    /// Available models.
-    pub models: Vec<String>,
+    /// Available model selections.
+    pub items: Vec<RoleSelection>,
     /// Currently selected index.
     pub selected: i32,
     /// Search filter.
@@ -928,24 +929,23 @@ pub struct ModelPickerOverlay {
 
 impl ModelPickerOverlay {
     /// Create a new model picker.
-    pub fn new(models: Vec<String>) -> Self {
+    pub fn new(items: Vec<RoleSelection>) -> Self {
         Self {
-            models,
+            items,
             selected: 0,
             filter: String::new(),
         }
     }
 
-    /// Get filtered models.
-    pub fn filtered_models(&self) -> Vec<&str> {
+    /// Get filtered items.
+    pub fn filtered_items(&self) -> Vec<&RoleSelection> {
         if self.filter.is_empty() {
-            self.models.iter().map(String::as_str).collect()
+            self.items.iter().collect()
         } else {
             let filter = self.filter.to_lowercase();
-            self.models
+            self.items
                 .iter()
-                .filter(|m| m.to_lowercase().contains(&filter))
-                .map(String::as_str)
+                .filter(|s| s.model.to_string().to_lowercase().contains(&filter))
                 .collect()
         }
     }
@@ -959,7 +959,7 @@ impl ModelPickerOverlay {
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        let max = self.filtered_models().len() as i32 - 1;
+        let max = self.filtered_items().len() as i32 - 1;
         if self.selected < max {
             self.selected += 1;
         }

@@ -1,9 +1,8 @@
 use super::*;
 use tempfile::TempDir;
 
-fn make_config(max_size: i32, preview_size: i32, enabled: bool) -> ToolConfig {
+fn make_config(preview_size: i32, enabled: bool) -> ToolConfig {
     ToolConfig {
-        max_result_size: max_size,
         result_preview_size: preview_size,
         enable_result_persistence: enabled,
         ..Default::default()
@@ -21,10 +20,10 @@ fn extract_text(content: &ToolResultContent) -> &str {
 #[tokio::test]
 async fn test_small_result_unchanged() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(100, 20, true);
+    let config = make_config(20, true);
     let output = ToolOutput::text("small result");
 
-    let result = persist_if_needed(output, "call-1", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-1", temp_dir.path(), 100, &config).await;
 
     assert_eq!(extract_text(&result.content), "small result");
     assert!(!result.is_error);
@@ -33,11 +32,11 @@ async fn test_small_result_unchanged() {
 #[tokio::test]
 async fn test_large_result_persisted() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(50, 20, true);
+    let config = make_config(20, true);
     let large_content = "x".repeat(100);
     let output = ToolOutput::text(&large_content);
 
-    let result = persist_if_needed(output, "call-2", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-2", temp_dir.path(), 50, &config).await;
 
     // Check that result contains persistence markers
     let text = extract_text(&result.content);
@@ -56,11 +55,11 @@ async fn test_large_result_persisted() {
 #[tokio::test]
 async fn test_persistence_disabled() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(50, 20, false);
+    let config = make_config(20, false);
     let large_content = "x".repeat(100);
     let output = ToolOutput::text(&large_content);
 
-    let result = persist_if_needed(output, "call-3", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-3", temp_dir.path(), 50, &config).await;
 
     // Should return original unchanged
     assert_eq!(extract_text(&result.content), large_content);
@@ -72,11 +71,11 @@ async fn test_persistence_disabled() {
 #[tokio::test]
 async fn test_preview_truncation() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(50, 10, true);
+    let config = make_config(10, true);
     let large_content = "abcdefghijklmnopqrstuvwxyz".repeat(5); // 130 chars
     let output = ToolOutput::text(&large_content);
 
-    let result = persist_if_needed(output, "call-4", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-4", temp_dir.path(), 50, &config).await;
 
     let text = extract_text(&result.content);
     // Preview should contain first ~10 chars + "..."
@@ -86,11 +85,11 @@ async fn test_preview_truncation() {
 #[tokio::test]
 async fn test_structured_content() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(20, 10, true);
+    let config = make_config(10, true);
     let json = serde_json::json!({"key": "value".repeat(10)});
     let output = ToolOutput::structured(json);
 
-    let result = persist_if_needed(output, "call-5", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-5", temp_dir.path(), 20, &config).await;
 
     // Should be persisted since JSON string representation exceeds threshold
     let text = extract_text(&result.content);
@@ -100,11 +99,11 @@ async fn test_structured_content() {
 #[tokio::test]
 async fn test_error_output_preserved() {
     let temp_dir = TempDir::new().unwrap();
-    let config = make_config(50, 20, true);
+    let config = make_config(20, true);
     let large_content = "error: ".to_string() + &"x".repeat(100);
     let output = ToolOutput::error(&large_content);
 
-    let result = persist_if_needed(output, "call-6", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-6", temp_dir.path(), 50, &config).await;
 
     // is_error flag should be preserved
     assert!(result.is_error);
@@ -113,13 +112,12 @@ async fn test_error_output_preserved() {
 #[tokio::test]
 async fn test_utf8_safe_truncation() {
     let temp_dir = TempDir::new().unwrap();
-    // Use a threshold that's larger than 10 emojis but smaller than 100
-    let config = make_config(100, 10, true);
+    let config = make_config(10, true);
     // Multi-byte UTF-8 characters - 50 emojis = 200 bytes
     let large_content = "🔥".repeat(50);
     let output = ToolOutput::text(&large_content);
 
-    let result = persist_if_needed(output, "call-7", temp_dir.path(), &config).await;
+    let result = persist_if_needed(output, "call-7", temp_dir.path(), 100, &config).await;
 
     let text = extract_text(&result.content);
     // Should not panic on UTF-8 boundary and should be persisted (200 bytes > 100 threshold)

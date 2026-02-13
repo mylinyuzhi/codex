@@ -42,8 +42,7 @@ impl Drop for EnvVarGuard {
 #[tokio::test]
 async fn create_env_honors_overrides() {
     let value = "custom".to_string();
-    let env =
-        create_env_for_mcp_server(Some(HashMap::from([("TZ".into(), value.clone())])), &[]);
+    let env = create_env_for_mcp_server(Some(HashMap::from([("TZ".into(), value.clone())])), &[]);
     assert_eq!(env.get("TZ"), Some(&value));
 }
 

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use cocode_protocol::AgentProgress;
-use cocode_protocol::ThinkingLevel;
+use cocode_protocol::RoleSelection;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::UserQueuedCommand;
 
@@ -16,11 +16,8 @@ pub struct SessionState {
     /// Messages in the conversation.
     pub messages: Vec<ChatMessage>,
 
-    /// Current model being used.
-    pub current_model: String,
-
-    /// Current thinking level.
-    pub thinking_level: ThinkingLevel,
+    /// Current model + thinking level selection.
+    pub current_selection: Option<RoleSelection>,
 
     /// Whether plan mode is active.
     pub plan_mode: bool,
@@ -42,9 +39,6 @@ pub struct SessionState {
 
     /// Session ID (if resuming).
     pub session_id: Option<String>,
-
-    /// Thinking budget in tokens (if set).
-    pub thinking_budget_tokens: Option<i32>,
 
     /// Thinking tokens used in the current turn.
     pub thinking_tokens_used: i32,
@@ -68,8 +62,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             messages: Vec::new(),
-            current_model: "claude-sonnet-4-20250514".to_string(),
-            thinking_level: ThinkingLevel::default(),
+            current_selection: None,
             plan_mode: false,
             plan_phase: None,
             plan_file: None,
@@ -77,7 +70,6 @@ impl Default for SessionState {
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_id: None,
-            thinking_budget_tokens: None,
             thinking_tokens_used: 0,
             mcp_servers: Vec::new(),
             fallback_model: None,
@@ -115,11 +107,6 @@ impl SessionState {
         }
     }
 
-    /// Set the thinking budget.
-    pub fn set_thinking_budget(&mut self, budget: Option<i32>) {
-        self.thinking_budget_tokens = budget;
-    }
-
     /// Reset thinking tokens used (call at start of turn).
     pub fn reset_thinking_tokens(&mut self) {
         self.thinking_tokens_used = 0;
@@ -128,12 +115,6 @@ impl SessionState {
     /// Add thinking tokens used.
     pub fn add_thinking_tokens(&mut self, tokens: i32) {
         self.thinking_tokens_used += tokens;
-    }
-
-    /// Get remaining thinking budget (if budget is set).
-    pub fn thinking_budget_remaining(&self) -> Option<i32> {
-        self.thinking_budget_tokens
-            .map(|budget| (budget - self.thinking_tokens_used).max(0))
     }
 
     /// Set the current plan phase.

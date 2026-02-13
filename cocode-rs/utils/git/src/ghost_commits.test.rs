@@ -197,8 +197,7 @@ fn create_snapshot_reports_large_untracked_dirs() -> Result<(), GitToolingError>
         std::fs::write(file, "data\n")?;
     }
 
-    let (ghost, report) =
-        create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+    let (ghost, report) = create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
     assert!(ghost.parent().is_some());
     assert_eq!(
         report.large_untracked_dirs,
@@ -232,8 +231,7 @@ fn create_snapshot_reports_large_untracked_dirs() -> Result<(), GitToolingError>
 }
 
 #[test]
-fn restore_preserves_large_untracked_dirs_when_threshold_disabled()
--> Result<(), GitToolingError> {
+fn restore_preserves_large_untracked_dirs_when_threshold_disabled() -> Result<(), GitToolingError> {
     let temp = tempfile::tempdir()?;
     let repo = temp.path();
     init_test_repo(repo);
@@ -324,8 +322,7 @@ fn snapshot_ignores_default_ignored_directories() -> Result<(), GitToolingError>
         "print('ignored')\n",
     )?;
 
-    let (ghost, report) =
-        create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+    let (ghost, report) = create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
     assert!(ghost.parent().is_some());
 
     for file in ghost.preexisting_untracked_files() {
@@ -481,8 +478,7 @@ fn create_snapshot_reports_nested_large_untracked_dirs_under_tracked_parent()
         std::fs::write(file, "data\n")?;
     }
 
-    let (ghost, report) =
-        create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+    let (ghost, report) = create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
     assert_eq!(report.large_untracked_dirs.len(), 1);
     let entry = &report.large_untracked_dirs[0];
     assert_ne!(entry.path, PathBuf::from("src"));
@@ -572,8 +568,8 @@ fn create_ghost_commit_rejects_force_include_parent_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo = temp.path();
     init_test_repo(repo);
-    let options = CreateGhostCommitOptions::new(repo)
-        .force_include(vec![PathBuf::from("../outside.txt")]);
+    let options =
+        CreateGhostCommitOptions::new(repo).force_include(vec![PathBuf::from("../outside.txt")]);
     let err = create_ghost_commit(&options).unwrap_err();
     assert_matches!(err, GitToolingError::PathEscapesRepository { .. });
 }

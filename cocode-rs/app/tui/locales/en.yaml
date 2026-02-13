@@ -93,6 +93,9 @@ command.paste_from_clipboard: "Paste from Clipboard"
 # Queue
 command.queue_input: "Queue Input"
 
+# Background
+command.background_all_tasks: "Background All Tasks"
+
 # Quit
 command.quit: "Quit"
 
@@ -128,9 +131,6 @@ status.waiting: "Waiting:"
 status.thinking: "thinking..."
 status.thinking_with_duration: "thinking... %{duration}s"
 status.thought_for: "thought for %{duration}s"
-
-# Thinking budget
-status.thinking_budget: "%{used}/%{total}"
 
 # ============================================================
 # Dialog/Overlay translations
@@ -181,6 +181,7 @@ help.ctrl_m: "Switch model"
 help.ctrl_v: "Paste (image or text)"
 help.ctrl_e: "Open external editor"
 help.ctrl_l: "Clear screen"
+help.ctrl_b: "Background running tasks"
 help.ctrl_c: "Interrupt"
 help.ctrl_q: "Quit"
 help.enter: "Submit message"
@@ -238,6 +239,9 @@ input.placeholder: "Type a message... (Enter to send, Shift+Enter for newline)"
 
 # Image paste
 toast.image_pasted: "Image pasted from clipboard"
+
+# Toast messages for background
+toast.tasks_backgrounded: "Backgrounded %{count} task(s)"
 
 # Toast messages for queue
 toast.command_queued: "Queued (%{count} waiting)"

@@ -172,10 +172,7 @@ impl SystemReminderOrchestrator {
                             debug!("Generator '{}' produced reminder", name);
                             Some((attachment_type, reminder))
                         }
-                        Ok(Ok(None)) => {
-                            debug!("Generator '{}' produced no output", name);
-                            None
-                        }
+                        Ok(Ok(None)) => None,
                         Ok(Err(e)) => {
                             warn!("Generator '{}' failed: {}", name, e);
                             None

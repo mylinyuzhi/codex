@@ -22,7 +22,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let config = RetrievalConfig::load(&std::env::current_dir()?)?;
+//!     let config = RetrievalConfig::load(&std::env::current_dir()?, &cocode_home)?;
 //!     run_tui(config).await
 //! }
 //! ```
@@ -89,7 +89,8 @@ pub async fn run_tui(
 /// Use `run_tui()` with a service parameter for full functionality.
 pub async fn run_tui_default() -> anyhow::Result<()> {
     let workdir = std::env::current_dir()?;
-    let config = RetrievalConfig::load(&workdir)?;
+    let cocode_home = crate::find_cocode_home();
+    let config = RetrievalConfig::load(&workdir, &cocode_home)?;
     run_tui(config, None).await
 }
 

@@ -1,7 +1,13 @@
 use crate::definition::AgentDefinition;
 
 /// Tools that are never available to any subagent, regardless of configuration.
-const SYSTEM_BLOCKED: &[&str] = &["Task", "EnterPlanMode", "ExitPlanMode"];
+const SYSTEM_BLOCKED: &[&str] = &[
+    "Task",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "TaskStop",
+    "AskUserQuestion",
+];
 
 /// Apply three-layer tool filtering for a subagent.
 ///
@@ -36,8 +42,10 @@ pub fn filter_tools_for_agent(
     }
 
     // Background agents cannot use interactive tools.
+    // Note: AskUserQuestion is already in SYSTEM_BLOCKED for all subagents.
+    // This filter catches any additional interactive tools not in SYSTEM_BLOCKED.
     if background {
-        let interactive_blocked = ["UserInput", "AskUser", "ConfirmAction"];
+        let interactive_blocked: &[&str] = &[];
         result.retain(|t| !interactive_blocked.contains(&t.as_str()));
     }
 

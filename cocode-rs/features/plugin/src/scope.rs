@@ -9,9 +9,11 @@ use std::path::PathBuf;
 /// The scope from which a plugin was loaded.
 ///
 /// Scopes are ordered by priority (higher scopes override lower ones):
-/// 1. Project - `.cocode/plugins/` in the project directory
-/// 2. User - `~/.config/cocode/plugins/`
-/// 3. Managed - System-installed plugins
+/// 1. Flag - `--plugin-dir` or inline (highest priority)
+/// 2. Local - Development/local plugins
+/// 3. Project - `.cocode/plugins/` in the project directory
+/// 4. User - `~/.cocode/plugins/`
+/// 5. Managed - System-installed plugins (lowest priority)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PluginScope {
     /// System-installed (lowest priority).
@@ -20,8 +22,14 @@ pub enum PluginScope {
     /// User-global plugins.
     User,
 
-    /// Project-local plugins (highest priority).
+    /// Project-local plugins.
     Project,
+
+    /// Development/local plugins.
+    Local,
+
+    /// CLI flag or inline plugins (highest priority).
+    Flag,
 }
 
 impl PluginScope {
@@ -49,9 +57,8 @@ impl PluginScope {
                     None
                 }
             }
-            Self::User => dirs::config_dir().map(|p| p.join("cocode").join("plugins")),
-            Self::Project => {
-                // Project scope depends on the current working directory
+            Self::User | Self::Project | Self::Local | Self::Flag => {
+                // These scopes depend on runtime context
                 None
             }
         }
@@ -63,6 +70,8 @@ impl PluginScope {
             Self::Managed => 0,
             Self::User => 1,
             Self::Project => 2,
+            Self::Local => 3,
+            Self::Flag => 4,
         }
     }
 }
@@ -73,6 +82,8 @@ impl std::fmt::Display for PluginScope {
             Self::Managed => write!(f, "managed"),
             Self::User => write!(f, "user"),
             Self::Project => write!(f, "project"),
+            Self::Local => write!(f, "local"),
+            Self::Flag => write!(f, "flag"),
         }
     }
 }

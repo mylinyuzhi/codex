@@ -249,7 +249,8 @@ fn test_echo_and_apply_patch_is_ignored() {
 
 #[test]
 fn test_apply_patch_with_arg_is_ignored() {
-    let script = "apply_patch foo <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH";
+    let script =
+        "apply_patch foo <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH";
     assert_not_match(script);
 }
 

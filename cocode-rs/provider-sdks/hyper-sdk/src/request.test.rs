@@ -253,8 +253,7 @@ fn test_with_volcengine_options() {
         .with_volcengine_options(VolcengineOptions::new().with_thinking_budget(2048));
 
     assert!(request.provider_options.is_some());
-    let opts =
-        downcast_options::<VolcengineOptions>(request.provider_options.as_ref().unwrap());
+    let opts = downcast_options::<VolcengineOptions>(request.provider_options.as_ref().unwrap());
     assert!(opts.is_some());
     assert_eq!(opts.unwrap().thinking_budget_tokens, Some(2048));
 }

@@ -21,8 +21,8 @@ async fn test_enter_plan_mode() {
 #[tokio::test]
 async fn test_enter_plan_mode_with_agent_id() {
     let tool = EnterPlanModeTool::new();
-    let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
-        .with_agent_id("explore-1");
+    let mut ctx =
+        ToolContext::new("call-1", "session-1", PathBuf::from("/tmp")).with_agent_id("explore-1");
 
     let input = serde_json::json!({});
     let result = tool.execute(input, &mut ctx).await.unwrap();

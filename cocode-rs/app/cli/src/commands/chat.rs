@@ -1,8 +1,10 @@
 //! Chat command - start an interactive chat session.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cocode_config::ConfigManager;
+use cocode_config::ConfigOverrides;
 use cocode_protocol::ModelSpec;
 use cocode_protocol::RoleSelection;
 use cocode_session::Session;
@@ -72,13 +74,16 @@ pub async fn run(
     // Get working directory
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // Build Config snapshot from ConfigManager
+    let snapshot =
+        Arc::new(config.build_config(ConfigOverrides::default().with_cwd(working_dir.clone()))?);
+
     // Use current config (profile-based)
     let (provider_name, model_name) = config.current();
 
-    // Get provider type from config
-    let provider_type = config
-        .resolve_provider(&provider_name)
-        .map(|info| info.provider_type)
+    // Get provider type from snapshot
+    let provider_type = snapshot
+        .provider_type(&provider_name)
         .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
 
     // Create session with the model spec
@@ -93,8 +98,8 @@ pub async fn run(
         session.set_max_turns(Some(max));
     }
 
-    // Create session state
-    let mut state = SessionState::new(session, config).await?;
+    // Create session state from config snapshot
+    let mut state = SessionState::new(session, snapshot).await?;
 
     // Set system prompt suffix if provided
     if let Some(suffix) = system_prompt_suffix {

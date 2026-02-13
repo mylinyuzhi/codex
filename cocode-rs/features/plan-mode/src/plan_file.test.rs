@@ -3,7 +3,7 @@ use crate::plan_slug::clear_slug_cache;
 
 #[test]
 fn test_get_plan_dir() {
-    let dir = get_plan_dir().expect("should get plan dir");
+    let dir = get_plan_dir();
     assert!(dir.ends_with("plans"));
     assert!(dir.to_string_lossy().contains(".cocode"));
 }
@@ -11,7 +11,7 @@ fn test_get_plan_dir() {
 #[test]
 fn test_get_plan_file_path_main_agent() {
     clear_slug_cache();
-    let path = get_plan_file_path("test-session", None).expect("should get path");
+    let path = get_plan_file_path("test-session", None);
     assert!(path.extension().unwrap_or_default() == "md");
     assert!(!path.to_string_lossy().contains("agent-"));
 }
@@ -19,7 +19,7 @@ fn test_get_plan_file_path_main_agent() {
 #[test]
 fn test_get_plan_file_path_subagent() {
     clear_slug_cache();
-    let path = get_plan_file_path("test-session", Some("explore-1")).expect("should get path");
+    let path = get_plan_file_path("test-session", Some("explore-1"));
     assert!(path.extension().unwrap_or_default() == "md");
     assert!(path.to_string_lossy().contains("agent-explore-1"));
 }
@@ -41,7 +41,7 @@ fn test_plan_file_manager() {
     assert_eq!(manager.session_id(), "session-1");
     assert!(manager.agent_id().is_none());
 
-    let path = manager.path().expect("should get path");
+    let path = manager.path();
     assert!(path.extension().unwrap_or_default() == "md");
 }
 
@@ -53,6 +53,6 @@ fn test_plan_file_manager_for_agent() {
     assert_eq!(manager.session_id(), "session-1");
     assert_eq!(manager.agent_id(), Some("explore"));
 
-    let path = manager.path().expect("should get path");
+    let path = manager.path();
     assert!(path.to_string_lossy().contains("agent-explore"));
 }

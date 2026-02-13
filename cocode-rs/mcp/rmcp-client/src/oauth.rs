@@ -48,8 +48,6 @@ use cocode_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
-use crate::find_codex_home::find_codex_home;
-
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 
@@ -95,13 +93,19 @@ pub(crate) fn load_oauth_tokens(
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: &std::path::Path,
 ) -> Result<Option<StoredOAuthTokens>> {
     let keyring_store = DefaultKeyringStore;
     match store_mode {
-        OAuthCredentialsStoreMode::Auto => {
-            load_oauth_tokens_from_keyring_with_fallback_to_file(&keyring_store, server_name, url)
+        OAuthCredentialsStoreMode::Auto => load_oauth_tokens_from_keyring_with_fallback_to_file(
+            &keyring_store,
+            server_name,
+            url,
+            cocode_home,
+        ),
+        OAuthCredentialsStoreMode::File => {
+            load_oauth_tokens_from_file(server_name, url, cocode_home)
         }
-        OAuthCredentialsStoreMode::File => load_oauth_tokens_from_file(server_name, url),
         OAuthCredentialsStoreMode::Keyring => {
             load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
                 .with_context(|| "failed to read OAuth tokens from keyring".to_string())
@@ -113,8 +117,9 @@ pub(crate) fn has_oauth_tokens(
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: &std::path::Path,
 ) -> Result<bool> {
-    Ok(load_oauth_tokens(server_name, url, store_mode)?.is_some())
+    Ok(load_oauth_tokens(server_name, url, store_mode, cocode_home)?.is_some())
 }
 
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
@@ -137,13 +142,14 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore>(
     keyring_store: &K,
     server_name: &str,
     url: &str,
+    cocode_home: &std::path::Path,
 ) -> Result<Option<StoredOAuthTokens>> {
     match load_oauth_tokens_from_keyring(keyring_store, server_name, url) {
         Ok(Some(tokens)) => Ok(Some(tokens)),
-        Ok(None) => load_oauth_tokens_from_file(server_name, url),
+        Ok(None) => load_oauth_tokens_from_file(server_name, url, cocode_home),
         Err(error) => {
             warn!("failed to read OAuth tokens from keyring: {error}");
-            load_oauth_tokens_from_file(server_name, url)
+            load_oauth_tokens_from_file(server_name, url, cocode_home)
                 .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
         }
     }
@@ -171,6 +177,7 @@ pub fn save_oauth_tokens(
     server_name: &str,
     tokens: &StoredOAuthTokens,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: &std::path::Path,
 ) -> Result<()> {
     let keyring_store = DefaultKeyringStore;
     match store_mode {
@@ -178,10 +185,11 @@ pub fn save_oauth_tokens(
             &keyring_store,
             server_name,
             tokens,
+            cocode_home,
         ),
-        OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file(tokens),
+        OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file(tokens, cocode_home),
         OAuthCredentialsStoreMode::Keyring => {
-            save_oauth_tokens_with_keyring(&keyring_store, server_name, tokens)
+            save_oauth_tokens_with_keyring(&keyring_store, server_name, tokens, cocode_home)
         }
     }
 }
@@ -190,13 +198,14 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
     keyring_store: &K,
     server_name: &str,
     tokens: &StoredOAuthTokens,
+    cocode_home: &std::path::Path,
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
 
     let key = compute_store_key(server_name, &tokens.url)?;
     match keyring_store.save(KEYRING_SERVICE, &key, &serialized) {
         Ok(()) => {
-            if let Err(error) = delete_oauth_tokens_from_file(&key) {
+            if let Err(error) = delete_oauth_tokens_from_file(&key, cocode_home) {
                 warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
             }
             Ok(())
@@ -216,13 +225,14 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore>(
     keyring_store: &K,
     server_name: &str,
     tokens: &StoredOAuthTokens,
+    cocode_home: &std::path::Path,
 ) -> Result<()> {
-    match save_oauth_tokens_with_keyring(keyring_store, server_name, tokens) {
+    match save_oauth_tokens_with_keyring(keyring_store, server_name, tokens, cocode_home) {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = error.to_string();
             warn!("falling back to file storage for OAuth tokens: {message}");
-            save_oauth_tokens_to_file(tokens)
+            save_oauth_tokens_to_file(tokens, cocode_home)
                 .with_context(|| format!("failed to write OAuth tokens to keyring: {message}"))
         }
     }
@@ -232,9 +242,16 @@ pub fn delete_oauth_tokens(
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: &std::path::Path,
 ) -> Result<bool> {
     let keyring_store = DefaultKeyringStore;
-    delete_oauth_tokens_from_keyring_and_file(&keyring_store, store_mode, server_name, url)
+    delete_oauth_tokens_from_keyring_and_file(
+        &keyring_store,
+        store_mode,
+        server_name,
+        url,
+        cocode_home,
+    )
 }
 
 fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
@@ -242,6 +259,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
     store_mode: OAuthCredentialsStoreMode,
     server_name: &str,
     url: &str,
+    cocode_home: &std::path::Path,
 ) -> Result<bool> {
     let key = compute_store_key(server_name, url)?;
     let keyring_result = keyring_store.delete(KEYRING_SERVICE, &key);
@@ -260,7 +278,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
         }
     };
 
-    let file_removed = delete_oauth_tokens_from_file(&key)?;
+    let file_removed = delete_oauth_tokens_from_file(&key, cocode_home)?;
     Ok(keyring_removed || file_removed)
 }
 
@@ -274,6 +292,7 @@ struct OAuthPersistorInner {
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: PathBuf,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
 }
 
@@ -283,6 +302,7 @@ impl OAuthPersistor {
         url: String,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
         store_mode: OAuthCredentialsStoreMode,
+        cocode_home: PathBuf,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
         Self {
@@ -291,6 +311,7 @@ impl OAuthPersistor {
                 url,
                 authorization_manager,
                 store_mode,
+                cocode_home,
                 last_credentials: Mutex::new(initial_credentials),
             }),
         }
@@ -326,7 +347,12 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
-                    save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
+                    save_oauth_tokens(
+                        &self.inner.server_name,
+                        &stored,
+                        self.inner.store_mode,
+                        &self.inner.cocode_home,
+                    )?;
                     *last_credentials = Some(stored);
                 }
             }
@@ -337,6 +363,7 @@ impl OAuthPersistor {
                         &self.inner.server_name,
                         &self.inner.url,
                         self.inner.store_mode,
+                        &self.inner.cocode_home,
                     )
                 {
                     warn!(
@@ -394,8 +421,12 @@ struct FallbackTokenEntry {
     scopes: Vec<String>,
 }
 
-fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
-    let Some(store) = read_fallback_file()? else {
+fn load_oauth_tokens_from_file(
+    server_name: &str,
+    url: &str,
+    cocode_home: &std::path::Path,
+) -> Result<Option<StoredOAuthTokens>> {
+    let Some(store) = read_fallback_file(cocode_home)? else {
         return Ok(None);
     };
 
@@ -437,9 +468,12 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
     Ok(None)
 }
 
-fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
+fn save_oauth_tokens_to_file(
+    tokens: &StoredOAuthTokens,
+    cocode_home: &std::path::Path,
+) -> Result<()> {
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
-    let mut store = read_fallback_file()?.unwrap_or_default();
+    let mut store = read_fallback_file(cocode_home)?.unwrap_or_default();
 
     let token_response = &tokens.token_response.0;
     let expires_at = tokens
@@ -463,11 +497,11 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
     };
 
     store.insert(key, entry);
-    write_fallback_file(&store)
+    write_fallback_file(&store, cocode_home)
 }
 
-fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
-    let mut store = match read_fallback_file()? {
+fn delete_oauth_tokens_from_file(key: &str, cocode_home: &std::path::Path) -> Result<bool> {
+    let mut store = match read_fallback_file(cocode_home)? {
         Some(store) => store,
         None => return Ok(false),
     };
@@ -475,7 +509,7 @@ fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
     let removed = store.remove(key).is_some();
 
     if removed {
-        write_fallback_file(&store)?;
+        write_fallback_file(&store, cocode_home)?;
     }
 
     Ok(removed)
@@ -534,14 +568,12 @@ fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
     Ok(format!("{server_name}|{truncated}"))
 }
 
-fn fallback_file_path() -> Result<PathBuf> {
-    let mut path = find_codex_home()?;
-    path.push(FALLBACK_FILENAME);
-    Ok(path)
+fn fallback_file_path(cocode_home: &std::path::Path) -> anyhow::Result<PathBuf> {
+    Ok(cocode_home.join(FALLBACK_FILENAME))
 }
 
-fn read_fallback_file() -> Result<Option<FallbackFile>> {
-    let path = fallback_file_path()?;
+fn read_fallback_file(cocode_home: &std::path::Path) -> Result<Option<FallbackFile>> {
+    let path = fallback_file_path(cocode_home)?;
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -562,8 +594,8 @@ fn read_fallback_file() -> Result<Option<FallbackFile>> {
     }
 }
 
-fn write_fallback_file(store: &FallbackFile) -> Result<()> {
-    let path = fallback_file_path()?;
+fn write_fallback_file(store: &FallbackFile, cocode_home: &std::path::Path) -> Result<()> {
+    let path = fallback_file_path(cocode_home)?;
 
     if store.is_empty() {
         if path.exists() {

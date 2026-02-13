@@ -25,7 +25,6 @@ use cocode_hooks::HookEventType;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookResult;
 use cocode_protocol::AbortReason;
-use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::ToolOutput;
@@ -35,6 +34,7 @@ use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -74,10 +74,14 @@ pub struct ExecutorConfig {
     /// When set, tool results exceeding the configured size threshold are
     /// persisted to `{session_dir}/tool-results/{call_id}.txt`.
     pub session_dir: Option<PathBuf>,
-    /// Tool configuration for result persistence thresholds.
+    /// Tool configuration for result persistence settings (preview size, enable flag).
     pub tool_config: cocode_protocol::ToolConfig,
     /// Feature flags for tool enablement.
     pub features: cocode_protocol::Features,
+    /// Web search configuration.
+    pub web_search_config: cocode_protocol::WebSearchConfig,
+    /// Web fetch configuration.
+    pub web_fetch_config: cocode_protocol::WebFetchConfig,
     /// Model-level cap on tool output size (characters).
     /// When set, applied after per-tool truncation but before persistence.
     pub max_tool_output_chars: Option<i32>,
@@ -103,6 +107,8 @@ impl Default for ExecutorConfig {
             session_dir: None,
             tool_config: cocode_protocol::ToolConfig::default(),
             features: cocode_protocol::Features::with_defaults(),
+            web_search_config: cocode_protocol::WebSearchConfig::default(),
+            web_fetch_config: cocode_protocol::WebFetchConfig::default(),
             max_tool_output_chars: None,
         }
     }
@@ -176,6 +182,10 @@ pub struct StreamingToolExecutor {
     shell_executor: ShellExecutor,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Shared registry of cancellation tokens for background agents.
+    agent_cancel_tokens: crate::context::AgentCancelTokens,
+    /// Base directory for background agent output files.
+    agent_output_dir: Option<PathBuf>,
     /// Optional model call function for single-shot LLM calls.
     model_call_fn: Option<ModelCallFn>,
     /// Optional skill manager for the Skill tool.
@@ -206,6 +216,8 @@ pub struct StreamingToolExecutor {
     /// which tools can be used during the skill execution. Applied as an
     /// intersection with `allowed_tool_names`.
     skill_allowed_tools: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
+    /// Optional OTel manager for metrics and traces.
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 impl StreamingToolExecutor {
@@ -230,6 +242,8 @@ impl StreamingToolExecutor {
             completed_results: Arc::new(Mutex::new(Vec::new())),
             shell_executor,
             spawn_agent_fn: None,
+            agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            agent_output_dir: None,
             model_call_fn: None,
             skill_manager: None,
             parent_selections: None,
@@ -238,6 +252,7 @@ impl StreamingToolExecutor {
             allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
+            otel_manager: None,
         }
     }
 
@@ -274,6 +289,18 @@ impl StreamingToolExecutor {
     /// Set the spawn agent callback for the Task tool.
     pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the shared agent cancel token registry.
+    pub fn with_agent_cancel_tokens(mut self, tokens: crate::context::AgentCancelTokens) -> Self {
+        self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the agent output directory for TaskOutput to find agent results.
+    pub fn with_agent_output_dir(mut self, dir: PathBuf) -> Self {
+        self.agent_output_dir = Some(dir);
         self
     }
 
@@ -322,6 +349,12 @@ impl StreamingToolExecutor {
         // Store in a way that can be passed to tool context
         // Note: The actual wiring happens in create_context
         self.skill_manager = Some(manager);
+        self
+    }
+
+    /// Set the OTel manager for metrics and traces.
+    pub fn with_otel_manager(mut self, otel: Option<Arc<cocode_otel::OtelManager>>) -> Self {
+        self.otel_manager = otel;
         self
     }
 
@@ -458,10 +491,10 @@ impl StreamingToolExecutor {
             }
         };
 
-        let concurrency = tool.concurrency_safety();
+        let is_safe = tool.is_concurrency_safe_for(&tool_call.arguments);
 
-        match concurrency {
-            ConcurrencySafety::Safe => {
+        match is_safe {
+            true => {
                 // Check concurrency limit
                 let active_count = self.active_tasks.lock().await.len();
                 if active_count >= self.config.max_concurrency as usize {
@@ -476,7 +509,7 @@ impl StreamingToolExecutor {
                 // Start immediately
                 self.start_tool_execution(tool_call).await;
             }
-            ConcurrencySafety::Unsafe => {
+            false => {
                 // Queue for sequential execution
                 self.pending_unsafe.lock().await.push(PendingToolCall {
                     tool_call,
@@ -533,58 +566,42 @@ impl StreamingToolExecutor {
         let session_id = self.config.session_id.clone();
         let cwd = self.config.cwd.clone();
 
-        // Clone persistence config for result handling
         let session_dir = self.config.session_dir.clone();
         let tool_config = self.config.tool_config.clone();
-        let call_id_for_persistence = call_id.clone();
         let max_tool_output_chars = self.config.max_tool_output_chars;
+        let otel_manager = self.otel_manager.clone();
 
         // Spawn the execution task
         let handle = tokio::spawn(async move {
-            let mut result = execute_tool(
+            let tool_start = std::time::Instant::now();
+            let result = execute_tool(
                 &registry,
                 modified_tool_call,
                 ctx,
                 timeout_secs,
                 max_tool_output_chars,
+                session_dir.as_deref(),
+                &tool_config,
+                otel_manager.as_ref(),
+            )
+            .await;
+            let tool_duration = tool_start.elapsed();
+
+            // Execute post-hooks (shared logic with execute_single_tool)
+            let is_error = result.is_err();
+            run_post_hooks(
+                hooks.as_deref(),
+                &name,
+                &modified_input,
+                is_error,
+                &session_id,
+                &cwd,
             )
             .await;
 
-            // Apply large result persistence if configured
-            if let (Ok(output), Some(dir)) = (&result, &session_dir) {
-                let persisted = result_persistence::persist_if_needed(
-                    output.clone(),
-                    &call_id_for_persistence,
-                    dir,
-                    &tool_config,
-                )
-                .await;
-                result = Ok(persisted);
-            }
-
-            // Execute post-hooks within the spawned task
-            if let Some(hooks) = hooks {
-                let is_error = result.is_err();
-                let event_type = if is_error {
-                    HookEventType::PostToolUseFailure
-                } else {
-                    HookEventType::PostToolUse
-                };
-
-                let hook_ctx =
-                    HookContext::new(event_type, session_id, cwd).with_tool(&name, modified_input);
-
-                let outcomes = hooks.execute(&hook_ctx).await;
-                for outcome in outcomes {
-                    if let HookResult::Reject { reason } = outcome.result {
-                        warn!(
-                            tool = %name,
-                            hook = %outcome.hook_name,
-                            reason = %reason,
-                            "Post-hook returned rejection (logged but result unchanged)"
-                        );
-                    }
-                }
+            // Record tool metrics in OTel
+            if let Some(otel) = &otel_manager {
+                otel.tool_result(&name, &call_id, "", tool_duration, !is_error, "");
             }
 
             ToolExecutionResult {
@@ -597,14 +614,21 @@ impl StreamingToolExecutor {
         self.active_tasks.lock().await.insert(tool_call.id, handle);
     }
 
-    /// Execute queued unsafe tools sequentially.
+    /// Execute queued pending tools with dynamic scheduling.
+    ///
+    /// Uses CC v2.1.7-style dynamic queue processing:
+    /// - Safe tools are spawned concurrently (up to `max_concurrency`)
+    /// - When an unsafe tool is encountered, all active tasks are awaited first
+    /// - After each completion, the next batch is evaluated
     pub async fn execute_pending_unsafe(&self) {
         let pending = {
             let mut lock = self.pending_unsafe.lock().await;
             std::mem::take(&mut *lock)
         };
 
-        for pending_call in pending {
+        let mut queue = std::collections::VecDeque::from(pending);
+
+        while let Some(pending_call) = queue.pop_front() {
             if self.cancel_token.is_cancelled() {
                 break;
             }
@@ -612,7 +636,6 @@ impl StreamingToolExecutor {
             let tool_call = pending_call.tool_call;
             let call_id = tool_call.id.clone();
             let name = tool_call.name.clone();
-            let original_input = tool_call.arguments.clone();
 
             // Reject tools not in the model's allowlist (if set)
             if !self.is_tool_allowed(&name) {
@@ -631,80 +654,106 @@ impl StreamingToolExecutor {
                 continue;
             }
 
-            // Execute pre-hooks before starting the tool
-            let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
-                Ok(input) => input,
-                Err(reason) => {
-                    // Pre-hook rejected the tool call
-                    let result =
-                        Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
-                    self.emit_completed(&call_id, &result).await;
-                    self.completed_results
-                        .lock()
-                        .await
-                        .push(ToolExecutionResult {
-                            call_id,
-                            name,
-                            result,
-                        });
-                    continue;
+            // Check per-input concurrency safety
+            let is_safe = self
+                .registry
+                .get(&name)
+                .map(|tool| tool.is_concurrency_safe_for(&tool_call.arguments))
+                .unwrap_or(false);
+
+            if is_safe {
+                // Safe tool: spawn concurrently (respecting max_concurrency)
+                let active_count = self.active_tasks.lock().await.len();
+                if active_count >= self.config.max_concurrency as usize {
+                    // Wait for at least one active task to complete before spawning more
+                    self.drain_one_active().await;
                 }
-            };
-
-            // Emit started event
-            self.emit_event(LoopEvent::ToolUseStarted {
-                call_id: call_id.clone(),
-                name: name.clone(),
-            })
-            .await;
-
-            // Create context and execute with potentially modified input
-            let ctx = self.create_context(&call_id);
-            let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
-            let mut result = execute_tool(
-                &self.registry,
-                modified_tool_call,
-                ctx,
-                self.config.default_timeout_secs,
-                self.config.max_tool_output_chars,
-            )
-            .await;
-
-            // Apply large result persistence if configured
-            if let (Ok(output), Some(dir)) = (&result, &self.config.session_dir) {
-                let persisted = result_persistence::persist_if_needed(
-                    output.clone(),
-                    &call_id,
-                    dir,
-                    &self.config.tool_config,
-                )
-                .await;
-                result = Ok(persisted);
+                self.start_tool_execution(tool_call).await;
+            } else {
+                // Unsafe tool: drain all active tasks first, then execute sequentially
+                self.drain_active_tasks().await;
+                self.execute_single_tool(tool_call).await;
             }
-
-            // Execute post-hooks
-            let is_error = result.is_err();
-            self.execute_post_hooks(&name, &modified_input, is_error)
-                .await;
-
-            // Emit completed event
-            self.emit_completed(&call_id, &result).await;
-
-            // Store result
-            self.completed_results
-                .lock()
-                .await
-                .push(ToolExecutionResult {
-                    call_id,
-                    name,
-                    result,
-                });
         }
+
+        // Drain any remaining active tasks spawned during the loop
+        self.drain_active_tasks().await;
     }
 
-    /// Wait for all active tasks and return their results.
-    pub async fn drain(&self) -> Vec<ToolExecutionResult> {
-        // Wait for all active tasks
+    /// Execute a single tool synchronously (for unsafe tools in the pending queue).
+    async fn execute_single_tool(&self, tool_call: ToolCall) {
+        let call_id = tool_call.id.clone();
+        let name = tool_call.name.clone();
+        let original_input = tool_call.arguments.clone();
+
+        // Execute pre-hooks before starting the tool
+        let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
+            Ok(input) => input,
+            Err(reason) => {
+                let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
+                self.emit_completed(&call_id, &result).await;
+                self.completed_results
+                    .lock()
+                    .await
+                    .push(ToolExecutionResult {
+                        call_id,
+                        name,
+                        result,
+                    });
+                return;
+            }
+        };
+
+        // Emit started event
+        self.emit_event(LoopEvent::ToolUseStarted {
+            call_id: call_id.clone(),
+            name: name.clone(),
+        })
+        .await;
+
+        // Create context and execute with potentially modified input
+        let tool_start = std::time::Instant::now();
+        let ctx = self.create_context(&call_id);
+        let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
+        let result = execute_tool(
+            &self.registry,
+            modified_tool_call,
+            ctx,
+            self.config.default_timeout_secs,
+            self.config.max_tool_output_chars,
+            self.config.session_dir.as_deref(),
+            &self.config.tool_config,
+            self.otel_manager.as_ref(),
+        )
+        .await;
+        let tool_duration = tool_start.elapsed();
+
+        // Execute post-hooks
+        let is_error = result.is_err();
+        self.execute_post_hooks(&name, &modified_input, is_error)
+            .await;
+
+        // Record tool metrics in OTel
+        if let Some(otel) = &self.otel_manager {
+            otel.tool_result(&name, &call_id, "", tool_duration, !is_error, "");
+        }
+
+        // Emit completed event
+        self.emit_completed(&call_id, &result).await;
+
+        // Store result
+        self.completed_results
+            .lock()
+            .await
+            .push(ToolExecutionResult {
+                call_id,
+                name,
+                result,
+            });
+    }
+
+    /// Wait for all active tasks to complete and collect their results.
+    async fn drain_active_tasks(&self) {
         let tasks: Vec<_> = {
             let mut lock = self.active_tasks.lock().await;
             lock.drain().collect()
@@ -734,6 +783,46 @@ impl StreamingToolExecutor {
                 }
             }
         }
+    }
+
+    /// Wait for one active task to complete and collect its result.
+    async fn drain_one_active(&self) {
+        // Take one handle from active tasks
+        let entry = {
+            let mut lock = self.active_tasks.lock().await;
+            let key = lock.keys().next().cloned();
+            key.and_then(|k| lock.remove(&k).map(|h| (k, h)))
+        };
+
+        if let Some((call_id, handle)) = entry {
+            match handle.await {
+                Ok(result) => {
+                    self.emit_completed(&result.call_id, &result.result).await;
+                    self.completed_results.lock().await.push(result);
+                }
+                Err(e) => {
+                    error!(call_id = %call_id, error = %e, "Task panicked");
+                    let result = Err(crate::error::tool_error::InternalSnafu {
+                        message: format!("Tool execution task panicked (call_id: {call_id}): {e}"),
+                    }
+                    .build());
+                    self.emit_completed(&call_id, &result).await;
+                    self.completed_results
+                        .lock()
+                        .await
+                        .push(ToolExecutionResult {
+                            call_id: call_id.clone(),
+                            name: format!("<panicked:{call_id}>"),
+                            result,
+                        });
+                }
+            }
+        }
+    }
+
+    /// Wait for all active tasks and return their results.
+    pub async fn drain(&self) -> Vec<ToolExecutionResult> {
+        self.drain_active_tasks().await;
 
         // Return all completed results
         let mut results = self.completed_results.lock().await;
@@ -801,6 +890,14 @@ impl StreamingToolExecutor {
         &self.invoked_skills
     }
 
+    /// Get the shared agent cancel token registry.
+    ///
+    /// The driver / subagent manager should register cancel tokens here
+    /// when spawning agents, so TaskStop can cancel them by ID.
+    pub fn agent_cancel_tokens(&self) -> &crate::context::AgentCancelTokens {
+        &self.agent_cancel_tokens
+    }
+
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
@@ -811,12 +908,22 @@ impl StreamingToolExecutor {
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
             .features(self.config.features.clone())
+            .web_search_config(self.config.web_search_config.clone())
+            .web_fetch_config(self.config.web_fetch_config.clone())
             .shell_executor(self.shell_executor.clone())
             .invoked_skills(self.invoked_skills.clone());
 
         // Add spawn_agent_fn if available
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Share agent cancel tokens registry
+        builder = builder.agent_cancel_tokens(self.agent_cancel_tokens.clone());
+
+        // Add agent_output_dir if available
+        if let Some(ref dir) = self.agent_output_dir {
+            builder = builder.agent_output_dir(dir.clone());
         }
 
         // Add model_call_fn if available
@@ -905,7 +1012,7 @@ impl StreamingToolExecutor {
         for outcome in outcomes {
             // Emit hook executed event
             self.emit_event(LoopEvent::HookExecuted {
-                hook_type: cocode_protocol::HookEventType::PreToolCall,
+                hook_type: HookEventType::PreToolUse.into(),
                 hook_name: outcome.hook_name.clone(),
             })
             .await;
@@ -942,6 +1049,24 @@ impl StreamingToolExecutor {
                         "Async hook registered and running in background"
                     );
                 }
+                HookResult::PermissionOverride { decision, reason } => {
+                    debug!(
+                        tool = %tool_name,
+                        hook = %outcome.hook_name,
+                        decision = %decision,
+                        reason = ?reason,
+                        "Hook returned permission override"
+                    );
+                    // Permission override is handled by the permission pipeline
+                    // "deny" is treated like Reject
+                    if decision == "deny" {
+                        return Err(reason.unwrap_or_else(|| {
+                            "Tool denied by hook permission override".to_string()
+                        }));
+                    }
+                    // "allow" - continue without further permission checks
+                    // (the caller will need to check for this in the permission pipeline)
+                }
             }
         }
 
@@ -950,70 +1075,93 @@ impl StreamingToolExecutor {
 
     /// Execute post-tool-use hooks.
     async fn execute_post_hooks(&self, tool_name: &str, input: &Value, is_error: bool) {
-        let hooks = match &self.hooks {
-            Some(h) => h,
-            None => return,
-        };
-
-        let event_type = if is_error {
-            HookEventType::PostToolUseFailure
-        } else {
-            HookEventType::PostToolUse
-        };
-
-        let ctx = HookContext::new(
-            event_type,
-            self.config.session_id.clone(),
-            self.config.cwd.clone(),
+        run_post_hooks(
+            self.hooks.as_deref(),
+            tool_name,
+            input,
+            is_error,
+            &self.config.session_id,
+            &self.config.cwd,
         )
+        .await;
+    }
+}
+
+/// Shared post-hook execution logic.
+///
+/// Used by both `start_tool_execution` (spawned safe tools) and
+/// `execute_single_tool` (inline unsafe tools) to ensure consistent behavior.
+async fn run_post_hooks(
+    hooks: Option<&HookRegistry>,
+    tool_name: &str,
+    input: &Value,
+    is_error: bool,
+    session_id: &str,
+    cwd: &Path,
+) {
+    let hooks = match hooks {
+        Some(h) => h,
+        None => return,
+    };
+
+    let event_type = if is_error {
+        HookEventType::PostToolUseFailure
+    } else {
+        HookEventType::PostToolUse
+    };
+
+    let ctx = HookContext::new(event_type, session_id.to_string(), cwd.to_path_buf())
         .with_tool(tool_name, input.clone());
 
-        let outcomes = hooks.execute(&ctx).await;
-
-        for outcome in outcomes {
-            let hook_type = if is_error {
-                cocode_protocol::HookEventType::PostToolCallFailure
-            } else {
-                cocode_protocol::HookEventType::PostToolCall
-            };
-
-            self.emit_event(LoopEvent::HookExecuted {
-                hook_type,
-                hook_name: outcome.hook_name.clone(),
-            })
-            .await;
-
-            // Post hooks can only continue or reject; rejection is logged but doesn't change the result
-            if let HookResult::Reject { reason } = outcome.result {
-                warn!(
-                    tool = %tool_name,
-                    hook = %outcome.hook_name,
-                    reason = %reason,
-                    "Post-hook returned rejection (logged but result unchanged)"
-                );
-            }
+    let outcomes = hooks.execute(&ctx).await;
+    for outcome in outcomes {
+        if let HookResult::Reject { reason } = outcome.result {
+            warn!(
+                tool = %tool_name,
+                hook = %outcome.hook_name,
+                reason = %reason,
+                "Post-hook returned rejection (logged but result unchanged)"
+            );
         }
     }
 }
 
-/// Execute a single tool with timeout.
+/// Execute a single tool with timeout and cancellation support.
 async fn execute_tool(
     registry: &ToolRegistry,
     tool_call: ToolCall,
     mut ctx: ToolContext,
     timeout_secs: i64,
     max_tool_output_chars: Option<i32>,
+    session_dir: Option<&Path>,
+    tool_config: &cocode_protocol::ToolConfig,
+    otel_manager: Option<&Arc<cocode_otel::OtelManager>>,
 ) -> Result<ToolOutput> {
     let timeout_duration = std::time::Duration::from_secs(timeout_secs as u64);
+    let cancel_token = ctx.cancel_token.clone();
 
-    match tokio::time::timeout(
-        timeout_duration,
-        execute_tool_inner(registry, tool_call, &mut ctx, max_tool_output_chars),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build()),
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            Err(crate::error::tool_error::CancelledSnafu.build())
+        }
+        result = tokio::time::timeout(
+            timeout_duration,
+            execute_tool_inner(
+                registry,
+                tool_call,
+                &mut ctx,
+                max_tool_output_chars,
+                session_dir,
+                tool_config,
+                otel_manager,
+            ),
+        ) => {
+            match result {
+                Ok(inner) => inner,
+                Err(_) => Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build()),
+            }
+        }
     }
 }
 
@@ -1245,7 +1393,11 @@ async fn execute_tool_inner(
     tool_call: ToolCall,
     ctx: &mut ToolContext,
     max_tool_output_chars: Option<i32>,
+    session_dir: Option<&Path>,
+    tool_config: &cocode_protocol::ToolConfig,
+    otel_manager: Option<&Arc<cocode_otel::OtelManager>>,
 ) -> Result<ToolOutput> {
+    let call_id = &tool_call.id;
     let name = &tool_call.name;
     let input = tool_call.arguments;
 
@@ -1280,8 +1432,25 @@ async fn execute_tool_inner(
     let permission = apply_permission_mode(pipeline_result, ctx.permission_mode, name);
 
     match permission {
-        cocode_protocol::PermissionResult::Allowed => {}
+        cocode_protocol::PermissionResult::Allowed => {
+            if let Some(otel) = otel_manager {
+                otel.tool_decision(
+                    name,
+                    call_id,
+                    "allowed",
+                    cocode_otel::ToolDecisionSource::Config,
+                );
+            }
+        }
         cocode_protocol::PermissionResult::Denied { reason } => {
+            if let Some(otel) = otel_manager {
+                otel.tool_decision(
+                    name,
+                    call_id,
+                    "denied",
+                    cocode_otel::ToolDecisionSource::Config,
+                );
+            }
             return Err(
                 crate::error::tool_error::PermissionDeniedSnafu { message: reason }.build(),
             );
@@ -1291,6 +1460,14 @@ async fn execute_tool_inner(
             let pattern = &request.description;
             if ctx.is_approved(name, pattern).await {
                 // Already approved for this pattern (exact or wildcard)
+                if let Some(otel) = otel_manager {
+                    otel.tool_decision(
+                        name,
+                        call_id,
+                        "allowed",
+                        cocode_otel::ToolDecisionSource::Config,
+                    );
+                }
             } else if let Some(requester) = &ctx.permission_requester {
                 // Use the permission requester for interactive approval
                 let worker_id = ctx.call_id.clone();
@@ -1299,16 +1476,40 @@ async fn execute_tool_inner(
                     .await;
                 match decision {
                     cocode_protocol::ApprovalDecision::Denied => {
+                        if let Some(otel) = otel_manager {
+                            otel.tool_decision(
+                                name,
+                                call_id,
+                                "denied",
+                                cocode_otel::ToolDecisionSource::User,
+                            );
+                        }
                         return Err(crate::error::tool_error::PermissionDeniedSnafu {
                             message: format!("User denied permission for tool '{name}'"),
                         }
                         .build());
                     }
                     cocode_protocol::ApprovalDecision::Approved => {
+                        if let Some(otel) = otel_manager {
+                            otel.tool_decision(
+                                name,
+                                call_id,
+                                "approved",
+                                cocode_otel::ToolDecisionSource::User,
+                            );
+                        }
                         // Session-only: remember exact description
                         ctx.approve_pattern(name, pattern).await;
                     }
                     cocode_protocol::ApprovalDecision::ApprovedWithPrefix { prefix_pattern } => {
+                        if let Some(otel) = otel_manager {
+                            otel.tool_decision(
+                                name,
+                                call_id,
+                                "approved",
+                                cocode_otel::ToolDecisionSource::User,
+                            );
+                        }
                         // Remember prefix pattern in session + persist to disk
                         ctx.approve_pattern(name, &prefix_pattern).await;
                         ctx.persist_permission_rule(name, &prefix_pattern).await;
@@ -1316,6 +1517,14 @@ async fn execute_tool_inner(
                 }
             } else {
                 // No permission requester available - deny
+                if let Some(otel) = otel_manager {
+                    otel.tool_decision(
+                        name,
+                        call_id,
+                        "denied",
+                        cocode_otel::ToolDecisionSource::Config,
+                    );
+                }
                 return Err(crate::error::tool_error::PermissionDeniedSnafu {
                     message: format!("Tool '{name}' requires approval: {}", request.description),
                 }
@@ -1336,12 +1545,28 @@ async fn execute_tool_inner(
         Err(e) => return Err(e),
     };
 
+    // Persist oversized results BEFORE truncation.
+    // Uses per-tool limit as the threshold so full output is saved to disk
+    // when it exceeds the tool's normal output size.
+    let per_tool_limit = tool.max_result_size_chars() as usize;
+    if let Some(dir) = session_dir {
+        output = result_persistence::persist_if_needed(
+            output,
+            call_id,
+            dir,
+            per_tool_limit,
+            tool_config,
+        )
+        .await;
+    }
+
     // Apply truncation: use the smaller of per-tool limit and model-level limit.
-    // Single pass avoids double truncation markers.
-    let per_tool = tool.max_result_size_chars() as usize;
+    // After persistence, the output is either:
+    // - A small <persisted-output> block (if persisted) → truncation is a no-op
+    // - The original output ≤ per_tool_limit → truncation only fires if model_limit is smaller
     let max_chars = match max_tool_output_chars {
-        Some(model_limit) => per_tool.min(model_limit as usize),
-        None => per_tool,
+        Some(model_limit) => per_tool_limit.min(model_limit as usize),
+        None => per_tool_limit,
     };
     output.truncate_to(max_chars);
 

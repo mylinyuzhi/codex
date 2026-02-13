@@ -51,10 +51,9 @@ async fn test_context_creation() {
     let mut config = RetrievalConfig::default();
     config.data_dir = dir.path().to_path_buf();
 
-    let ctx =
-        RetrievalContext::new(config, RetrievalFeatures::MINIMAL, dir.path().to_path_buf())
-            .await
-            .unwrap();
+    let ctx = RetrievalContext::new(config, RetrievalFeatures::MINIMAL, dir.path().to_path_buf())
+        .await
+        .unwrap();
 
     assert!(ctx.features().code_search);
     assert!(!ctx.features().vector_search);

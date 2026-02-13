@@ -21,12 +21,15 @@
 //! ## Example
 //!
 //! ```ignore
-//! use cocode_tui::{App, AppConfig, create_channels};
+//! use cocode_tui::{App, create_channels};
+//! use cocode_config::{ConfigManager, ConfigOverrides};
+//! use std::sync::Arc;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let (agent_tx, agent_rx, command_tx, command_rx) = create_channels(32);
-//!     let config = AppConfig::default();
+//!     let manager = ConfigManager::from_default()?;
+//!     let config = Arc::new(manager.build_config(ConfigOverrides::default())?);
 //!     let mut app = App::new(agent_rx, command_tx, config)?;
 //!     app.run().await
 //! }
@@ -58,7 +61,6 @@ pub mod widgets;
 
 // Re-export commonly used types
 pub use app::App;
-pub use app::AppConfig;
 pub use app::create_channels;
 pub use command::UserCommand;
 pub use event::TuiCommand;

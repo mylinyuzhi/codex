@@ -26,8 +26,7 @@ fn test_json_rpc_response_parsing() {
 
 #[test]
 fn test_json_rpc_error_parsing() {
-    let json =
-        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+    let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
     let response: JsonRpcResponse = serde_json::from_str(json).unwrap();
     assert_eq!(response.id, Some(1));
     assert!(response.result.is_none());

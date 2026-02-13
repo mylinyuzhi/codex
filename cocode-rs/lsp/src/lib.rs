@@ -18,7 +18,7 @@
 //!
 //! let diagnostics = Arc::new(DiagnosticsStore::new());
 //! let config = LspServersConfig::default();
-//! let manager = LspServerManager::new(config, None, diagnostics);
+//! let manager = LspServerManager::new(config, None, None, diagnostics);
 //!
 //! // Get client for a Rust file
 //! let client = manager.get_client(Path::new("src/lib.rs")).await?;
@@ -77,13 +77,34 @@ pub use symbols::flatten_symbols;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Resolve the cocode home directory.
+///
+/// Standalone helper for binary entry points.
+/// Library APIs (`LspServerManager::new`, `LspServersConfig::load`) accept
+/// `cocode_home` as a parameter instead — callers are responsible for resolving it.
+///
+/// Checks `COCODE_HOME` env var first, falls back to `~/.cocode`.
+/// This is a standalone implementation to avoid depending on `cocode-config`.
+pub fn find_cocode_home() -> PathBuf {
+    std::env::var("COCODE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".cocode")
+        })
+}
+
 /// Create an `LspServerManager` with standard configuration.
 ///
 /// This is a convenience function that loads config from the standard locations
-/// (`~/.codex/lsp_servers.json` and `.codex/lsp_servers.json`) and creates
+/// (`~/.cocode/lsp_servers.json` and `.cocode/lsp_servers.json`) and creates
 /// the manager with a fresh diagnostics store.
 ///
 /// # Arguments
+/// * `cocode_home` - Cocode home directory for user-level config lookup.
 /// * `cwd` - Working directory for the LSP servers. Used for project-local config
 ///           and as the workspace root.
 ///
@@ -92,13 +113,20 @@ use std::sync::Arc;
 /// use cocode_lsp::create_manager;
 ///
 /// // Create manager for current directory
-/// let manager = create_manager(Some(std::env::current_dir().unwrap()));
+/// let manager = create_manager(None, Some(std::env::current_dir().unwrap()));
 /// ```
-pub fn create_manager(cwd: Option<PathBuf>) -> Arc<LspServerManager> {
-    let codex_home = config::find_codex_home();
-    let lsp_config = LspServersConfig::load(codex_home.as_deref(), cwd.as_deref());
+pub fn create_manager(
+    cocode_home: Option<&std::path::Path>,
+    cwd: Option<PathBuf>,
+) -> Arc<LspServerManager> {
+    let lsp_config = LspServersConfig::load(cocode_home, cwd.as_deref());
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    Arc::new(LspServerManager::new(lsp_config, cwd, diagnostics))
+    Arc::new(LspServerManager::new(
+        lsp_config,
+        cocode_home.map(std::path::Path::to_path_buf),
+        cwd,
+        diagnostics,
+    ))
 }
 
 // Re-export lsp_types for handler use

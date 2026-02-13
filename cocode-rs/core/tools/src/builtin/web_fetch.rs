@@ -10,14 +10,28 @@ use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 /// Maximum result size for web content (characters).
 const MAX_RESULT_CHARS: i32 = 100_000;
 
+/// Maximum line width for HTML→text conversion.
+const MAX_LINE_WIDTH: usize = 120;
+
+/// Static HTTP client for connection pooling.
+///
+/// Uses a generous default timeout; per-request timeouts are set from config.
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client")
+});
+
 /// Tool for fetching content from a URL.
 ///
-/// Fetches the URL, converts HTML to markdown, and processes
-/// the content with an optional prompt.
+/// Fetches the URL, converts HTML to text, and returns the content.
 pub struct WebFetchTool;
 
 impl WebFetchTool {
@@ -71,6 +85,10 @@ impl Tool for WebFetchTool {
 
     fn max_result_size_chars(&self) -> i32 {
         MAX_RESULT_CHARS
+    }
+
+    fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+        Some(cocode_protocol::Feature::WebFetch)
     }
 
     async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
@@ -133,7 +151,15 @@ impl Tool for WebFetchTool {
             .build()
         })?;
 
-        // Validate URL
+        // Validate URL is not empty
+        if url.trim().is_empty() {
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: "URL must not be empty",
+            }
+            .build());
+        }
+
+        // Validate URL scheme
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(crate::error::tool_error::InvalidInputSnafu {
                 message: "url must start with http:// or https://",
@@ -141,16 +167,130 @@ impl Tool for WebFetchTool {
             .build());
         }
 
+        let config = &ctx.web_fetch_config;
+        let max_content_length = config.max_content_length;
+
         ctx.emit_progress(format!("Fetching {url}")).await;
 
-        // Stub implementation — actual HTTP fetch + HTML→markdown conversion
-        // will be connected when reqwest/htmd dependencies are wired up.
+        // Transform GitHub blob URLs to raw URLs
+        let fetch_url = transform_github_url(url);
+
+        // Fetch with timeout from config
+        let response = match HTTP_CLIENT
+            .get(&fetch_url)
+            .header("User-Agent", &config.user_agent)
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Ok(ToolOutput::error(format!(
+                        "[TIMEOUT] Request timed out after {} seconds",
+                        config.timeout_secs
+                    )));
+                }
+                return Ok(ToolOutput::error(format!("[NETWORK_ERROR] {e}")));
+            }
+        };
+
+        // Check HTTP status
+        let status = response.status();
+        if !status.is_success() {
+            return Ok(ToolOutput::error(format!(
+                "[HTTP_ERROR] {} {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Unknown")
+            )));
+        }
+
+        // Check Content-Length to prevent OOM on huge responses
+        if let Some(content_length) = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            if content_length > max_content_length * 2 {
+                return Ok(ToolOutput::error(format!(
+                    "[CONTENT_TOO_LARGE] Content too large: {} bytes (max: {} bytes)",
+                    content_length,
+                    max_content_length * 2
+                )));
+            }
+        }
+
+        // Get content type
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Get response body
+        let body = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                return Ok(ToolOutput::error(format!(
+                    "[NETWORK_ERROR] Failed to read response body: {e}"
+                )));
+            }
+        };
+
+        // Convert HTML to text if needed
+        let text_content = if content_type.contains("text/html") || content_type.is_empty() {
+            html_to_text(&body)
+        } else {
+            body
+        };
+
+        // Truncate if needed (UTF-8 safe)
+        let truncated = if text_content.len() > max_content_length {
+            let truncated_content = truncate_utf8_safe(&text_content, max_content_length);
+            format!(
+                "{}\n\n[Content truncated. Showing first {} of {} bytes]",
+                truncated_content,
+                truncated_content.len(),
+                text_content.len()
+            )
+        } else {
+            text_content
+        };
+
+        // Return content with context
         Ok(ToolOutput::text(format!(
-            "WebFetch for URL: {url}\nPrompt: {prompt}\n\n\
-             [HTTP client not yet connected — this is a stub response.\n\
-             To enable, wire up reqwest for HTTP and a markdown converter for HTML.]"
+            "Content from {fetch_url}:\nPrompt: {prompt}\n\n{truncated}"
         )))
     }
+}
+
+/// Transform GitHub blob URLs to raw.githubusercontent.com URLs.
+fn transform_github_url(url: &str) -> String {
+    if url.contains("github.com") && url.contains("/blob/") {
+        url.replace("github.com", "raw.githubusercontent.com")
+            .replace("/blob/", "/")
+    } else {
+        url.to_string()
+    }
+}
+
+/// Truncate string at a valid UTF-8 character boundary.
+fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &s[..boundary]
+}
+
+/// Convert HTML to plain text using html2text.
+fn html_to_text(html: &str) -> String {
+    html2text::from_read(html.as_bytes(), MAX_LINE_WIDTH).unwrap_or_else(|_| html.to_string())
 }
 
 #[cfg(test)]

@@ -27,10 +27,12 @@ async fn test_with_skills() {
         SkillInfo {
             name: "commit".to_string(),
             description: "Generate a commit message".to_string(),
+            when_to_use: None,
         },
         SkillInfo {
             name: "review-pr".to_string(),
             description: "Review a pull request".to_string(),
+            when_to_use: Some("Use when the user asks to review a PR".to_string()),
         },
     ];
 
@@ -54,6 +56,12 @@ async fn test_with_skills() {
             .content()
             .unwrap()
             .contains("Generate a commit message")
+    );
+    assert!(
+        reminder
+            .content()
+            .unwrap()
+            .contains("When to use: Use when the user asks to review a PR")
     );
 }
 

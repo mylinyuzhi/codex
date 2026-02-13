@@ -30,6 +30,15 @@ fn test_ctrl_m_cycles_model() {
 }
 
 #[test]
+fn test_ctrl_b_backgrounds_all_tasks() {
+    let event = key(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    assert_eq!(
+        handle_key_event(event, false),
+        Some(TuiCommand::BackgroundAllTasks)
+    );
+}
+
+#[test]
 fn test_ctrl_c_interrupts() {
     let event = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert_eq!(handle_key_event(event, false), Some(TuiCommand::Interrupt));

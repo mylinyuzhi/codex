@@ -231,22 +231,29 @@ fn render_subagents(frame: &mut Frame, area: Rect, state: &AppState) {
 
 /// Render the status bar.
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
-    // Check if we're currently thinking (more precise than checking streaming state)
     let is_thinking = state.ui.is_thinking();
+    let model_display = state
+        .session
+        .current_selection
+        .as_ref()
+        .map(|s| s.model.display_name.as_str())
+        .unwrap_or_default();
+    let effective_thinking = state
+        .session
+        .current_selection
+        .as_ref()
+        .map(|s| s.effective_thinking_level())
+        .unwrap_or_default();
 
     let status_bar = StatusBar::new(
-        &state.session.current_model,
-        &state.session.thinking_level,
+        model_display,
+        &effective_thinking,
         state.session.plan_mode,
         &state.session.token_usage,
     )
     .is_thinking(is_thinking)
     .show_thinking_enabled(state.ui.show_thinking)
     .thinking_duration(state.ui.thinking_duration())
-    .thinking_budget(
-        state.session.thinking_tokens_used,
-        state.session.thinking_budget_remaining(),
-    )
     .plan_phase(state.session.plan_phase)
     .mcp_server_count(state.session.connected_mcp_count())
     .queue_counts(state.session.queued_count(), 0);
@@ -259,7 +266,7 @@ fn render_overlay(frame: &mut Frame, area: Rect, overlay: &Overlay) {
     let overlay_width = (area.width * 60 / 100).min(80).max(40);
     let overlay_height = match overlay {
         Overlay::Permission(_) => 12,
-        Overlay::ModelPicker(picker) => (picker.filtered_models().len() as u16 + 4).min(20),
+        Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),
         Overlay::CommandPalette(palette) => (palette.filtered_commands().len() as u16 + 4).min(20),
         Overlay::SessionBrowser(browser) => (browser.filtered_sessions().len() as u16 + 4).min(20),
         Overlay::Help => 20,
@@ -363,20 +370,21 @@ fn render_model_picker_overlay(
     frame.render_widget(block, area);
 
     // Build model list
-    let models = picker.filtered_models();
+    let items = picker.filtered_items();
     let mut lines: Vec<Line> = vec![];
 
-    for (i, model) in models.iter().enumerate() {
+    for (i, selection) in items.iter().enumerate() {
+        let display = selection.model.to_string();
         let is_selected = picker.selected == i as i32;
         let line = if is_selected {
-            Line::from(Span::raw(format!("▸ {model}")).bold().cyan())
+            Line::from(Span::raw(format!("▸ {display}")).bold().cyan())
         } else {
-            Line::from(Span::raw(format!("  {model}")))
+            Line::from(Span::raw(format!("  {display}")))
         };
         lines.push(line);
     }
 
-    if models.is_empty() {
+    if items.is_empty() {
         lines.push(Line::from(
             Span::raw(t!("dialog.no_models_match").to_string())
                 .dim()
@@ -431,6 +439,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             "Ctrl+L".bold().into(),
             Span::raw(format!("      {}", t!("help.ctrl_l"))),
+        ]),
+        Line::from(vec![
+            "Ctrl+B".bold().into(),
+            Span::raw(format!("      {}", t!("help.ctrl_b"))),
         ]),
         Line::from(vec![
             "Ctrl+C".bold().into(),

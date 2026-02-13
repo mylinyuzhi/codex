@@ -151,6 +151,11 @@ pub enum ContextModifier {
         /// should be executable while the skill is active.
         allowed_tools: Vec<String>,
     },
+    /// The task list was updated by a TodoWrite tool call.
+    TodosUpdated {
+        /// The full task list (as the raw JSON array from TodoWrite input).
+        todos: Value,
+    },
 }
 
 /// Result of validating tool input.

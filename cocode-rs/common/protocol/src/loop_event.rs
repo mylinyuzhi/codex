@@ -747,36 +747,54 @@ pub struct McpServerInfo {
 }
 
 /// Type of hook event.
+///
+/// Mirrors `cocode_hooks::HookEventType` with identical variants and serde names
+/// so that conversion between the two is straightforward.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventType {
-    /// Before a tool call.
-    PreToolCall,
-    /// After a successful tool call.
-    PostToolCall,
-    /// After a failed tool call.
-    PostToolCallFailure,
-    /// On session start.
+    /// Before a tool is used.
+    PreToolUse,
+    /// After a tool completes successfully.
+    PostToolUse,
+    /// After a tool use fails.
+    PostToolUseFailure,
+    /// When the user submits a prompt.
+    UserPromptSubmit,
+    /// When a session starts.
     SessionStart,
-    /// On session end.
+    /// When a session ends.
     SessionEnd,
-    /// On user prompt submit.
-    PromptSubmit,
-    /// Before context compaction.
+    /// When the agent stops.
+    Stop,
+    /// When a sub-agent starts.
+    SubagentStart,
+    /// When a sub-agent stops.
+    SubagentStop,
+    /// Before context compaction occurs.
     PreCompact,
+    /// A notification event (informational, no blocking).
+    Notification,
+    /// When a permission is requested.
+    PermissionRequest,
 }
 
 impl HookEventType {
     /// Get the hook type as a string.
     pub fn as_str(&self) -> &'static str {
         match self {
-            HookEventType::PreToolCall => "pre_tool_call",
-            HookEventType::PostToolCall => "post_tool_call",
-            HookEventType::PostToolCallFailure => "post_tool_call_failure",
-            HookEventType::SessionStart => "session_start",
-            HookEventType::SessionEnd => "session_end",
-            HookEventType::PromptSubmit => "prompt_submit",
-            HookEventType::PreCompact => "pre_compact",
+            Self::PreToolUse => "pre_tool_use",
+            Self::PostToolUse => "post_tool_use",
+            Self::PostToolUseFailure => "post_tool_use_failure",
+            Self::UserPromptSubmit => "user_prompt_submit",
+            Self::SessionStart => "session_start",
+            Self::SessionEnd => "session_end",
+            Self::Stop => "stop",
+            Self::SubagentStart => "subagent_start",
+            Self::SubagentStop => "subagent_stop",
+            Self::PreCompact => "pre_compact",
+            Self::Notification => "notification",
+            Self::PermissionRequest => "permission_request",
         }
     }
 }

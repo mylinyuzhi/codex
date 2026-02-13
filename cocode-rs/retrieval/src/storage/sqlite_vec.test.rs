@@ -338,7 +338,8 @@ fn test_parse_vec0_dimension() {
     let sql = "CREATE VIRTUAL TABLE chunks_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[1536])";
     assert_eq!(SqliteVecStore::parse_vec0_dimension(sql), Some(1536));
 
-    let sql2 = "CREATE VIRTUAL TABLE chunks_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[4])";
+    let sql2 =
+        "CREATE VIRTUAL TABLE chunks_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[4])";
     assert_eq!(SqliteVecStore::parse_vec0_dimension(sql2), Some(4));
 
     assert_eq!(SqliteVecStore::parse_vec0_dimension("no match"), None);

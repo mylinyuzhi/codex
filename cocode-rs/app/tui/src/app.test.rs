@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn test_app_config_default() {
-    let config = AppConfig::default();
-    assert!(!config.model.is_empty());
-    assert!(!config.available_models.is_empty());
+fn test_config_snapshot_model_selections() {
+    let config = cocode_config::Config::default();
+    // Default config has no providers, so no model selections
+    assert!(config.all_model_selections().is_empty());
 }
 
 #[test]

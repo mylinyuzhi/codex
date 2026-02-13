@@ -33,6 +33,7 @@ async fn test_task_output_tool_with_task() {
         command: "echo test".to_string(),
         output,
         completed: Arc::new(Notify::new()),
+        cancel_token: tokio_util::sync::CancellationToken::new(),
     };
     ctx.shell_executor
         .background_registry

@@ -4,6 +4,7 @@ use cocode_session::SessionState;
 use cocode_skill::SkillContext;
 use cocode_skill::SkillManager;
 use cocode_skill::execute_skill;
+use cocode_skill::find_local_command;
 use std::io::BufRead;
 use std::io::Write;
 use std::io::{self};
@@ -122,54 +123,80 @@ impl<'a> Repl<'a> {
     ///
     /// Returns true if the REPL should exit.
     async fn handle_command(&mut self, input: &str) -> anyhow::Result<bool> {
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        let cmd = parts.first().map(|s| *s).unwrap_or("");
+        // Parse the command name from input (strip leading `/`)
+        let (cmd_name, _args) = cocode_skill::parse_skill_command(input).unwrap_or(("", ""));
 
-        match cmd {
-            "/exit" | "/quit" | "/q" => {
-                println!("Goodbye!");
-                return Ok(true);
-            }
-            "/help" | "/h" | "/?" => {
-                self.print_help().await;
-            }
-            "/skills" => {
-                self.list_skills().await;
-            }
-            "/status" => {
-                println!("Session ID: {}", self.session.session_id());
-                println!(
-                    "Model:      {}/{}",
-                    self.session.provider(),
-                    self.session.model()
-                );
-                println!("Turns:      {}", self.session.total_turns());
-                println!(
-                    "Tokens:     {} in / {} out",
-                    self.session.total_input_tokens(),
-                    self.session.total_output_tokens()
-                );
-            }
-            "/clear" => {
-                // Clear screen using ANSI escape codes
-                print!("\x1B[2J\x1B[1;1H");
-                io::stdout().flush()?;
-            }
-            "/cancel" => {
-                self.session.cancel();
-                println!("Operation cancelled.");
-            }
-            _ => {
-                // Try to execute as a skill command
-                if self.try_execute_skill(input).await? {
-                    // Skill was executed - result already printed
-                } else {
-                    println!("Unknown command: {cmd}");
+        // Try local commands first (unified via find_local_command)
+        if let Some(local_cmd) = find_local_command(cmd_name) {
+            match local_cmd.name {
+                "exit" => {
+                    println!("Goodbye!");
+                    return Ok(true);
+                }
+                "help" => {
+                    self.print_help().await;
+                }
+                "status" => {
+                    println!("Session ID: {}", self.session.session_id());
                     println!(
-                        "Type /help for available commands or /skills to list available skills."
+                        "Model:      {}/{}",
+                        self.session.provider(),
+                        self.session.model()
+                    );
+                    println!("Turns:      {}", self.session.total_turns());
+                    println!(
+                        "Tokens:     {} in / {} out",
+                        self.session.total_input_tokens(),
+                        self.session.total_output_tokens()
                     );
                 }
+                "clear" => {
+                    print!("\x1B[2J\x1B[1;1H");
+                    io::stdout().flush()?;
+                }
+                "cancel" => {
+                    self.session.cancel();
+                    println!("Operation cancelled.");
+                }
+                "skills" => {
+                    self.list_skills().await;
+                }
+                "todos" => {
+                    // Read task list directly from the most recent TodoWrite call
+                    println!("{}", self.session.current_todos());
+                }
+                "compact" => {
+                    println!("Requesting compaction...");
+                    match self
+                        .session
+                        .run_turn("Please compact the conversation context now.")
+                        .await
+                    {
+                        Ok(result) => {
+                            println!();
+                            println!("{}", result.final_text);
+                        }
+                        Err(e) => {
+                            output::print_error(&e.to_string());
+                        }
+                    }
+                }
+                "model" => {
+                    println!("/{} is not yet supported in REPL mode.", local_cmd.name);
+                }
+                _ => {
+                    println!("/{} is not yet supported in REPL mode.", local_cmd.name);
+                }
             }
+            return Ok(false);
+        }
+
+        // Try to execute as a skill command
+        if self.try_execute_skill(input).await? {
+            // Skill was executed - result already printed
+        } else {
+            println!("Unknown command: /{cmd_name}");
+            println!("Type /help for available commands or /skills to list available skills.");
         }
 
         Ok(false)
@@ -177,22 +204,11 @@ impl<'a> Repl<'a> {
 
     /// Print help including available skills.
     async fn print_help(&self) {
-        println!("Commands:");
-        println!("  /help, /h, /?  - Show this help");
-        println!("  /exit, /quit   - Exit the chat");
-        println!("  /status        - Show session status");
-        println!("  /skills        - List available skills");
-        println!("  /clear         - Clear the screen");
-        println!("  /cancel        - Cancel current operation");
-
         let manager = self.skill_manager.lock().await;
-        let visible = manager.user_visible_skills();
-        if !visible.is_empty() {
-            println!();
-            println!("Skills:");
-            for skill in visible {
-                println!("  /{} - {}", skill.name, skill.description);
-            }
+
+        println!("Commands:");
+        for cmd in manager.all_commands() {
+            println!("  /{} - {}", cmd.name, cmd.description);
         }
     }
 

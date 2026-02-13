@@ -62,6 +62,8 @@ use hyper_sdk::FinishReason;
 use hyper_sdk::Message;
 use hyper_sdk::ToolCall;
 use hyper_sdk::ToolDefinition;
+use std::sync::Mutex;
+
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -183,14 +185,28 @@ pub struct AgentLoop {
     /// Applied to the executor on the next turn iteration.
     active_skill_allowed_tools: Option<std::collections::HashSet<String>>,
 
+    // Task list state (updated by TodoWrite tool via ContextModifier)
+    /// Latest task list from the most recent TodoWrite tool call.
+    current_todos: Option<serde_json::Value>,
+
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
-    /// Consumed once via `std::mem::take` in Step 6.5 and injected as steering.
-    queued_commands: Vec<QueuedCommandInfo>,
+    /// Shared via `Arc<Mutex>` so the TUI driver can push commands while the
+    /// loop is running. Drained once per iteration in Step 6.5 and injected
+    /// as steering system-reminders.
+    queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
 
     // Feature flags
     /// Feature flags for tool enablement and feature gating.
     features: cocode_protocol::Features,
+
+    // Web search config
+    /// Web search configuration (provider, api_key, max_results).
+    web_search_config: cocode_protocol::WebSearchConfig,
+
+    // Web fetch config
+    /// Web fetch configuration (timeout, max_content_length, user_agent).
+    web_fetch_config: cocode_protocol::WebFetchConfig,
 
     // Permission rules
     /// Pre-configured permission rules loaded from settings files.
@@ -200,6 +216,10 @@ pub struct AgentLoop {
     /// Watch channel sender for broadcasting agent status.
     /// This allows efficient status polling without processing all events.
     status_tx: watch::Sender<AgentStatus>,
+
+    // OpenTelemetry
+    /// Optional OTel manager for metrics and traces.
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -224,10 +244,13 @@ pub struct AgentLoopBuilder {
     shell_executor: Option<ShellExecutor>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
-    queued_commands: Vec<QueuedCommandInfo>,
+    queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
     status_tx: Option<watch::Sender<AgentStatus>>,
     features: cocode_protocol::Features,
+    web_search_config: cocode_protocol::WebSearchConfig,
+    web_fetch_config: cocode_protocol::WebFetchConfig,
     permission_rules: Vec<cocode_tools::PermissionRule>,
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 impl AgentLoopBuilder {
@@ -254,10 +277,13 @@ impl AgentLoopBuilder {
             shell_executor: None,
             spawn_agent_fn: None,
             skill_manager: None,
-            queued_commands: Vec::new(),
+            queued_commands: Arc::new(Mutex::new(Vec::new())),
             status_tx: None,
             features: cocode_protocol::Features::with_defaults(),
+            web_search_config: cocode_protocol::WebSearchConfig::default(),
+            web_fetch_config: cocode_protocol::WebFetchConfig::default(),
             permission_rules: Vec::new(),
+            otel_manager: None,
         }
     }
 
@@ -383,11 +409,13 @@ impl AgentLoopBuilder {
         self
     }
 
-    /// Set initial queued commands (for real-time steering).
+    /// Set the shared queued-commands handle for real-time steering.
     ///
-    /// Commands are consumed once in `core_message_loop` Step 6.5 and injected
-    /// as steering system-reminders that ask the model to address each message.
-    pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
+    /// The same `Arc<Mutex<Vec>>` is held by the TUI driver so it can push
+    /// new commands while the loop is running. Commands are drained once per
+    /// iteration in `core_message_loop` Step 6.5 and injected as steering
+    /// system-reminders.
+    pub fn queued_commands(mut self, commands: Arc<Mutex<Vec<QueuedCommandInfo>>>) -> Self {
         self.queued_commands = commands;
         self
     }
@@ -422,9 +450,27 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the web search configuration.
+    pub fn web_search_config(mut self, config: cocode_protocol::WebSearchConfig) -> Self {
+        self.web_search_config = config;
+        self
+    }
+
+    /// Set the web fetch configuration.
+    pub fn web_fetch_config(mut self, config: cocode_protocol::WebFetchConfig) -> Self {
+        self.web_fetch_config = config;
+        self
+    }
+
     /// Set pre-configured permission rules.
     pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
         self.permission_rules = rules;
+        self
+    }
+
+    /// Set the OTel manager for metrics and traces.
+    pub fn otel_manager(mut self, otel: Option<Arc<cocode_otel::OtelManager>>) -> Self {
+        self.otel_manager = otel;
         self
     }
 
@@ -492,10 +538,14 @@ impl AgentLoopBuilder {
             skill_manager: self.skill_manager,
             invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             active_skill_allowed_tools: None,
-            queued_commands: self.queued_commands,
+            current_todos: None,
+            queued_commands: self.queued_commands.clone(),
             features: self.features,
+            web_search_config: self.web_search_config,
+            web_fetch_config: self.web_fetch_config,
             permission_rules: self.permission_rules,
             status_tx,
+            otel_manager: self.otel_manager,
         }
     }
 }
@@ -518,7 +568,7 @@ impl AgentLoop {
     /// injected as steering system-reminders. The steering prompt asks the model
     /// to address the message and continue, so no separate post-idle execution
     /// is needed (consume-then-remove pattern).
-    pub fn queue_command(&mut self, prompt: impl Into<String>) {
+    pub fn queue_command(&self, prompt: impl Into<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -528,17 +578,29 @@ impl AgentLoop {
             prompt: prompt.into(),
             queued_at: now,
         };
-        self.queued_commands.push(cmd);
+        self.queued_commands.lock().unwrap().push(cmd);
     }
 
-    /// Get the current queued commands (for processing after idle).
-    pub fn take_queued_commands(&mut self) -> Vec<QueuedCommandInfo> {
-        std::mem::take(&mut self.queued_commands)
+    /// Drain all queued commands.
+    pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
+        std::mem::take(&mut *self.queued_commands.lock().unwrap())
     }
 
     /// Get the number of queued commands.
     pub fn queued_count(&self) -> usize {
-        self.queued_commands.len()
+        self.queued_commands.lock().unwrap().len()
+    }
+
+    /// Get a shared handle to the queued commands.
+    ///
+    /// This allows the TUI driver to push commands while the loop is running.
+    pub fn shared_queued_commands(&self) -> Arc<Mutex<Vec<QueuedCommandInfo>>> {
+        self.queued_commands.clone()
+    }
+
+    /// Take the current task list (if any) set by a TodoWrite tool call.
+    pub fn take_todos(&mut self) -> Option<serde_json::Value> {
+        self.current_todos.take()
     }
 
     /// Subscribe to status updates.
@@ -585,6 +647,35 @@ impl AgentLoop {
             "Starting agent loop"
         );
 
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // Execute SessionStart hooks at real session start (turn_number == 0 means first run)
+        if self.turn_number == 0 {
+            let ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::SessionStart,
+                session_id.clone(),
+                self.context.environment.cwd.clone(),
+            )
+            .with_metadata("source", "init");
+            self.execute_lifecycle_hooks(ctx).await;
+        }
+
+        // Execute UserPromptSubmit hooks before processing the prompt
+        {
+            let ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::UserPromptSubmit,
+                session_id.clone(),
+                self.context.environment.cwd.clone(),
+            )
+            .with_metadata("prompt", initial_message);
+            self.execute_lifecycle_hooks(ctx).await;
+        }
+
+        // Record user prompt in OTel
+        if let Some(otel) = &self.otel_manager {
+            otel.user_prompt(initial_message, initial_message.len());
+        }
+
         // Add user message to history
         let turn_id = uuid::Uuid::new_v4().to_string();
         let user_msg = TrackedMessage::user(initial_message, &turn_id);
@@ -598,8 +689,21 @@ impl AgentLoop {
         let mut query_tracking = QueryTracking::new_root(uuid::Uuid::new_v4().to_string());
         let mut auto_compact_tracking = AutoCompactTracking::new();
 
-        self.core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
-            .await
+        let result = self
+            .core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
+            .await;
+
+        // Execute Stop hooks when the agent loop finishes
+        {
+            let ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::Stop,
+                session_id,
+                self.context.environment.cwd.clone(),
+            );
+            self.execute_lifecycle_hooks(ctx).await;
+        }
+
+        result
     }
 
     /// Run the agent loop, consuming any queued commands as steering.
@@ -711,6 +815,7 @@ impl AgentLoop {
 
         // ── STEP 6: Initialize state ──
         self.turn_number += 1;
+        let turn_start = Instant::now();
         // Update status to streaming
         self.set_status(AgentStatus::streaming(turn_id.clone()));
         self.emit(LoopEvent::TurnStarted {
@@ -718,6 +823,9 @@ impl AgentLoop {
             turn_number: self.turn_number,
         })
         .await;
+        if let Some(otel) = &self.otel_manager {
+            otel.counter("cocode.turn.started", 1, &[]);
+        }
 
         // ── STEP 6.5: Generate system reminders ──
         // System reminders provide dynamic context (file changes, plan mode, etc.)
@@ -816,6 +924,7 @@ impl AgentLoop {
                 .map(|skill| SkillInfo {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    when_to_use: skill.when_to_use.clone(),
                 })
                 .collect();
 
@@ -846,9 +955,13 @@ impl AgentLoop {
         // Commands are drained here so they are only injected once, not on every
         // recursive tool-call iteration. The steering prompt asks the model to
         // "address this message and continue", so no post-idle re-execution is needed.
-        if !self.queued_commands.is_empty() {
-            gen_ctx_builder =
-                gen_ctx_builder.queued_commands(std::mem::take(&mut self.queued_commands));
+        // The shared Mutex allows the TUI driver to push new commands while the
+        // loop is running; they will be picked up on the next iteration.
+        {
+            let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
+            if !drained.is_empty() {
+                gen_ctx_builder = gen_ctx_builder.queued_commands(drained);
+            }
         }
 
         let gen_ctx = gen_ctx_builder.build();
@@ -899,6 +1012,8 @@ impl AgentLoop {
             is_plan_mode: self.plan_mode_state.is_active,
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
             features: self.features.clone(),
+            web_search_config: self.web_search_config.clone(),
+            web_fetch_config: self.web_fetch_config.clone(),
             max_tool_output_chars,
             ..ExecutorConfig::default()
         };
@@ -916,7 +1031,9 @@ impl AgentLoop {
         // Share async hook tracker for background hook completion tracking
         .with_async_hook_tracker(self.async_hook_tracker.clone())
         // Share the shell executor for command execution and background tasks
-        .with_shell_executor(self.shell_executor.clone());
+        .with_shell_executor(self.shell_executor.clone())
+        // Share OTel manager for tool execution metrics/events
+        .with_otel_manager(self.otel_manager.clone());
 
         // Wire permission rules into executor
         if !self.permission_rules.is_empty() {
@@ -974,6 +1091,9 @@ impl AgentLoop {
         let mut output_recovery_attempts = 0;
         let collected = loop {
             if self.cancel_token.is_cancelled() {
+                executor
+                    .abort_all(cocode_protocol::AbortReason::UserInterrupted)
+                    .await;
                 self.set_status(AgentStatus::Idle);
                 return Ok(LoopResult::interrupted(
                     self.turn_number,
@@ -999,6 +1119,13 @@ impl AgentLoop {
                         delay_ms: 0,
                     })
                     .await;
+                    if let Some(otel) = &self.otel_manager {
+                        otel.counter(
+                            "cocode.api.retry",
+                            1,
+                            &[("attempt", &output_recovery_attempts.to_string())],
+                        );
+                    }
                     continue;
                 }
             }
@@ -1008,6 +1135,22 @@ impl AgentLoop {
         if let Some(usage) = &collected.usage {
             self.total_input_tokens += usage.input_tokens as i32;
             self.total_output_tokens += usage.output_tokens as i32;
+
+            if let Some(otel) = &self.otel_manager {
+                otel.histogram("cocode.api.input_tokens", usage.input_tokens as i64, &[]);
+                otel.histogram("cocode.api.output_tokens", usage.output_tokens as i64, &[]);
+                if let Some(cached) = usage.cache_read_tokens {
+                    otel.histogram("cocode.api.cached_tokens", cached, &[]);
+                }
+                // Record SSE completion event with token breakdown
+                otel.sse_event_completed(
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.reasoning_tokens,
+                    0, // tool tokens not tracked separately
+                );
+            }
         }
 
         let usage = collected.usage.clone().unwrap_or_default();
@@ -1064,6 +1207,9 @@ impl AgentLoop {
             // ── STEP 13: Handle abort after tool execution ──
             // Check if cancelled during tool execution
             if self.cancel_token.is_cancelled() {
+                executor
+                    .abort_all(cocode_protocol::AbortReason::UserInterrupted)
+                    .await;
                 self.set_status(AgentStatus::Idle);
                 return Ok(LoopResult::interrupted(
                     self.turn_number,
@@ -1218,6 +1364,10 @@ impl AgentLoop {
             usage,
         })
         .await;
+        if let Some(otel) = &self.otel_manager {
+            otel.record_duration("cocode.turn.duration_ms", turn_start.elapsed(), &[]);
+            otel.counter("cocode.turn.completed", 1, &[]);
+        }
 
         // ── STEP 18: Recurse or return ──
         match collected.finish_reason {
@@ -1316,11 +1466,23 @@ impl AgentLoop {
 
         let request = builder.build();
 
-        let mut stream = self
+        let api_request_start = Instant::now();
+        let stream_result = self
             .api_client
             .stream_request(&*model, request, StreamOptions::streaming())
-            .await
-            .map_err(|e| anyhow::anyhow!("API stream error: {e}"))?;
+            .await;
+        let api_connect_duration = api_request_start.elapsed();
+
+        // Record API request connection event
+        if let Some(otel) = &self.otel_manager {
+            let (status, error) = match &stream_result {
+                Ok(_) => (Some(200u16), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+            otel.record_api_request(1, status, error.as_deref(), api_connect_duration);
+        }
+
+        let mut stream = stream_result.map_err(|e| anyhow::anyhow!("API stream error: {e}"))?;
 
         let mut all_content: Vec<ContentBlock> = Vec::new();
         let mut final_usage: Option<TokenUsage> = None;
@@ -1335,13 +1497,17 @@ impl AgentLoop {
         loop {
             let next_event = stream.next();
 
-            // Use tokio::select! for stall detection if enabled
+            // Use tokio::select! for stall detection and cancellation
             let result = if stall_enabled {
                 let timeout_at = last_event_time + stall_timeout;
                 let remaining = timeout_at.saturating_duration_since(Instant::now());
 
                 tokio::select! {
                     biased;
+                    _ = self.cancel_token.cancelled() => {
+                        // Cancelled during streaming — break out
+                        break;
+                    }
                     result = next_event => result,
                     _ = tokio::time::sleep(remaining) => {
                         // Stream stall detected
@@ -1376,6 +1542,9 @@ impl AgentLoop {
                                             fallback_model,
                                             format!("Stream stalled for {:?}", stall_timeout),
                                         );
+                                        if let Some(otel) = &self.otel_manager {
+                                            otel.counter("cocode.model.fallback", 1, &[]);
+                                        }
                                     }
                                 }
                                 return Err(anyhow::anyhow!(
@@ -1386,7 +1555,13 @@ impl AgentLoop {
                     }
                 }
             } else {
-                next_event.await
+                tokio::select! {
+                    biased;
+                    _ = self.cancel_token.cancelled() => {
+                        break;
+                    }
+                    result = next_event => result,
+                }
             };
 
             // Process the result
@@ -1405,6 +1580,9 @@ impl AgentLoop {
                             // Note: We can't emit async events here, but we record the fallback
                             self.fallback_state
                                 .record_fallback(fallback_model, format!("API error: {}", err_str));
+                            if let Some(otel) = &self.otel_manager {
+                                otel.counter("cocode.model.fallback", 1, &[]);
+                            }
                         }
                     }
                 }
@@ -1478,6 +1656,9 @@ impl AgentLoop {
                                 .await;
                                 self.fallback_state
                                     .record_fallback(fallback_model, msg.clone());
+                                if let Some(otel) = &self.otel_manager {
+                                    otel.counter("cocode.model.fallback", 1, &[]);
+                                }
                             }
                         }
                     }
@@ -1677,6 +1858,9 @@ impl AgentLoop {
         // Update status to compacting
         self.set_status(AgentStatus::Compacting);
         self.emit(LoopEvent::CompactionStarted).await;
+        if let Some(otel) = &self.otel_manager {
+            otel.counter("cocode.compaction.started", 1, &[]);
+        }
 
         // Estimate tokens before compaction
         let tokens_before = self.message_history.estimate_tokens();
@@ -1888,6 +2072,9 @@ impl AgentLoop {
 
         // Compaction complete - restore status to Idle
         self.set_status(AgentStatus::Idle);
+        if let Some(otel) = &self.otel_manager {
+            otel.counter("cocode.compaction.completed", 1, &[]);
+        }
         self.emit(LoopEvent::CompactionCompleted {
             removed_messages: 0, // Tracked by MessageHistory
             summary_tokens: post_tokens,
@@ -2000,6 +2187,42 @@ impl AgentLoop {
             })
             .await;
         }
+    }
+
+    /// Execute lifecycle hooks (non-tool events) and emit HookExecuted for each.
+    ///
+    /// Used for SessionStart, UserPromptSubmit, Stop, SessionEnd, etc.
+    /// Returns `true` if any hook rejected (for events that support rejection).
+    async fn execute_lifecycle_hooks(&self, ctx: cocode_hooks::HookContext) -> bool {
+        let protocol_event: HookEventType = ctx.event_type.clone().into();
+        let outcomes = self.hooks.execute(&ctx).await;
+        let mut rejected = false;
+
+        for outcome in &outcomes {
+            self.emit(LoopEvent::HookExecuted {
+                hook_type: protocol_event.clone(),
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+
+            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
+                info!(
+                    hook_name = %outcome.hook_name,
+                    reason = %reason,
+                    event = %ctx.event_type,
+                    "Lifecycle hook rejected"
+                );
+                rejected = true;
+            }
+
+            // Track async hooks
+            if let cocode_hooks::HookResult::Async { task_id, hook_name } = &outcome.result {
+                self.async_hook_tracker
+                    .register(task_id.clone(), hook_name.clone());
+            }
+        }
+
+        rejected
     }
 
     /// Restore context after compaction.
@@ -2321,6 +2544,13 @@ impl AgentLoop {
                         skill = %skill_name,
                         tools = ?allowed_tools,
                         "Applied SkillAllowedTools modifier"
+                    );
+                }
+                ContextModifier::TodosUpdated { todos } => {
+                    self.current_todos = Some(todos.clone());
+                    debug!(
+                        count = todos.as_array().map_or(0, |a| a.len()),
+                        "Applied TodosUpdated modifier"
                     );
                 }
             }

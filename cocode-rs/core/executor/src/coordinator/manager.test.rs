@@ -96,10 +96,9 @@ async fn test_wait_for_no_callback() {
 #[tokio::test]
 async fn test_spawn_with_execute_fn() {
     // Create a coordinator with an execution callback
-    let mut coord =
-        AgentCoordinator::new().with_execute_fn(Arc::new(|_model, prompt, _tools| {
-            Box::pin(async move { Ok(format!("Executed: {prompt}")) })
-        }));
+    let mut coord = AgentCoordinator::new().with_execute_fn(Arc::new(|_model, prompt, _tools| {
+        Box::pin(async move { Ok(format!("Executed: {prompt}")) })
+    }));
 
     let config = SpawnConfig {
         model: "claude-3".to_string(),

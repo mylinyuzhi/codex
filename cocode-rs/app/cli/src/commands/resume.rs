@@ -1,6 +1,9 @@
 //! Resume command - resume a previous session.
 
+use std::sync::Arc;
+
 use cocode_config::ConfigManager;
+use cocode_config::ConfigOverrides;
 use cocode_session::SessionManager;
 use cocode_session::persistence::session_file_path;
 
@@ -19,10 +22,13 @@ pub async fn run(session_id: &str, config: &ConfigManager) -> anyhow::Result<()>
     println!("Resuming session: {session_id}");
     println!();
 
+    // Build Config snapshot from ConfigManager
+    let snapshot = Arc::new(config.build_config(ConfigOverrides::default())?);
+
     let mut manager = SessionManager::new();
 
     // Load the session
-    manager.load_session(session_id, config).await?;
+    manager.load_session(session_id, snapshot).await?;
 
     // Get the session state
     let state = manager

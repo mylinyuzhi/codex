@@ -4,9 +4,11 @@
 //! managing the event loop, state updates, and rendering.
 
 use std::io;
-use std::path::PathBuf;
+use std::sync::Arc;
 
+use cocode_config::Config;
 use cocode_protocol::LoopEvent;
+use cocode_protocol::RoleSelection;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -35,31 +37,6 @@ use crate::update::handle_command;
 use crate::update::handle_file_search_event;
 use crate::update::handle_symbol_search_event;
 
-/// Configuration for the TUI application.
-#[derive(Debug, Clone)]
-pub struct AppConfig {
-    /// Initial model to use.
-    pub model: String,
-    /// Available models for the model picker.
-    pub available_models: Vec<String>,
-    /// Working directory for file search.
-    pub cwd: PathBuf,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            model: "claude-sonnet-4-20250514".to_string(),
-            available_models: vec![
-                "claude-sonnet-4-20250514".to_string(),
-                "claude-opus-4-20250514".to_string(),
-                "claude-haiku-3-5-20241022".to_string(),
-            ],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        }
-    }
-}
-
 /// The main TUI application.
 ///
 /// This struct manages the complete lifecycle of the TUI, including:
@@ -77,7 +54,7 @@ pub struct App {
     /// Sender for commands to the core agent.
     command_tx: mpsc::Sender<UserCommand>,
     /// Available models for the picker.
-    available_models: Vec<String>,
+    available_models: Vec<RoleSelection>,
     /// File search manager for @mention autocomplete.
     file_search: FileSearchManager,
     /// Receiver for file search events.
@@ -109,39 +86,48 @@ impl App {
     pub fn new(
         agent_rx: mpsc::Receiver<LoopEvent>,
         command_tx: mpsc::Sender<UserCommand>,
-        config: AppConfig,
+        config: Arc<Config>,
     ) -> io::Result<Self> {
         // Initialize i18n before anything else
         crate::i18n::init();
 
         let tui = Tui::new()?;
-        let state = AppState::with_model(&config.model);
 
-        // Create symbol search manager (before file search, since config.cwd is moved)
+        // Build available models from Config snapshot
+        let available_models = config.all_model_selections();
+
+        // Find initial selection matching main model
+        let state = available_models
+            .iter()
+            .find(|s| config.main_model().is_some_and(|m| *m == s.model))
+            .map(|sel| AppState::with_selection(sel.clone()))
+            .unwrap_or_else(AppState::new);
+
+        // Create symbol search manager (before file search)
         let (symbol_search_tx, symbol_search_rx) = create_symbol_search_channel();
         let symbol_search = SymbolSearchManager::new(config.cwd.clone(), symbol_search_tx);
 
         // Create file search manager
         let (file_search_tx, file_search_rx) = create_file_search_channel();
-        let file_search = FileSearchManager::new(config.cwd, file_search_tx);
+        let file_search = FileSearchManager::new(config.cwd.clone(), file_search_tx);
 
         // Create skill search manager
         let skill_search = SkillSearchManager::new();
 
         // Create agent search manager and load builtin agents
         let mut agent_search = AgentSearchManager::new();
-        let agent_defs = cocode_subagent::builtin_agents_with_overrides();
+        let agent_defs = cocode_subagent::builtin_agents_with_overrides(&config.cocode_home);
         agent_search.load_agents(agent_defs.iter().map(AgentInfo::from));
 
         // Create paste manager
-        let paste_manager = PasteManager::new();
+        let paste_manager = PasteManager::new(&config.cocode_home);
 
         Ok(Self {
             tui,
             state,
             agent_rx,
             command_tx,
-            available_models: config.available_models,
+            available_models,
             file_search,
             file_search_rx,
             skill_search,
@@ -159,6 +145,7 @@ impl App {
         agent_rx: mpsc::Receiver<LoopEvent>,
         command_tx: mpsc::Sender<UserCommand>,
     ) -> Self {
+        use std::path::PathBuf;
         let (file_search_tx, file_search_rx) = create_file_search_channel();
         let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
         let skill_search = SkillSearchManager::new();
@@ -178,7 +165,9 @@ impl App {
             agent_search,
             symbol_search,
             symbol_search_rx,
-            paste_manager: PasteManager::new(),
+            paste_manager: PasteManager::with_cache_dir(
+                std::env::temp_dir().join("cocode-test-paste-cache"),
+            ),
         }
     }
 

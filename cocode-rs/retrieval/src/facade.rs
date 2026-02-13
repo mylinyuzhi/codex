@@ -9,7 +9,7 @@
 //! use cocode_retrieval::{RetrievalFacade, FacadeBuilder, RetrievalFeatures};
 //!
 //! // Standard: Get facade for current working directory (cached)
-//! let facade = RetrievalFacade::for_workdir(&cwd).await?;
+//! let facade = RetrievalFacade::for_workdir(&cwd, &cocode_home).await?;
 //!
 //! // Custom: Builder pattern
 //! let facade = FacadeBuilder::new(config)
@@ -205,12 +205,12 @@ impl RetrievalFacade {
     /// Get or create a cached facade for the given working directory.
     ///
     /// Loads configuration from retrieval.toml files:
-    /// 1. `{workdir}/.codex/retrieval.toml` (project-level)
-    /// 2. `~/.codex/retrieval.toml` (global)
+    /// 1. `{workdir}/.cocode/retrieval.toml` (project-level)
+    /// 2. `{cocode_home}/retrieval.toml` (global)
     ///
     /// Returns `NotEnabled` error if retrieval is not configured/enabled.
     /// Instances are cached by canonicalized workdir path (LRU, max 16).
-    pub async fn for_workdir(workdir: &Path) -> Result<Arc<Self>> {
+    pub async fn for_workdir(workdir: &Path, cocode_home: &Path) -> Result<Arc<Self>> {
         // Canonicalize path for cache key
         let canonical = workdir
             .canonicalize()
@@ -222,7 +222,7 @@ impl RetrievalFacade {
         }
 
         // Load config
-        let config = RetrievalConfig::load(workdir)?;
+        let config = RetrievalConfig::load(workdir, cocode_home)?;
 
         // Check if enabled
         if !config.enabled {
@@ -250,8 +250,8 @@ impl RetrievalFacade {
     }
 
     /// Check if retrieval is configured (without initializing).
-    pub fn is_configured(workdir: &Path) -> bool {
-        RetrievalConfig::load(workdir)
+    pub fn is_configured(workdir: &Path, cocode_home: &Path) -> bool {
+        RetrievalConfig::load(workdir, cocode_home)
             .map(|c| c.enabled)
             .unwrap_or(false)
     }

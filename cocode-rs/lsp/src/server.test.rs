@@ -13,7 +13,7 @@ async fn test_find_server_for_extension_opt_in() {
     // With no config, no servers should be available (opt-in design)
     let empty_config = LspServersConfig::default();
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(empty_config, None, diagnostics);
+    let manager = LspServerManager::new(empty_config, None, None, diagnostics);
 
     // No config = no servers
     assert!(manager.find_server_for_extension(".rs").await.is_err());
@@ -32,7 +32,7 @@ async fn test_find_server_for_extension_opt_in() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     assert!(manager.find_server_for_extension(".rs").await.is_ok());
     assert!(manager.find_server_for_extension(".go").await.is_ok());
@@ -56,7 +56,7 @@ async fn test_find_server_disabled() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     // rust-analyzer is disabled
     assert!(manager.find_server_for_extension(".rs").await.is_err());
@@ -68,7 +68,7 @@ async fn test_find_server_disabled() {
 fn test_find_project_root() {
     let config = LspServersConfig::default();
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     // For non-existent paths, should return parent directory
     let root = manager.find_project_root(Path::new("/some/path/file.rs"));
@@ -92,7 +92,7 @@ async fn test_custom_server_priority() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     // Custom server should be found first
     let server_info = manager.find_server_for_extension(".rs").await.unwrap();
@@ -117,7 +117,7 @@ async fn test_custom_server_new_extension() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     // Custom extension should be found
     let server_info = manager.find_server_for_extension(".ts").await.unwrap();
@@ -149,7 +149,7 @@ async fn test_all_supported_extensions() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     let exts = manager.all_supported_extensions().await;
     // Only configured servers should be included
@@ -175,7 +175,7 @@ async fn test_server_info_lifecycle_config() {
     );
 
     let diagnostics = Arc::new(DiagnosticsStore::new());
-    let manager = LspServerManager::new(config, None, diagnostics);
+    let manager = LspServerManager::new(config, None, None, diagnostics);
 
     let server_info = manager.find_server_for_extension(".rs").await.unwrap();
     assert_eq!(server_info.lifecycle_config.max_restarts, 5);

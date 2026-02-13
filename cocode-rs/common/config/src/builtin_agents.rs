@@ -60,15 +60,12 @@ pub struct BuiltinAgentOverride {
 /// Maps agent type (e.g., "explore", "bash") to its override configuration.
 pub type BuiltinAgentsConfig = HashMap<String, BuiltinAgentOverride>;
 
-/// Load builtin agents config from `~/.cocode/builtin-agents.json`.
+/// Load builtin agents config from `{cocode_home}/builtin-agents.json`.
 ///
 /// Returns an empty map if the file doesn't exist or cannot be parsed.
 /// Errors are logged but not propagated.
-pub fn load_builtin_agents_config() -> BuiltinAgentsConfig {
-    let path = match dirs::home_dir() {
-        Some(h) => h.join(".cocode").join("builtin-agents.json"),
-        None => return HashMap::new(),
-    };
+pub fn load_builtin_agents_config(cocode_home: &std::path::Path) -> BuiltinAgentsConfig {
+    let path = cocode_home.join("builtin-agents.json");
 
     if !path.exists() {
         return HashMap::new();

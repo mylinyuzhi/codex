@@ -37,6 +37,10 @@ pub struct ExecutorConfig {
     pub enable_streaming_tools: bool,
     /// Feature flags propagated to subagent tool executors.
     pub features: cocode_protocol::Features,
+    /// Web search configuration propagated to tool executors.
+    pub web_search_config: cocode_protocol::WebSearchConfig,
+    /// Web fetch configuration propagated to tool executors.
+    pub web_fetch_config: cocode_protocol::WebFetchConfig,
 }
 
 impl Default for ExecutorConfig {
@@ -49,6 +53,8 @@ impl Default for ExecutorConfig {
             enable_micro_compaction: true,
             enable_streaming_tools: true,
             features: cocode_protocol::Features::with_defaults(),
+            web_search_config: cocode_protocol::WebSearchConfig::default(),
+            web_fetch_config: cocode_protocol::WebFetchConfig::default(),
         }
     }
 }
@@ -84,6 +90,9 @@ pub struct AgentExecutor {
 
     /// Pre-configured permission rules loaded from settings files.
     permission_rules: Vec<cocode_tools::PermissionRule>,
+
+    /// Optional OTel manager for metrics and traces.
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 impl AgentExecutor {
@@ -104,6 +113,7 @@ impl AgentExecutor {
             cancel_token: CancellationToken::new(),
             spawn_agent_fn: None,
             permission_rules: Vec::new(),
+            otel_manager: None,
         }
     }
 
@@ -220,7 +230,10 @@ impl AgentExecutor {
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
             .features(self.config.features.clone())
-            .permission_rules(self.permission_rules.clone());
+            .web_search_config(self.config.web_search_config.clone())
+            .web_fetch_config(self.config.web_fetch_config.clone())
+            .permission_rules(self.permission_rules.clone())
+            .otel_manager(self.otel_manager.clone());
 
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
@@ -265,6 +278,7 @@ pub struct ExecutorBuilder {
     spawn_agent_fn: Option<SpawnAgentFn>,
     features: cocode_protocol::Features,
     permission_rules: Vec<cocode_tools::PermissionRule>,
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
 impl ExecutorBuilder {
@@ -280,6 +294,7 @@ impl ExecutorBuilder {
             spawn_agent_fn: None,
             features: cocode_protocol::Features::with_defaults(),
             permission_rules: Vec::new(),
+            otel_manager: None,
         }
     }
 
@@ -367,6 +382,12 @@ impl ExecutorBuilder {
         self
     }
 
+    /// Set the OTel manager for metrics and traces.
+    pub fn otel_manager(mut self, otel: Option<Arc<cocode_otel::OtelManager>>) -> Self {
+        self.otel_manager = otel;
+        self
+    }
+
     /// Build the executor.
     ///
     /// # Panics
@@ -389,6 +410,7 @@ impl ExecutorBuilder {
         executor.cancel_token = self.cancel_token;
         executor.spawn_agent_fn = self.spawn_agent_fn;
         executor.permission_rules = self.permission_rules;
+        executor.otel_manager = self.otel_manager;
         executor
     }
 }

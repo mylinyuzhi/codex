@@ -14,17 +14,25 @@ use crate::plan_slug::get_unique_slug;
 /// Default plan directory name within the cocode config directory.
 const PLAN_DIR_NAME: &str = "plans";
 
-/// Cocode config directory name.
-const COCODE_DIR_NAME: &str = ".cocode";
+/// Resolve the cocode home directory.
+///
+/// Checks `COCODE_HOME` env var first, falls back to `~/.cocode`.
+/// This is a standalone implementation to avoid depending on `cocode-config`.
+fn find_cocode_home() -> PathBuf {
+    std::env::var("COCODE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".cocode")
+        })
+}
 
 /// Get the plan directory path (`~/.cocode/plans/`).
-///
-/// # Errors
-///
-/// Returns an error if the home directory cannot be determined.
-pub fn get_plan_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| plan_mode_error::NoHomeDirSnafu.build())?;
-    Ok(home.join(COCODE_DIR_NAME).join(PLAN_DIR_NAME))
+pub fn get_plan_dir() -> PathBuf {
+    find_cocode_home().join(PLAN_DIR_NAME)
 }
 
 /// Get the plan file path for a session.
@@ -37,8 +45,8 @@ pub fn get_plan_dir() -> Result<PathBuf> {
 /// # Returns
 ///
 /// Path to the plan file. For subagents, the format is `{slug}-agent-{agent_id}.md`.
-pub fn get_plan_file_path(session_id: &str, agent_id: Option<&str>) -> Result<PathBuf> {
-    let plan_dir = get_plan_dir()?;
+pub fn get_plan_file_path(session_id: &str, agent_id: Option<&str>) -> PathBuf {
+    let plan_dir = get_plan_dir();
     let slug = get_unique_slug(session_id, None);
 
     let filename = match agent_id {
@@ -46,7 +54,7 @@ pub fn get_plan_file_path(session_id: &str, agent_id: Option<&str>) -> Result<Pa
         None => format!("{slug}.md"),
     };
 
-    Ok(plan_dir.join(filename))
+    plan_dir.join(filename)
 }
 
 /// Read the contents of a plan file.
@@ -60,7 +68,7 @@ pub fn get_plan_file_path(session_id: &str, agent_id: Option<&str>) -> Result<Pa
 ///
 /// `Some(content)` if the file exists and is readable, `None` if it doesn't exist.
 pub fn read_plan_file(session_id: &str, agent_id: Option<&str>) -> Option<String> {
-    let path = get_plan_file_path(session_id, agent_id).ok()?;
+    let path = get_plan_file_path(session_id, agent_id);
     std::fs::read_to_string(&path).ok()
 }
 
@@ -85,7 +93,7 @@ pub fn is_plan_file(path: &Path, plan_path: &Path) -> bool {
 ///
 /// Returns an error if directory creation fails.
 pub fn ensure_plan_dir() -> Result<PathBuf> {
-    let plan_dir = get_plan_dir()?;
+    let plan_dir = get_plan_dir();
     if !plan_dir.exists() {
         std::fs::create_dir_all(&plan_dir).context(plan_mode_error::CreateDirSnafu {
             message: format!("failed to create {}", plan_dir.display()),
@@ -121,14 +129,14 @@ impl PlanFileManager {
     }
 
     /// Get the plan file path.
-    pub fn path(&self) -> Result<PathBuf> {
+    pub fn path(&self) -> PathBuf {
         get_plan_file_path(&self.session_id, self.agent_id.as_deref())
     }
 
     /// Ensure the plan directory exists and return the plan file path.
     pub fn ensure_and_get_path(&self) -> Result<PathBuf> {
         ensure_plan_dir()?;
-        self.path()
+        Ok(self.path())
     }
 
     /// Read the plan file contents.
@@ -138,7 +146,7 @@ impl PlanFileManager {
 
     /// Check if a path matches this manager's plan file.
     pub fn is_plan_file(&self, path: &Path) -> bool {
-        self.path().map(|p| is_plan_file(path, &p)).unwrap_or(false)
+        is_plan_file(path, &self.path())
     }
 
     /// Get the session ID.

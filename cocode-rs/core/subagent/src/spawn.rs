@@ -32,6 +32,13 @@ pub struct SpawnInput {
     /// Override the allowed tools for this spawn.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+
+    /// Agent ID to resume from a previous invocation.
+    ///
+    /// When set, the agent loads the prior output and prepends it as context
+    /// to the prompt, allowing continuation of a previous session.
+    #[serde(default)]
+    pub resume_from: Option<String>,
 }
 
 #[cfg(test)]

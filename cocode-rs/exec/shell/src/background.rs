@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// A background process tracked by the registry.
 #[derive(Debug, Clone)]
@@ -17,6 +18,10 @@ pub struct BackgroundProcess {
     pub output: Arc<Mutex<String>>,
     /// Notification sent when the process completes.
     pub completed: Arc<Notify>,
+    /// Cancellation token to signal the background task to stop.
+    ///
+    /// When cancelled, the spawned task can check this and kill the child process.
+    pub cancel_token: CancellationToken,
 }
 
 /// Registry for tracking background shell processes.
@@ -49,10 +54,16 @@ impl BackgroundTaskRegistry {
 
     /// Signals the task to stop and removes it from the registry.
     ///
+    /// Cancels the task's token (which triggers `kill_on_drop` on the child
+    /// process) and notifies waiters.
+    ///
     /// Returns true if the task was found and removed, false otherwise.
     pub async fn stop(&self, task_id: &str) -> bool {
         let mut tasks = self.tasks.lock().await;
         if let Some(process) = tasks.remove(task_id) {
+            // Cancel the token — the spawned task uses select! on this
+            // and will drop the Child, triggering kill_on_drop.
+            process.cancel_token.cancel();
             // Notify any waiters that the process is complete
             process.completed.notify_waiters();
             true

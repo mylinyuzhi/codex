@@ -17,8 +17,7 @@ fn test_zai_options() {
 
 #[test]
 fn test_downcast() {
-    let opts: Box<dyn ProviderOptionsData> =
-        ZaiOptions::new().with_thinking_budget(8192).boxed();
+    let opts: Box<dyn ProviderOptionsData> = ZaiOptions::new().with_thinking_budget(8192).boxed();
 
     let zai_opts = downcast_options::<ZaiOptions>(&opts);
     assert!(zai_opts.is_some());

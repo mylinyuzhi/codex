@@ -7,7 +7,8 @@ license.workspace = true
 [dependencies]
 cocode-protocol.workspace = true
 cocode-shell-parser.workspace = true
-tokio = { workspace = true, features = ["sync", "process", "time", "io-util", "rt", "fs"] }
+tokio = { workspace = true, features = ["sync", "process", "time", "io-util", "rt", "fs", "macros"] }
+tokio-util.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

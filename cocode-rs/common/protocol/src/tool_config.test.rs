@@ -75,6 +75,6 @@ fn test_apply_patch_tool_type_serde() {
 }
 
 #[test]
- fn test_apply_patch_tool_type_default() {
+fn test_apply_patch_tool_type_default() {
     assert_eq!(ApplyPatchToolType::default(), ApplyPatchToolType::Freeform);
 }

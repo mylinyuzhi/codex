@@ -28,10 +28,11 @@ pub enum ApplyPatchToolType {
 /// Default maximum number of concurrent tool executions.
 pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
 
-/// Default maximum tool result size before persistence to disk (400K characters).
+/// Default global fallback for maximum tool result size (400K characters).
 ///
-/// Results larger than this threshold are saved to disk with only a preview
-/// kept in the conversation context, significantly reducing token usage.
+/// The primary persistence threshold is the per-tool `Tool::max_result_size_chars()`
+/// (e.g. 30K for Bash, 100K for Read). This constant serves as a global fallback
+/// for tools that don't override `max_result_size_chars()`.
 pub const DEFAULT_MAX_RESULT_SIZE: i32 = 400_000;
 
 /// Default preview size for persisted large results (2K characters).
@@ -69,11 +70,11 @@ pub struct ToolConfig {
     #[serde(default)]
     pub mcp_tool_timeout: Option<i32>,
 
-    /// Maximum tool result size before persistence to disk.
+    /// Global fallback for maximum tool result size (characters).
     ///
-    /// Results larger than this threshold are saved to disk with only a preview
-    /// kept in the conversation context. This saves significant context tokens
-    /// when tools return very large outputs.
+    /// The primary persistence threshold is the per-tool `Tool::max_result_size_chars()`.
+    /// This field is kept as a global fallback configuration value.
+    /// See also: `result_preview_size`, `enable_result_persistence`.
     #[serde(default = "default_max_result_size")]
     pub max_result_size: i32,
 

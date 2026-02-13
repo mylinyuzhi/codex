@@ -29,7 +29,7 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
 
 /// Returns builtin agents with config overrides applied.
 ///
-/// Loads configuration from `~/.cocode/builtin-agents.json` and applies
+/// Loads configuration from `{cocode_home}/builtin-agents.json` and applies
 /// any overrides to the hardcoded agent definitions.
 ///
 /// # Example
@@ -37,11 +37,11 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
 /// ```ignore
 /// use cocode_subagent::definitions::builtin_agents_with_overrides;
 ///
-/// let agents = builtin_agents_with_overrides();
+/// let agents = builtin_agents_with_overrides(&cocode_home);
 /// // Agents now have any user-configured overrides applied
 /// ```
-pub fn builtin_agents_with_overrides() -> Vec<AgentDefinition> {
-    let config = cocode_config::load_builtin_agents_config();
+pub fn builtin_agents_with_overrides(cocode_home: &std::path::Path) -> Vec<AgentDefinition> {
+    let config = cocode_config::load_builtin_agents_config(cocode_home);
     builtin_agents_with_config(&config)
 }
 

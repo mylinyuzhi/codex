@@ -31,6 +31,7 @@ async fn test_kill_shell_tool_stops_task() {
         command: "sleep 60".to_string(),
         output,
         completed: Arc::new(Notify::new()),
+        cancel_token: tokio_util::sync::CancellationToken::new(),
     };
     ctx.shell_executor
         .background_registry

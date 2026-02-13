@@ -8,20 +8,6 @@ use std::path::PathBuf;
 use tracing::debug;
 use tracing::warn;
 
-/// Find the codex home directory.
-///
-/// Respects `CODEX_HOME` environment variable, falls back to `~/.codex`.
-pub fn find_codex_home() -> Option<PathBuf> {
-    // Honor the `CODEX_HOME` environment variable when it is set
-    if let Ok(val) = std::env::var("CODEX_HOME") {
-        if !val.is_empty() {
-            return Some(PathBuf::from(val));
-        }
-    }
-    // Fall back to ~/.codex
-    dirs::home_dir().map(|h| h.join(".codex"))
-}
-
 // ============================================================================
 // Default value constants
 // ============================================================================
@@ -297,7 +283,7 @@ pub const LSP_SERVERS_CONFIG_FILE: &str = "lsp_servers.json";
 
 impl LspServersConfig {
     /// Load LSP config from standard locations
-    /// Priority: project .codex/ > user {codex_home}/
+    /// Priority: project .cocode/ > user {cocode_home}/
     ///
     /// # Arguments
     /// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
@@ -314,9 +300,9 @@ impl LspServersConfig {
             }
         }
 
-        // 2. Try project-level config (.codex/lsp_servers.json)
+        // 2. Try project-level config (.cocode/lsp_servers.json)
         if let Some(root) = project_root {
-            let project_path = root.join(".codex").join(LSP_SERVERS_CONFIG_FILE);
+            let project_path = root.join(".cocode").join(LSP_SERVERS_CONFIG_FILE);
             if let Ok(project_config) = Self::from_file(&project_path) {
                 debug!("Loaded project LSP config from: {}", project_path.display());
                 config.merge(project_config); // Project overrides user
@@ -573,9 +559,9 @@ impl LspServersConfig {
 /// Configuration level for a server
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigLevel {
-    /// User-level config (~/.codex/lsp_servers.json)
+    /// User-level config (~/.cocode/lsp_servers.json)
     User,
-    /// Project-level config (.codex/lsp_servers.json)
+    /// Project-level config (.cocode/lsp_servers.json)
     Project,
 }
 

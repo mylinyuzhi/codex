@@ -6,6 +6,7 @@ fn test_role_selection_new() {
     assert_eq!(selection.model.provider, "anthropic");
     assert_eq!(selection.model.model, "claude-opus-4");
     assert!(selection.thinking_level.is_none());
+    assert!(selection.supported_thinking_levels.is_none());
 }
 
 #[test]
@@ -32,6 +33,36 @@ fn test_role_selection_set_thinking_level() {
 
     selection.clear_thinking_level();
     assert!(selection.thinking_level.is_none());
+}
+
+#[test]
+fn test_role_selection_effective_thinking_level() {
+    // No override — returns default (None effort)
+    let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
+    let effective = selection.effective_thinking_level();
+    assert_eq!(effective.effort, crate::model::ReasoningEffort::None);
+
+    // With override — returns the override
+    let selection =
+        RoleSelection::with_thinking(ModelSpec::new("openai", "gpt-5"), ThinkingLevel::high());
+    let effective = selection.effective_thinking_level();
+    assert_eq!(effective.effort, crate::model::ReasoningEffort::High);
+}
+
+#[test]
+fn test_role_selection_supported_thinking_levels() {
+    let levels = vec![
+        ThinkingLevel::low(),
+        ThinkingLevel::medium(),
+        ThinkingLevel::high(),
+    ];
+    let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"))
+        .with_supported_thinking_levels(levels.clone());
+
+    assert_eq!(
+        selection.supported_thinking_levels.as_ref().unwrap().len(),
+        3
+    );
 }
 
 #[test]
@@ -200,8 +231,9 @@ fn test_serde_skip_none_fields() {
     let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"));
     let json = serde_json::to_string(&selection).unwrap();
 
-    // thinking_level should be skipped when None
+    // thinking_level and supported_thinking_levels should be skipped when None
     assert!(!json.contains("thinking_level"));
+    assert!(!json.contains("supported_thinking_levels"));
 
     // Empty selections should serialize to {}
     let selections = RoleSelections::default();

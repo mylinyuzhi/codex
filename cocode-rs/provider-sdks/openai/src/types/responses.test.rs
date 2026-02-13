@@ -74,8 +74,8 @@ fn test_response_create_params_with_text() {
 
 #[test]
 fn test_prompt_caching_config() {
-    let config = PromptCachingConfig::with_key("my-key")
-        .retention(PromptCacheRetention::TwentyFourHours);
+    let config =
+        PromptCachingConfig::with_key("my-key").retention(PromptCacheRetention::TwentyFourHours);
 
     assert_eq!(config.cache_key, Some("my-key".to_string()));
     assert_eq!(

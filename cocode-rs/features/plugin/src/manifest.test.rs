@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[test]
@@ -51,6 +52,7 @@ fn test_validate_manifest() {
             min_cocode_version: None,
         },
         contributions: PluginContributions::default(),
+        user_config: HashMap::new(),
     };
 
     assert!(manifest.validate().is_ok());
@@ -69,6 +71,7 @@ fn test_validate_empty_name() {
             min_cocode_version: None,
         },
         contributions: PluginContributions::default(),
+        user_config: HashMap::new(),
     };
 
     let errors = manifest.validate().unwrap_err();
@@ -88,6 +91,7 @@ fn test_validate_invalid_name_chars() {
             min_cocode_version: None,
         },
         contributions: PluginContributions::default(),
+        user_config: HashMap::new(),
     };
 
     let errors = manifest.validate().unwrap_err();

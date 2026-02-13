@@ -44,6 +44,18 @@ pub enum HookResult {
         /// Name of the hook running in the background.
         hook_name: String,
     },
+
+    /// Override the permission decision for a PreToolUse hook.
+    ///
+    /// In Claude Code, a PreToolUse hook can return `permissionDecision: "allow"`
+    /// to auto-approve a tool without user confirmation.
+    PermissionOverride {
+        /// The permission decision: "allow", "deny", or "ask".
+        decision: String,
+        /// Optional reason for the decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
 }
 
 /// A completed hook execution with metadata.

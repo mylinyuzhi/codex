@@ -593,8 +593,8 @@ async fn test_execute_with_extraction_filters_nonexistent() {
         tmp.path().join("does_not_exist.txt"),
     ]);
 
-    let executor = ShellExecutor::new(tmp.path().to_path_buf())
-        .with_path_extractor(Arc::new(mock_extractor));
+    let executor =
+        ShellExecutor::new(tmp.path().to_path_buf()).with_path_extractor(Arc::new(mock_extractor));
 
     let result = executor.execute_with_extraction("echo hello", 10).await;
 
@@ -613,8 +613,8 @@ async fn test_execute_with_extraction_failed_command() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let mock_extractor = MockExtractor::new(vec![PathBuf::from("/some/file")]);
 
-    let executor = ShellExecutor::new(tmp.path().to_path_buf())
-        .with_path_extractor(Arc::new(mock_extractor));
+    let executor =
+        ShellExecutor::new(tmp.path().to_path_buf()).with_path_extractor(Arc::new(mock_extractor));
 
     // Command that fails
     let result = executor.execute_with_extraction("exit 1", 10).await;
@@ -636,8 +636,8 @@ async fn test_execute_with_cwd_tracking_and_extraction() {
 
     let mock_extractor = MockExtractor::new(vec![test_file.clone()]);
 
-    let mut executor = ShellExecutor::new(tmp.path().to_path_buf())
-        .with_path_extractor(Arc::new(mock_extractor));
+    let mut executor =
+        ShellExecutor::new(tmp.path().to_path_buf()).with_path_extractor(Arc::new(mock_extractor));
 
     // Execute with both CWD tracking and extraction
     let result = executor

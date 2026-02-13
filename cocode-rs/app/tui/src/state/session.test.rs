@@ -4,6 +4,7 @@ use super::*;
 fn test_session_state_default() {
     let state = SessionState::default();
     assert!(state.messages.is_empty());
+    assert!(state.current_selection.is_none());
     assert!(!state.plan_mode);
     assert!(state.tool_executions.is_empty());
 }
@@ -73,34 +74,17 @@ fn test_cleanup_completed_tools() {
 }
 
 #[test]
-fn test_thinking_budget() {
+fn test_thinking_tokens() {
     let mut state = SessionState::default();
 
-    // Initially no budget
-    assert!(state.thinking_budget_tokens.is_none());
     assert_eq!(state.thinking_tokens_used, 0);
-    assert!(state.thinking_budget_remaining().is_none());
 
-    // Set a budget
-    state.set_thinking_budget(Some(10000));
-    assert_eq!(state.thinking_budget_remaining(), Some(10000));
-
-    // Add tokens used
     state.add_thinking_tokens(3000);
     assert_eq!(state.thinking_tokens_used, 3000);
-    assert_eq!(state.thinking_budget_remaining(), Some(7000));
 
-    // Add more tokens
     state.add_thinking_tokens(5000);
     assert_eq!(state.thinking_tokens_used, 8000);
-    assert_eq!(state.thinking_budget_remaining(), Some(2000));
 
-    // Reset tokens
     state.reset_thinking_tokens();
     assert_eq!(state.thinking_tokens_used, 0);
-    assert_eq!(state.thinking_budget_remaining(), Some(10000));
-
-    // Over budget should return 0
-    state.add_thinking_tokens(15000);
-    assert_eq!(state.thinking_budget_remaining(), Some(0));
 }

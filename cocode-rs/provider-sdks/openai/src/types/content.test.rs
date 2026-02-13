@@ -83,17 +83,13 @@ fn test_input_file() {
 
 #[test]
 fn test_computer_call_output() {
-    let block = InputContentBlock::computer_call_output_screenshot(
-        "call-1",
-        Some("base64".into()),
-        None,
-    );
+    let block =
+        InputContentBlock::computer_call_output_screenshot("call-1", Some("base64".into()), None);
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"computer_call_output""#));
     assert!(json.contains(r#""call_id":"call-1""#));
 
-    let block =
-        InputContentBlock::computer_call_output_action("call-2", Some("success".into()));
+    let block = InputContentBlock::computer_call_output_action("call-2", Some("success".into()));
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"computer_call_output""#));
 }
@@ -108,8 +104,7 @@ fn test_tool_call_outputs() {
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"web_search_call_output""#));
 
-    let block =
-        InputContentBlock::code_interpreter_call_output("call-3", Some("output".into()));
+    let block = InputContentBlock::code_interpreter_call_output("call-3", Some("output".into()));
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"code_interpreter_call_output""#));
 

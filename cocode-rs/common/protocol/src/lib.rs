@@ -33,6 +33,8 @@ pub mod thinking;
 pub mod tool_config;
 pub mod tool_types;
 pub mod tracking;
+pub mod web_fetch_config;
+pub mod web_search_config;
 
 // Model types
 pub use model::Capability;
@@ -200,6 +202,13 @@ pub use mcp_config::DEFAULT_TOOL_CACHE_TTL_SECS;
 
 // Agent status types
 pub use agent_status::AgentStatus;
+
+// Web fetch config types
+pub use web_fetch_config::WebFetchConfig;
+
+// Web search config types
+pub use web_search_config::WebSearchConfig;
+pub use web_search_config::WebSearchProvider;
 
 // Correlation types
 pub use correlation::CorrelatedEvent;

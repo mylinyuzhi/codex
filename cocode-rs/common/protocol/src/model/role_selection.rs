@@ -37,6 +37,10 @@ pub struct RoleSelection {
     /// Current thinking level (overrides ModelInfo.default_thinking_level).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
+
+    /// Thinking levels this model supports (for UI cycling). From ModelInfo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
 }
 
 impl RoleSelection {
@@ -45,6 +49,7 @@ impl RoleSelection {
         Self {
             model,
             thinking_level: None,
+            supported_thinking_levels: None,
         }
     }
 
@@ -53,12 +58,24 @@ impl RoleSelection {
         Self {
             model,
             thinking_level: Some(level),
+            supported_thinking_levels: None,
         }
     }
 
     /// Create from a ModelSpec (uses model's default thinking level).
     pub fn from_spec(spec: ModelSpec) -> Self {
         Self::new(spec)
+    }
+
+    /// Set supported thinking levels (for UI cycling).
+    pub fn with_supported_thinking_levels(mut self, levels: Vec<ThinkingLevel>) -> Self {
+        self.supported_thinking_levels = Some(levels);
+        self
+    }
+
+    /// Effective thinking level: explicit override or default (None effort).
+    pub fn effective_thinking_level(&self) -> ThinkingLevel {
+        self.thinking_level.clone().unwrap_or_default()
     }
 
     /// Update the thinking level.

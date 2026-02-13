@@ -23,9 +23,7 @@ fn test_parse_installer_type_npm() {
         InstallerType::Npm
     );
     assert_eq!(
-        LspInstaller::parse_installer_type(
-            "npm install -g typescript-language-server typescript"
-        ),
+        LspInstaller::parse_installer_type("npm install -g typescript-language-server typescript"),
         InstallerType::Npm
     );
 }

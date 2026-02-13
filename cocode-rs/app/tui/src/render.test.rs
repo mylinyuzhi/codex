@@ -1,4 +1,6 @@
 use super::*;
+use cocode_protocol::RoleSelection;
+use cocode_protocol::model::ModelSpec;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -104,7 +106,10 @@ fn test_render_with_model_picker() {
     state
         .ui
         .set_overlay(Overlay::ModelPicker(crate::state::ModelPickerOverlay::new(
-            vec!["claude-sonnet-4".to_string(), "claude-opus-4".to_string()],
+            vec![
+                RoleSelection::new(ModelSpec::new("anthropic", "claude-sonnet-4")),
+                RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4")),
+            ],
         )));
 
     terminal

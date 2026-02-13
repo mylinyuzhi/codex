@@ -139,10 +139,7 @@ pub async fn delete_session_file(path: &Path) -> anyhow::Result<()> {
 
 /// Get the default sessions directory.
 pub fn default_sessions_dir() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".cocode")
-        .join("sessions")
+    cocode_config::find_cocode_home().join("sessions")
 }
 
 /// Get the path for a session file by ID.

@@ -16,8 +16,8 @@ fn create_with_absolute_path_ignores_base_path() {
 fn relative_path_is_resolved_against_base_path() {
     let temp_dir = tempdir().expect("base dir");
     let base_dir = temp_dir.path();
-    let abs_path_buf = AbsolutePathBuf::resolve_path_against_base("file.txt", base_dir)
-        .expect("failed to create");
+    let abs_path_buf =
+        AbsolutePathBuf::resolve_path_against_base("file.txt", base_dir).expect("failed to create");
     assert_eq!(abs_path_buf.as_path(), base_dir.join("file.txt").as_path());
 }
 
@@ -31,5 +31,8 @@ fn guard_used_in_deserialization() {
         serde_json::from_str::<AbsolutePathBuf>(&format!(r#""{relative_path}""#))
             .expect("failed to deserialize")
     };
-    assert_eq!(abs_path_buf.as_path(), base_dir.join(relative_path).as_path());
+    assert_eq!(
+        abs_path_buf.as_path(),
+        base_dir.join(relative_path).as_path()
+    );
 }

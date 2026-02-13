@@ -75,9 +75,10 @@ async fn test_service_accessors_return_arc() {
 fn test_is_configured_false() {
     let dir = TempDir::new().unwrap();
     // Create a config file with enabled = false
-    let config_dir = dir.path().join(".codex");
+    let config_dir = dir.path().join(".cocode");
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(config_dir.join("retrieval.toml"), "enabled = false").unwrap();
+    let cocode_home = dir.path().join(".cocode");
     // Should return false when explicitly disabled
-    assert!(!RetrievalFacade::is_configured(dir.path()));
+    assert!(!RetrievalFacade::is_configured(dir.path(), &cocode_home));
 }

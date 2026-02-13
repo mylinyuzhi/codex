@@ -20,10 +20,17 @@ fn test_abort_reason() {
 
 #[test]
 fn test_hook_event_type() {
-    assert_eq!(HookEventType::PreToolCall.as_str(), "pre_tool_call");
-    assert_eq!(HookEventType::PostToolCall.as_str(), "post_tool_call");
+    assert_eq!(HookEventType::PreToolUse.as_str(), "pre_tool_use");
+    assert_eq!(HookEventType::PostToolUse.as_str(), "post_tool_use");
+    assert_eq!(
+        HookEventType::PostToolUseFailure.as_str(),
+        "post_tool_use_failure"
+    );
     assert_eq!(HookEventType::SessionStart.as_str(), "session_start");
     assert_eq!(HookEventType::PreCompact.as_str(), "pre_compact");
+    assert_eq!(HookEventType::Stop.as_str(), "stop");
+    assert_eq!(HookEventType::SubagentStart.as_str(), "subagent_start");
+    assert_eq!(HookEventType::SubagentStop.as_str(), "subagent_stop");
 }
 
 #[test]

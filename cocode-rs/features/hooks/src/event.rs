@@ -61,6 +61,25 @@ impl std::fmt::Display for HookEventType {
     }
 }
 
+impl From<HookEventType> for cocode_protocol::HookEventType {
+    fn from(event: HookEventType) -> Self {
+        match event {
+            HookEventType::PreToolUse => Self::PreToolUse,
+            HookEventType::PostToolUse => Self::PostToolUse,
+            HookEventType::PostToolUseFailure => Self::PostToolUseFailure,
+            HookEventType::UserPromptSubmit => Self::UserPromptSubmit,
+            HookEventType::SessionStart => Self::SessionStart,
+            HookEventType::SessionEnd => Self::SessionEnd,
+            HookEventType::Stop => Self::Stop,
+            HookEventType::SubagentStart => Self::SubagentStart,
+            HookEventType::SubagentStop => Self::SubagentStop,
+            HookEventType::PreCompact => Self::PreCompact,
+            HookEventType::Notification => Self::Notification,
+            HookEventType::PermissionRequest => Self::PermissionRequest,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "event.test.rs"]
 mod tests;

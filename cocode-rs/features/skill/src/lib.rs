@@ -24,6 +24,7 @@ pub mod dedup;
 pub mod hooks;
 pub mod interface;
 pub mod loader;
+pub mod local;
 pub mod manager;
 pub mod outcome;
 pub mod scanner;
@@ -55,6 +56,11 @@ pub use scanner::SkillScanner;
 pub use source::LoadedFrom;
 pub use source::SkillSource;
 pub use validator::validate_skill;
+
+// Re-export local command types
+pub use local::LocalCommandDef;
+pub use local::builtin_local_commands;
+pub use local::find_local_command;
 
 // Re-export hook functionality
 pub use hooks::cleanup_skill_hooks;

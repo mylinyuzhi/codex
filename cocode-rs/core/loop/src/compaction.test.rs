@@ -797,8 +797,7 @@ fn test_format_summary_with_transcript() {
     let summary = "## Summary\nUser worked on fixing a bug.";
     let transcript_path = PathBuf::from("/tmp/session-123.jsonl");
 
-    let formatted =
-        format_summary_with_transcript(summary, Some(&transcript_path), true, 50000);
+    let formatted = format_summary_with_transcript(summary, Some(&transcript_path), true, 50000);
 
     assert!(formatted.contains("session is being continued"));
     assert!(formatted.contains("50000 tokens"));

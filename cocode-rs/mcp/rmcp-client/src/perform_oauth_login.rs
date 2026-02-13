@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,6 +47,7 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     callback_port: Option<u16>,
+    cocode_home: PathBuf,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -60,6 +62,7 @@ pub async fn perform_oauth_login(
         true,
         callback_port,
         None,
+        cocode_home,
     )
     .await?
     .finish()
@@ -76,6 +79,7 @@ pub async fn perform_oauth_login_return_url(
     scopes: &[String],
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
+    cocode_home: PathBuf,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -90,6 +94,7 @@ pub async fn perform_oauth_login_return_url(
         false,
         callback_port,
         timeout_secs,
+        cocode_home,
     )
     .await?;
 
@@ -190,6 +195,7 @@ struct OauthLoginFlow {
     server_name: String,
     server_url: String,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: PathBuf,
     launch_browser: bool,
     timeout: Duration,
 }
@@ -218,6 +224,7 @@ impl OauthLoginFlow {
         launch_browser: bool,
         callback_port: Option<u16>,
         timeout_secs: Option<i64>,
+        cocode_home: PathBuf,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
@@ -274,6 +281,7 @@ impl OauthLoginFlow {
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
             store_mode,
+            cocode_home,
             launch_browser,
             timeout,
         })
@@ -323,7 +331,12 @@ impl OauthLoginFlow {
                 token_response: WrappedOAuthTokenResponse(credentials),
                 expires_at,
             };
-            save_oauth_tokens(&self.server_name, &stored, self.store_mode)?;
+            save_oauth_tokens(
+                &self.server_name,
+                &stored,
+                self.store_mode,
+                &self.cocode_home,
+            )?;
 
             Ok(())
         }

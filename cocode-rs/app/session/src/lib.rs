@@ -24,7 +24,8 @@
 //!
 //! ```ignore
 //! use cocode_session::{Session, SessionState, SessionManager};
-//! use cocode_config::ConfigManager;
+//! use cocode_config::{ConfigManager, ConfigOverrides};
+//! use std::sync::Arc;
 //! use std::path::PathBuf;
 //!
 //! // Create a new session
@@ -34,9 +35,10 @@
 //!     cocode_protocol::ProviderType::Openai,
 //! );
 //!
-//! // Build session state
-//! let config = ConfigManager::from_default()?;
-//! let mut state = SessionState::new(session, &config).await?;
+//! // Build session state from config snapshot
+//! let manager = ConfigManager::from_default()?;
+//! let config = Arc::new(manager.build_config(ConfigOverrides::default())?);
+//! let mut state = SessionState::new(session, config).await?;
 //!
 //! // Run a turn
 //! let result = state.run_turn("Hello, world!").await?;

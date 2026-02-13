@@ -18,7 +18,7 @@ fn test_hub_error_inherit_without_parent() {
 
 #[test]
 fn test_hub_new() {
-    let config = ConfigManager::empty();
+    let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
     assert_eq!(hub.provider_cache_size(), 0);
     assert_eq!(hub.model_cache_size(), 0);
@@ -26,7 +26,7 @@ fn test_hub_new() {
 
 #[test]
 fn test_hub_debug() {
-    let config = ConfigManager::empty();
+    let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
     let debug_str = format!("{:?}", hub);
     assert!(debug_str.contains("ModelHub"));
@@ -131,7 +131,7 @@ fn test_resolve_identity_role_fallback_to_main() {
 
 #[test]
 fn test_hub_prepare_main_with_selections_empty_selections_returns_error() {
-    let config = ConfigManager::empty();
+    let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
     let selections = RoleSelections::default();
 
@@ -142,7 +142,7 @@ fn test_hub_prepare_main_with_selections_empty_selections_returns_error() {
 
 #[test]
 fn test_hub_get_model_for_role_with_selections() {
-    let config = ConfigManager::empty();
+    let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
 
     let mut selections = RoleSelections::default();
@@ -161,7 +161,7 @@ fn test_hub_get_model_for_role_with_selections() {
 
 #[test]
 fn test_hub_get_model_for_role_with_selections_empty_returns_error() {
-    let config = ConfigManager::empty();
+    let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
     let selections = RoleSelections::default();
 

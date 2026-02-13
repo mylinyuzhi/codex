@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Error;
@@ -28,12 +29,13 @@ pub async fn determine_streamable_http_auth_status(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     store_mode: OAuthCredentialsStoreMode,
+    cocode_home: &Path,
 ) -> Result<McpAuthStatus> {
     if bearer_token_env_var.is_some() {
         return Ok(McpAuthStatus::BearerToken);
     }
 
-    if has_oauth_tokens(server_name, url, store_mode)? {
+    if has_oauth_tokens(server_name, url, store_mode, cocode_home)? {
         return Ok(McpAuthStatus::OAuth);
     }
 

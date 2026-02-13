@@ -51,11 +51,7 @@ impl MockKeyringStore {
 }
 
 impl KeyringStore for MockKeyringStore {
-    fn load(
-        &self,
-        _service: &str,
-        account: &str,
-    ) -> Result<Option<String>, CredentialStoreError> {
+    fn load(&self, _service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
         let credential = {
             let guard = self
                 .credentials
@@ -75,12 +71,7 @@ impl KeyringStore for MockKeyringStore {
         }
     }
 
-    fn save(
-        &self,
-        _service: &str,
-        account: &str,
-        value: &str,
-    ) -> Result<(), CredentialStoreError> {
+    fn save(&self, _service: &str, account: &str, value: &str) -> Result<(), CredentialStoreError> {
         let credential = self.credential(account);
         credential
             .set_password(value)

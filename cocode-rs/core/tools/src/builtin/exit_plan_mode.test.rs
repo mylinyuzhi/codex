@@ -36,8 +36,8 @@ async fn test_exit_plan_mode_with_prompts() {
 #[tokio::test]
 async fn test_exit_plan_mode_as_agent() {
     let tool = ExitPlanModeTool::new();
-    let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
-        .with_agent_id("explore-1");
+    let mut ctx =
+        ToolContext::new("call-1", "session-1", PathBuf::from("/tmp")).with_agent_id("explore-1");
 
     let input = serde_json::json!({});
     let result = tool.execute(input, &mut ctx).await.unwrap();
