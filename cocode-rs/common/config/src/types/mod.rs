@@ -8,6 +8,10 @@
 //!
 //! For resolved runtime types, see `ProviderInfo` in cocode_protocol.
 
+pub mod domain;
+
+pub use domain::ApiKey;
+
 use crate::error::config_error::ConfigValidationSnafu;
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
@@ -314,5 +318,5 @@ pub struct ModelSummary {
 }
 
 #[cfg(test)]
-#[path = "types.test.rs"]
+#[path = "mod.test.rs"]
 mod tests;

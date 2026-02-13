@@ -51,6 +51,8 @@ pub mod json_config;
 pub mod loader;
 pub mod manager;
 pub mod resolver;
+pub mod runtime;
+pub mod store;
 pub mod types;
 
 // Re-export protocol types (model)
@@ -74,6 +76,9 @@ pub use loader::LoadedConfig;
 pub use manager::ConfigManager;
 pub use manager::RuntimeOverrides;
 pub use resolver::ConfigResolver;
+pub use runtime::RuntimeState;
+pub use store::ConfigStore;
+pub use types::ApiKey;
 pub use types::ModelSummary;
 pub use types::ModelsFile;
 pub use types::ProviderConfig;
