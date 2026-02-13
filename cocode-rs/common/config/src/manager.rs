@@ -170,12 +170,7 @@ impl ConfigManager {
         provider: &str,
         model: &str,
     ) -> Result<ModelInfo, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         resolver.resolve_model_info(provider, model)
     }
 
@@ -184,12 +179,7 @@ impl ConfigManager {
     /// This is much cheaper than `resolve_provider()` when you only need
     /// the `ProviderType` — it skips API key validation and model resolution.
     pub fn provider_type(&self, provider: &str) -> Result<ProviderType, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         resolver.provider_type(provider)
     }
 
@@ -198,12 +188,7 @@ impl ConfigManager {
     /// Returns the alias if set and non-empty, otherwise returns the slug.
     /// The result is an owned `String` because the resolver is behind a `RwLock`.
     pub fn resolve_model_alias(&self, provider: &str, model: &str) -> Result<String, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         Ok(resolver.resolve_model_alias(provider, model).to_string())
     }
 
@@ -212,12 +197,7 @@ impl ConfigManager {
     /// This is cheaper than `list_models()` which resolves each model's full
     /// `ModelInfo`. Use this when you only need the slug strings.
     pub fn list_model_slugs(&self, provider: &str) -> Result<Vec<String>, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         Ok(resolver
             .list_models(provider)
             .into_iter()
@@ -232,30 +212,20 @@ impl ConfigManager {
     /// - All connection settings (base_url, streaming, wire_api)
     /// - Map of resolved models (slug -> ModelInfo)
     pub fn resolve_provider(&self, provider: &str) -> Result<ProviderInfo, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         resolver.resolve_provider(provider)
     }
 
     /// Resolve provider using pre-resolved model cache (avoids redundant model resolution).
     ///
     /// This is used by `build_config()` to avoid re-resolving models that were already
-    /// resolved in the role resolution phase. The cache is keyed by (provider, model).
+    /// resolved in the role resolution phase. The cache is keyed by `ModelSpec`.
     pub(crate) fn resolve_provider_with_cache(
         &self,
         provider: &str,
-        model_cache: &HashMap<(String, String), ModelInfo>,
+        model_cache: &HashMap<ModelSpec, ModelInfo>,
     ) -> Result<ProviderInfo, ConfigError> {
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
+        let resolver = self.read_resolver()?;
         resolver.resolve_provider_with_cache(provider, model_cache)
     }
 
@@ -298,6 +268,48 @@ impl ConfigManager {
 
         // 3. Fallback to built-in default
         ("openai".to_string(), "gpt-5".to_string())
+    }
+
+    /// Get the current active provider and model as a typed `ModelSpec`.
+    ///
+    /// Returns the same value as `current()` but as a `ModelSpec` for type safety.
+    pub fn current_spec(&self) -> ModelSpec {
+        let (provider, model) = self.current();
+        ModelSpec::new(&provider, &model)
+    }
+
+    /// Get the current active provider and model for a specific role as a `ModelSpec`.
+    ///
+    /// Returns the same value as `current_for_role()` but as a `ModelSpec` for type safety.
+    pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
+        let (provider, model) = self.current_for_role(role);
+        ModelSpec::new(&provider, &model)
+    }
+
+    /// Switch to a specific provider and model using a typed `ModelSpec`.
+    ///
+    /// This is the type-safe version of `switch()` that accepts a `ModelSpec` directly.
+    pub fn switch_spec(&self, spec: &ModelSpec) -> Result<(), ConfigError> {
+        self.switch(&spec.provider, &spec.model)
+    }
+
+    /// Switch model for a specific role using a typed `ModelSpec`.
+    ///
+    /// This is the type-safe version of `switch_role()` that accepts a `ModelSpec` directly.
+    pub fn switch_role_spec(&self, role: ModelRole, spec: &ModelSpec) -> Result<(), ConfigError> {
+        self.switch_role(role, &spec.provider, &spec.model)
+    }
+
+    /// Switch model and thinking level for a specific role using a typed `ModelSpec`.
+    ///
+    /// This is the type-safe version of `switch_role_with_thinking()` that accepts a `ModelSpec` directly.
+    pub fn switch_role_spec_with_thinking(
+        &self,
+        role: ModelRole,
+        spec: &ModelSpec,
+        thinking_level: ThinkingLevel,
+    ) -> Result<(), ConfigError> {
+        self.switch_role_with_thinking(role, &spec.provider, &spec.model, thinking_level)
     }
 
     /// Set runtime overrides for provider/model selection.
@@ -391,39 +403,12 @@ impl ConfigManager {
     /// This updates the runtime overrides (in-memory only).
     /// To persist, edit `config.toml` directly.
     pub fn switch(&self, provider: &str, model: &str) -> Result<(), ConfigError> {
-        // Validate the provider/model combination
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
-
-        // Check if provider is configured (either in config or built-in)
-        if !resolver.has_provider(provider) {
-            // Check built-in providers
-            if builtin::get_provider_defaults(provider).is_none() {
-                return NotFoundSnafu {
-                    kind: NotFoundKind::Provider,
-                    name: provider.to_string(),
-                }
-                .fail();
-            }
-        }
-
-        drop(resolver);
+        // Validate the provider
+        self.validate_provider(provider)?;
 
         // Update runtime overrides (in-memory)
-        {
-            let mut runtime = self.runtime_overrides.write().map_err(|e| {
-                InternalSnafu {
-                    message: format!("Failed to acquire write lock: {e}"),
-                }
-                .build()
-            })?;
-
-            runtime.set_main(ModelSpec::new(provider, model));
-        }
+        let mut runtime = self.write_runtime()?;
+        runtime.set_main(ModelSpec::new(provider, model));
 
         info!(provider = provider, model = model, "Switched to new model");
         Ok(())
@@ -440,38 +425,13 @@ impl ConfigManager {
         model: &str,
     ) -> Result<(), ConfigError> {
         // Validate the provider
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
-
-        if !resolver.has_provider(provider) {
-            if builtin::get_provider_defaults(provider).is_none() {
-                return NotFoundSnafu {
-                    kind: NotFoundKind::Provider,
-                    name: provider.to_string(),
-                }
-                .fail();
-            }
-        }
-
-        drop(resolver);
+        self.validate_provider(provider)?;
 
         // Update runtime overrides
-        {
-            let mut runtime = self.runtime_overrides.write().map_err(|e| {
-                InternalSnafu {
-                    message: format!("Failed to acquire write lock: {e}"),
-                }
-                .build()
-            })?;
-
-            runtime
-                .selections
-                .set(role, RoleSelection::new(ModelSpec::new(provider, model)));
-        }
+        let mut runtime = self.write_runtime()?;
+        runtime
+            .selections
+            .set(role, RoleSelection::new(ModelSpec::new(provider, model)));
 
         info!(
             provider = provider,
@@ -494,42 +454,14 @@ impl ConfigManager {
         thinking_level: ThinkingLevel,
     ) -> Result<(), ConfigError> {
         // Validate the provider
-        let resolver = self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire read lock: {e}"),
-            }
-            .build()
-        })?;
-
-        if !resolver.has_provider(provider) {
-            if builtin::get_provider_defaults(provider).is_none() {
-                return NotFoundSnafu {
-                    kind: NotFoundKind::Provider,
-                    name: provider.to_string(),
-                }
-                .fail();
-            }
-        }
-
-        drop(resolver);
+        self.validate_provider(provider)?;
 
         // Update runtime overrides
-        {
-            let mut runtime = self.runtime_overrides.write().map_err(|e| {
-                InternalSnafu {
-                    message: format!("Failed to acquire write lock: {e}"),
-                }
-                .build()
-            })?;
-
-            runtime.selections.set(
-                role,
-                RoleSelection::with_thinking(
-                    ModelSpec::new(provider, model),
-                    thinking_level.clone(),
-                ),
-            );
-        }
+        let mut runtime = self.write_runtime()?;
+        runtime.selections.set(
+            role,
+            RoleSelection::with_thinking(ModelSpec::new(provider, model), thinking_level.clone()),
+        );
 
         info!(
             provider = provider,
@@ -550,12 +482,7 @@ impl ConfigManager {
         role: ModelRole,
         thinking_level: ThinkingLevel,
     ) -> Result<bool, ConfigError> {
-        let mut runtime = self.runtime_overrides.write().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire write lock: {e}"),
-            }
-            .build()
-        })?;
+        let mut runtime = self.write_runtime()?;
 
         let updated = runtime
             .selections
@@ -828,13 +755,119 @@ impl ConfigManager {
             models.merge(override_models);
         }
 
-        // PHASE 1: Collect all unique (provider, model) pairs from roles AND providers
+        // Build model cache and providers
+        let (model_cache, resolved_models, providers) = self.build_model_cache(&models)?;
+
+        // Resolve cwd and instructions
+        let cwd = overrides
+            .cwd
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let user_instructions = overrides
+            .user_instructions
+            .as_ref()
+            .cloned()
+            .or_else(|| load_instructions(&cwd));
+
+        // Merge features with overrides
+        let mut features = resolved.features.clone();
+        if !overrides.features.is_empty() {
+            features.apply_map(
+                &overrides
+                    .features
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect(),
+            );
+        }
+
+        // Build sandbox config
+        let sandbox_mode = overrides.sandbox_mode.unwrap_or_default();
+        let writable_roots = overrides
+            .writable_roots
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| {
+                if sandbox_mode == SandboxMode::WorkspaceWrite {
+                    vec![cwd.clone()]
+                } else {
+                    Vec::new()
+                }
+            });
+
+        // Load extended configs from environment variables
+        let env_loader = EnvLoader::new();
+
+        // Merge individual config sections
+        let tool_config = self.merge_tool_config(&overrides, &resolved, &env_loader);
+        let mut compact_config = self.merge_compact_config(&overrides, &resolved, &env_loader);
+        if let Some(main_info) = resolved_models.get(&ModelRole::Main) {
+            compact_config.apply_model_overrides(main_info);
+        }
+        let plan_config = self.merge_plan_config(&overrides, &resolved, &env_loader);
+        let attachment_config = self.merge_attachment_config(&overrides, &resolved, &env_loader);
+        let path_config = self.merge_path_config(&overrides, &resolved, &env_loader);
+
+        // Web search and fetch configs
+        let web_search_config = resolved.web_search.clone().unwrap_or_default();
+        let web_fetch_config = resolved.web_fetch.clone().unwrap_or_default();
+
+        // OTel config: resolve from JSON + env vars
+        let otel = resolved
+            .otel
+            .as_ref()
+            .filter(|c| c.is_enabled())
+            .map(|c| c.to_otel_settings(&self.config_path));
+
+        Ok(Config {
+            models,
+            providers,
+            resolved_models,
+            cwd,
+            cocode_home: self.config_path.clone(),
+            user_instructions,
+            features,
+            logging: resolved.logging,
+            active_profile: app_config.profile.clone(),
+            ephemeral: overrides.ephemeral.unwrap_or(false),
+            sandbox_mode,
+            writable_roots,
+            tool_config,
+            compact_config,
+            plan_config,
+            attachment_config,
+            path_config,
+            web_search_config,
+            web_fetch_config,
+            permissions: resolved.permissions.clone(),
+            hooks: resolved.hooks.clone(),
+            otel,
+        })
+    }
+
+    // Private helper methods for config building
+
+    /// Build model cache and providers from configured models.
+    ///
+    /// Returns (model_cache, resolved_models_by_role, providers).
+    fn build_model_cache(
+        &self,
+        models: &cocode_protocol::ModelRoles,
+    ) -> Result<
+        (
+            HashMap<ModelSpec, ModelInfo>,
+            HashMap<ModelRole, ModelInfo>,
+            HashMap<String, ProviderInfo>,
+        ),
+        ConfigError,
+    > {
+        // PHASE 1: Collect all unique models from roles AND providers
         let mut model_keys = std::collections::HashSet::new();
 
         // 1a. From configured roles
         for role in ModelRole::all() {
             if let Some(spec) = models.get(*role) {
-                model_keys.insert((spec.provider.clone(), spec.model.clone()));
+                model_keys.insert(spec.clone());
             }
         }
 
@@ -842,16 +875,16 @@ impl ConfigManager {
         for summary in self.list_providers() {
             if let Ok(slugs) = self.list_model_slugs(&summary.name) {
                 for slug in slugs {
-                    model_keys.insert((summary.name.clone(), slug));
+                    model_keys.insert(ModelSpec::new(&summary.name, &slug));
                 }
             }
         }
 
         // PHASE 2: Resolve each unique model ONCE into a cache
-        let mut model_cache: HashMap<(String, String), ModelInfo> = HashMap::new();
-        for (provider, model) in model_keys {
-            if let Ok(info) = self.resolve_model_info(&provider, &model) {
-                model_cache.insert((provider.clone(), model.clone()), info);
+        let mut model_cache: HashMap<ModelSpec, ModelInfo> = HashMap::new();
+        for spec in model_keys {
+            if let Ok(info) = self.resolve_model_info(&spec.provider, &spec.model) {
+                model_cache.insert(spec, info);
             }
         }
 
@@ -859,8 +892,7 @@ impl ConfigManager {
         let mut resolved_models = HashMap::new();
         for role in ModelRole::all() {
             if let Some(spec) = models.get(*role) {
-                let key = (spec.provider.clone(), spec.model.clone());
-                if let Some(info) = model_cache.get(&key) {
+                if let Some(info) = model_cache.get(spec) {
                     resolved_models.insert(*role, info.clone());
                 }
             }
@@ -874,48 +906,20 @@ impl ConfigManager {
             }
         }
 
-        // Determine cwd
-        let cwd = overrides
-            .cwd
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        Ok((model_cache, resolved_models, providers))
+    }
 
-        // Load instructions from cwd
-        let user_instructions = overrides
-            .user_instructions
-            .or_else(|| load_instructions(&cwd));
-
-        // Apply feature overrides
-        let mut features = resolved.features.clone();
-        if !overrides.features.is_empty() {
-            features.apply_map(
-                &overrides
-                    .features
-                    .iter()
-                    .map(|(k, v)| (k.clone(), *v))
-                    .collect(),
-            );
-        }
-
-        // Build writable roots (default to cwd if WorkspaceWrite)
-        let sandbox_mode = overrides.sandbox_mode.unwrap_or_default();
-        let writable_roots = overrides.writable_roots.unwrap_or_else(|| {
-            if sandbox_mode == SandboxMode::WorkspaceWrite {
-                vec![cwd.clone()]
-            } else {
-                Vec::new()
-            }
-        });
-
-        // Load extended configs from environment variables
-        // Precedence: overrides > env vars > JSON config > defaults
-        let env_loader = EnvLoader::new();
-
-        // Tool config: overrides > env > JSON > default
-        let tool_config = overrides.tool_config.unwrap_or_else(|| {
+    /// Merge tool config: overrides > env > JSON > default.
+    fn merge_tool_config(
+        &self,
+        overrides: &ConfigOverrides,
+        resolved: &crate::json_config::ResolvedAppConfig,
+        env_loader: &EnvLoader,
+    ) -> cocode_protocol::ToolConfig {
+        overrides.tool_config.clone().unwrap_or_else(|| {
             let mut config = env_loader.load_tool_config();
             if let Some(json_config) = &resolved.tool {
                 // JSON config fills in gaps where env didn't set values
-                // For numeric fields: use JSON if env produced the default value
                 if config.max_tool_concurrency == cocode_protocol::DEFAULT_MAX_TOOL_CONCURRENCY {
                     config.max_tool_concurrency = json_config.max_tool_concurrency;
                 }
@@ -924,10 +928,17 @@ impl ConfigManager {
                 }
             }
             config
-        });
+        })
+    }
 
-        // Compact config: overrides > env > JSON > default
-        let mut compact_config = overrides.compact_config.unwrap_or_else(|| {
+    /// Merge compact config: overrides > env > JSON > default.
+    fn merge_compact_config(
+        &self,
+        overrides: &ConfigOverrides,
+        resolved: &crate::json_config::ResolvedAppConfig,
+        env_loader: &EnvLoader,
+    ) -> cocode_protocol::CompactConfig {
+        overrides.compact_config.clone().unwrap_or_else(|| {
             let mut config = env_loader.load_compact_config();
             if let Some(json_config) = &resolved.compact {
                 // Merge ALL JSON values where env didn't set them
@@ -979,15 +990,17 @@ impl ConfigManager {
                 tracing::warn!(error = %e, "Invalid compact config");
             }
             config
-        });
+        })
+    }
 
-        // Apply model-level overrides from main model
-        if let Some(main_info) = resolved_models.get(&ModelRole::Main) {
-            compact_config.apply_model_overrides(main_info);
-        }
-
-        // Plan config: overrides > env > JSON > default
-        let plan_config = overrides.plan_config.unwrap_or_else(|| {
+    /// Merge plan config: overrides > env > JSON > default.
+    fn merge_plan_config(
+        &self,
+        overrides: &ConfigOverrides,
+        resolved: &crate::json_config::ResolvedAppConfig,
+        env_loader: &EnvLoader,
+    ) -> cocode_protocol::PlanModeConfig {
+        overrides.plan_config.clone().unwrap_or_else(|| {
             let mut config = env_loader.load_plan_config();
             if let Some(json_config) = &resolved.plan {
                 // Merge JSON values where env didn't set them
@@ -1010,10 +1023,17 @@ impl ConfigManager {
                 tracing::warn!(error = %e, "Invalid plan config");
             }
             config
-        });
+        })
+    }
 
-        // Attachment config: overrides > env > JSON > default
-        let attachment_config = overrides.attachment_config.unwrap_or_else(|| {
+    /// Merge attachment config: overrides > env > JSON > default.
+    fn merge_attachment_config(
+        &self,
+        overrides: &ConfigOverrides,
+        resolved: &crate::json_config::ResolvedAppConfig,
+        env_loader: &EnvLoader,
+    ) -> cocode_protocol::AttachmentConfig {
+        overrides.attachment_config.clone().unwrap_or_else(|| {
             let mut config = env_loader.load_attachment_config();
             if let Some(json_config) = &resolved.attachment {
                 // Merge JSON values where env didn't set them
@@ -1028,13 +1048,20 @@ impl ConfigManager {
                 }
             }
             config
-        });
+        })
+    }
 
-        // Path config: overrides > env > JSON > default
-        let mut path_config = overrides.path_config.unwrap_or_else(|| {
-            let config = env_loader.load_path_config();
-            config
-        });
+    /// Merge path config: overrides > env > JSON > default.
+    fn merge_path_config(
+        &self,
+        overrides: &ConfigOverrides,
+        resolved: &crate::json_config::ResolvedAppConfig,
+        env_loader: &EnvLoader,
+    ) -> cocode_protocol::PathConfig {
+        let mut path_config = overrides
+            .path_config
+            .clone()
+            .unwrap_or_else(|| env_loader.load_path_config());
         // Merge JSON path config
         if let Some(json_paths) = &resolved.paths {
             if path_config.project_dir.is_none() {
@@ -1047,44 +1074,82 @@ impl ConfigManager {
                 path_config.env_file = json_paths.env_file.clone();
             }
         }
+        path_config
+    }
 
-        // Web search config: JSON > default
-        let web_search_config = resolved.web_search.clone().unwrap_or_default();
+    // Private helper methods for lock management
 
-        // Web fetch config: JSON > default
-        let web_fetch_config = resolved.web_fetch.clone().unwrap_or_default();
-
-        // OTel config: resolve from JSON + env vars
-        let otel = resolved
-            .otel
-            .as_ref()
-            .filter(|c| c.is_enabled())
-            .map(|c| c.to_otel_settings(&self.config_path));
-
-        Ok(Config {
-            models,
-            providers,
-            resolved_models,
-            cwd,
-            cocode_home: self.config_path.clone(),
-            user_instructions,
-            features,
-            logging: resolved.logging,
-            active_profile: app_config.profile.clone(),
-            ephemeral: overrides.ephemeral.unwrap_or(false),
-            sandbox_mode,
-            writable_roots,
-            tool_config,
-            compact_config,
-            plan_config,
-            attachment_config,
-            path_config,
-            web_search_config,
-            web_fetch_config,
-            permissions: resolved.permissions.clone(),
-            hooks: resolved.hooks.clone(),
-            otel,
+    /// Acquire read lock on resolver.
+    fn read_resolver(&self) -> Result<std::sync::RwLockReadGuard<'_, ConfigResolver>, ConfigError> {
+        self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire resolver read lock: {e}"),
+            }
+            .build()
         })
+    }
+
+    /// Acquire write lock on resolver.
+    fn write_resolver(
+        &self,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, ConfigResolver>, ConfigError> {
+        self.resolver.write().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire resolver write lock: {e}"),
+            }
+            .build()
+        })
+    }
+
+    /// Acquire read lock on runtime overrides.
+    fn read_runtime(
+        &self,
+    ) -> Result<std::sync::RwLockReadGuard<'_, RuntimeOverrides>, ConfigError> {
+        self.runtime_overrides.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire runtime read lock: {e}"),
+            }
+            .build()
+        })
+    }
+
+    /// Acquire write lock on runtime overrides.
+    fn write_runtime(
+        &self,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, RuntimeOverrides>, ConfigError> {
+        self.runtime_overrides.write().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire runtime write lock: {e}"),
+            }
+            .build()
+        })
+    }
+
+    /// Acquire read lock on app config.
+    fn read_config(&self) -> Result<std::sync::RwLockReadGuard<'_, AppConfig>, ConfigError> {
+        self.config.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire config read lock: {e}"),
+            }
+            .build()
+        })
+    }
+
+    /// Validate that a provider exists (in config or built-in).
+    fn validate_provider(&self, provider: &str) -> Result<(), ConfigError> {
+        let resolver = self.read_resolver()?;
+
+        if !resolver.has_provider(provider) {
+            if builtin::get_provider_defaults(provider).is_none() {
+                return NotFoundSnafu {
+                    kind: NotFoundKind::Provider,
+                    name: provider.to_string(),
+                }
+                .fail();
+            }
+        }
+
+        Ok(())
     }
 }
 

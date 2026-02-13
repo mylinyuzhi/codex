@@ -722,7 +722,7 @@ async fn handle_idle_command(
             let model_display = selection.model.to_string();
             info!(model = %model_display, "Model changed");
 
-            if let Err(e) = config.switch(&selection.model.provider, &selection.model.model) {
+            if let Err(e) = config.switch_spec(&selection.model) {
                 error!(error = %e, "Failed to switch model");
                 let _ = event_tx
                     .send(LoopEvent::Error {
