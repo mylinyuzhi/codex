@@ -46,16 +46,19 @@
 pub mod builtin;
 pub mod builtin_agents;
 pub mod config;
+mod config_builder;
 pub mod env_loader;
 pub mod error;
 pub mod interceptors;
 pub mod json_config;
 pub mod loader;
 pub mod manager;
+mod model_cache;
 pub mod resolver;
 pub mod runtime;
 pub mod store;
 pub mod types;
+mod validation;
 
 // Re-export protocol types (model)
 pub use cocode_protocol::Capability;
