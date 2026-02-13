@@ -156,6 +156,34 @@ fn test_tool_builders() {
 }
 
 #[test]
+fn test_function_tool_flat_serialization() {
+    let tool = Tool::function(
+        "LS",
+        Some("List files".to_string()),
+        serde_json::json!({"type": "object", "properties": {}}),
+    )
+    .unwrap();
+
+    let json = serde_json::to_string(&tool).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    // Responses API flat format: name/parameters at top level, no nested "function" key.
+    assert_eq!(v["type"], "function");
+    assert_eq!(v["name"], "LS");
+    assert!(v.get("parameters").is_some());
+    assert!(v.get("function").is_none(), "must not have nested 'function' key");
+
+    // Roundtrip
+    let parsed: Tool = serde_json::from_str(&json).unwrap();
+    if let Tool::Function { function } = &parsed {
+        assert_eq!(function.name, "LS");
+        assert_eq!(function.description, Some("List files".to_string()));
+    } else {
+        panic!("Expected Function variant");
+    }
+}
+
+#[test]
 fn test_custom_tool_serialization() {
     // Custom tool with grammar format
     let tool = Tool::custom_with_grammar(

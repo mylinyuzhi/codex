@@ -76,6 +76,7 @@ pub enum Tool {
     /// Function tool.
     Function {
         /// Function definition.
+        #[serde(flatten)]
         function: FunctionDefinition,
     },
     /// Web search tool.
