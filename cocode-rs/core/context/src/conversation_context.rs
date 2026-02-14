@@ -10,6 +10,23 @@ use cocode_protocol::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Output style configuration that affects system prompt generation.
+///
+/// When active, modifies the system prompt by:
+/// - Stripping the "Communication Style" section from identity
+/// - Conditionally removing coding-specific sections (ToolPolicy, GitWorkflow, TaskManagement)
+/// - Appending the style's custom instructions at the end of the prompt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputStylePromptConfig {
+    /// The style name (for display purposes).
+    pub name: String,
+    /// The style content/instructions to append to the prompt.
+    pub content: String,
+    /// Whether to keep coding-specific sections (ToolPolicy, GitWorkflow, TaskManagement).
+    /// Built-in styles default to true; custom styles default to false.
+    pub keep_coding_instructions: bool,
+}
+
 use crate::budget::ContextBudget;
 use crate::environment::EnvironmentInfo;
 
@@ -100,6 +117,8 @@ pub struct ConversationContext {
     pub subagent_type: Option<SubagentType>,
     /// Path to the conversation transcript file.
     pub transcript_path: Option<std::path::PathBuf>,
+    /// Output style configuration for prompt modification.
+    pub output_style: Option<OutputStylePromptConfig>,
 }
 
 impl ConversationContext {
@@ -139,6 +158,7 @@ pub struct ConversationContextBuilder {
     session_memory_config: SessionMemoryConfig,
     subagent_type: Option<SubagentType>,
     transcript_path: Option<std::path::PathBuf>,
+    output_style: Option<OutputStylePromptConfig>,
 }
 
 impl ConversationContextBuilder {
@@ -202,6 +222,11 @@ impl ConversationContextBuilder {
         self
     }
 
+    pub fn output_style(mut self, config: OutputStylePromptConfig) -> Self {
+        self.output_style = Some(config);
+        self
+    }
+
     /// Build the [`ConversationContext`].
     ///
     /// Returns `Err` if required fields are missing.
@@ -230,6 +255,7 @@ impl ConversationContextBuilder {
             session_memory_config: self.session_memory_config,
             subagent_type: self.subagent_type,
             transcript_path: self.transcript_path,
+            output_style: self.output_style,
         })
     }
 }

@@ -32,6 +32,8 @@ pub enum PromptSection {
     MemoryFiles,
     /// Injected content.
     Injections,
+    /// Output style instructions.
+    OutputStyle,
 }
 
 /// Assemble ordered sections into a single prompt string.

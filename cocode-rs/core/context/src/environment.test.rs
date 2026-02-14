@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn test_builder_required_fields() {
-    let result = EnvironmentInfo::builder()
-        .cwd("/tmp/test")
-        .build();
+    let result = EnvironmentInfo::builder().cwd("/tmp/test").build();
     assert!(result.is_ok());
 
     let env = result.unwrap();

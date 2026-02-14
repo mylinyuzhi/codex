@@ -733,6 +733,7 @@ impl ConfigManager {
             permissions: resolved.permissions.clone(),
             hooks: resolved.hooks.clone(),
             otel,
+            output_style: resolved.output_style.clone(),
         })
     }
 

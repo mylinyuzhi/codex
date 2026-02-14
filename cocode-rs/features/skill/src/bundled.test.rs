@@ -43,21 +43,8 @@ fn test_compute_fingerprint_length() {
 #[test]
 fn test_bundled_skills_returns_vec() {
     let skills = bundled_skills();
-    // Should contain output-style skill
     assert!(!skills.is_empty());
-    assert!(skills.iter().any(|s| s.name == "output-style"));
-}
-
-#[test]
-fn test_output_style_skill() {
-    let skills = bundled_skills();
-    let output_style = skills.iter().find(|s| s.name == "output-style").unwrap();
-    assert_eq!(
-        output_style.description,
-        "Manage response output styles (explanatory, learning, etc.)"
-    );
-    assert!(output_style.prompt.contains("/output-style"));
-    assert_eq!(output_style.fingerprint.len(), 64);
+    assert!(skills.iter().any(|s| s.name == "plugin"));
 }
 
 #[test]

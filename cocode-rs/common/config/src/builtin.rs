@@ -90,6 +90,8 @@ pub struct CustomOutputStyle {
     pub content: String,
     /// Source file path.
     pub path: PathBuf,
+    /// Whether to keep coding-specific sections (default: false for custom styles).
+    pub keep_coding_instructions: bool,
 }
 
 /// Output style metadata parsed from YAML frontmatter.
@@ -227,6 +229,7 @@ fn load_single_style(path: &Path) -> Option<CustomOutputStyle> {
         description,
         content: body.trim().to_string(),
         path: path.to_path_buf(),
+        keep_coding_instructions: frontmatter.keep_coding_instructions.unwrap_or(false),
     })
 }
 
@@ -244,7 +247,7 @@ pub fn default_output_styles_dir(cocode_home: &std::path::Path) -> PathBuf {
 pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleInfo> {
     let mut styles = Vec::new();
 
-    // Add built-in styles
+    // Add built-in styles (keep_coding_instructions defaults to true)
     for name in list_builtin_output_styles() {
         if let Some(content) = get_output_style(name) {
             styles.push(OutputStyleInfo {
@@ -252,18 +255,21 @@ pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleI
                 description: builtin_style_description(name),
                 content: content.to_string(),
                 source: OutputStyleSource::Builtin,
+                keep_coding_instructions: true,
             });
         }
     }
 
-    // Add custom styles from default directory
+    // Add custom styles from default directory (keep_coding_instructions defaults to false)
     let dir = default_output_styles_dir(cocode_home);
     for custom in load_custom_output_styles(&dir) {
+        let keep_coding = custom.keep_coding_instructions;
         styles.push(OutputStyleInfo {
             name: custom.name,
             description: custom.description,
             content: custom.content,
             source: OutputStyleSource::Custom(custom.path),
+            keep_coding_instructions: keep_coding,
         });
     }
 
@@ -290,6 +296,9 @@ pub struct OutputStyleInfo {
     pub content: String,
     /// Source of the style.
     pub source: OutputStyleSource,
+    /// Whether to keep coding-specific sections in the system prompt.
+    /// Built-in styles default to `true`; custom styles default to `false`.
+    pub keep_coding_instructions: bool,
 }
 
 /// Source of an output style.
@@ -329,17 +338,19 @@ pub fn find_output_style(name: &str, cocode_home: &std::path::Path) -> Option<Ou
                 description: custom.description,
                 content: custom.content,
                 source: OutputStyleSource::Custom(custom.path),
+                keep_coding_instructions: custom.keep_coding_instructions,
             });
         }
     }
 
-    // Fall back to built-in styles
+    // Fall back to built-in styles (keep_coding_instructions defaults to true)
     if let Some(content) = get_output_style(name) {
         return Some(OutputStyleInfo {
             name: name.to_string(),
             description: builtin_style_description(&name_lower),
             content: content.to_string(),
             source: OutputStyleSource::Builtin,
+            keep_coding_instructions: true,
         });
     }
 

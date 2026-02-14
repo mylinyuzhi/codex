@@ -66,6 +66,7 @@ fn test_output_style_config_resolve_builtin() {
         enabled: true,
         style_name: Some("explanatory".to_string()),
         instruction: None,
+        keep_coding_instructions: None,
     };
     let instruction = config.resolve_instruction().unwrap();
     assert!(instruction.contains("Explanatory Style Active"));
@@ -77,6 +78,7 @@ fn test_output_style_config_custom_takes_precedence() {
         enabled: true,
         style_name: Some("explanatory".to_string()),
         instruction: Some("My custom style".to_string()),
+        keep_coding_instructions: None,
     };
     let instruction = config.resolve_instruction().unwrap();
     assert_eq!(instruction, "My custom style");
@@ -89,6 +91,7 @@ fn test_output_style_config_empty_instruction_fallback() {
         enabled: true,
         style_name: Some("learning".to_string()),
         instruction: Some(String::new()),
+        keep_coding_instructions: None,
     };
     let instruction = config.resolve_instruction().unwrap();
     assert!(instruction.contains("Learning Style Active"));
@@ -100,6 +103,7 @@ fn test_output_style_config_unknown_style() {
         enabled: true,
         style_name: Some("nonexistent".to_string()),
         instruction: None,
+        keep_coding_instructions: None,
     };
     assert!(config.resolve_instruction().is_none());
 }
@@ -110,6 +114,64 @@ fn test_output_style_config_neither_set() {
         enabled: true,
         style_name: None,
         instruction: None,
+        keep_coding_instructions: None,
     };
     assert!(config.resolve_instruction().is_none());
+}
+
+#[test]
+fn test_resolve_prompt_config_disabled() {
+    let config = OutputStyleConfig {
+        enabled: false,
+        style_name: Some("explanatory".to_string()),
+        instruction: None,
+        keep_coding_instructions: None,
+    };
+    let tmp = std::env::temp_dir();
+    assert!(config.resolve_prompt_config(&tmp).is_none());
+}
+
+#[test]
+fn test_resolve_prompt_config_with_builtin_style() {
+    let config = OutputStyleConfig {
+        enabled: true,
+        style_name: Some("explanatory".to_string()),
+        instruction: None,
+        keep_coding_instructions: None,
+    };
+    let tmp = std::env::temp_dir();
+    let result = config.resolve_prompt_config(&tmp).unwrap();
+    assert_eq!(result.name, "explanatory");
+    assert!(result.content.contains("Explanatory Style Active"));
+    // Built-in styles default keep_coding_instructions to true
+    assert!(result.keep_coding_instructions);
+}
+
+#[test]
+fn test_resolve_prompt_config_with_custom_instruction() {
+    let config = OutputStyleConfig {
+        enabled: true,
+        style_name: None,
+        instruction: Some("My custom output style".to_string()),
+        keep_coding_instructions: Some(true),
+    };
+    let tmp = std::env::temp_dir();
+    let result = config.resolve_prompt_config(&tmp).unwrap();
+    assert_eq!(result.name, "custom");
+    assert_eq!(result.content, "My custom output style");
+    assert!(result.keep_coding_instructions);
+}
+
+#[test]
+fn test_resolve_prompt_config_keep_coding_override() {
+    let config = OutputStyleConfig {
+        enabled: true,
+        style_name: Some("explanatory".to_string()),
+        instruction: None,
+        keep_coding_instructions: Some(false), // Override built-in default
+    };
+    let tmp = std::env::temp_dir();
+    let result = config.resolve_prompt_config(&tmp).unwrap();
+    // The override should take effect over the built-in default
+    assert!(!result.keep_coding_instructions);
 }

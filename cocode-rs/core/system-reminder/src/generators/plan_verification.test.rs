@@ -159,7 +159,10 @@ async fn test_content_matches_cc_template() {
 #[test]
 fn test_attachment_type() {
     let generator = PlanVerificationGenerator;
-    assert_eq!(generator.attachment_type(), AttachmentType::PlanVerification);
+    assert_eq!(
+        generator.attachment_type(),
+        AttachmentType::PlanVerification
+    );
 }
 
 #[test]

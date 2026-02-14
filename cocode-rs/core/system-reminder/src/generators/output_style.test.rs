@@ -73,12 +73,9 @@ async fn test_generate_with_builtin_style() {
 
     let reminder = result.expect("reminder");
     assert_eq!(reminder.attachment_type, AttachmentType::OutputStyle);
-    assert!(
-        reminder
-            .content()
-            .unwrap()
-            .contains("Explanatory Style Active")
-    );
+    // Now generates a reinforcement reminder rather than the full style content
+    assert!(reminder.content().unwrap().contains("explanatory"));
+    assert!(reminder.content().unwrap().contains("output style"));
 }
 
 #[tokio::test]
@@ -96,13 +93,7 @@ async fn test_generate_with_learning_style() {
     assert!(result.is_some());
 
     let reminder = result.expect("reminder");
-    assert!(
-        reminder
-            .content()
-            .unwrap()
-            .contains("Learning Style Active")
-    );
-    assert!(reminder.content().unwrap().contains("TODO(human)"));
+    assert!(reminder.content().unwrap().contains("learning"));
 }
 
 #[tokio::test]
@@ -120,12 +111,13 @@ async fn test_generate_with_custom_instruction() {
     assert!(result.is_some());
 
     let reminder = result.expect("reminder");
-    assert_eq!(reminder.content().unwrap(), "Always be brief and direct.");
+    // Falls back to "custom" when no style_name is set
+    assert!(reminder.content().unwrap().contains("custom"));
 }
 
 #[tokio::test]
-async fn test_custom_instruction_takes_precedence() {
-    // Both style_name and instruction set - instruction should win
+async fn test_named_style_in_reinforcement() {
+    // Both style_name and instruction set - reinforcement uses style_name
     let config = test_config_with_style(Some("explanatory"), Some("My custom override"));
     let ctx = GeneratorContext::builder()
         .config(&config)
@@ -139,13 +131,7 @@ async fn test_custom_instruction_takes_precedence() {
     assert!(result.is_some());
 
     let reminder = result.expect("reminder");
-    assert_eq!(reminder.content().unwrap(), "My custom override");
-    assert!(
-        !reminder
-            .content()
-            .unwrap()
-            .contains("Explanatory Style Active")
-    );
+    assert!(reminder.content().unwrap().contains("explanatory"));
 }
 
 #[test]
@@ -155,8 +141,8 @@ fn test_generator_properties() {
     assert_eq!(generator.attachment_type(), AttachmentType::OutputStyle);
     assert_eq!(generator.tier(), ReminderTier::MainAgentOnly);
 
-    // Output style injects once per session (max_per_session: 1)
+    // Output style reinforcement uses periodic throttle (every 15 turns)
     let throttle = generator.throttle_config();
-    assert_eq!(throttle.min_turns_between, 0);
-    assert_eq!(throttle.max_per_session, Some(1));
+    assert_eq!(throttle.min_turns_between, 15);
+    assert!(throttle.max_per_session.is_none());
 }

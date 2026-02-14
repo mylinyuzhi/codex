@@ -222,6 +222,14 @@ pub struct AppConfig {
     /// OpenTelemetry configuration.
     #[serde(default)]
     pub otel: Option<OtelJsonConfig>,
+
+    /// Output style name to activate (e.g., "explanatory", "learning", or a custom style).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "outputStyle"
+    )]
+    pub output_style: Option<String>,
 }
 
 /// A single hook configuration entry in config.json.
@@ -297,6 +305,8 @@ pub struct ResolvedAppConfig {
     pub hooks: Vec<HookConfig>,
     /// Effective OTel configuration.
     pub otel: Option<OtelJsonConfig>,
+    /// Effective output style name.
+    pub output_style: Option<String>,
 }
 
 impl AppConfig {
@@ -324,6 +334,7 @@ impl AppConfig {
             web_fetch: self.web_fetch.clone(),
             hooks: self.hooks.clone(),
             otel: self.otel.clone(),
+            output_style: self.output_style.clone(),
         }
     }
 
