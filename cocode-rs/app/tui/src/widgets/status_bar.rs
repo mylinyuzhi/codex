@@ -4,8 +4,11 @@
 //! - Current model name
 //! - Thinking level
 //! - Plan mode indicator
+//! - Context window usage gauge
+//! - Token breakdown (input/output/cache)
+//! - Cost estimate
+//! - Working directory
 //! - Thinking duration
-//! - Token usage
 
 use std::time::Duration;
 
@@ -14,6 +17,7 @@ use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -21,23 +25,15 @@ use ratatui::widgets::Widget;
 
 use crate::i18n::t;
 use crate::state::PlanPhase;
+use crate::theme::Theme;
 
 /// Status bar widget showing model, thinking level, plan mode, and tokens.
-///
-/// # Example
-///
-/// ```ignore
-/// let status_bar = StatusBar::new()
-///     .model("claude-sonnet-4-20250514")
-///     .thinking_level(&ThinkingLevel::new(ReasoningEffort::High))
-///     .plan_mode(true)
-///     .token_usage(&usage);
-/// ```
 pub struct StatusBar<'a> {
     model: &'a str,
     thinking_level: &'a ThinkingLevel,
     plan_mode: bool,
     token_usage: &'a TokenUsage,
+    theme: &'a Theme,
     /// Whether currently streaming thinking content.
     is_thinking: bool,
     /// Whether thinking display is enabled.
@@ -48,8 +44,16 @@ pub struct StatusBar<'a> {
     plan_phase: Option<PlanPhase>,
     /// Number of connected MCP servers.
     mcp_server_count: i32,
-    /// Number of queued commands (also serves as steering).
+    /// Number of queued commands.
     queued_count: i32,
+    /// Context window tokens used.
+    context_window_used: i32,
+    /// Context window total capacity.
+    context_window_total: i32,
+    /// Estimated cost in cents.
+    estimated_cost_cents: i32,
+    /// Working directory.
+    working_dir: Option<&'a str>,
 }
 
 impl<'a> StatusBar<'a> {
@@ -59,18 +63,24 @@ impl<'a> StatusBar<'a> {
         thinking_level: &'a ThinkingLevel,
         plan_mode: bool,
         token_usage: &'a TokenUsage,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             model,
             thinking_level,
             plan_mode,
             token_usage,
+            theme,
             is_thinking: false,
             show_thinking_enabled: false,
             thinking_duration: None,
             plan_phase: None,
             mcp_server_count: 0,
             queued_count: 0,
+            context_window_used: 0,
+            context_window_total: 0,
+            estimated_cost_cents: 0,
+            working_dir: None,
         }
     }
 
@@ -105,12 +115,27 @@ impl<'a> StatusBar<'a> {
     }
 
     /// Set the queue count.
-    ///
-    /// Queued commands are consumed once and injected as steering into the
-    /// current turn (consume-then-remove pattern).
     pub fn queue_counts(mut self, queued: i32, _steering: i32) -> Self {
         self.queued_count = queued;
-        // steering_count is deprecated - queued commands now serve as steering
+        self
+    }
+
+    /// Set the context window usage.
+    pub fn context_window(mut self, used: i32, total: i32) -> Self {
+        self.context_window_used = used;
+        self.context_window_total = total;
+        self
+    }
+
+    /// Set the estimated cost in cents.
+    pub fn estimated_cost(mut self, cents: i32) -> Self {
+        self.estimated_cost_cents = cents;
+        self
+    }
+
+    /// Set the working directory.
+    pub fn working_dir(mut self, dir: Option<&'a str>) -> Self {
+        self.working_dir = dir;
         self
     }
 
@@ -127,45 +152,93 @@ impl<'a> StatusBar<'a> {
         } else {
             self.model.to_string()
         };
-        Span::raw(format!(" {name} ")).cyan()
+        Span::raw(format!(" {name} ")).fg(self.theme.primary)
     }
 
     /// Format the thinking level for display.
     fn format_thinking(&self) -> Span<'static> {
-        let (label, style) = match self.thinking_level.effort {
-            ReasoningEffort::None => (t!("status.think_off").to_string(), "dim"),
-            ReasoningEffort::Minimal => (t!("status.think_min").to_string(), "dim"),
-            ReasoningEffort::Low => (t!("status.think_low").to_string(), "green"),
-            ReasoningEffort::Medium => (t!("status.think_med").to_string(), "yellow"),
-            ReasoningEffort::High => (t!("status.think_high").to_string(), "magenta"),
-            ReasoningEffort::XHigh => (t!("status.think_max").to_string(), "red"),
+        let (label, color) = match self.thinking_level.effort {
+            ReasoningEffort::None => (t!("status.think_off").to_string(), self.theme.text_dim),
+            ReasoningEffort::Minimal => (t!("status.think_min").to_string(), self.theme.text_dim),
+            ReasoningEffort::Low => (t!("status.think_low").to_string(), self.theme.success),
+            ReasoningEffort::Medium => (t!("status.think_med").to_string(), self.theme.warning),
+            ReasoningEffort::High => (t!("status.think_high").to_string(), self.theme.thinking),
+            ReasoningEffort::XHigh => (t!("status.think_max").to_string(), self.theme.error),
         };
 
-        let text = format!(" {} ", t!("status.think_label", level = label));
-        match style {
-            "dim" => Span::raw(text).dim(),
-            "green" => Span::raw(text).green(),
-            "yellow" => Span::raw(text).yellow(),
-            "magenta" => Span::raw(text).magenta(),
-            "red" => Span::raw(text).red(),
-            _ => Span::raw(text),
-        }
+        Span::raw(format!(" {} ", t!("status.think_label", level = label))).fg(color)
     }
 
     /// Format the plan mode indicator.
     fn format_plan_mode(&self) -> Option<Span<'static>> {
         if self.plan_mode {
             if let Some(phase) = self.plan_phase {
-                // Show phase indicator when in plan mode
                 let phase_text = format!(" {} {} ", phase.emoji(), phase.display_name());
-                Some(Span::raw(phase_text).on_blue().bold())
+                Some(Span::styled(
+                    phase_text,
+                    Style::default().bg(self.theme.plan_mode).bold(),
+                ))
             } else {
                 let plan_text = format!(" {} ", t!("status.plan"));
-                Some(Span::raw(plan_text).on_blue().bold())
+                Some(Span::styled(
+                    plan_text,
+                    Style::default().bg(self.theme.plan_mode).bold(),
+                ))
             }
         } else {
             None
         }
+    }
+
+    /// Format the context window usage gauge.
+    fn format_context_gauge(&self) -> Option<Span<'static>> {
+        if self.context_window_total <= 0 {
+            return None;
+        }
+
+        let percent =
+            (self.context_window_used as f64 / self.context_window_total as f64 * 100.0) as i32;
+        let percent = percent.clamp(0, 100);
+
+        // Build gauge: [████░░] 62%
+        let filled = (percent * 6 / 100) as usize;
+        let empty = 6 - filled;
+        let gauge = format!("[{}{}]{}%", "█".repeat(filled), "░".repeat(empty), percent);
+
+        let color = if percent < 60 {
+            self.theme.success
+        } else if percent < 80 {
+            self.theme.warning
+        } else {
+            self.theme.error
+        };
+
+        Some(Span::raw(format!(" {gauge} ")).fg(color))
+    }
+
+    /// Format the token breakdown.
+    fn format_tokens(&self) -> Span<'static> {
+        let input = self.token_usage.input_tokens;
+        let output = self.token_usage.output_tokens;
+        let cache = self.token_usage.cache_read_tokens.unwrap_or(0);
+
+        let format_count = |count: i64| -> String {
+            if count >= 1_000_000 {
+                format!("{:.1}M", count as f64 / 1_000_000.0)
+            } else if count >= 1_000 {
+                format!("{:.1}k", count as f64 / 1_000.0)
+            } else {
+                format!("{count}")
+            }
+        };
+
+        let mut text = format!(" ↑{} ↓{}", format_count(input), format_count(output));
+        if cache > 0 {
+            text.push_str(&format!(" ♻{}", format_count(cache)));
+        }
+        text.push(' ');
+
+        Span::raw(text).fg(self.theme.text_dim)
     }
 
     /// Format the MCP server indicator.
@@ -176,7 +249,7 @@ impl<'a> StatusBar<'a> {
                     " {} ",
                     t!("status.mcp", count = self.mcp_server_count)
                 ))
-                .green(),
+                .fg(self.theme.success),
             )
         } else {
             None
@@ -190,31 +263,51 @@ impl<'a> StatusBar<'a> {
         }
 
         let text = format!(" {} ", t!("status.queued", count = self.queued_count));
-        Some(Span::raw(text).yellow())
+        Some(Span::raw(text).fg(self.theme.warning))
     }
 
-    /// Format the token usage.
-    fn format_tokens(&self) -> Span<'static> {
-        let total = self.token_usage.total();
-        let formatted = if total >= 1_000_000 {
-            format!("{:.1}M", total as f64 / 1_000_000.0)
-        } else if total >= 1_000 {
-            format!("{:.1}k", total as f64 / 1_000.0)
-        } else {
-            format!("{total}")
-        };
-        Span::raw(format!(" {} ", t!("status.tokens", count = formatted))).dim()
+    /// Format the cost estimate.
+    fn format_cost(&self) -> Option<Span<'static>> {
+        if self.estimated_cost_cents <= 0 {
+            return None;
+        }
+
+        let dollars = self.estimated_cost_cents as f64 / 100.0;
+        Some(Span::raw(format!(" ${dollars:.2} ")).fg(self.theme.text_dim))
+    }
+
+    /// Format the working directory.
+    fn format_working_dir(&self) -> Option<Span<'static>> {
+        self.working_dir.map(|dir| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let shortened = if !home.is_empty() && dir.starts_with(&home) {
+                format!("~{}", &dir[home.len()..])
+            } else {
+                dir.to_string()
+            };
+            // Truncate if too long
+            let display = if shortened.len() > 25 {
+                let parts: Vec<&str> = shortened.split('/').collect();
+                if parts.len() > 3 {
+                    format!("{}/.../{}", parts[..2].join("/"), parts[parts.len() - 1])
+                } else {
+                    shortened
+                }
+            } else {
+                shortened
+            };
+            Span::raw(format!(" {display} ")).fg(self.theme.text_dim)
+        })
     }
 
     /// Format keyboard hints.
     fn format_hints(&self) -> Span<'static> {
-        Span::raw(format!(" {} ", t!("status.hints"))).dim()
+        Span::raw(format!(" {} ", t!("status.hints"))).fg(self.theme.text_dim)
     }
 
     /// Format the thinking status indicator.
     fn format_thinking_status(&self) -> Option<Span<'static>> {
         if self.is_thinking {
-            // Show spinner and current duration while thinking
             let duration_text = if let Some(duration) = self.thinking_duration {
                 let secs = duration.as_secs();
                 if secs > 0 {
@@ -225,12 +318,18 @@ impl<'a> StatusBar<'a> {
             } else {
                 format!(" {} ", t!("status.thinking"))
             };
-            Some(Span::raw(format!("🤔{duration_text}")).magenta().italic())
+            Some(
+                Span::raw(format!("🤔{duration_text}"))
+                    .fg(self.theme.thinking)
+                    .italic(),
+            )
         } else if let Some(duration) = self.thinking_duration {
-            // Show completed duration after thinking
             let secs = duration.as_secs();
             if secs > 0 {
-                Some(Span::raw(format!(" {} ", t!("status.thought_for", duration = secs))).dim())
+                Some(
+                    Span::raw(format!(" {} ", t!("status.thought_for", duration = secs)))
+                        .fg(self.theme.text_dim),
+                )
             } else {
                 None
             }
@@ -242,7 +341,7 @@ impl<'a> StatusBar<'a> {
     /// Format the thinking display toggle indicator.
     fn format_thinking_toggle(&self) -> Option<Span<'static>> {
         if self.show_thinking_enabled {
-            Some(Span::raw(" 💭 ").dim())
+            Some(Span::raw(" 💭 ").fg(self.theme.text_dim))
         } else {
             None
         }
@@ -260,44 +359,62 @@ impl Widget for StatusBar<'_> {
 
         // Model
         spans.push(self.format_model());
-        spans.push(Span::raw("│").dim());
+        spans.push(Span::raw("│").fg(self.theme.text_dim));
 
         // Thinking level
         spans.push(self.format_thinking());
-        spans.push(Span::raw("│").dim());
+        spans.push(Span::raw("│").fg(self.theme.text_dim));
 
         // Plan mode (if active)
         if let Some(plan_span) = self.format_plan_mode() {
             spans.push(plan_span);
-            spans.push(Span::raw("│").dim());
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
+        }
+
+        // Context window gauge (if data available)
+        if let Some(gauge_span) = self.format_context_gauge() {
+            spans.push(gauge_span);
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
         // Thinking status (if currently thinking)
         if let Some(thinking_span) = self.format_thinking_status() {
             spans.push(thinking_span);
-            spans.push(Span::raw("│").dim());
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
         // Thinking toggle indicator (if enabled)
         if let Some(toggle_span) = self.format_thinking_toggle() {
             spans.push(toggle_span);
-            spans.push(Span::raw("│").dim());
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
         // MCP servers (if any connected)
         if let Some(mcp_span) = self.format_mcp_status() {
             spans.push(mcp_span);
-            spans.push(Span::raw("│").dim());
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
         // Queue status (if items pending)
         if let Some(queue_span) = self.format_queue_status() {
             spans.push(queue_span);
-            spans.push(Span::raw("│").dim());
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
-        // Tokens
+        // Tokens (input/output breakdown)
         spans.push(self.format_tokens());
+
+        // Cost estimate
+        if let Some(cost_span) = self.format_cost() {
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            spans.push(cost_span);
+        }
+
+        // Working directory
+        if let Some(dir_span) = self.format_working_dir() {
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            spans.push(dir_span);
+        }
 
         // Calculate used width
         let used_width: usize = spans.iter().map(|s| s.width()).sum();

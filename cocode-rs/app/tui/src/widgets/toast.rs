@@ -111,14 +111,16 @@ impl Toast {
 /// Widget to render a stack of toast notifications.
 pub struct ToastWidget<'a> {
     toasts: &'a [Toast],
+    theme: &'a crate::theme::Theme,
     max_display: i32,
 }
 
 impl<'a> ToastWidget<'a> {
     /// Create a new toast widget.
-    pub fn new(toasts: &'a [Toast]) -> Self {
+    pub fn new(toasts: &'a [Toast], theme: &'a crate::theme::Theme) -> Self {
         Self {
             toasts,
+            theme,
             max_display: 3,
         }
     }
@@ -169,19 +171,19 @@ impl Widget for ToastWidget<'_> {
             let (icon, border_style) = match toast.severity {
                 ToastSeverity::Info => (
                     toast.severity.icon(),
-                    ratatui::style::Style::default().cyan(),
+                    ratatui::style::Style::default().fg(self.theme.primary),
                 ),
                 ToastSeverity::Success => (
                     toast.severity.icon(),
-                    ratatui::style::Style::default().green(),
+                    ratatui::style::Style::default().fg(self.theme.success),
                 ),
                 ToastSeverity::Warning => (
                     toast.severity.icon(),
-                    ratatui::style::Style::default().yellow(),
+                    ratatui::style::Style::default().fg(self.theme.warning),
                 ),
                 ToastSeverity::Error => (
                     toast.severity.icon(),
-                    ratatui::style::Style::default().red(),
+                    ratatui::style::Style::default().fg(self.theme.error),
                 ),
             };
 
@@ -193,24 +195,16 @@ impl Widget for ToastWidget<'_> {
             block.render(toast_area, buf);
 
             // Render the message with icon
-            let line = match toast.severity {
-                ToastSeverity::Info => Line::from(vec![
-                    Span::raw(format!("[{icon}] ")).cyan(),
-                    Span::raw(&toast.message),
-                ]),
-                ToastSeverity::Success => Line::from(vec![
-                    Span::raw(format!("[{icon}] ")).green(),
-                    Span::raw(&toast.message),
-                ]),
-                ToastSeverity::Warning => Line::from(vec![
-                    Span::raw(format!("[{icon}] ")).yellow(),
-                    Span::raw(&toast.message),
-                ]),
-                ToastSeverity::Error => Line::from(vec![
-                    Span::raw(format!("[{icon}] ")).red(),
-                    Span::raw(&toast.message),
-                ]),
+            let icon_color = match toast.severity {
+                ToastSeverity::Info => self.theme.primary,
+                ToastSeverity::Success => self.theme.success,
+                ToastSeverity::Warning => self.theme.warning,
+                ToastSeverity::Error => self.theme.error,
             };
+            let line = Line::from(vec![
+                Span::raw(format!("[{icon}] ")).fg(icon_color),
+                Span::raw(&toast.message),
+            ]);
 
             Paragraph::new(line).render(inner, buf);
 

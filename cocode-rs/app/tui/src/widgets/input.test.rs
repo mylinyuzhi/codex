@@ -1,9 +1,11 @@
 use super::*;
+use crate::theme::Theme;
 
 #[test]
 fn test_input_widget_empty() {
     let input = InputState::default();
-    let widget = InputWidget::new(&input);
+    let theme = Theme::default();
+    let widget = InputWidget::new(&input, &theme);
 
     let area = Rect::new(0, 0, 40, 3);
     let mut buf = Buffer::empty(area);
@@ -16,7 +18,8 @@ fn test_input_widget_empty() {
 fn test_input_widget_with_text() {
     let mut input = InputState::default();
     input.set_text("Hello");
-    let widget = InputWidget::new(&input);
+    let theme = Theme::default();
+    let widget = InputWidget::new(&input, &theme);
 
     let area = Rect::new(0, 0, 40, 3);
     let mut buf = Buffer::empty(area);
@@ -29,7 +32,8 @@ fn test_input_widget_with_text() {
 #[test]
 fn test_input_widget_placeholder() {
     let input = InputState::default();
-    let widget = InputWidget::new(&input).placeholder("Type a message...");
+    let theme = Theme::default();
+    let widget = InputWidget::new(&input, &theme).placeholder("Type a message...");
 
     let area = Rect::new(0, 0, 40, 3);
     let mut buf = Buffer::empty(area);
@@ -42,7 +46,8 @@ fn test_input_widget_placeholder() {
 #[test]
 fn test_input_widget_unfocused() {
     let input = InputState::default();
-    let widget = InputWidget::new(&input).focused(false);
+    let theme = Theme::default();
+    let widget = InputWidget::new(&input, &theme).focused(false);
 
     let area = Rect::new(0, 0, 40, 3);
     let mut buf = Buffer::empty(area);
@@ -57,7 +62,8 @@ fn test_get_lines_with_cursor() {
     input.set_text("Hello");
     input.cursor = 2; // After "He"
 
-    let widget = InputWidget::new(&input);
+    let theme = Theme::default();
+    let widget = InputWidget::new(&input, &theme);
     let lines = widget.get_lines();
 
     assert!(!lines.is_empty());

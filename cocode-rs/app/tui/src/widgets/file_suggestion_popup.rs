@@ -4,7 +4,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -15,6 +14,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
 use crate::state::FileSuggestionState;
+use crate::theme::Theme;
 
 /// Maximum number of visible suggestions in the popup.
 const MAX_VISIBLE: i32 = 8;
@@ -24,12 +24,13 @@ const MAX_VISIBLE: i32 = 8;
 /// Renders a dropdown list of file suggestions below the input area.
 pub struct FileSuggestionPopup<'a> {
     state: &'a FileSuggestionState,
+    theme: &'a Theme,
 }
 
 impl<'a> FileSuggestionPopup<'a> {
     /// Create a new file suggestion popup.
-    pub fn new(state: &'a FileSuggestionState) -> Self {
-        Self { state }
+    pub fn new(state: &'a FileSuggestionState, theme: &'a Theme) -> Self {
+        Self { state, theme }
     }
 
     /// Calculate the area for the popup based on input position.
@@ -85,10 +86,7 @@ impl<'a> FileSuggestionPopup<'a> {
             // Highlighted character
             let char_end = path[idx..].chars().next().map(|c| idx + c.len_utf8());
             if let Some(end) = char_end {
-                spans.push(Span::styled(
-                    &path[idx..end],
-                    Style::default().bold().cyan(),
-                ));
+                spans.push(Span::styled(&path[idx..end], Style::default().bold()));
                 last_end = end;
             }
         }
@@ -116,7 +114,7 @@ impl Widget for FileSuggestionPopup<'_> {
         let block = Block::default()
             .title(title.bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().cyan());
+            .border_style(Style::default().fg(self.theme.primary));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -161,7 +159,9 @@ impl Widget for FileSuggestionPopup<'_> {
 
             // Style based on selection
             let style = if is_selected {
-                Style::default().bg(Color::Blue).fg(Color::White)
+                Style::default()
+                    .bg(self.theme.bg_selected)
+                    .fg(self.theme.text)
             } else {
                 Style::default()
             };
@@ -186,7 +186,11 @@ impl Widget for FileSuggestionPopup<'_> {
 
                 for (char_idx, c) in suggestion.display_text.chars().enumerate() {
                     let is_match = suggestion.match_indices.contains(&(char_idx as i32));
-                    let char_style = if is_match { style.bold().cyan() } else { style };
+                    let char_style = if is_match {
+                        style.bold().fg(self.theme.primary)
+                    } else {
+                        style
+                    };
                     buf.set_string(x, y, c.to_string(), char_style);
                     x += 1;
                 }

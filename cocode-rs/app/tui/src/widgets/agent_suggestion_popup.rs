@@ -4,7 +4,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::widgets::Block;
@@ -13,6 +12,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
 use crate::state::AgentSuggestionState;
+use crate::theme::Theme;
 
 /// Maximum number of visible suggestions in the popup.
 const MAX_VISIBLE: i32 = 8;
@@ -24,12 +24,13 @@ const MAX_VISIBLE: i32 = 8;
 /// and skill (magenta) suggestions.
 pub struct AgentSuggestionPopup<'a> {
     state: &'a AgentSuggestionState,
+    theme: &'a Theme,
 }
 
 impl<'a> AgentSuggestionPopup<'a> {
     /// Create a new agent suggestion popup.
-    pub fn new(state: &'a AgentSuggestionState) -> Self {
-        Self { state }
+    pub fn new(state: &'a AgentSuggestionState, theme: &'a Theme) -> Self {
+        Self { state, theme }
     }
 
     /// Calculate the area for the popup based on input position.
@@ -75,7 +76,7 @@ impl Widget for AgentSuggestionPopup<'_> {
         let block = Block::default()
             .title(title.bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().yellow());
+            .border_style(Style::default().fg(self.theme.warning));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -120,7 +121,9 @@ impl Widget for AgentSuggestionPopup<'_> {
 
             // Style based on selection
             let style = if is_selected {
-                Style::default().bg(Color::Yellow).fg(Color::Black)
+                Style::default()
+                    .bg(self.theme.bg_selected)
+                    .fg(self.theme.text)
             } else {
                 Style::default()
             };
@@ -150,7 +153,7 @@ impl Widget for AgentSuggestionPopup<'_> {
                 for (char_idx, c) in suggestion.agent_type.chars().enumerate() {
                     let is_match = suggestion.match_indices.contains(&char_idx);
                     let char_style = if is_match {
-                        style.bold().yellow()
+                        style.bold().fg(self.theme.warning)
                     } else {
                         style
                     };

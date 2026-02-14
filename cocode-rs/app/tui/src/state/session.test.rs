@@ -65,6 +65,7 @@ fn test_cleanup_completed_tools() {
             status: ToolStatus::Completed,
             progress: None,
             output: None,
+            started_at: None,
         });
     }
 

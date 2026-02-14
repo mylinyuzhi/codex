@@ -1,4 +1,5 @@
 use super::*;
+use crate::theme::Theme;
 
 #[test]
 fn test_toast_creation() {
@@ -33,11 +34,12 @@ fn test_toast_expired() {
 
 #[test]
 fn test_toast_widget_render() {
+    let theme = Theme::default();
     let toasts = vec![
         Toast::info("t1", "Info message"),
         Toast::warning("t2", "Warning message"),
     ];
-    let widget = ToastWidget::new(&toasts);
+    let widget = ToastWidget::new(&toasts, &theme);
 
     let area = Rect::new(0, 0, 50, 10);
     let mut buf = Buffer::empty(area);
@@ -48,8 +50,9 @@ fn test_toast_widget_render() {
 
 #[test]
 fn test_toast_widget_calculate_area() {
+    let theme = Theme::default();
     let toasts = vec![Toast::info("t1", "Test")];
-    let widget = ToastWidget::new(&toasts);
+    let widget = ToastWidget::new(&toasts, &theme);
 
     let frame_area = Rect::new(0, 0, 100, 50);
     let area = widget.calculate_area(frame_area);

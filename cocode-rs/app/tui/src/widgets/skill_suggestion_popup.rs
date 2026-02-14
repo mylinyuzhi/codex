@@ -4,7 +4,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::widgets::Block;
@@ -13,6 +12,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
 use crate::state::SkillSuggestionState;
+use crate::theme::Theme;
 
 /// Maximum number of visible suggestions in the popup.
 const MAX_VISIBLE: i32 = 8;
@@ -22,12 +22,13 @@ const MAX_VISIBLE: i32 = 8;
 /// Renders a dropdown list of skill suggestions above the input area.
 pub struct SkillSuggestionPopup<'a> {
     state: &'a SkillSuggestionState,
+    theme: &'a Theme,
 }
 
 impl<'a> SkillSuggestionPopup<'a> {
     /// Create a new skill suggestion popup.
-    pub fn new(state: &'a SkillSuggestionState) -> Self {
-        Self { state }
+    pub fn new(state: &'a SkillSuggestionState, theme: &'a Theme) -> Self {
+        Self { state, theme }
     }
 
     /// Calculate the area for the popup based on input position.
@@ -73,7 +74,7 @@ impl Widget for SkillSuggestionPopup<'_> {
         let block = Block::default()
             .title(title.bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().magenta());
+            .border_style(Style::default().fg(self.theme.accent));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -118,7 +119,9 @@ impl Widget for SkillSuggestionPopup<'_> {
 
             // Style based on selection
             let style = if is_selected {
-                Style::default().bg(Color::Magenta).fg(Color::White)
+                Style::default()
+                    .bg(self.theme.bg_selected)
+                    .fg(self.theme.text)
             } else {
                 Style::default()
             };
@@ -146,7 +149,7 @@ impl Widget for SkillSuggestionPopup<'_> {
                 for (char_idx, c) in suggestion.name.chars().enumerate() {
                     let is_match = suggestion.match_indices.contains(&char_idx);
                     let char_style = if is_match {
-                        style.bold().magenta()
+                        style.bold().fg(self.theme.accent)
                     } else {
                         style
                     };

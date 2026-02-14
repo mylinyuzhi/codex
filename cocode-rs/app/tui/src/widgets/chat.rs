@@ -2,11 +2,13 @@
 //!
 //! Displays the conversation messages with support for:
 //! - Message role indicators (user/assistant)
-//! - Streaming content
+//! - Streaming content with markdown rendering
 //! - Thinking content (collapsed by default)
 //! - Animated thinking block with duration
+//! - Inline tool call display
 //! - Scroll position
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
@@ -23,6 +25,9 @@ use ratatui::widgets::Wrap;
 use crate::i18n::t;
 use crate::state::ChatMessage;
 use crate::state::MessageRole;
+use crate::state::ToolStatus;
+use crate::theme::Theme;
+use crate::widgets::markdown::markdown_to_lines;
 
 /// Chat history widget.
 pub struct ChatWidget<'a> {
@@ -37,11 +42,17 @@ pub struct ChatWidget<'a> {
     animation_frame: u8,
     /// Duration of current or last thinking phase.
     thinking_duration: Option<Duration>,
+    /// Theme for styling.
+    theme: &'a Theme,
+    /// Set of collapsed tool call IDs.
+    collapsed_tools: &'a HashSet<String>,
+    /// Available width for markdown rendering.
+    width: u16,
 }
 
 impl<'a> ChatWidget<'a> {
     /// Create a new chat widget.
-    pub fn new(messages: &'a [ChatMessage]) -> Self {
+    pub fn new(messages: &'a [ChatMessage], theme: &'a Theme) -> Self {
         Self {
             messages,
             scroll_offset: 0,
@@ -51,6 +62,9 @@ impl<'a> ChatWidget<'a> {
             is_thinking: false,
             animation_frame: 0,
             thinking_duration: None,
+            theme,
+            collapsed_tools: &EMPTY_SET,
+            width: 80,
         }
     }
 
@@ -96,6 +110,18 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
+    /// Set the collapsed tools set.
+    pub fn collapsed_tools(mut self, collapsed: &'a HashSet<String>) -> Self {
+        self.collapsed_tools = collapsed;
+        self
+    }
+
+    /// Set the available width.
+    pub fn width(mut self, width: u16) -> Self {
+        self.width = width;
+        self
+    }
+
     /// Format duration for display (e.g., "2.3s").
     fn format_duration(duration: Duration) -> String {
         let secs = duration.as_secs_f64();
@@ -115,19 +141,57 @@ impl<'a> ChatWidget<'a> {
         SPINNER[self.animation_frame as usize % SPINNER.len()]
     }
 
+    /// Render inline tool calls for a message.
+    fn render_tool_calls(&self, message: &ChatMessage) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for tool in &message.tool_calls {
+            let status_icon = match tool.status {
+                ToolStatus::Running => Span::raw(" ⏳").fg(self.theme.tool_running),
+                ToolStatus::Completed => Span::raw(" ✓").fg(self.theme.tool_completed),
+                ToolStatus::Failed => Span::raw(" ✗").fg(self.theme.tool_error),
+            };
+
+            // Top border with tool name and status
+            lines.push(Line::from(vec![
+                Span::raw("  ┌ ").fg(self.theme.border),
+                Span::raw(tool.tool_name.clone())
+                    .bold()
+                    .fg(self.theme.primary),
+                Span::raw(" ─").fg(self.theme.border),
+                status_icon,
+            ]));
+
+            // Description line
+            if !tool.description.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::raw("  │ ").fg(self.theme.border),
+                    Span::raw(tool.description.clone()).fg(self.theme.text_dim),
+                ]));
+            }
+
+            // Bottom border
+            lines.push(Line::from(
+                Span::raw("  └─────────────────────────────").fg(self.theme.border),
+            ));
+        }
+        lines
+    }
+
     /// Format a message for display.
     fn format_message(&self, message: &ChatMessage) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         // Role indicator
         let role_span = match message.role {
-            MessageRole::User => Span::raw(format!("▶ {}", t!("chat.you"))).bold().cyan(),
+            MessageRole::User => Span::raw(format!("▶ {}", t!("chat.you")))
+                .bold()
+                .fg(self.theme.user_message),
             MessageRole::Assistant => Span::raw(format!("◀ {}", t!("chat.assistant")))
                 .bold()
-                .green(),
+                .fg(self.theme.assistant_message),
             MessageRole::System => Span::raw(format!("⚙ {}", t!("chat.system")))
                 .bold()
-                .yellow(),
+                .fg(self.theme.system_message),
         };
         lines.push(Line::from(role_span));
 
@@ -140,23 +204,37 @@ impl<'a> ChatWidget<'a> {
                 if self.show_thinking {
                     // Show expanded thinking content with styled header
                     let header = format!("  💭 {}", t!("chat.thinking_tokens", tokens = tokens));
-                    lines.push(Line::from(Span::raw(header).dim().italic().magenta()));
+                    lines.push(Line::from(
+                        Span::raw(header).italic().fg(self.theme.thinking),
+                    ));
                     for line in thinking.lines() {
-                        lines.push(Line::from(Span::raw(format!("    {line}")).dim()));
+                        lines.push(Line::from(
+                            Span::raw(format!("    {line}")).fg(self.theme.text_dim),
+                        ));
                     }
                     lines.push(Line::from("")); // Separator
                 } else {
                     // Show collapsed indicator
                     let indicator =
                         format!("  ▸ {}", t!("chat.thinking_collapsed", tokens = tokens));
-                    lines.push(Line::from(Span::raw(indicator).dim().magenta()));
+                    lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
                 }
             }
         }
 
-        // Message content
-        for line in message.content.lines() {
-            lines.push(Line::from(Span::raw(format!("  {line}"))));
+        // Inline tool calls (between thinking and content)
+        if !message.tool_calls.is_empty() {
+            lines.extend(self.render_tool_calls(message));
+        }
+
+        // Message content - use markdown rendering for assistant messages
+        if message.role == MessageRole::Assistant && !message.content.is_empty() {
+            let md_lines = markdown_to_lines(&message.content, self.theme, self.width);
+            lines.extend(md_lines);
+        } else {
+            for line in message.content.lines() {
+                lines.push(Line::from(Span::raw(format!("  {line}"))));
+            }
         }
 
         // Streaming indicator
@@ -170,6 +248,9 @@ impl<'a> ChatWidget<'a> {
         lines
     }
 }
+
+/// Empty set for default collapsed_tools reference.
+static EMPTY_SET: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
 
 impl Widget for ChatWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -195,7 +276,7 @@ impl Widget for ChatWidget<'_> {
             all_lines.push(Line::from(
                 Span::raw(format!("◀ {}", t!("chat.assistant")))
                     .bold()
-                    .green(),
+                    .fg(self.theme.assistant_message),
             ));
 
             // Show thinking content (collapsed indicator or expanded)
@@ -221,13 +302,19 @@ impl Widget for ChatWidget<'_> {
                                 t!("chat.thinking_active", duration = duration_str)
                             )
                         };
-                        all_lines.push(Line::from(Span::raw(header).dim().italic().magenta()));
+                        all_lines.push(Line::from(
+                            Span::raw(header).italic().fg(self.theme.thinking),
+                        ));
 
                         for line in thinking.lines() {
-                            all_lines.push(Line::from(Span::raw(format!("    {line}")).dim()));
+                            all_lines.push(Line::from(
+                                Span::raw(format!("    {line}")).fg(self.theme.text_dim),
+                            ));
                         }
                         if self.is_thinking {
-                            all_lines.push(Line::from(Span::raw("    ▌").dim().slow_blink()));
+                            all_lines.push(Line::from(
+                                Span::raw("    ▌").fg(self.theme.text_dim).slow_blink(),
+                            ));
                         }
                     } else {
                         // Show collapsed indicator with word count estimate and animation
@@ -253,17 +340,16 @@ impl Widget for ChatWidget<'_> {
                                 )
                             )
                         };
-                        all_lines.push(Line::from(Span::raw(indicator).dim().magenta()));
+                        all_lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
                     }
                 }
             }
 
-            // Show main streaming content
+            // Show main streaming content with markdown rendering
             if let Some(content) = self.streaming_content {
                 if !content.is_empty() {
-                    for line in content.lines() {
-                        all_lines.push(Line::from(Span::raw(format!("  {line}"))));
-                    }
+                    let md_lines = markdown_to_lines(content, self.theme, self.width);
+                    all_lines.extend(md_lines);
                 }
                 all_lines.push(Line::from(Span::raw("  ▌").slow_blink()));
             }

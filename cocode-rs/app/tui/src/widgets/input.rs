@@ -17,6 +17,7 @@ use ratatui::widgets::Wrap;
 use crate::i18n::t;
 use crate::paste::is_paste_pill;
 use crate::state::InputState;
+use crate::theme::Theme;
 
 /// Token type for syntax highlighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,16 +200,22 @@ fn tokenize(text: &str) -> Vec<Token> {
 /// Input widget for user text entry.
 pub struct InputWidget<'a> {
     input: &'a InputState,
+    theme: &'a Theme,
     focused: bool,
+    plan_mode: bool,
+    queued_count: i32,
     placeholder: Option<&'a str>,
 }
 
 impl<'a> InputWidget<'a> {
     /// Create a new input widget.
-    pub fn new(input: &'a InputState) -> Self {
+    pub fn new(input: &'a InputState, theme: &'a Theme) -> Self {
         Self {
             input,
+            theme,
             focused: true,
+            plan_mode: false,
+            queued_count: 0,
             placeholder: None,
         }
     }
@@ -216,6 +223,18 @@ impl<'a> InputWidget<'a> {
     /// Set whether the input is focused.
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Set whether plan mode is active.
+    pub fn plan_mode(mut self, plan_mode: bool) -> Self {
+        self.plan_mode = plan_mode;
+        self
+    }
+
+    /// Set the number of queued commands.
+    pub fn queued_count(mut self, count: i32) -> Self {
+        self.queued_count = count;
         self
     }
 
@@ -270,6 +289,7 @@ impl<'a> InputWidget<'a> {
                     current_line_spans.push(Self::styled_span(
                         &current_span_text,
                         current_token_type.unwrap_or(TokenType::Text),
+                        self.theme,
                     ));
                     current_span_text.clear();
                 }
@@ -283,6 +303,7 @@ impl<'a> InputWidget<'a> {
                     current_line_spans.push(Self::styled_span(
                         &current_span_text,
                         current_token_type.unwrap_or(TokenType::Text),
+                        self.theme,
                     ));
                     current_span_text.clear();
                 }
@@ -297,6 +318,7 @@ impl<'a> InputWidget<'a> {
                         current_line_spans.push(Self::styled_span(
                             &current_span_text,
                             current_token_type.unwrap_or(TokenType::Text),
+                            self.theme,
                         ));
                         current_span_text.clear();
                     }
@@ -313,6 +335,7 @@ impl<'a> InputWidget<'a> {
             current_line_spans.push(Self::styled_span(
                 &current_span_text,
                 current_token_type.unwrap_or(TokenType::Text),
+                self.theme,
             ));
         }
 
@@ -334,14 +357,15 @@ impl<'a> InputWidget<'a> {
     }
 
     /// Create a styled span based on token type.
-    fn styled_span(text: &str, token_type: TokenType) -> Span<'static> {
+    fn styled_span(text: &str, token_type: TokenType, theme: &Theme) -> Span<'static> {
+        let raw = Span::raw(text.to_string());
         match token_type {
-            TokenType::Text => Span::raw(text.to_string()),
-            TokenType::AtMention => Span::raw(text.to_string()).cyan(),
-            TokenType::AgentMention => Span::raw(text.to_string()).yellow().bold(),
-            TokenType::SymbolMention => Span::raw(text.to_string()).green().bold(),
-            TokenType::SlashCommand => Span::raw(text.to_string()).magenta(),
-            TokenType::PastePill => Span::raw(text.to_string()).green().italic(),
+            TokenType::Text => raw,
+            TokenType::AtMention => raw.fg(theme.primary),
+            TokenType::AgentMention => raw.fg(theme.warning).bold(),
+            TokenType::SymbolMention => raw.fg(theme.success).bold(),
+            TokenType::SlashCommand => raw.fg(theme.accent),
+            TokenType::PastePill => raw.fg(theme.success).italic(),
         }
     }
 }
@@ -356,19 +380,35 @@ impl Widget for InputWidget<'_> {
 
         // Create block
         let border_style = if self.focused {
-            ratatui::style::Style::default().cyan()
+            ratatui::style::Style::default().fg(self.theme.border_focused)
         } else {
-            ratatui::style::Style::default().dim()
+            ratatui::style::Style::default().fg(self.theme.border)
+        };
+
+        let line_num = self.input.text().lines().count().max(1);
+        let col = self.input.cursor + 1;
+        let queue_tag = if self.queued_count > 0 {
+            format!(" [Q:{}]", self.queued_count)
+        } else {
+            String::new()
+        };
+        let title_text = if self.plan_mode {
+            format!(
+                " {} [PLAN]{queue_tag} [{line_num}:{col}] ",
+                t!("input.title")
+            )
+        } else {
+            format!(" {}{queue_tag} [{line_num}:{col}] ", t!("input.title"))
         };
 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(format!(" {} ", t!("input.title")))
+            .title(title_text)
             .title_style(if self.focused {
                 ratatui::style::Style::default().bold()
             } else {
-                ratatui::style::Style::default().dim()
+                ratatui::style::Style::default().fg(self.theme.text_dim)
             });
 
         let paragraph = Paragraph::new(lines)
