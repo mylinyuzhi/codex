@@ -74,11 +74,7 @@ fn test_permission_section() {
 
 #[test]
 fn test_render_memory_files() {
-    let env = EnvironmentInfo::builder()
-        .cwd("/tmp")
-
-        .build()
-        .unwrap();
+    let env = EnvironmentInfo::builder().cwd("/tmp").build().unwrap();
 
     let ctx = ConversationContext::builder()
         .environment(env)
@@ -116,11 +112,7 @@ fn test_render_memory_files_empty() {
 
 #[test]
 fn test_render_injections() {
-    let env = EnvironmentInfo::builder()
-        .cwd("/tmp")
-
-        .build()
-        .unwrap();
+    let env = EnvironmentInfo::builder().cwd("/tmp").build().unwrap();
 
     let ctx = ConversationContext::builder()
         .environment(env)
@@ -165,7 +157,6 @@ fn test_render_environment_with_language_preference() {
         .is_git_repo(true)
         .git_branch("main")
         .date("2025-01-29")
-
         .language_preference("中文")
         .build()
         .unwrap();

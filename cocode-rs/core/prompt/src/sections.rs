@@ -7,6 +7,7 @@ use cocode_context::ConversationContext;
 use cocode_context::InjectionPosition;
 use cocode_protocol::PermissionMode;
 
+use crate::engine;
 use crate::templates;
 
 /// Logical sections of the system prompt.
@@ -50,26 +51,19 @@ pub fn assemble_sections(sections: &[(PromptSection, String)]) -> String {
 
 /// Render the environment template with values from the conversation context.
 pub fn render_environment(ctx: &ConversationContext) -> String {
-    let git_branch = ctx.environment.git_branch.as_deref().unwrap_or("(none)");
-
-    let mut env = templates::ENVIRONMENT_TEMPLATE
-        .replace("{{platform}}", &ctx.environment.platform)
-        .replace("{{cwd}}", &ctx.environment.cwd.display().to_string())
-        .replace("{{is_git_repo}}", &ctx.environment.is_git_repo.to_string())
-        .replace("{{git_branch}}", git_branch)
-        .replace("{{date}}", &ctx.environment.date);
-
-    // Conditionally append OS version if detected
-    if !ctx.environment.os_version.is_empty() {
-        env.push_str(&format!("\n- OS Version: {}", ctx.environment.os_version));
-    }
-
-    // Append language preference if set
-    if let Some(ref lang) = ctx.environment.language_preference {
-        env.push_str(&format!("\n# Language Preference\n\nYou MUST respond in {}. All your responses, explanations, and communications should be in this language unless the user explicitly requests otherwise.\n", lang));
-    }
-
-    env
+    let env = &ctx.environment;
+    engine::render(
+        "environment",
+        minijinja::context! {
+            platform => &env.platform,
+            cwd => env.cwd.display().to_string(),
+            is_git_repo => env.is_git_repo,
+            git_branch => env.git_branch.as_deref(),
+            date => &env.date,
+            os_version => &env.os_version,
+            language_preference => env.language_preference.as_deref(),
+        },
+    )
 }
 
 /// Get the permission section text for the given mode.
@@ -89,15 +83,9 @@ pub fn render_memory_files(ctx: &ConversationContext) -> String {
         return String::new();
     }
 
-    let mut parts = vec!["# Memory Files".to_string()];
-    let mut sorted_files = ctx.memory_files.clone();
-    sorted_files.sort_by_key(|f| f.priority);
-
-    for file in &sorted_files {
-        parts.push(format!("## {}\n\n{}", file.path, file.content.trim()));
-    }
-
-    parts.join("\n\n")
+    let mut files = ctx.memory_files.clone();
+    files.sort_by_key(|f| f.priority);
+    engine::render("memory_files", minijinja::context! { files })
 }
 
 /// Generate tool-specific policy lines based on available tool names.
@@ -106,30 +94,28 @@ pub fn render_memory_files(ctx: &ConversationContext) -> String {
 /// avoiding wasted tokens for disabled tools.
 pub fn generate_tool_policy_lines(tool_names: &[String]) -> String {
     let tools: std::collections::HashSet<&str> = tool_names.iter().map(|s| s.as_str()).collect();
-    let mut lines = Vec::new();
-    if tools.contains("Read") {
-        lines.push("- Use Read for reading files (not cat/head/tail)");
+    let rules: Vec<&str> = [
+        ("Read", "Use Read for reading files (not cat/head/tail)"),
+        ("Edit", "Use Edit for modifying files (not sed/awk)"),
+        ("Write", "Use Write for creating files (not echo/heredoc)"),
+        ("Grep", "Use Grep for searching file contents (not grep/rg)"),
+        (
+            "Glob",
+            "Use Glob for finding files by pattern (not find/ls)",
+        ),
+        ("LS", "Use LS for directory listing (not Bash ls)"),
+    ]
+    .iter()
+    .filter(|(name, _)| tools.contains(name))
+    .map(|(_, rule)| *rule)
+    .collect();
+
+    if rules.is_empty() {
+        return String::new();
     }
-    if tools.contains("Edit") {
-        lines.push("- Use Edit for modifying files (not sed/awk)");
-    }
-    if tools.contains("Write") {
-        lines.push("- Use Write for creating files (not echo/heredoc)");
-    }
-    if tools.contains("Grep") {
-        lines.push("- Use Grep for searching file contents (not grep/rg)");
-    }
-    if tools.contains("Glob") {
-        lines.push("- Use Glob for finding files by pattern (not find/ls)");
-    }
-    if tools.contains("LS") {
-        lines.push("- Use LS for directory listing (not Bash ls)");
-    }
-    if lines.is_empty() {
-        String::new()
-    } else {
-        lines.join("\n")
-    }
+    engine::render("tool_policy_lines", minijinja::context! { rules })
+        .trim()
+        .to_string()
 }
 
 /// Render injections for a specific position.

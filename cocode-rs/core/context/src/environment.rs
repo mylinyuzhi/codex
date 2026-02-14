@@ -123,11 +123,8 @@ impl EnvironmentInfoBuilder {
 
         // Auto-detect git branch if in a repo and not explicitly set
         let git_branch = if is_git_repo {
-            self.git_branch.or_else(|| {
-                cocode_git::get_current_branch(&cwd)
-                    .ok()
-                    .flatten()
-            })
+            self.git_branch
+                .or_else(|| cocode_git::get_current_branch(&cwd).ok().flatten())
         } else {
             self.git_branch
         };
@@ -161,7 +158,11 @@ fn detect_os_version_inner() -> Option<String> {
     }
     let s = String::from_utf8(output.stdout).ok()?;
     let trimmed = s.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(windows)]
@@ -173,7 +174,11 @@ fn detect_os_version_inner() -> Option<String> {
     let s = String::from_utf8(output.stdout).ok()?;
     // `ver` outputs a blank line then "Microsoft Windows [Version 10.0.xxx]"
     let trimmed = s.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
