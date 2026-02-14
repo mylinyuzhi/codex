@@ -1,4 +1,5 @@
 use super::*;
+use serial_test::serial;
 use std::env;
 
 // Helper to set and cleanup env vars in tests
@@ -39,6 +40,7 @@ fn test_load_tool_config_default() {
 }
 
 #[test]
+#[serial]
 fn test_load_tool_config_from_env() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_MAX_TOOL_CONCURRENCY, "5");
@@ -51,6 +53,7 @@ fn test_load_tool_config_from_env() {
 }
 
 #[test]
+#[serial]
 fn test_load_compact_config_from_env() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_DISABLE_COMPACT, "true");
@@ -65,6 +68,7 @@ fn test_load_compact_config_from_env() {
 }
 
 #[test]
+#[serial]
 fn test_load_compact_config_extended_fields() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_MIN_TOKENS_TO_PRESERVE, "15000");
@@ -83,6 +87,7 @@ fn test_load_compact_config_extended_fields() {
 }
 
 #[test]
+#[serial]
 fn test_load_plan_config_from_env() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_PLAN_AGENT_COUNT, "3");
@@ -95,6 +100,7 @@ fn test_load_plan_config_from_env() {
 }
 
 #[test]
+#[serial]
 fn test_load_plan_config_clamps_values() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_PLAN_AGENT_COUNT, "100"); // Too high
@@ -107,6 +113,7 @@ fn test_load_plan_config_clamps_values() {
 }
 
 #[test]
+#[serial]
 fn test_load_attachment_config_from_env() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_DISABLE_ATTACHMENTS, "yes");
@@ -119,6 +126,7 @@ fn test_load_attachment_config_from_env() {
 }
 
 #[test]
+#[serial]
 fn test_load_path_config_from_env() {
     let mut guard = EnvGuard::new();
     guard.set(ENV_PROJECT_DIR, "/project");
@@ -133,6 +141,7 @@ fn test_load_path_config_from_env() {
 }
 
 #[test]
+#[serial]
 fn test_bool_parsing() {
     let loader = EnvLoader::new();
 

@@ -949,6 +949,7 @@ dependencies = [
  "jsonc-parser",
  "serde",
  "serde_json",
+ "serial_test",
  "snafu",
  "snafu-virtstack",
  "tempfile",
