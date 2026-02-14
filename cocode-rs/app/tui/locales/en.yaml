@@ -96,6 +96,9 @@ command.queue_input: "Queue Input"
 # Background
 command.background_all_tasks: "Background All Tasks"
 
+# Tool collapse
+command.toggle_tool_collapse: "Toggle Tool Collapse"
+
 # Quit
 command.quit: "Quit"
 
@@ -193,6 +196,7 @@ help.alt_up_down: "Scroll chat"
 help.pgup_pgdn: "Page scroll"
 help.ctrl_left_right: "Word movement"
 help.ctrl_bksp: "Delete word backward"
+help.ctrl_shift_e: "Toggle tool results"
 
 # ============================================================
 # Toast notifications
@@ -267,6 +271,33 @@ palette.interrupt: "Interrupt"
 palette.interrupt_desc: "Cancel current operation"
 palette.quit: "Quit"
 palette.quit_desc: "Exit the application"
+
+# ============================================================
+# Header bar
+# ============================================================
+
+header.new_session: "New Session"
+header.turn_count: "%{count} turns"
+header.compacting: "Compacting..."
+header.fallback: "Fallback: %{model}"
+
+# ============================================================
+# Status bar (additional)
+# ============================================================
+
+status.context_gauge: "%{percent}%"
+
+# ============================================================
+# Help overlay categories
+# ============================================================
+
+help.category_navigation: "Navigation"
+help.category_editing: "Editing"
+help.category_mode: "Mode"
+help.category_tools: "Tools"
+help.category_ui: "UI"
+help.ctrl_p: "Command palette"
+help.ctrl_s: "Session browser"
 
 # ============================================================
 # Tool panel

@@ -15,6 +15,7 @@ use ratatui::widgets::Widget;
 use cocode_symbol_search::SymbolKind;
 
 use crate::state::SymbolSuggestionState;
+use crate::theme::Theme;
 
 /// Maximum number of visible suggestions in the popup.
 const MAX_VISIBLE: i32 = 8;
@@ -26,12 +27,13 @@ const MAX_VISIBLE: i32 = 8;
 /// agent (yellow), and skill (magenta) suggestions.
 pub struct SymbolSuggestionPopup<'a> {
     state: &'a SymbolSuggestionState,
+    theme: &'a Theme,
 }
 
 impl<'a> SymbolSuggestionPopup<'a> {
     /// Create a new symbol suggestion popup.
-    pub fn new(state: &'a SymbolSuggestionState) -> Self {
-        Self { state }
+    pub fn new(state: &'a SymbolSuggestionState, theme: &'a Theme) -> Self {
+        Self { state, theme }
     }
 
     /// Calculate the area for the popup based on input position.
@@ -89,7 +91,7 @@ impl Widget for SymbolSuggestionPopup<'_> {
         let block = Block::default()
             .title(title.bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().green());
+            .border_style(Style::default().fg(self.theme.success));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -134,7 +136,9 @@ impl Widget for SymbolSuggestionPopup<'_> {
 
             // Style based on selection
             let style = if is_selected {
-                Style::default().bg(Color::Green).fg(Color::Black)
+                Style::default()
+                    .bg(self.theme.bg_selected)
+                    .fg(self.theme.text)
             } else {
                 Style::default()
             };
@@ -169,7 +173,7 @@ impl Widget for SymbolSuggestionPopup<'_> {
                 for (char_idx, c) in suggestion.name.chars().enumerate() {
                     let is_match = suggestion.match_indices.contains(&char_idx);
                     let char_style = if is_match {
-                        style.bold().green()
+                        style.bold().fg(self.theme.success)
                     } else {
                         style
                     };

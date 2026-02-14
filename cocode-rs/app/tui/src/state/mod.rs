@@ -9,6 +9,7 @@ mod session;
 mod ui;
 
 pub use session::ChatMessage;
+pub use session::InlineToolCall;
 pub use session::McpServerStatus;
 pub use session::MessageRole;
 pub use session::PlanPhase;

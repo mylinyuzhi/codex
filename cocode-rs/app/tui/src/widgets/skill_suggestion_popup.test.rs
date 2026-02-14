@@ -23,7 +23,8 @@ fn create_test_state() -> SkillSuggestionState {
 #[test]
 fn test_popup_creation() {
     let state = create_test_state();
-    let popup = SkillSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SkillSuggestionPopup::new(&state, &theme);
 
     let input_area = Rect::new(0, 20, 80, 3);
     let area = popup.calculate_area(input_area, 24);
@@ -35,7 +36,8 @@ fn test_popup_creation() {
 #[test]
 fn test_popup_render() {
     let state = create_test_state();
-    let popup = SkillSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SkillSuggestionPopup::new(&state, &theme);
 
     let area = Rect::new(0, 0, 50, 10);
     let mut buf = Buffer::empty(area);
@@ -51,7 +53,8 @@ fn test_popup_render() {
 fn test_empty_suggestions() {
     let mut state = SkillSuggestionState::new("xyz".to_string(), 0);
     state.update_suggestions(vec![]);
-    let popup = SkillSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SkillSuggestionPopup::new(&state, &theme);
 
     let area = Rect::new(0, 0, 50, 10);
     let mut buf = Buffer::empty(area);

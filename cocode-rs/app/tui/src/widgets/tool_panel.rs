@@ -16,18 +16,21 @@ use ratatui::widgets::Widget;
 use crate::i18n::t;
 use crate::state::ToolExecution;
 use crate::state::ToolStatus;
+use crate::theme::Theme;
 
 /// Tool panel widget showing tool execution status.
 pub struct ToolPanel<'a> {
     tools: &'a [ToolExecution],
+    theme: &'a Theme,
     max_display: usize,
 }
 
 impl<'a> ToolPanel<'a> {
     /// Create a new tool panel.
-    pub fn new(tools: &'a [ToolExecution]) -> Self {
+    pub fn new(tools: &'a [ToolExecution], theme: &'a Theme) -> Self {
         Self {
             tools,
+            theme,
             max_display: 5,
         }
     }
@@ -39,11 +42,11 @@ impl<'a> ToolPanel<'a> {
     }
 
     /// Format a tool for display.
-    fn format_tool(tool: &ToolExecution) -> ListItem<'static> {
+    fn format_tool(tool: &ToolExecution, theme: &Theme) -> ListItem<'static> {
         let status_icon = match tool.status {
-            ToolStatus::Running => Span::raw("⏳").yellow(),
-            ToolStatus::Completed => Span::raw("✓").green(),
-            ToolStatus::Failed => Span::raw("✗").red(),
+            ToolStatus::Running => Span::raw("⏳").fg(theme.tool_running),
+            ToolStatus::Completed => Span::raw("✓").fg(theme.tool_completed),
+            ToolStatus::Failed => Span::raw("✗").fg(theme.tool_error),
         };
 
         let name = Span::raw(format!(" {}", tool.name));
@@ -51,10 +54,26 @@ impl<'a> ToolPanel<'a> {
         let progress = tool
             .progress
             .as_ref()
-            .map(|p| Span::raw(format!(" - {p}")).dim())
+            .map(|p| Span::raw(format!(" - {p}")).fg(theme.text_dim))
             .unwrap_or_else(|| Span::raw(""));
 
-        let line = Line::from(vec![status_icon, name, progress]);
+        // Show elapsed time for running tools
+        let elapsed = if tool.status == ToolStatus::Running {
+            tool.started_at
+                .map(|t| {
+                    let secs = t.elapsed().as_secs();
+                    if secs > 0 {
+                        Span::raw(format!(" {secs}s")).fg(theme.text_dim)
+                    } else {
+                        Span::raw("")
+                    }
+                })
+                .unwrap_or_else(|| Span::raw(""))
+        } else {
+            Span::raw("")
+        };
+
+        let line = Line::from(vec![status_icon, name, progress, elapsed]);
         ListItem::new(line)
     }
 }
@@ -71,7 +90,7 @@ impl Widget for ToolPanel<'_> {
         let items: Vec<ListItem> = display_tools
             .iter()
             .rev()
-            .map(|t| Self::format_tool(t))
+            .map(|t| Self::format_tool(t, self.theme))
             .collect();
 
         let running_count = self
@@ -88,7 +107,7 @@ impl Widget for ToolPanel<'_> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(ratatui::style::Style::default().dim())
+            .border_style(ratatui::style::Style::default().fg(self.theme.border))
             .title(title);
 
         let list = List::new(items).block(block);
