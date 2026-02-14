@@ -97,9 +97,9 @@ impl Tool for SkillTool {
             })?;
 
         // Check if the LLM is allowed to invoke this skill
-        if skill.disable_model_invocation {
+        if !skill.is_llm_invocable() {
             return Ok(ToolOutput::error(format!(
-                "Skill '{skill_name}' cannot be invoked by the model (disable_model_invocation is set)"
+                "Skill '{skill_name}' cannot be invoked by the model"
             )));
         }
 

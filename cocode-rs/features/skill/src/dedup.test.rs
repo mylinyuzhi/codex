@@ -25,6 +25,7 @@ fn make_success(name: &str) -> SkillLoadOutcome {
             argument_hint: None,
             aliases: Vec::new(),
             interface: None,
+            command_type: crate::command::CommandType::Prompt,
         },
         source: SkillSource::Bundled,
     }
@@ -96,6 +97,7 @@ fn test_dedup_skills_keeps_first_occurrence() {
                 argument_hint: None,
                 aliases: Vec::new(),
                 interface: None,
+                command_type: crate::command::CommandType::Prompt,
             },
             source: SkillSource::ProjectSettings {
                 path: PathBuf::from("/first"),
@@ -122,6 +124,7 @@ fn test_dedup_skills_keeps_first_occurrence() {
                 argument_hint: None,
                 aliases: Vec::new(),
                 interface: None,
+                command_type: crate::command::CommandType::Prompt,
             },
             source: SkillSource::UserSettings {
                 path: PathBuf::from("/second"),
