@@ -3,6 +3,7 @@
 //! Captures platform, working directory, git state, and model information.
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -12,7 +13,7 @@ use serde::Serialize;
 pub struct EnvironmentInfo {
     /// Operating system platform (e.g., "darwin", "linux", "windows").
     pub platform: String,
-    /// OS version string.
+    /// OS version string (may be empty if detection failed).
     pub os_version: String,
     /// Current working directory.
     pub cwd: PathBuf,
@@ -23,8 +24,6 @@ pub struct EnvironmentInfo {
     pub git_branch: Option<String>,
     /// Current date (e.g., "2025-01-29").
     pub date: String,
-    /// Current model name.
-    pub model: String,
     /// Maximum context window tokens for this model.
     pub context_window: i32,
     /// Maximum output tokens for this model.
@@ -47,10 +46,9 @@ pub struct EnvironmentInfoBuilder {
     platform: Option<String>,
     os_version: Option<String>,
     cwd: Option<PathBuf>,
-    is_git_repo: bool,
+    is_git_repo: Option<bool>,
     git_branch: Option<String>,
     date: Option<String>,
-    model: Option<String>,
     context_window: Option<i32>,
     max_output_tokens: Option<i32>,
     language_preference: Option<String>,
@@ -73,7 +71,7 @@ impl EnvironmentInfoBuilder {
     }
 
     pub fn is_git_repo(mut self, is_git_repo: bool) -> Self {
-        self.is_git_repo = is_git_repo;
+        self.is_git_repo = Some(is_git_repo);
         self
     }
 
@@ -84,11 +82,6 @@ impl EnvironmentInfoBuilder {
 
     pub fn date(mut self, date: impl Into<String>) -> Self {
         self.date = Some(date.into());
-        self
-    }
-
-    pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
         self
     }
 
@@ -112,31 +105,80 @@ impl EnvironmentInfoBuilder {
     /// Returns `Err` if required fields are missing.
     pub fn build(self) -> crate::error::Result<EnvironmentInfo> {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        let cwd = self.cwd.ok_or_else(|| {
+            crate::error::context_error::BuildSnafu {
+                message: "cwd is required",
+            }
+            .build()
+        })?;
+
+        // Auto-detect OS version via `uname -sr` if not explicitly set
+        let os_version = self.os_version.unwrap_or_else(detect_os_version);
+
+        // Auto-detect git repo if not explicitly set
+        let is_git_repo = self
+            .is_git_repo
+            .unwrap_or_else(|| cocode_git::is_inside_git_repo(&cwd));
+
+        // Auto-detect git branch if in a repo and not explicitly set
+        let git_branch = if is_git_repo {
+            self.git_branch.or_else(|| {
+                cocode_git::get_current_branch(&cwd)
+                    .ok()
+                    .flatten()
+            })
+        } else {
+            self.git_branch
+        };
+
         Ok(EnvironmentInfo {
             platform: self
                 .platform
                 .unwrap_or_else(|| std::env::consts::OS.to_string()),
-            os_version: self.os_version.unwrap_or_default(),
-            cwd: self.cwd.ok_or_else(|| {
-                crate::error::context_error::BuildSnafu {
-                    message: "cwd is required",
-                }
-                .build()
-            })?,
-            is_git_repo: self.is_git_repo,
-            git_branch: self.git_branch,
+            os_version,
+            cwd,
+            is_git_repo,
+            git_branch,
             date: self.date.unwrap_or(today),
-            model: self.model.ok_or_else(|| {
-                crate::error::context_error::BuildSnafu {
-                    message: "model is required",
-                }
-                .build()
-            })?,
             context_window: self.context_window.unwrap_or(200000),
             max_output_tokens: self.max_output_tokens.unwrap_or(16384),
             language_preference: self.language_preference,
         })
     }
+}
+
+/// Detect OS version. Returns empty string on failure.
+fn detect_os_version() -> String {
+    detect_os_version_inner().unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn detect_os_version_inner() -> Option<String> {
+    let output = Command::new("uname").args(["-sr"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+}
+
+#[cfg(windows)]
+fn detect_os_version_inner() -> Option<String> {
+    let output = Command::new("cmd").args(["/C", "ver"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?;
+    // `ver` outputs a blank line then "Microsoft Windows [Version 10.0.xxx]"
+    let trimmed = s.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detect_os_version_inner() -> Option<String> {
+    None
 }
 
 #[cfg(test)]

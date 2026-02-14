@@ -32,7 +32,6 @@ fn test_estimate_tokens_custom_ratio() {
 fn test_compute_budget() {
     let env = EnvironmentInfo::builder()
         .cwd("/tmp/test")
-        .model("test-model")
         .context_window(100000)
         .max_output_tokens(10000)
         .build()

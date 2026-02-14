@@ -23,5 +23,4 @@ fn test_environment_template_has_placeholders() {
     assert!(ENVIRONMENT_TEMPLATE.contains("{{platform}}"));
     assert!(ENVIRONMENT_TEMPLATE.contains("{{cwd}}"));
     assert!(ENVIRONMENT_TEMPLATE.contains("{{date}}"));
-    assert!(ENVIRONMENT_TEMPLATE.contains("{{model}}"));
 }

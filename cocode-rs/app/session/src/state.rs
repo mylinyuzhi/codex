@@ -435,13 +435,8 @@ impl SessionState {
         });
 
         // Build environment info
-        let model_name = self
-            .session
-            .model()
-            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(model_name)
             .context_window(self.context_window)
             .max_output_tokens(16_384)
             .build()
@@ -1048,13 +1043,8 @@ impl SessionState {
         self.session.touch();
 
         // Build environment info
-        let model_name = self
-            .session
-            .model()
-            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(model_name)
             .context_window(self.context_window)
             .max_output_tokens(16_384)
             .build()

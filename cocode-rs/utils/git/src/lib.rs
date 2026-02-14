@@ -10,8 +10,11 @@ mod platform;
 
 // Basic git operations
 pub use operations::commit_all;
+pub use operations::ensure_git_repository;
+pub use operations::get_current_branch;
 pub use operations::get_head_commit;
 pub use operations::get_uncommitted_changes;
+pub use operations::is_inside_git_repo;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;

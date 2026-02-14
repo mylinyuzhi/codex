@@ -54,12 +54,15 @@ pub fn render_environment(ctx: &ConversationContext) -> String {
 
     let mut env = templates::ENVIRONMENT_TEMPLATE
         .replace("{{platform}}", &ctx.environment.platform)
-        .replace("{{os_version}}", &ctx.environment.os_version)
         .replace("{{cwd}}", &ctx.environment.cwd.display().to_string())
         .replace("{{is_git_repo}}", &ctx.environment.is_git_repo.to_string())
         .replace("{{git_branch}}", git_branch)
-        .replace("{{date}}", &ctx.environment.date)
-        .replace("{{model}}", &ctx.environment.model);
+        .replace("{{date}}", &ctx.environment.date);
+
+    // Conditionally append OS version if detected
+    if !ctx.environment.os_version.is_empty() {
+        env.push_str(&format!("\n- OS Version: {}", ctx.environment.os_version));
+    }
 
     // Append language preference if set
     if let Some(ref lang) = ctx.environment.language_preference {

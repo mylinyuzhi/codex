@@ -196,7 +196,6 @@ impl AgentExecutor {
         // Build environment info
         let environment = EnvironmentInfo::builder()
             .cwd(std::env::current_dir().unwrap_or_default())
-            .model(&self.config.model.model)
             .context_window(self.config.context_window)
             .max_output_tokens(self.config.max_output_tokens)
             .build()

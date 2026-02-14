@@ -962,6 +962,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "cocode-error",
+ "cocode-git",
  "cocode-protocol",
  "serde",
  "serde_json",

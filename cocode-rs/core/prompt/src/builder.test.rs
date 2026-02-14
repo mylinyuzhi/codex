@@ -14,7 +14,6 @@ fn test_env() -> EnvironmentInfo {
         .is_git_repo(true)
         .git_branch("main")
         .date("2025-01-29")
-        .model("claude-3-opus")
         .context_window(200000)
         .max_output_tokens(16384)
         .build()
