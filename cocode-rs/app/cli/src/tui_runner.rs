@@ -815,6 +815,10 @@ async fn handle_idle_command(
             // No-op when idle: the signal was already sent by the TUI.
             info!("BackgroundAllTasks received in idle handler (no active agents)");
         }
+        UserCommand::SetOutputStyle { style } => {
+            info!(?style, "Output style changed");
+            state.set_output_style(style);
+        }
         // Turn-triggering commands (SubmitInput, ExecuteSkill) should not
         // arrive here when called from process_deferred, but handle gracefully.
         UserCommand::SubmitInput { .. } | UserCommand::ExecuteSkill { .. } => {
@@ -889,7 +893,7 @@ async fn process_deferred(
 /// handled purely in the TUI update loop.
 async fn handle_local_command_in_driver(
     name: &str,
-    _args: &str,
+    args: &str,
     state: &mut cocode_session::SessionState,
     event_tx: &mpsc::Sender<LoopEvent>,
 ) {
@@ -925,9 +929,90 @@ async fn handle_local_command_in_driver(
                 }
             }
         }
+        "output-style" => {
+            handle_output_style_command(args, state, event_tx).await;
+        }
         _ => {
             // Unknown local command that reached the driver — emit as text
             emit_text_response(event_tx, &format!("/{name} is not supported.")).await;
+        }
+    }
+}
+
+/// Handle the `/output-style` local command.
+///
+/// Subcommands:
+/// - (no args) / "status": Show current output style
+/// - "list": List all available styles (built-in + custom)
+/// - "off" / "none" / "disable": Disable the output style
+/// - `<name>`: Activate the named style
+/// - "help": Show usage text
+async fn handle_output_style_command(
+    args: &str,
+    state: &mut cocode_session::SessionState,
+    event_tx: &mpsc::Sender<LoopEvent>,
+) {
+    let arg = args.trim();
+    let cocode_home = cocode_config::find_cocode_home();
+
+    match arg {
+        "" | "status" => {
+            let current = state.current_output_style_name();
+            let text = match current {
+                Some(name) => format!("Current output style: {name}"),
+                None => "No output style active.".to_string(),
+            };
+            emit_text_response(event_tx, &text).await;
+        }
+        "list" => {
+            let styles = cocode_config::builtin::load_all_output_styles(&cocode_home);
+            if styles.is_empty() {
+                emit_text_response(event_tx, "No output styles available.").await;
+            } else {
+                let mut text = format!("Available output styles ({}):\n", styles.len());
+                for style in &styles {
+                    let source = if style.source.is_builtin() {
+                        "built-in"
+                    } else {
+                        "custom"
+                    };
+                    let desc = style.description.as_deref().unwrap_or("No description");
+                    text.push_str(&format!("  {} [{}] - {}\n", style.name, source, desc));
+                }
+                emit_text_response(event_tx, &text).await;
+            }
+        }
+        "off" | "none" | "disable" => {
+            state.set_output_style(None);
+            emit_text_response(event_tx, "Output style disabled.").await;
+        }
+        "help" => {
+            let text = "\
+Usage: /output-style [subcommand]
+
+Subcommands:
+  (no args)    Show current output style
+  status       Show current output style
+  list         List all available styles
+  <name>       Activate the named style
+  off          Disable the output style
+  help         Show this help text";
+            emit_text_response(event_tx, text).await;
+        }
+        name => {
+            // Try to find and activate the named style
+            if cocode_config::builtin::find_output_style(name, &cocode_home).is_some() {
+                state.set_output_style(Some(name.to_string()));
+                emit_text_response(event_tx, &format!("Output style set to: {name}")).await;
+            } else {
+                emit_text_response(
+                    event_tx,
+                    &format!(
+                        "Unknown output style: {name}\nUse /output-style list to see available styles."
+                    ),
+                )
+                .await;
+            }
         }
     }
 }

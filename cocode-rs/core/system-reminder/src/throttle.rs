@@ -66,11 +66,11 @@ impl ThrottleConfig {
         }
     }
 
-    /// Standard throttle for output style.
-    /// Injects once per session at the start, consistent with Claude Code behavior.
+    /// Standard throttle for output style reinforcement.
+    /// The output style is in the system prompt, so we only reinforce periodically.
     pub fn output_style() -> Self {
         Self {
-            max_per_session: Some(1),
+            min_turns_between: 15,
             ..Default::default()
         }
     }

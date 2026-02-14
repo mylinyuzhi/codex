@@ -219,6 +219,9 @@ pub struct OutputStyleConfig {
     /// Custom output style instruction text.
     /// Takes precedence over style_name if both are set.
     pub instruction: Option<String>,
+    /// Whether to keep coding-specific prompt sections when output style is active.
+    /// Built-in styles default to `true`; custom styles default to `false`.
+    pub keep_coding_instructions: Option<bool>,
 }
 
 impl Default for OutputStyleConfig {
@@ -227,6 +230,7 @@ impl Default for OutputStyleConfig {
             enabled: false,
             style_name: None,
             instruction: None,
+            keep_coding_instructions: None,
         }
     }
 }
@@ -251,6 +255,46 @@ impl OutputStyleConfig {
         if let Some(name) = &self.style_name {
             if let Some(content) = cocode_config::builtin::get_output_style(name) {
                 return Some(content.to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Resolve the complete output style prompt config.
+    ///
+    /// Returns `None` if the output style is not enabled or has no resolvable content.
+    pub fn resolve_prompt_config(
+        &self,
+        cocode_home: &std::path::Path,
+    ) -> Option<cocode_context::OutputStylePromptConfig> {
+        if !self.enabled {
+            return None;
+        }
+
+        // Try to find by style_name first (gives us full OutputStyleInfo with keep_coding_instructions)
+        if let Some(name) = &self.style_name {
+            if let Some(info) = cocode_config::builtin::find_output_style(name, cocode_home) {
+                let keep_coding = self
+                    .keep_coding_instructions
+                    .unwrap_or(info.keep_coding_instructions);
+                return Some(cocode_context::OutputStylePromptConfig {
+                    name: info.name,
+                    content: info.content,
+                    keep_coding_instructions: keep_coding,
+                });
+            }
+        }
+
+        // Fall back to custom instruction
+        if let Some(instruction) = &self.instruction {
+            if !instruction.is_empty() {
+                let keep_coding = self.keep_coding_instructions.unwrap_or(false);
+                return Some(cocode_context::OutputStylePromptConfig {
+                    name: "custom".to_string(),
+                    content: instruction.clone(),
+                    keep_coding_instructions: keep_coding,
+                });
             }
         }
 

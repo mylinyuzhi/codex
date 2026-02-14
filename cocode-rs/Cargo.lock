@@ -1524,6 +1524,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "cocode-config",
+ "cocode-context",
  "cocode-error",
  "cocode-protocol",
  "futures",

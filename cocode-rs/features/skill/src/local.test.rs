@@ -46,6 +46,12 @@ fn find_by_alias() {
 }
 
 #[test]
+fn find_output_style_command() {
+    let cmd = find_local_command("output-style").expect("output-style should exist");
+    assert_eq!(cmd.name, "output-style");
+}
+
+#[test]
 fn find_nonexistent_returns_none() {
     assert!(find_local_command("nonexistent").is_none());
 }

@@ -675,7 +675,7 @@ async fn handle_local_command(
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
         // Commands that need the agent driver: dispatch via ExecuteSkill
-        "compact" | "skills" | "todos" => {
+        "compact" | "skills" | "todos" | "output-style" => {
             let msg_id = format!("user-{}", state.session.messages.len());
             let display = format!("/{}", local_cmd.name);
             state

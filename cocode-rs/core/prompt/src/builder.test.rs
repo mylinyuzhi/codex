@@ -2,6 +2,7 @@ use cocode_context::ContextInjection;
 use cocode_context::EnvironmentInfo;
 use cocode_context::InjectionPosition;
 use cocode_context::MemoryFile;
+use cocode_context::OutputStylePromptConfig;
 use cocode_protocol::PermissionMode;
 
 use super::*;
@@ -216,4 +217,131 @@ fn test_section_ordering() {
     assert!(security_pos < env_pos);
     assert!(env_pos < permission_pos);
     assert!(permission_pos < memory_pos);
+}
+
+#[test]
+fn test_build_with_output_style_strips_communication_style() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .output_style(OutputStylePromptConfig {
+            name: "explanatory".to_string(),
+            content: "Be explanatory in responses.".to_string(),
+            keep_coding_instructions: true,
+        })
+        .build()
+        .unwrap();
+
+    let prompt = SystemPromptBuilder::build(&ctx);
+
+    // Communication Style section should be stripped
+    assert!(!prompt.contains("## Communication Style"));
+    assert!(!prompt.contains("Be concise and direct"));
+    // Other sections should remain
+    assert!(prompt.contains("## Core Principles"));
+    assert!(prompt.contains("## Working Approach"));
+    // Output style content should be appended
+    assert!(prompt.contains("# Output Style: explanatory"));
+    assert!(prompt.contains("Be explanatory in responses."));
+}
+
+#[test]
+fn test_build_with_output_style_keep_coding_false() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .output_style(OutputStylePromptConfig {
+            name: "creative".to_string(),
+            content: "Be creative.".to_string(),
+            keep_coding_instructions: false,
+        })
+        .build()
+        .unwrap();
+
+    let prompt = SystemPromptBuilder::build(&ctx);
+
+    // Coding-specific sections should be excluded
+    assert!(!prompt.contains("Tool Usage Policy"));
+    assert!(!prompt.contains("Git Workflow"));
+    assert!(!prompt.contains("Task Management"));
+    // Security and identity should still be present
+    assert!(prompt.contains("Security"));
+    assert!(prompt.contains("Identity"));
+    // Output style should be present
+    assert!(prompt.contains("# Output Style: creative"));
+}
+
+#[test]
+fn test_build_with_output_style_keep_coding_true() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .output_style(OutputStylePromptConfig {
+            name: "explanatory".to_string(),
+            content: "Be explanatory.".to_string(),
+            keep_coding_instructions: true,
+        })
+        .build()
+        .unwrap();
+
+    let prompt = SystemPromptBuilder::build(&ctx);
+
+    // Coding-specific sections should still be included
+    assert!(prompt.contains("Tool Usage Policy"));
+    assert!(prompt.contains("Git Workflow"));
+    assert!(prompt.contains("Task Management"));
+    // Output style should be present at the end
+    assert!(prompt.contains("# Output Style: explanatory"));
+}
+
+#[test]
+fn test_strip_communication_style_removes_section() {
+    let input = "\
+# Identity
+
+Intro text
+
+## Core Principles
+
+- Principle 1
+
+## Communication Style
+
+- Be concise
+- Be direct
+
+## Working Approach
+
+- Approach 1
+";
+
+    let result = strip_communication_style(input);
+
+    assert!(!result.contains("## Communication Style"));
+    assert!(!result.contains("Be concise"));
+    assert!(!result.contains("Be direct"));
+    assert!(result.contains("## Core Principles"));
+    assert!(result.contains("Principle 1"));
+    assert!(result.contains("## Working Approach"));
+    assert!(result.contains("Approach 1"));
+}
+
+#[test]
+fn test_strip_communication_style_preserves_other_sections() {
+    let input = "\
+## First Section
+
+Content A
+
+## Second Section
+
+Content B
+";
+
+    let result = strip_communication_style(input);
+
+    // No Communication Style section — input should pass through unchanged
+    assert!(result.contains("## First Section"));
+    assert!(result.contains("Content A"));
+    assert!(result.contains("## Second Section"));
+    assert!(result.contains("Content B"));
 }

@@ -101,8 +101,8 @@ fn test_predefined_configs() {
     assert_eq!(todo.min_turns_between, 5);
 
     let output_style = ThrottleConfig::output_style();
-    assert_eq!(output_style.min_turns_between, 0);
-    assert_eq!(output_style.max_per_session, Some(1));
+    assert_eq!(output_style.min_turns_between, 15);
+    assert!(output_style.max_per_session.is_none());
 
     let security = ThrottleConfig::security_guidelines();
     assert_eq!(security.full_content_every_n, Some(5));

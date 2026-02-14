@@ -13,15 +13,18 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
-/// Generator for output style instructions.
+/// Generator for output style reinforcement reminders.
 ///
-/// This generator injects output style instructions that modify how the model
-/// responds. It supports:
+/// Since the output style is now injected directly into the system prompt
+/// (via `SystemPromptBuilder`), this generator serves as a periodic reinforcement
+/// to remind the model to follow the active output style instructions.
+///
+/// It supports:
 /// - Built-in styles: "explanatory" (educational insights) and "learning" (hands-on learning)
 /// - Custom instruction text provided via configuration
 ///
-/// The generator only runs for the main agent and uses high throttling (once per 50 turns)
-/// since the style should remain consistent throughout a session.
+/// The generator only runs for the main agent and uses moderate throttling
+/// (every 15 turns) since the style is already in the system prompt.
 #[derive(Debug)]
 pub struct OutputStyleGenerator;
 
@@ -46,21 +49,28 @@ impl AttachmentGenerator for OutputStyleGenerator {
     }
 
     fn throttle_config(&self) -> ThrottleConfig {
-        // Output style injects once per session at the start,
-        // consistent with Claude Code behavior
+        // Periodic reinforcement — the output style is already in the system prompt,
+        // so we only need occasional reminders.
         ThrottleConfig::output_style()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Resolve the output style instruction from config
-        let instruction = match ctx.config.output_style.resolve_instruction() {
-            Some(i) => i,
-            None => return Ok(None),
-        };
+        // Resolve the style name for the reinforcement message
+        let style_name = ctx
+            .config
+            .output_style
+            .style_name
+            .as_deref()
+            .unwrap_or("custom");
+
+        let reminder = format!(
+            "Remember: Follow the active output style \"{}\" instructions in your system prompt.",
+            style_name
+        );
 
         Ok(Some(SystemReminder::new(
             AttachmentType::OutputStyle,
-            instruction,
+            reminder,
         )))
     }
 }

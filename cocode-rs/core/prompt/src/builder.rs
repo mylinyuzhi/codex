@@ -26,14 +26,22 @@ impl SystemPromptBuilder {
     pub fn build(ctx: &ConversationContext) -> String {
         let mut ordered_sections = Vec::new();
 
-        // 1. Identity
-        ordered_sections.push((
-            PromptSection::Identity,
-            templates::BASE_IDENTITY.to_string(),
-        ));
+        let has_output_style = ctx.output_style.is_some();
+        let keep_coding = ctx
+            .output_style
+            .as_ref()
+            .map_or(true, |s| s.keep_coding_instructions);
 
-        // 2. Tool policy (if tools present)
-        if ctx.has_tools() {
+        // 1. Identity (strip Communication Style when output style is active)
+        let identity = if has_output_style {
+            strip_communication_style(templates::BASE_IDENTITY)
+        } else {
+            templates::BASE_IDENTITY.to_string()
+        };
+        ordered_sections.push((PromptSection::Identity, identity));
+
+        // 2. Tool policy (if tools present) — skipped when output style has keep_coding=false
+        if ctx.has_tools() && keep_coding {
             let mut policy = templates::TOOL_POLICY.to_string();
             let tool_lines = sections::generate_tool_policy_lines(&ctx.tool_names);
             if !tool_lines.is_empty() {
@@ -46,17 +54,21 @@ impl SystemPromptBuilder {
         // 3. Security
         ordered_sections.push((PromptSection::Security, templates::SECURITY.to_string()));
 
-        // 4. Git workflow
-        ordered_sections.push((
-            PromptSection::GitWorkflow,
-            templates::GIT_WORKFLOW.to_string(),
-        ));
+        // 4. Git workflow — skipped when output style has keep_coding=false
+        if keep_coding {
+            ordered_sections.push((
+                PromptSection::GitWorkflow,
+                templates::GIT_WORKFLOW.to_string(),
+            ));
+        }
 
-        // 5. Task management
-        ordered_sections.push((
-            PromptSection::TaskManagement,
-            templates::TASK_MANAGEMENT.to_string(),
-        ));
+        // 5. Task management — skipped when output style has keep_coding=false
+        if keep_coding {
+            ordered_sections.push((
+                PromptSection::TaskManagement,
+                templates::TASK_MANAGEMENT.to_string(),
+            ));
+        }
 
         // 6. MCP instructions (if MCP servers present)
         if ctx.has_mcp_servers() {
@@ -97,6 +109,14 @@ impl SystemPromptBuilder {
         let end_injections = render_injections(ctx, InjectionPosition::EndOfPrompt);
         if !end_injections.is_empty() {
             ordered_sections.push((PromptSection::Injections, end_injections));
+        }
+
+        // 11. Output style instructions (appended at the end)
+        if let Some(ref style) = ctx.output_style {
+            ordered_sections.push((
+                PromptSection::OutputStyle,
+                format!("# Output Style: {}\n\n{}", style.name, style.content),
+            ));
         }
 
         assemble_sections(&ordered_sections)
@@ -143,6 +163,34 @@ impl SystemPromptBuilder {
     pub fn build_brief_summarization(conversation_text: &str) -> (String, String) {
         summarization::build_brief_summary_prompt(conversation_text)
     }
+}
+
+/// Strip the "## Communication Style" section from identity text.
+///
+/// When an output style is active, the default communication style
+/// instructions conflict with the output style. This function removes
+/// the `## Communication Style` section (header + body) while keeping
+/// all other sections intact.
+fn strip_communication_style(identity: &str) -> String {
+    let mut result = String::new();
+    let mut skip = false;
+
+    for line in identity.lines() {
+        if line.starts_with("## Communication Style") {
+            skip = true;
+            continue;
+        }
+        // Stop skipping when we hit another ## heading
+        if skip && line.starts_with("## ") {
+            skip = false;
+        }
+        if !skip {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]

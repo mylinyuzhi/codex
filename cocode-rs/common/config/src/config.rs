@@ -187,6 +187,12 @@ pub struct Config {
     // ============================================================
     /// OpenTelemetry settings (resolved from JSON config + env vars).
     pub otel: Option<cocode_otel::config::OtelSettings>,
+
+    // ============================================================
+    // 17. Output Style
+    // ============================================================
+    /// Active output style name (e.g., "explanatory", "learning", or custom).
+    pub output_style: Option<String>,
 }
 
 impl Config {
@@ -363,6 +369,7 @@ impl Default for Config {
             permissions: None,
             hooks: Vec::new(),
             otel: None,
+            output_style: None,
         }
     }
 }
