@@ -92,26 +92,6 @@ pub enum BackgroundTaskStatus {
     Failed,
 }
 
-/// Plan state information.
-#[derive(Debug, Clone, Default)]
-pub struct PlanState {
-    /// Whether the plan is empty.
-    pub is_empty: bool,
-    /// Turn count when plan was last updated.
-    pub last_update_turn: i32,
-    /// Plan steps.
-    pub steps: Vec<PlanStep>,
-}
-
-/// A step in the plan.
-#[derive(Debug, Clone)]
-pub struct PlanStep {
-    /// Step description.
-    pub step: String,
-    /// Step status (pending, in_progress, completed).
-    pub status: String,
-}
-
 /// Approved plan information (one-time injection after ExitPlanMode).
 #[derive(Debug, Clone)]
 pub struct ApprovedPlanInfo {
@@ -382,8 +362,6 @@ pub struct GeneratorContext<'a> {
     pub is_plan_mode: bool,
     /// Whether this is a re-entry into plan mode.
     pub is_plan_reentry: bool,
-    /// Current plan state.
-    pub plan_state: Option<PlanState>,
     /// Approved plan (one-time, after ExitPlanMode).
     pub approved_plan: Option<ApprovedPlanInfo>,
     /// Restored plan (after compaction).
@@ -538,7 +516,6 @@ pub struct GeneratorContextBuilder<'a> {
     plan_file_path: Option<PathBuf>,
     is_plan_mode: bool,
     is_plan_reentry: bool,
-    plan_state: Option<PlanState>,
     approved_plan: Option<ApprovedPlanInfo>,
     restored_plan: Option<RestoredPlanInfo>,
     background_tasks: Vec<BackgroundTaskInfo>,
@@ -624,11 +601,6 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn is_plan_reentry(mut self, is_reentry: bool) -> Self {
         self.is_plan_reentry = is_reentry;
-        self
-    }
-
-    pub fn plan_state(mut self, state: PlanState) -> Self {
-        self.plan_state = Some(state);
         self
     }
 
@@ -742,7 +714,6 @@ impl<'a> GeneratorContextBuilder<'a> {
             plan_file_path: self.plan_file_path,
             is_plan_mode: self.is_plan_mode,
             is_plan_reentry: self.is_plan_reentry,
-            plan_state: self.plan_state,
             approved_plan: self.approved_plan,
             restored_plan: self.restored_plan,
             background_tasks: self.background_tasks,
