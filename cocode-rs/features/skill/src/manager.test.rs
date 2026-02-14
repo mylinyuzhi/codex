@@ -176,15 +176,21 @@ fn test_execute_skill_not_user_invocable() {
 fn test_llm_invocable_skills() {
     let mut manager = SkillManager::new();
 
-    // Normal skill - should be included
-    manager.register(make_skill("commit", "Generate commit"));
+    // Skill with when_to_use - should be included
+    let mut commit = make_skill("commit", "Generate commit");
+    commit.when_to_use = Some("Use when the user asks to commit changes".to_string());
+    manager.register(commit);
 
-    // Disabled model invocation - should be excluded
+    // Skill without when_to_use - should be excluded
+    manager.register(make_skill("output-style", "Set output style"));
+
+    // Disabled model invocation even with when_to_use - should be excluded
     let mut disabled = make_skill("internal", "Internal");
     disabled.disable_model_invocation = true;
+    disabled.when_to_use = Some("never".to_string());
     manager.register(disabled);
 
-    // Builtin skill - should be excluded
+    // Builtin skill without when_to_use - should be excluded
     let mut builtin = make_skill("builtin", "Builtin");
     builtin.source = SkillSource::Builtin;
     manager.register(builtin);

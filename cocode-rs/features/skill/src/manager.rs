@@ -210,16 +210,14 @@ impl SkillManager {
 
     /// Get skills that can be invoked by the LLM via the Skill tool.
     ///
-    /// Filters out skills that have `disable_model_invocation` set, builtin
-    /// skills, and skills without a description or `when_to_use` hint.
+    /// A skill is LLM-invocable only when it has a `when_to_use` hint and
+    /// `disable_model_invocation` is not set.  This matches the upstream
+    /// requirement that `whenToUse` must be present for a skill to appear
+    /// in the model's available-skills list.
     pub fn llm_invocable_skills(&self) -> Vec<&SkillPromptCommand> {
         self.skills
             .values()
-            .filter(|s| {
-                !s.disable_model_invocation
-                    && s.source != SkillSource::Builtin
-                    && (!s.description.is_empty() || s.when_to_use.is_some())
-            })
+            .filter(|s| s.when_to_use.is_some() && !s.disable_model_invocation)
             .collect()
     }
 
