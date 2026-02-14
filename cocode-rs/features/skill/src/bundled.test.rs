@@ -61,12 +61,26 @@ fn test_output_style_skill() {
 }
 
 #[test]
+fn test_bundled_skills_are_local_jsx() {
+    let skills = bundled_skills();
+    for skill in &skills {
+        assert_eq!(
+            skill.command_type,
+            crate::command::CommandType::LocalJsx,
+            "bundled skill '{}' should be LocalJsx",
+            skill.name
+        );
+    }
+}
+
+#[test]
 fn test_bundled_skill_struct() {
     let skill = BundledSkill {
         name: "test".to_string(),
         description: "Test skill".to_string(),
         prompt: "Do something".to_string(),
         fingerprint: compute_fingerprint(b"Do something"),
+        command_type: crate::command::CommandType::Prompt,
     };
     assert_eq!(skill.name, "test");
     assert_eq!(skill.fingerprint.len(), 64);

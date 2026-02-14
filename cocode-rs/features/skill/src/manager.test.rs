@@ -19,6 +19,7 @@ fn make_skill(name: &str, prompt: &str) -> SkillPromptCommand {
         argument_hint: None,
         aliases: Vec::new(),
         interface: None,
+        command_type: CommandType::Prompt,
     }
 }
 
@@ -181,8 +182,18 @@ fn test_llm_invocable_skills() {
     commit.when_to_use = Some("Use when the user asks to commit changes".to_string());
     manager.register(commit);
 
-    // Skill without when_to_use - should be excluded
-    manager.register(make_skill("output-style", "Set output style"));
+    // Skill with description but no when_to_use - should be included (has description)
+    manager.register(make_skill("review", "Review code"));
+
+    // Skill with empty description and no when_to_use (non-bundled) - should be excluded
+    let mut no_desc = make_skill("no-desc", "");
+    no_desc.description = String::new();
+    no_desc.when_to_use = None;
+    no_desc.source = SkillSource::UserSettings {
+        path: PathBuf::from("/user"),
+    };
+    no_desc.loaded_from = LoadedFrom::UserSettings;
+    manager.register(no_desc);
 
     // Disabled model invocation even with when_to_use - should be excluded
     let mut disabled = make_skill("internal", "Internal");
@@ -190,14 +201,37 @@ fn test_llm_invocable_skills() {
     disabled.when_to_use = Some("never".to_string());
     manager.register(disabled);
 
-    // Builtin skill without when_to_use - should be excluded
+    // Builtin skill - should be excluded (source filter)
     let mut builtin = make_skill("builtin", "Builtin");
     builtin.source = SkillSource::Builtin;
     manager.register(builtin);
 
+    // LocalJsx skill - should be excluded (type filter)
+    let mut local_jsx = make_skill("ui-cmd", "UI command");
+    local_jsx.command_type = CommandType::LocalJsx;
+    manager.register(local_jsx);
+
     let invocable = manager.llm_invocable_skills();
-    assert_eq!(invocable.len(), 1);
-    assert_eq!(invocable[0].name, "commit");
+    let mut names: Vec<&str> = invocable.iter().map(|s| s.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["commit", "review"]);
+}
+
+#[test]
+fn test_bundled_skills_not_llm_invocable() {
+    // After registering bundled skills, output-style and plugin should NOT
+    // appear in llm_invocable_skills because they are LocalJsx type.
+    let manager = SkillManager::with_bundled();
+    let invocable = manager.llm_invocable_skills();
+    let names: Vec<&str> = invocable.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        !names.contains(&"output-style"),
+        "output-style should not be LLM invocable"
+    );
+    assert!(
+        !names.contains(&"plugin"),
+        "plugin should not be LLM invocable"
+    );
 }
 
 #[test]

@@ -26,6 +26,7 @@ fn make_test_skill(name: &str, prompt: &str) -> SkillPromptCommand {
         argument_hint: None,
         aliases: Vec::new(),
         interface: None,
+        command_type: cocode_skill::CommandType::Prompt,
     }
 }
 
@@ -145,6 +146,30 @@ async fn test_skill_disable_model_invocation() {
 
     let input = serde_json::json!({
         "skill": "internal"
+    });
+
+    let result = tool.execute(input, &mut ctx).await.unwrap();
+    assert!(result.is_error);
+    let text = match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => t,
+        _ => panic!("Expected text content"),
+    };
+    assert!(text.contains("cannot be invoked by the model"));
+}
+
+#[tokio::test]
+async fn test_skill_local_jsx_not_invocable() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_test_skill("output-style", "Manage output styles");
+    skill.command_type = cocode_skill::CommandType::LocalJsx;
+    manager.register(skill);
+
+    let tool = SkillTool::new();
+    let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+        .with_skill_manager(Arc::new(manager));
+
+    let input = serde_json::json!({
+        "skill": "output-style"
     });
 
     let result = tool.execute(input, &mut ctx).await.unwrap();

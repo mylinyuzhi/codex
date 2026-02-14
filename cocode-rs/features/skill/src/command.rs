@@ -109,10 +109,19 @@ pub struct SkillPromptCommand {
     /// Populated from SKILL.toml when hooks are defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<crate::interface::SkillInterface>,
+
+    /// Command type classification.
+    /// `Prompt` for regular skills, `LocalJsx` for bundled UI commands.
+    #[serde(default = "default_command_type")]
+    pub command_type: CommandType,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_command_type() -> CommandType {
+    CommandType::Prompt
 }
 
 fn default_source() -> SkillSource {
@@ -130,8 +139,10 @@ impl SkillPromptCommand {
     }
 
     /// Returns `true` if the LLM can invoke this skill via the Skill tool.
+    ///
+    /// Checks both `command_type` (must be `Prompt`) and `disable_model_invocation`.
     pub fn is_llm_invocable(&self) -> bool {
-        !self.disable_model_invocation
+        self.command_type == CommandType::Prompt && !self.disable_model_invocation
     }
 
     /// Returns `true` if this skill should appear in `/help` and command lists.

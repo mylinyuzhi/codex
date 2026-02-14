@@ -19,6 +19,7 @@ fn make_default_command() -> SkillPromptCommand {
         argument_hint: None,
         aliases: Vec::new(),
         interface: None,
+        command_type: CommandType::Prompt,
     }
 }
 
@@ -77,7 +78,13 @@ fn test_classification_methods() {
     assert!(!cmd.is_user_invocable());
     assert!(!cmd.is_visible_in_help());
 
+    // disable_model_invocation blocks LLM invocation
     cmd.disable_model_invocation = true;
+    assert!(!cmd.is_llm_invocable());
+
+    // LocalJsx command_type also blocks LLM invocation
+    cmd.disable_model_invocation = false;
+    cmd.command_type = CommandType::LocalJsx;
     assert!(!cmd.is_llm_invocable());
 }
 

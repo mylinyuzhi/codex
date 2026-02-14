@@ -3,6 +3,7 @@
 //! Reads `SKILL.toml` files, resolves prompt content (from external files
 //! or inline), validates the result, and produces [`SkillLoadOutcome`] values.
 
+use crate::command::CommandType;
 use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
 use crate::interface::SkillInterface;
@@ -147,6 +148,7 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
             aliases: interface.aliases.clone().unwrap_or_default(),
             // Only keep interface if it has hooks (to save memory)
             interface: if has_hooks { Some(interface) } else { None },
+            command_type: CommandType::Prompt,
         },
         source,
     }

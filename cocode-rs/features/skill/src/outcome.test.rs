@@ -20,6 +20,7 @@ fn make_success() -> SkillLoadOutcome {
             argument_hint: None,
             aliases: Vec::new(),
             interface: None,
+            command_type: crate::command::CommandType::Prompt,
         },
         source: SkillSource::Bundled,
     }
