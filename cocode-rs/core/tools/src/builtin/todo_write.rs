@@ -89,6 +89,10 @@ impl Tool for TodoWriteTool {
         false
     }
 
+    fn max_result_size_chars(&self) -> i32 {
+        100_000
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let todos = input["todos"].as_array().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {

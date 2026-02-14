@@ -22,19 +22,19 @@ use crate::mcp::McpServerConfig;
 /// contain contribution definitions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginContributions {
-    /// Paths to skill directories (containing SKILL.toml files).
+    /// Paths to skill directories (containing SKILL.md files).
     #[serde(default)]
     pub skills: Vec<String>,
 
-    /// Paths to hook configuration files (TOML).
+    /// Paths to hook configuration files (JSON).
     #[serde(default)]
     pub hooks: Vec<String>,
 
-    /// Paths to agent directories (containing AGENT.toml files).
+    /// Paths to agent directories (containing agent.json files).
     #[serde(default)]
     pub agents: Vec<String>,
 
-    /// Paths to command directories (containing COMMAND.toml files).
+    /// Paths to command directories (containing command.json files).
     #[serde(default)]
     pub commands: Vec<String>,
 

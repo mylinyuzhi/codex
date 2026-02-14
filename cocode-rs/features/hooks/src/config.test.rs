@@ -1,38 +1,41 @@
 use super::*;
 
 #[test]
-fn test_load_hooks_from_toml() {
+fn test_load_hooks_from_json() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("hooks.toml");
+    let file = dir.path().join("hooks.json");
     std::fs::write(
         &file,
-        r#"
-[[hooks]]
-name = "lint-check"
-event = "pre_tool_use"
-timeout_secs = 10
-
-[hooks.matcher]
-type = "exact"
-value = "bash"
-
-[hooks.handler]
-type = "command"
-command = "lint"
-args = ["--check"]
-
-[[hooks]]
-name = "notify-session"
-event = "session_start"
-
-[hooks.handler]
-type = "prompt"
-template = "Session started: $ARGUMENTS"
-"#,
+        r#"{
+  "hooks": [
+    {
+      "name": "lint-check",
+      "event": "pre_tool_use",
+      "timeout_secs": 10,
+      "matcher": {
+        "type": "exact",
+        "value": "bash"
+      },
+      "handler": {
+        "type": "command",
+        "command": "lint",
+        "args": ["--check"]
+      }
+    },
+    {
+      "name": "notify-session",
+      "event": "session_start",
+      "handler": {
+        "type": "prompt",
+        "template": "Session started: $ARGUMENTS"
+      }
+    }
+  ]
+}"#,
     )
     .expect("write");
 
-    let hooks = load_hooks_from_toml(&file).expect("load");
+    let hooks = load_hooks_from_json(&file).expect("load");
     assert_eq!(hooks.len(), 2);
 
     assert_eq!(hooks[0].name, "lint-check");
@@ -50,52 +53,55 @@ template = "Session started: $ARGUMENTS"
 #[test]
 fn test_load_empty_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("empty.toml");
-    std::fs::write(&file, "").expect("write");
+    let file = dir.path().join("empty.json");
+    std::fs::write(&file, "{}").expect("write");
 
-    let hooks = load_hooks_from_toml(&file).expect("load");
+    let hooks = load_hooks_from_json(&file).expect("load");
     assert!(hooks.is_empty());
 }
 
 #[test]
 fn test_load_nonexistent_file() {
-    let result = load_hooks_from_toml(Path::new("/nonexistent/hooks.toml"));
+    let result = load_hooks_from_json(Path::new("/nonexistent/hooks.json"));
     assert!(result.is_err());
 }
 
 #[test]
-fn test_load_invalid_toml() {
+fn test_load_invalid_json() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("bad.toml");
-    std::fs::write(&file, "this is not valid toml {{{").expect("write");
+    let file = dir.path().join("bad.json");
+    std::fs::write(&file, "this is not valid json {{{").expect("write");
 
-    let result = load_hooks_from_toml(&file);
+    let result = load_hooks_from_json(&file);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_load_invalid_regex_matcher() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("bad_regex.toml");
+    let file = dir.path().join("bad_regex.json");
     std::fs::write(
         &file,
-        r#"
-[[hooks]]
-name = "bad-regex"
-event = "pre_tool_use"
-
-[hooks.matcher]
-type = "regex"
-pattern = "[invalid"
-
-[hooks.handler]
-type = "command"
-command = "echo"
-"#,
+        r#"{
+  "hooks": [
+    {
+      "name": "bad-regex",
+      "event": "pre_tool_use",
+      "matcher": {
+        "type": "regex",
+        "pattern": "[invalid"
+      },
+      "handler": {
+        "type": "command",
+        "command": "echo"
+      }
+    }
+  ]
+}"#,
     )
     .expect("write");
 
-    let result = load_hooks_from_toml(&file);
+    let result = load_hooks_from_json(&file);
     assert!(result.is_err());
     assert!(result.err().expect("error").contains("invalid matcher"));
 }
@@ -103,41 +109,37 @@ command = "echo"
 #[test]
 fn test_load_all_handler_types() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("all.toml");
+    let file = dir.path().join("all.json");
     std::fs::write(
         &file,
-        r#"
-[[hooks]]
-name = "cmd"
-event = "pre_tool_use"
-[hooks.handler]
-type = "command"
-command = "echo"
-
-[[hooks]]
-name = "prompt"
-event = "session_start"
-[hooks.handler]
-type = "prompt"
-template = "hello"
-
-[[hooks]]
-name = "agent"
-event = "stop"
-[hooks.handler]
-type = "agent"
-
-[[hooks]]
-name = "webhook"
-event = "session_end"
-[hooks.handler]
-type = "webhook"
-url = "https://example.com"
-"#,
+        r#"{
+  "hooks": [
+    {
+      "name": "cmd",
+      "event": "pre_tool_use",
+      "handler": { "type": "command", "command": "echo" }
+    },
+    {
+      "name": "prompt",
+      "event": "session_start",
+      "handler": { "type": "prompt", "template": "hello" }
+    },
+    {
+      "name": "agent",
+      "event": "stop",
+      "handler": { "type": "agent" }
+    },
+    {
+      "name": "webhook",
+      "event": "session_end",
+      "handler": { "type": "webhook", "url": "https://example.com" }
+    }
+  ]
+}"#,
     )
     .expect("write");
 
-    let hooks = load_hooks_from_toml(&file).expect("load");
+    let hooks = load_hooks_from_json(&file).expect("load");
     assert_eq!(hooks.len(), 4);
     assert!(matches!(hooks[0].handler, HookHandler::Command { .. }));
     assert!(matches!(hooks[1].handler, HookHandler::Prompt { .. }));
@@ -148,33 +150,32 @@ url = "https://example.com"
 #[test]
 fn test_load_or_matcher() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("or.toml");
+    let file = dir.path().join("or.json");
     std::fs::write(
         &file,
-        r#"
-[[hooks]]
-name = "multi-tool"
-event = "pre_tool_use"
-
-[hooks.matcher]
-type = "or"
-
-[[hooks.matcher.matchers]]
-type = "exact"
-value = "bash"
-
-[[hooks.matcher.matchers]]
-type = "wildcard"
-pattern = "read_*"
-
-[hooks.handler]
-type = "command"
-command = "check"
-"#,
+        r#"{
+  "hooks": [
+    {
+      "name": "multi-tool",
+      "event": "pre_tool_use",
+      "matcher": {
+        "type": "or",
+        "matchers": [
+          { "type": "exact", "value": "bash" },
+          { "type": "wildcard", "pattern": "read_*" }
+        ]
+      },
+      "handler": {
+        "type": "command",
+        "command": "check"
+      }
+    }
+  ]
+}"#,
     )
     .expect("write");
 
-    let hooks = load_hooks_from_toml(&file).expect("load");
+    let hooks = load_hooks_from_json(&file).expect("load");
     assert_eq!(hooks.len(), 1);
     let matcher = hooks[0].matcher.as_ref().expect("matcher");
     assert!(matcher.matches("bash"));

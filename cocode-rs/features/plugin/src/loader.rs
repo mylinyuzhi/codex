@@ -1,6 +1,6 @@
 //! Plugin discovery and loading.
 //!
-//! Scans directories for plugins (containing PLUGIN.toml) and loads their
+//! Scans directories for plugins (containing plugin.json) and loads their
 //! contributions.
 
 use crate::agent_loader::load_agents_from_dir;
@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::error::plugin_error::InvalidManifestSnafu;
 use crate::error::plugin_error::IoSnafu;
 use crate::error::plugin_error::PathTraversalSnafu;
-use crate::manifest::PLUGIN_TOML;
+use crate::manifest::PLUGIN_JSON;
 use crate::manifest::PluginManifest;
 use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
@@ -84,7 +84,7 @@ impl PluginLoader {
 
     /// Scan a directory for plugins.
     ///
-    /// Returns a list of paths to plugin directories (containing PLUGIN.toml).
+    /// Returns a list of paths to plugin directories (containing plugin.json).
     pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
         if !root.is_dir() {
             return Vec::new();
@@ -102,7 +102,7 @@ impl PluginLoader {
 
         for entry in walker.filter_map(|e| e.ok()) {
             if entry.file_type().is_dir() {
-                let manifest_path = entry.path().join(PLUGIN_TOML);
+                let manifest_path = entry.path().join(PLUGIN_JSON);
                 if manifest_path.is_file() {
                     results.push(entry.path().to_path_buf());
                 }
@@ -359,14 +359,14 @@ impl PluginLoader {
         Ok(result)
     }
 
-    /// Load hooks from a TOML file.
+    /// Load hooks from a JSON file.
     fn load_hooks_from_file(
         &self,
         path: &Path,
         plugin_name: &str,
     ) -> Result<Vec<PluginContribution>> {
-        // load_hooks_from_toml takes a path and handles reading internally
-        match cocode_hooks::load_hooks_from_toml(path) {
+        // load_hooks_from_json takes a path and handles reading internally
+        match cocode_hooks::load_hooks_from_json(path) {
             Ok(definitions) => Ok(definitions
                 .into_iter()
                 .map(|hook| PluginContribution::Hook {

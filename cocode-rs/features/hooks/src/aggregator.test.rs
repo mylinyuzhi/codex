@@ -100,12 +100,12 @@ fn test_scope_ordering() {
     let settings = HookSettings::default();
     let hooks = aggregator.build(&settings);
 
-    // Should be sorted by scope priority
+    // Should be sorted by scope priority (Policy > Session > Skill > Plugin)
     assert_eq!(hooks.len(), 4);
     assert_eq!(hooks[0].source.scope(), HookScope::Policy);
-    assert_eq!(hooks[1].source.scope(), HookScope::Plugin);
-    assert_eq!(hooks[2].source.scope(), HookScope::Session);
-    assert_eq!(hooks[3].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[1].source.scope(), HookScope::Session);
+    assert_eq!(hooks[2].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[3].source.scope(), HookScope::Plugin);
 }
 
 #[test]
@@ -154,9 +154,9 @@ fn test_aggregate_hooks_helper() {
 
     assert_eq!(hooks.len(), 4);
     assert_eq!(hooks[0].source.scope(), HookScope::Policy);
-    assert_eq!(hooks[1].source.scope(), HookScope::Plugin);
-    assert_eq!(hooks[2].source.scope(), HookScope::Session);
-    assert_eq!(hooks[3].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[1].source.scope(), HookScope::Session);
+    assert_eq!(hooks[2].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[3].source.scope(), HookScope::Plugin);
 }
 
 #[test]

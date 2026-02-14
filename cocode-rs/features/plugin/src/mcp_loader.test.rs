@@ -22,20 +22,20 @@ fn test_load_mcp_server_stdio() {
     fs::create_dir_all(&server_dir).expect("mkdir");
 
     fs::write(
-        server_dir.join("MCP.toml"),
-        r#"
-name = "filesystem"
-description = "File system access"
-auto_start = true
-
-[transport]
-type = "stdio"
-command = "npx"
-args = ["-y", "@anthropic/mcp-server-filesystem"]
-
-[env]
-MCP_DEBUG = "true"
-"#,
+        server_dir.join("mcp.json"),
+        r#"{
+  "name": "filesystem",
+  "description": "File system access",
+  "auto_start": true,
+  "transport": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@anthropic/mcp-server-filesystem"]
+  },
+  "env": {
+    "MCP_DEBUG": "true"
+  }
+}"#,
     )
     .expect("write");
 
@@ -70,15 +70,15 @@ fn test_load_mcp_server_http() {
     fs::create_dir_all(&server_dir).expect("mkdir");
 
     fs::write(
-        server_dir.join("MCP.toml"),
-        r#"
-name = "remote-server"
-auto_start = false
-
-[transport]
-type = "http"
-url = "http://localhost:3000"
-"#,
+        server_dir.join("mcp.json"),
+        r#"{
+  "name": "remote-server",
+  "auto_start": false,
+  "transport": {
+    "type": "http",
+    "url": "http://localhost:3000"
+  }
+}"#,
     )
     .expect("write");
 
@@ -100,15 +100,15 @@ url = "http://localhost:3000"
 }
 
 #[test]
-fn test_load_mcp_server_invalid_toml() {
+fn test_load_mcp_server_invalid_json() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let server_dir = tmp.path().join("invalid");
     fs::create_dir_all(&server_dir).expect("mkdir");
 
-    fs::write(server_dir.join("MCP.toml"), "invalid { toml").expect("write");
+    fs::write(server_dir.join("mcp.json"), "invalid { json").expect("write");
 
     let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
-    assert!(results.is_empty()); // Invalid TOML should be skipped
+    assert!(results.is_empty()); // Invalid JSON should be skipped
 }
 
 #[test]
@@ -119,14 +119,14 @@ fn test_load_multiple_mcp_servers() {
     let server1 = tmp.path().join("server1");
     fs::create_dir_all(&server1).expect("mkdir");
     fs::write(
-        server1.join("MCP.toml"),
-        r#"
-name = "server1"
-
-[transport]
-type = "http"
-url = "http://localhost:3001"
-"#,
+        server1.join("mcp.json"),
+        r#"{
+  "name": "server1",
+  "transport": {
+    "type": "http",
+    "url": "http://localhost:3001"
+  }
+}"#,
     )
     .expect("write");
 
@@ -134,14 +134,14 @@ url = "http://localhost:3001"
     let server2 = tmp.path().join("server2");
     fs::create_dir_all(&server2).expect("mkdir");
     fs::write(
-        server2.join("MCP.toml"),
-        r#"
-name = "server2"
-
-[transport]
-type = "http"
-url = "http://localhost:3002"
-"#,
+        server2.join("mcp.json"),
+        r#"{
+  "name": "server2",
+  "transport": {
+    "type": "http",
+    "url": "http://localhost:3002"
+  }
+}"#,
     )
     .expect("write");
 

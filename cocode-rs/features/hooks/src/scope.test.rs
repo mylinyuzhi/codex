@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn test_priority_order() {
-    assert!(HookScope::Policy < HookScope::Plugin);
-    assert!(HookScope::Plugin < HookScope::Session);
+    assert!(HookScope::Policy < HookScope::Session);
     assert!(HookScope::Session < HookScope::Agent);
     assert!(HookScope::Agent < HookScope::Skill);
+    assert!(HookScope::Skill < HookScope::Plugin);
 }
 
 #[test]
@@ -22,10 +22,10 @@ fn test_sorting() {
         scopes,
         vec![
             HookScope::Policy,
-            HookScope::Plugin,
             HookScope::Session,
             HookScope::Agent,
             HookScope::Skill,
+            HookScope::Plugin,
         ]
     );
 }

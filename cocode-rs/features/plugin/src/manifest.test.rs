@@ -4,36 +4,38 @@ use std::path::Path;
 
 #[test]
 fn test_parse_manifest() {
-    let toml = r#"
-[plugin]
-name = "test-plugin"
-version = "1.0.0"
-description = "A test plugin"
-author = "Test Author"
+    let json = r#"{
+  "plugin": {
+    "name": "test-plugin",
+    "version": "1.0.0",
+    "description": "A test plugin",
+    "author": "Test Author"
+  },
+  "contributions": {
+    "skills": ["skills/"],
+    "hooks": ["hooks.json"]
+  }
+}"#;
 
-[contributions]
-skills = ["skills/"]
-hooks = ["hooks.toml"]
-"#;
-
-    let manifest = PluginManifest::from_str(toml, Path::new("test")).unwrap();
+    let manifest = PluginManifest::from_str(json, Path::new("test")).unwrap();
     assert_eq!(manifest.plugin.name, "test-plugin");
     assert_eq!(manifest.plugin.version, "1.0.0");
     assert_eq!(manifest.plugin.author, Some("Test Author".to_string()));
     assert_eq!(manifest.contributions.skills, vec!["skills/"]);
-    assert_eq!(manifest.contributions.hooks, vec!["hooks.toml"]);
+    assert_eq!(manifest.contributions.hooks, vec!["hooks.json"]);
 }
 
 #[test]
 fn test_parse_minimal_manifest() {
-    let toml = r#"
-[plugin]
-name = "minimal"
-version = "0.1.0"
-description = "Minimal plugin"
-"#;
+    let json = r#"{
+  "plugin": {
+    "name": "minimal",
+    "version": "0.1.0",
+    "description": "Minimal plugin"
+  }
+}"#;
 
-    let manifest = PluginManifest::from_str(toml, Path::new("test")).unwrap();
+    let manifest = PluginManifest::from_str(json, Path::new("test")).unwrap();
     assert_eq!(manifest.plugin.name, "minimal");
     assert!(manifest.contributions.skills.is_empty());
     assert!(manifest.contributions.hooks.is_empty());
@@ -95,5 +97,5 @@ fn test_validate_invalid_name_chars() {
     };
 
     let errors = manifest.validate().unwrap_err();
-    assert!(errors.iter().any(|e| e.contains("alphanumeric")));
+    assert!(errors.iter().any(|e| e.contains("lowercase")));
 }

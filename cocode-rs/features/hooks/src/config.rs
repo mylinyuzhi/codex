@@ -1,6 +1,6 @@
 //! Configuration loading for hooks.
 //!
-//! Loads hook definitions from TOML files.
+//! Loads hook definitions from JSON files.
 
 use std::path::Path;
 
@@ -12,21 +12,21 @@ use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::matcher::HookMatcher;
 
-/// Top-level TOML structure for hook configuration.
+/// Top-level JSON structure for hook configuration.
 #[derive(Debug, Deserialize)]
-struct HooksToml {
+struct HooksJson {
     #[serde(default)]
-    hooks: Vec<HookTomlEntry>,
+    hooks: Vec<HookJsonEntry>,
 }
 
-/// A single hook entry in TOML format.
+/// A single hook entry in JSON format.
 #[derive(Debug, Deserialize)]
-struct HookTomlEntry {
+struct HookJsonEntry {
     name: String,
     event: HookEventType,
     #[serde(default)]
-    matcher: Option<HookMatcherToml>,
-    handler: HookHandlerToml,
+    matcher: Option<HookMatcherJson>,
+    handler: HookHandlerJson,
     #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default = "default_timeout")]
@@ -43,21 +43,21 @@ fn default_timeout() -> i32 {
     30
 }
 
-/// TOML representation of a hook matcher.
+/// JSON representation of a hook matcher.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum HookMatcherToml {
+enum HookMatcherJson {
     Exact { value: String },
     Wildcard { pattern: String },
     Regex { pattern: String },
     All,
-    Or { matchers: Vec<HookMatcherToml> },
+    Or { matchers: Vec<HookMatcherJson> },
 }
 
-/// TOML representation of a hook handler.
+/// JSON representation of a hook handler.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum HookHandlerToml {
+enum HookHandlerJson {
     Command {
         command: String,
         #[serde(default)]
@@ -89,26 +89,26 @@ fn default_agent_timeout() -> i32 {
     60
 }
 
-impl From<HookMatcherToml> for HookMatcher {
-    fn from(toml: HookMatcherToml) -> Self {
-        match toml {
-            HookMatcherToml::Exact { value } => HookMatcher::Exact { value },
-            HookMatcherToml::Wildcard { pattern } => HookMatcher::Wildcard { pattern },
-            HookMatcherToml::Regex { pattern } => HookMatcher::Regex { pattern },
-            HookMatcherToml::All => HookMatcher::All,
-            HookMatcherToml::Or { matchers } => HookMatcher::Or {
+impl From<HookMatcherJson> for HookMatcher {
+    fn from(json: HookMatcherJson) -> Self {
+        match json {
+            HookMatcherJson::Exact { value } => HookMatcher::Exact { value },
+            HookMatcherJson::Wildcard { pattern } => HookMatcher::Wildcard { pattern },
+            HookMatcherJson::Regex { pattern } => HookMatcher::Regex { pattern },
+            HookMatcherJson::All => HookMatcher::All,
+            HookMatcherJson::Or { matchers } => HookMatcher::Or {
                 matchers: matchers.into_iter().map(Into::into).collect(),
             },
         }
     }
 }
 
-impl From<HookHandlerToml> for HookHandler {
-    fn from(toml: HookHandlerToml) -> Self {
-        match toml {
-            HookHandlerToml::Command { command, args } => HookHandler::Command { command, args },
-            HookHandlerToml::Prompt { template, model } => HookHandler::Prompt { template, model },
-            HookHandlerToml::Agent {
+impl From<HookHandlerJson> for HookHandler {
+    fn from(json: HookHandlerJson) -> Self {
+        match json {
+            HookHandlerJson::Command { command, args } => HookHandler::Command { command, args },
+            HookHandlerJson::Prompt { template, model } => HookHandler::Prompt { template, model },
+            HookHandlerJson::Agent {
                 max_turns,
                 prompt,
                 timeout,
@@ -117,13 +117,13 @@ impl From<HookHandlerToml> for HookHandler {
                 prompt,
                 timeout,
             },
-            HookHandlerToml::Webhook { url } => HookHandler::Webhook { url },
+            HookHandlerJson::Webhook { url } => HookHandler::Webhook { url },
         }
     }
 }
 
-impl From<HookTomlEntry> for HookDefinition {
-    fn from(entry: HookTomlEntry) -> Self {
+impl From<HookJsonEntry> for HookDefinition {
+    fn from(entry: HookJsonEntry) -> Self {
         HookDefinition {
             name: entry.name,
             event_type: entry.event,
@@ -137,33 +137,38 @@ impl From<HookTomlEntry> for HookDefinition {
     }
 }
 
-/// Loads hook definitions from a TOML file.
+/// Loads hook definitions from a JSON file.
 ///
 /// The file should have the following structure:
 ///
-/// ```toml
-/// [[hooks]]
-/// name = "lint-check"
-/// event = "pre_tool_use"
-/// timeout_secs = 10
-///
-/// [hooks.matcher]
-/// type = "exact"
-/// value = "bash"
-///
-/// [hooks.handler]
-/// type = "command"
-/// command = "lint"
-/// args = ["--check"]
+/// ```json
+/// {
+///   "hooks": [
+///     {
+///       "name": "lint-check",
+///       "event": "pre_tool_use",
+///       "timeout_secs": 10,
+///       "matcher": {
+///         "type": "exact",
+///         "value": "bash"
+///       },
+///       "handler": {
+///         "type": "command",
+///         "command": "lint",
+///         "args": ["--check"]
+///       }
+///     }
+///   ]
+/// }
 /// ```
-pub fn load_hooks_from_toml(path: &Path) -> Result<Vec<HookDefinition>, String> {
+pub fn load_hooks_from_json(path: &Path) -> Result<Vec<HookDefinition>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read hooks file '{}': {e}", path.display()))?;
 
-    let hooks_toml: HooksToml = toml::from_str(&content)
-        .map_err(|e| format!("failed to parse hooks TOML '{}': {e}", path.display()))?;
+    let hooks_json: HooksJson = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse hooks JSON '{}': {e}", path.display()))?;
 
-    let definitions: Vec<HookDefinition> = hooks_toml.hooks.into_iter().map(Into::into).collect();
+    let definitions: Vec<HookDefinition> = hooks_json.hooks.into_iter().map(Into::into).collect();
 
     // Validate all matchers
     for def in &definitions {
@@ -177,7 +182,7 @@ pub fn load_hooks_from_toml(path: &Path) -> Result<Vec<HookDefinition>, String> 
     debug!(
         path = %path.display(),
         count = definitions.len(),
-        "Loaded hooks from TOML"
+        "Loaded hooks from JSON"
     );
 
     Ok(definitions)

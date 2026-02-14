@@ -16,22 +16,25 @@
 //! 4. **User** - `~/.cocode/plugins/`
 //! 5. **Managed** - System-installed plugins (lowest priority)
 //!
-//! Each plugin contains a `PLUGIN.toml` manifest that declares its contributions.
+//! Each plugin contains a `plugin.json` manifest that declares its contributions.
 //!
 //! # Plugin Manifest
 //!
-//! ```toml
-//! [plugin]
-//! name = "my-plugin"
-//! version = "0.1.0"
-//! description = "My custom plugin"
-//!
-//! [contributions]
-//! skills = ["skills/"]     # Directories containing SKILL.toml files
-//! hooks = ["hooks.toml"]   # Hook configuration files
-//! agents = ["agents/"]     # Directories containing AGENT.toml files
-//! commands = ["commands/"] # Directories containing COMMAND.toml files
-//! mcp_servers = ["mcp/"]   # Directories containing MCP.toml files
+//! ```json
+//! {
+//!   "plugin": {
+//!     "name": "my-plugin",
+//!     "version": "0.1.0",
+//!     "description": "My custom plugin"
+//!   },
+//!   "contributions": {
+//!     "skills": ["skills/"],
+//!     "hooks": ["hooks.json"],
+//!     "agents": ["agents/"],
+//!     "commands": ["commands/"],
+//!     "mcp_servers": ["mcp/"]
+//!   }
+//! }
 //! ```
 
 pub mod agent_loader;

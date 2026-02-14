@@ -17,7 +17,7 @@
 //! - **Aggregator** (`HookAggregator`): Combines hooks from multiple sources.
 //! - **Settings** (`HookSettings`): Global hook settings.
 //! - **AsyncTracker** (`AsyncHookTracker`): Tracks background hook tasks.
-//! - **Config**: Loading hook definitions from TOML files.
+//! - **Config**: Loading hook definitions from JSON files.
 
 pub mod aggregator;
 pub mod async_tracker;
@@ -39,7 +39,7 @@ pub use aggregator::aggregate_hooks;
 pub use async_tracker::AsyncHookTracker;
 pub use async_tracker::CompletedAsyncHook;
 pub use async_tracker::PendingAsyncHook;
-pub use config::load_hooks_from_toml;
+pub use config::load_hooks_from_json;
 pub use context::HookContext;
 pub use definition::HookDefinition;
 pub use definition::HookHandler;

@@ -193,7 +193,7 @@ impl Tool for WebSearchTool {
     }
 
     fn is_read_only(&self) -> bool {
-        false // Network access requires approval
+        true
     }
 
     fn feature_gate(&self) -> Option<cocode_protocol::Feature> {

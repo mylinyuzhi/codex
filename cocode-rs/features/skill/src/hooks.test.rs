@@ -5,8 +5,6 @@ fn make_interface_with_hooks(hooks: HashMap<String, Vec<SkillHookConfig>>) -> Sk
     SkillInterface {
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
-        prompt_file: None,
-        prompt_inline: Some("test prompt".to_string()),
         allowed_tools: None,
         when_to_use: None,
         user_invocable: None,
@@ -63,8 +61,6 @@ fn test_convert_skill_hooks_empty() {
     let interface = SkillInterface {
         name: "test".to_string(),
         description: "Test".to_string(),
-        prompt_file: None,
-        prompt_inline: Some("test".to_string()),
         allowed_tools: None,
         when_to_use: None,
         user_invocable: None,
@@ -81,14 +77,12 @@ fn test_convert_skill_hooks_empty() {
 }
 
 #[test]
-fn test_convert_skill_hooks_single() {
+fn test_convert_skill_hooks_single_with_string_matcher() {
     let mut hooks = HashMap::new();
     hooks.insert(
         "PreToolUse".to_string(),
         vec![SkillHookConfig {
-            matcher: Some(SkillHookMatcher::Exact {
-                value: "Write".to_string(),
-            }),
+            matcher: Some("Write".to_string()),
             command: Some("npm run lint".to_string()),
             args: Some(vec!["--fix".to_string()]),
             timeout_secs: 60,
@@ -166,32 +160,28 @@ fn test_convert_skill_hooks_multiple() {
 }
 
 #[test]
-fn test_convert_matcher_or() {
-    let skill_matcher = SkillHookMatcher::Or {
-        matchers: vec![
-            SkillHookMatcher::Exact {
-                value: "Write".to_string(),
-            },
-            SkillHookMatcher::Exact {
-                value: "Edit".to_string(),
-            },
-        ],
-    };
+fn test_convert_string_matcher_pipe_separated() {
+    let matcher = convert_string_matcher("Write|Edit");
 
-    let hook_matcher = convert_matcher(&skill_matcher);
-
-    if let HookMatcher::Or { matchers } = hook_matcher {
+    if let HookMatcher::Or { matchers } = matcher {
         assert_eq!(matchers.len(), 2);
+        assert!(matches!(&matchers[0], HookMatcher::Exact { value } if value == "Write"));
+        assert!(matches!(&matchers[1], HookMatcher::Exact { value } if value == "Edit"));
     } else {
         panic!("Expected Or matcher");
     }
 }
 
 #[test]
-fn test_convert_matcher_all() {
-    let skill_matcher = SkillHookMatcher::All;
-    let hook_matcher = convert_matcher(&skill_matcher);
-    assert!(matches!(hook_matcher, HookMatcher::All));
+fn test_convert_string_matcher_wildcard() {
+    let matcher = convert_string_matcher("Bash*");
+    assert!(matches!(matcher, HookMatcher::Wildcard { pattern } if pattern == "Bash*"));
+}
+
+#[test]
+fn test_convert_string_matcher_exact() {
+    let matcher = convert_string_matcher("Write");
+    assert!(matches!(matcher, HookMatcher::Exact { value } if value == "Write"));
 }
 
 #[test]

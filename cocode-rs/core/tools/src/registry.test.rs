@@ -125,13 +125,13 @@ fn test_mcp_tools() {
 
     registry.register_mcp_server("myserver", tools);
 
-    assert!(registry.is_mcp_tool("mcp__myserver_tool1"));
-    assert!(registry.is_mcp_tool("mcp__myserver_tool2"));
+    assert!(registry.is_mcp_tool("mcp__myserver__tool1"));
+    assert!(registry.is_mcp_tool("mcp__myserver__tool2"));
     assert!(!registry.is_mcp_tool("tool1"));
 
     // Unregister
     registry.unregister_mcp_server("myserver");
-    assert!(!registry.is_mcp_tool("mcp__myserver_tool1"));
+    assert!(!registry.is_mcp_tool("mcp__myserver__tool1"));
 }
 
 #[test]
@@ -255,19 +255,19 @@ fn test_defer_mcp_tool_definitions() {
 
     // Also put a matching entry in the tools map to simulate executable registration
     registry.register(TestTool {
-        name: "mcp__srv_mcp_tool".to_string(),
+        name: "mcp__srv__mcp_tool".to_string(),
     });
 
-    assert!(registry.get("mcp__srv_mcp_tool").is_some());
+    assert!(registry.get("mcp__srv__mcp_tool").is_some());
 
     let deferred = registry.defer_mcp_tool_definitions();
-    assert!(deferred.contains(&"mcp__srv_mcp_tool".to_string()));
+    assert!(deferred.contains(&"mcp__srv__mcp_tool".to_string()));
 
     // Tool should be removed from executable set
-    assert!(registry.get("mcp__srv_mcp_tool").is_none());
+    assert!(registry.get("mcp__srv__mcp_tool").is_none());
 
     // But metadata should still be available
-    assert!(registry.is_mcp_tool("mcp__srv_mcp_tool"));
+    assert!(registry.is_mcp_tool("mcp__srv__mcp_tool"));
 
     // Builtin tool should not be affected
     assert!(registry.get("builtin").is_some());

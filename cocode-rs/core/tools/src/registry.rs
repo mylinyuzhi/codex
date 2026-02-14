@@ -36,7 +36,7 @@ pub struct McpToolInfo {
 impl McpToolInfo {
     /// Get the fully qualified name (mcp__server__tool).
     pub fn qualified_name(&self) -> String {
-        format!("mcp__{}_{}", self.server, self.name)
+        format!("mcp__{}__{}", self.server, self.name)
     }
 }
 
@@ -148,7 +148,7 @@ impl ToolRegistry {
 
     /// Unregister an MCP server's tools.
     pub fn unregister_mcp_server(&mut self, server_name: &str) {
-        let prefix = format!("mcp__{server_name}_");
+        let prefix = format!("mcp__{server_name}__");
         self.mcp_tools.retain(|name, _| !name.starts_with(&prefix));
         self.tools.retain(|name, _| !name.starts_with(&prefix));
     }

@@ -103,12 +103,12 @@ impl PluginInstaller {
         };
 
         // Read manifest from source to get version
-        let manifest_path = source_dir.join("PLUGIN.toml");
+        let manifest_path = source_dir.join("plugin.json");
         let manifest_version = if manifest_path.exists() {
             std::fs::read_to_string(&manifest_path)
                 .ok()
                 .and_then(|content| {
-                    let manifest: toml::Value = toml::from_str(&content).ok()?;
+                    let manifest: serde_json::Value = serde_json::from_str(&content).ok()?;
                     manifest
                         .get("plugin")?
                         .get("version")?
@@ -266,7 +266,7 @@ async fn clone_source(source: &MarketplaceSource, target: &std::path::Path) -> R
                 }
                 .build()
             })?;
-            std::fs::copy(path, target.join("PLUGIN.toml")).map_err(|e| {
+            std::fs::copy(path, target.join("plugin.json")).map_err(|e| {
                 InstallationFailedSnafu {
                     plugin_id: path.display().to_string(),
                     message: format!("Failed to copy: {e}"),
@@ -324,16 +324,16 @@ async fn clone_source(source: &MarketplaceSource, target: &std::path::Path) -> R
                     let _ = std::fs::remove_file(&tar_path);
                 }
                 _ => {
-                    // Not a tarball — treat the downloaded file as PLUGIN.toml directly
-                    let _ = std::fs::rename(&tar_path, target.join("PLUGIN.toml"));
+                    // Not a tarball — treat the downloaded file as plugin.json directly
+                    let _ = std::fs::rename(&tar_path, target.join("plugin.json"));
                 }
             }
 
-            // Verify PLUGIN.toml exists
-            if !target.join("PLUGIN.toml").exists() {
+            // Verify plugin.json exists
+            if !target.join("plugin.json").exists() {
                 return Err(InstallationFailedSnafu {
                     plugin_id: url.clone(),
-                    message: "Downloaded content does not contain PLUGIN.toml".to_string(),
+                    message: "Downloaded content does not contain plugin.json".to_string(),
                 }
                 .build());
             }

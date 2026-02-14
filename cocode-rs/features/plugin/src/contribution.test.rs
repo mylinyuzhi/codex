@@ -75,15 +75,15 @@ fn test_contribution_agent() {
 fn test_contributions_serialize() {
     let contrib = PluginContributions {
         skills: vec!["skills/".to_string()],
-        hooks: vec!["hooks.toml".to_string()],
+        hooks: vec!["hooks.json".to_string()],
         agents: vec!["agents/".to_string()],
         commands: vec!["commands/".to_string()],
         mcp_servers: vec![],
     };
 
-    let toml_str = toml::to_string(&contrib).expect("serialize");
-    assert!(toml_str.contains("skills"));
-    assert!(toml_str.contains("hooks"));
-    assert!(toml_str.contains("agents"));
-    assert!(toml_str.contains("commands"));
+    let json_str = serde_json::to_string(&contrib).expect("serialize");
+    assert!(json_str.contains("skills"));
+    assert!(json_str.contains("hooks"));
+    assert!(json_str.contains("agents"));
+    assert!(json_str.contains("commands"));
 }

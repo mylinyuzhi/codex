@@ -15,13 +15,14 @@ fn test_scan_finds_plugin() {
     let plugin_dir = tmp.path().join("my-plugin");
     fs::create_dir_all(&plugin_dir).expect("mkdir");
     fs::write(
-        plugin_dir.join("PLUGIN.toml"),
-        r#"
-[plugin]
-name = "my-plugin"
-version = "1.0.0"
-description = "Test plugin"
-"#,
+        plugin_dir.join("plugin.json"),
+        r#"{
+  "plugin": {
+    "name": "my-plugin",
+    "version": "1.0.0",
+    "description": "Test plugin"
+  }
+}"#,
     )
     .expect("write");
 
@@ -37,13 +38,14 @@ fn test_load_plugin() {
     let plugin_dir = tmp.path().join("test-plugin");
     fs::create_dir_all(&plugin_dir).expect("mkdir");
     fs::write(
-        plugin_dir.join("PLUGIN.toml"),
-        r#"
-[plugin]
-name = "test-plugin"
-version = "0.1.0"
-description = "A test plugin"
-"#,
+        plugin_dir.join("plugin.json"),
+        r#"{
+  "plugin": {
+    "name": "test-plugin",
+    "version": "0.1.0",
+    "description": "A test plugin"
+  }
+}"#,
     )
     .expect("write");
 
@@ -65,26 +67,23 @@ fn test_load_plugin_with_skills() {
     fs::create_dir_all(&skills_dir).expect("mkdir");
 
     fs::write(
-        plugin_dir.join("PLUGIN.toml"),
-        r#"
-[plugin]
-name = "skill-plugin"
-version = "0.1.0"
-description = "Plugin with skills"
-
-[contributions]
-skills = ["skills/"]
-"#,
+        plugin_dir.join("plugin.json"),
+        r#"{
+  "plugin": {
+    "name": "skill-plugin",
+    "version": "0.1.0",
+    "description": "Plugin with skills"
+  },
+  "contributions": {
+    "skills": ["skills/"]
+  }
+}"#,
     )
     .expect("write");
 
     fs::write(
-        skills_dir.join("SKILL.toml"),
-        r#"
-name = "my-skill"
-description = "A skill from a plugin"
-prompt_inline = "Do something"
-"#,
+        skills_dir.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: A skill from a plugin\n---\nDo something\n",
     )
     .expect("write skill");
 
