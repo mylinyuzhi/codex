@@ -9,6 +9,7 @@ fn make_hook(name: &str) -> HookDefinition {
         matcher: None,
         handler: HookHandler::Prompt {
             template: "test".to_string(),
+            model: None,
         },
         source: Default::default(),
         enabled: true,

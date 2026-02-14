@@ -1078,6 +1078,7 @@ version = "0.0.0"
 dependencies = [
  "cocode-error",
  "cocode-protocol",
+ "futures",
  "regex",
  "reqwest",
  "serde",

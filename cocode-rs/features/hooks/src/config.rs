@@ -65,10 +65,16 @@ enum HookHandlerToml {
     },
     Prompt {
         template: String,
+        #[serde(default)]
+        model: Option<String>,
     },
     Agent {
         #[serde(default = "default_max_turns")]
         max_turns: i32,
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default = "default_agent_timeout")]
+        timeout: i32,
     },
     Webhook {
         url: String,
@@ -76,7 +82,11 @@ enum HookHandlerToml {
 }
 
 fn default_max_turns() -> i32 {
-    5
+    50
+}
+
+fn default_agent_timeout() -> i32 {
+    60
 }
 
 impl From<HookMatcherToml> for HookMatcher {
@@ -97,8 +107,16 @@ impl From<HookHandlerToml> for HookHandler {
     fn from(toml: HookHandlerToml) -> Self {
         match toml {
             HookHandlerToml::Command { command, args } => HookHandler::Command { command, args },
-            HookHandlerToml::Prompt { template } => HookHandler::Prompt { template },
-            HookHandlerToml::Agent { max_turns } => HookHandler::Agent { max_turns },
+            HookHandlerToml::Prompt { template, model } => HookHandler::Prompt { template, model },
+            HookHandlerToml::Agent {
+                max_turns,
+                prompt,
+                timeout,
+            } => HookHandler::Agent {
+                max_turns,
+                prompt,
+                timeout,
+            },
             HookHandlerToml::Webhook { url } => HookHandler::Webhook { url },
         }
     }

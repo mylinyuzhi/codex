@@ -86,11 +86,24 @@ fn test_handler_command_serde() {
 fn test_handler_prompt_serde() {
     let handler = HookHandler::Prompt {
         template: "Review the changes: $ARGUMENTS".to_string(),
+        model: None,
     };
     let json = serde_json::to_string(&handler).expect("serialize");
     let parsed: HookHandler = serde_json::from_str(&json).expect("deserialize");
-    if let HookHandler::Prompt { template } = parsed {
+    if let HookHandler::Prompt { template, .. } = parsed {
         assert!(template.contains("$ARGUMENTS"));
+    } else {
+        panic!("Expected Prompt handler");
+    }
+}
+
+#[test]
+fn test_handler_prompt_with_model() {
+    let json = r#"{"type": "prompt", "template": "check $ARGUMENTS", "model": "haiku"}"#;
+    let handler: HookHandler = serde_json::from_str(json).expect("deserialize");
+    if let HookHandler::Prompt { template, model } = handler {
+        assert!(template.contains("$ARGUMENTS"));
+        assert_eq!(model, Some("haiku".to_string()));
     } else {
         panic!("Expected Prompt handler");
     }
@@ -100,11 +113,62 @@ fn test_handler_prompt_serde() {
 fn test_handler_agent_default_turns() {
     let json = r#"{"type": "agent"}"#;
     let handler: HookHandler = serde_json::from_str(json).expect("deserialize");
-    if let HookHandler::Agent { max_turns } = handler {
-        assert_eq!(max_turns, 5);
+    if let HookHandler::Agent {
+        max_turns,
+        prompt,
+        timeout,
+    } = handler
+    {
+        assert_eq!(max_turns, 50);
+        assert!(prompt.is_none());
+        assert_eq!(timeout, 60);
     } else {
         panic!("Expected Agent handler");
     }
+}
+
+#[test]
+fn test_handler_agent_with_prompt() {
+    let json =
+        r#"{"type": "agent", "max_turns": 10, "prompt": "verify $ARGUMENTS", "timeout": 120}"#;
+    let handler: HookHandler = serde_json::from_str(json).expect("deserialize");
+    if let HookHandler::Agent {
+        max_turns,
+        prompt,
+        timeout,
+    } = handler
+    {
+        assert_eq!(max_turns, 10);
+        assert_eq!(prompt, Some("verify $ARGUMENTS".to_string()));
+        assert_eq!(timeout, 120);
+    } else {
+        panic!("Expected Agent handler");
+    }
+}
+
+#[test]
+fn test_effective_timeout_clamped() {
+    let json = r#"{
+        "name": "slow-hook",
+        "event_type": "pre_tool_use",
+        "handler": { "type": "command", "command": "sleep", "args": [] },
+        "timeout_secs": 9999
+    }"#;
+    let def: HookDefinition = serde_json::from_str(json).expect("parse");
+    assert_eq!(def.timeout_secs, 9999);
+    assert_eq!(def.effective_timeout_secs(), MAX_TIMEOUT_SECS);
+}
+
+#[test]
+fn test_effective_timeout_normal() {
+    let json = r#"{
+        "name": "normal-hook",
+        "event_type": "pre_tool_use",
+        "handler": { "type": "command", "command": "echo", "args": [] },
+        "timeout_secs": 60
+    }"#;
+    let def: HookDefinition = serde_json::from_str(json).expect("parse");
+    assert_eq!(def.effective_timeout_secs(), 60);
 }
 
 #[test]

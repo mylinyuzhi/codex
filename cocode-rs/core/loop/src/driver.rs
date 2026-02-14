@@ -693,6 +693,16 @@ impl AgentLoop {
         {
             let ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::Stop,
+                session_id.clone(),
+                self.context.environment.cwd.clone(),
+            );
+            self.execute_lifecycle_hooks(ctx).await;
+        }
+
+        // Execute SessionEnd hooks to signal session lifecycle completion
+        {
+            let ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::SessionEnd,
                 session_id,
                 self.context.environment.cwd.clone(),
             );
@@ -2197,20 +2207,32 @@ impl AgentLoop {
             })
             .await;
 
-            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                info!(
-                    hook_name = %outcome.hook_name,
-                    reason = %reason,
-                    event = %ctx.event_type,
-                    "Lifecycle hook rejected"
-                );
-                rejected = true;
-            }
-
-            // Track async hooks
-            if let cocode_hooks::HookResult::Async { task_id, hook_name } = &outcome.result {
-                self.async_hook_tracker
-                    .register(task_id.clone(), hook_name.clone());
+            match &outcome.result {
+                cocode_hooks::HookResult::Reject { reason } => {
+                    info!(
+                        hook_name = %outcome.hook_name,
+                        reason = %reason,
+                        event = %ctx.event_type,
+                        "Lifecycle hook rejected"
+                    );
+                    rejected = true;
+                }
+                cocode_hooks::HookResult::Async { task_id, hook_name } => {
+                    self.async_hook_tracker
+                        .register(task_id.clone(), hook_name.clone());
+                }
+                cocode_hooks::HookResult::ContinueWithContext {
+                    additional_context, ..
+                } => {
+                    if let Some(ctx_str) = additional_context {
+                        info!(
+                            hook_name = %outcome.hook_name,
+                            event = %ctx.event_type,
+                            "Lifecycle hook provided additional context: {ctx_str}"
+                        );
+                    }
+                }
+                _ => {}
             }
         }
 

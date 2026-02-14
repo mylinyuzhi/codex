@@ -33,6 +33,10 @@ pub enum HookEventType {
     Notification,
     /// When a permission is requested.
     PermissionRequest,
+    /// When an agent team teammate is about to go idle.
+    TeammateIdle,
+    /// When a task is being marked as completed.
+    TaskCompleted,
 }
 
 impl HookEventType {
@@ -51,6 +55,8 @@ impl HookEventType {
             Self::PreCompact => "pre_compact",
             Self::Notification => "notification",
             Self::PermissionRequest => "permission_request",
+            Self::TeammateIdle => "teammate_idle",
+            Self::TaskCompleted => "task_completed",
         }
     }
 }
@@ -76,6 +82,8 @@ impl From<HookEventType> for cocode_protocol::HookEventType {
             HookEventType::PreCompact => Self::PreCompact,
             HookEventType::Notification => Self::Notification,
             HookEventType::PermissionRequest => Self::PermissionRequest,
+            HookEventType::TeammateIdle => Self::TeammateIdle,
+            HookEventType::TaskCompleted => Self::TaskCompleted,
         }
     }
 }
