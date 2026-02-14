@@ -288,35 +288,34 @@ impl Model for OpenAIModel {
         }
 
         // Handle provider-specific options
-        if let Some(ref options) = request.provider_options {
-            if let Some(openai_opts) = downcast_options::<OpenAIOptions>(options) {
-                if let Some(prev_id) = &openai_opts.previous_response_id {
-                    params = params.previous_response_id(prev_id);
+        if let Some(ref options) = request.provider_options
+            && let Some(openai_opts) = downcast_options::<OpenAIOptions>(options)
+        {
+            if let Some(prev_id) = &openai_opts.previous_response_id {
+                params = params.previous_response_id(prev_id);
+            }
+            if let Some(effort) = openai_opts.reasoning_effort {
+                let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
+                // Apply reasoning summary if set
+                if let Some(summary) = openai_opts.reasoning_summary
+                    && let Some(summary_str) = convert_reasoning_summary_to_string(summary)
+                {
+                    reasoning_config = reasoning_config.with_summary(summary_str);
                 }
-                if let Some(effort) = &openai_opts.reasoning_effort {
-                    let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
-                    // Apply reasoning summary if set
-                    if let Some(summary) = &openai_opts.reasoning_summary {
-                        if let Some(summary_str) = convert_reasoning_summary_to_string(summary) {
-                            reasoning_config = reasoning_config.with_summary(summary_str);
-                        }
-                    }
-                    params = params.reasoning(reasoning_config);
-                }
-                // Include encrypted content if requested
-                if openai_opts.include_encrypted_content == Some(true) {
-                    params =
-                        params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
-                }
-                // Apply catchall extra params
-                if !openai_opts.extra.is_empty() {
-                    params.extra.extend(
-                        openai_opts
-                            .extra
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone())),
-                    );
-                }
+                params = params.reasoning(reasoning_config);
+            }
+            // Include encrypted content if requested
+            if openai_opts.include_encrypted_content == Some(true) {
+                params = params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
+            }
+            // Apply catchall extra params
+            if !openai_opts.extra.is_empty() {
+                params.extra.extend(
+                    openai_opts
+                        .extra
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
             }
         }
 
@@ -414,35 +413,34 @@ impl Model for OpenAIModel {
             params = params.tool_choice(convert_tool_choice_to_oai(choice));
         }
 
-        if let Some(ref options) = request.provider_options {
-            if let Some(openai_opts) = downcast_options::<OpenAIOptions>(options) {
-                if let Some(prev_id) = &openai_opts.previous_response_id {
-                    params = params.previous_response_id(prev_id);
+        if let Some(ref options) = request.provider_options
+            && let Some(openai_opts) = downcast_options::<OpenAIOptions>(options)
+        {
+            if let Some(prev_id) = &openai_opts.previous_response_id {
+                params = params.previous_response_id(prev_id);
+            }
+            if let Some(effort) = openai_opts.reasoning_effort {
+                let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
+                // Apply reasoning summary if set
+                if let Some(summary) = openai_opts.reasoning_summary
+                    && let Some(summary_str) = convert_reasoning_summary_to_string(summary)
+                {
+                    reasoning_config = reasoning_config.with_summary(summary_str);
                 }
-                if let Some(effort) = &openai_opts.reasoning_effort {
-                    let mut reasoning_config = convert_reasoning_effort_to_oai(effort);
-                    // Apply reasoning summary if set
-                    if let Some(summary) = &openai_opts.reasoning_summary {
-                        if let Some(summary_str) = convert_reasoning_summary_to_string(summary) {
-                            reasoning_config = reasoning_config.with_summary(summary_str);
-                        }
-                    }
-                    params = params.reasoning(reasoning_config);
-                }
-                // Include encrypted content if requested
-                if openai_opts.include_encrypted_content == Some(true) {
-                    params =
-                        params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
-                }
-                // Apply catchall extra params
-                if !openai_opts.extra.is_empty() {
-                    params.extra.extend(
-                        openai_opts
-                            .extra
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone())),
-                    );
-                }
+                params = params.reasoning(reasoning_config);
+            }
+            // Include encrypted content if requested
+            if openai_opts.include_encrypted_content == Some(true) {
+                params = params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
+            }
+            // Apply catchall extra params
+            if !openai_opts.extra.is_empty() {
+                params.extra.extend(
+                    openai_opts
+                        .extra
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
             }
         }
 
@@ -554,7 +552,7 @@ fn convert_tool_choice_to_oai(choice: &crate::tools::ToolChoice) -> oai::ToolCho
 }
 
 fn convert_reasoning_effort_to_oai(
-    effort: &crate::options::openai::ReasoningEffort,
+    effort: crate::options::openai::ReasoningEffort,
 ) -> oai::ReasoningConfig {
     let oai_effort = match effort {
         crate::options::openai::ReasoningEffort::Low => oai::ReasoningEffort::Low,
@@ -565,7 +563,7 @@ fn convert_reasoning_effort_to_oai(
 }
 
 fn convert_reasoning_summary_to_string(
-    summary: &crate::options::openai::ReasoningSummary,
+    summary: crate::options::openai::ReasoningSummary,
 ) -> Option<String> {
     use crate::options::openai::ReasoningSummary;
     match summary {
@@ -591,7 +589,7 @@ fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, Hyp
                             content.push(ContentBlock::text(text));
                         }
                         oai::OutputContentBlock::Refusal { refusal, .. } => {
-                            content.push(ContentBlock::text(format!("[Refusal: {}]", refusal)));
+                            content.push(ContentBlock::text(format!("[Refusal: {refusal}]")));
                         }
                     }
                 }

@@ -12,7 +12,7 @@ use cocode_protocol::TokenUsage;
 use cocode_protocol::UserQueuedCommand;
 
 /// State synchronized with the agent session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SessionState {
     /// Messages in the conversation.
     pub messages: Vec<ChatMessage>,
@@ -72,32 +72,6 @@ pub struct SessionState {
 
     /// Estimated cost in cents.
     pub estimated_cost_cents: i32,
-}
-
-impl Default for SessionState {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            current_selection: None,
-            plan_mode: false,
-            plan_phase: None,
-            plan_file: None,
-            tool_executions: Vec::new(),
-            subagents: Vec::new(),
-            token_usage: TokenUsage::default(),
-            session_id: None,
-            thinking_tokens_used: 0,
-            mcp_servers: Vec::new(),
-            fallback_model: None,
-            is_compacting: false,
-            queued_commands: Vec::new(),
-            working_dir: None,
-            turn_count: 0,
-            context_window_used: 0,
-            context_window_total: 0,
-            estimated_cost_cents: 0,
-        }
-    }
 }
 
 impl SessionState {

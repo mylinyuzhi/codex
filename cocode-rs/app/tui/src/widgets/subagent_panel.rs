@@ -126,42 +126,40 @@ impl Widget for SubagentPanel<'_> {
             y += 1;
 
             // Render progress on next line if available
-            if let Some(ref progress) = subagent.progress {
-                if y < inner.y + inner.height {
-                    let progress_str = if let (Some(current), Some(total)) =
-                        (progress.current_step, progress.total_steps)
-                    {
-                        format!(
-                            "  {}",
-                            t!("subagent.step_progress", current = current, total = total)
-                        )
-                    } else if let Some(ref msg) = progress.message {
-                        format!("  {}", msg)
-                    } else {
-                        String::new()
-                    };
+            if let Some(ref progress) = subagent.progress
+                && y < inner.y + inner.height
+            {
+                let progress_str = if let (Some(current), Some(total)) =
+                    (progress.current_step, progress.total_steps)
+                {
+                    format!(
+                        "  {}",
+                        t!("subagent.step_progress", current = current, total = total)
+                    )
+                } else if let Some(ref msg) = progress.message {
+                    format!("  {msg}")
+                } else {
+                    String::new()
+                };
 
-                    if !progress_str.is_empty() {
-                        let available = inner.width as usize;
-                        let text = if progress_str.len() > available {
-                            format!("{}...", &progress_str[..available.saturating_sub(3)])
-                        } else {
-                            progress_str
-                        };
-                        buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
-                        y += 1;
-                    }
+                if !progress_str.is_empty() {
+                    let available = inner.width as usize;
+                    let text = if progress_str.len() > available {
+                        format!("{}...", &progress_str[..available.saturating_sub(3)])
+                    } else {
+                        progress_str
+                    };
+                    buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
+                    y += 1;
                 }
             }
         }
 
         // Show count if more items exist
-        if self.subagents.len() > self.max_display as usize {
-            if y < inner.y + inner.height {
-                let remaining = self.subagents.len() - self.max_display as usize;
-                let text = format!("  {}", t!("subagent.more", count = remaining));
-                buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
-            }
+        if self.subagents.len() > self.max_display as usize && y < inner.y + inner.height {
+            let remaining = self.subagents.len() - self.max_display as usize;
+            let text = format!("  {}", t!("subagent.more", count = remaining));
+            buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
         }
     }
 }

@@ -182,10 +182,10 @@ pub fn load_custom_output_styles(dir: &Path) -> Vec<CustomOutputStyle> {
         let path = entry.path();
 
         // Only process .md files
-        if path.extension().is_some_and(|ext| ext == "md") {
-            if let Some(style) = load_single_style(&path) {
-                styles.push(style);
-            }
+        if path.extension().is_some_and(|ext| ext == "md")
+            && let Some(style) = load_single_style(&path)
+        {
+            styles.push(style);
         }
     }
 

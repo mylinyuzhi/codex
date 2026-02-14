@@ -751,6 +751,7 @@ impl ToolContext {
     ///
     /// Called when the user selects "Allow always" — writes the pattern
     /// into `permissions.allow` so it's remembered across sessions.
+    #[allow(clippy::expect_used)]
     pub async fn persist_permission_rule(&self, tool_name: &str, pattern: &str) {
         use cocode_config::default_config_dir;
 

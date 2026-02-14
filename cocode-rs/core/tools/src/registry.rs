@@ -197,10 +197,10 @@ impl ToolRegistry {
 
         // Built-in tools — skip those gated on a disabled feature
         for tool in self.tools.values() {
-            if let Some(feature) = tool.feature_gate() {
-                if !features.enabled(feature) {
-                    continue;
-                }
+            if let Some(feature) = tool.feature_gate()
+                && !features.enabled(feature)
+            {
+                continue;
             }
             definitions.push(tool.to_definition());
         }
@@ -251,14 +251,14 @@ impl ToolRegistry {
             .filter_map(|name| {
                 if let Some(tool) = self.get(name) {
                     Some(tool.to_definition())
-                } else if let Some(mcp) = self.get_mcp(name) {
-                    Some(ToolDefinition::full(
-                        mcp.qualified_name(),
-                        mcp.description.clone().unwrap_or_default(),
-                        mcp.input_schema.clone(),
-                    ))
                 } else {
-                    None
+                    self.get_mcp(name).map(|mcp| {
+                        ToolDefinition::full(
+                            mcp.qualified_name(),
+                            mcp.description.clone().unwrap_or_default(),
+                            mcp.input_schema.clone(),
+                        )
+                    })
                 }
             })
             .collect()
@@ -312,7 +312,7 @@ impl ToolRegistry {
             .values()
             .map(|t| {
                 let name_len = t.qualified_name().len();
-                let desc_len = t.description.as_deref().map(|d| d.len()).unwrap_or(0);
+                let desc_len = t.description.as_deref().map(str::len).unwrap_or(0);
                 let schema_len = serde_json::to_string(&t.input_schema)
                     .map(|s| s.len())
                     .unwrap_or(0);

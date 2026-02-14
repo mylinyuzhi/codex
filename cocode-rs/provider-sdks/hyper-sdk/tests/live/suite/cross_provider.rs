@@ -26,7 +26,7 @@ pub async fn run(source_model: &Arc<dyn Model>, target_model: &Arc<dyn Model>) -
     let source_response = source_model.generate(source_request).await?;
 
     // Convert response to assistant message with source tracking
-    let mut assistant_msg = Message::assistant(&source_response.text());
+    let mut assistant_msg = Message::assistant(source_response.text());
     assistant_msg.metadata.source_provider = Some(source_model.provider().to_string());
     assistant_msg.metadata.source_model = Some(source_model.model_name().to_string());
 
@@ -57,8 +57,7 @@ pub async fn run(source_model: &Arc<dyn Model>, target_model: &Arc<dyn Model>) -
     // We just verify it contains "8" somewhere
     assert!(
         response_text.contains('8'),
-        "Response should contain '8', got: {}",
-        response_text
+        "Response should contain '8', got: {response_text}"
     );
 
     Ok(())
@@ -156,8 +155,7 @@ pub async fn run_streaming(
         || text.contains("museum");
     assert!(
         mentions_landmark || text.len() > 20,
-        "Response should mention a Paris landmark or be substantive: {}",
-        text
+        "Response should mention a Paris landmark or be substantive: {text}"
     );
 
     Ok(())

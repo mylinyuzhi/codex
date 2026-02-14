@@ -379,7 +379,7 @@ async fn test_multiple_safe_tools_concurrent() {
 
     // Submit multiple safe tools — all should start concurrently
     for i in 0..5 {
-        let call = ToolCall::new(&format!("call-{i}"), "safe_tool", serde_json::json!({}));
+        let call = ToolCall::new(format!("call-{i}"), "safe_tool", serde_json::json!({}));
         executor.on_tool_complete(call).await;
     }
 

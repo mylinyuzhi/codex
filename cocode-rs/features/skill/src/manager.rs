@@ -262,7 +262,7 @@ impl SkillManager {
     pub fn all_commands(&self) -> Vec<SlashCommand> {
         let mut commands: Vec<SlashCommand> = builtin_local_commands()
             .iter()
-            .map(|cmd| cmd.to_slash_command())
+            .map(super::local::LocalCommandDef::to_slash_command)
             .collect();
 
         for skill in self.user_visible_skills() {
@@ -286,14 +286,14 @@ impl SkillManager {
         }
 
         // Then check prompt skills
-        if let Some(skill) = self.find_by_name_or_alias(name) {
-            if skill.is_user_invocable() {
-                return Some(SlashCommand {
-                    name: skill.name.clone(),
-                    description: skill.description.clone(),
-                    command_type: skill.command_type,
-                });
-            }
+        if let Some(skill) = self.find_by_name_or_alias(name)
+            && skill.is_user_invocable()
+        {
+            return Some(SlashCommand {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                command_type: skill.command_type,
+            });
         }
 
         None

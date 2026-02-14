@@ -381,10 +381,10 @@ impl IndexRepairer {
     pub async fn repair_all(&self, status: &HealthStatus) -> Vec<RepairResult> {
         let mut results = Vec::new();
         for issue in &status.issues {
-            if issue.repairable {
-                if let Ok(result) = self.repair(issue).await {
-                    results.push(result);
-                }
+            if issue.repairable
+                && let Ok(result) = self.repair(issue).await
+            {
+                results.push(result);
             }
         }
         results
@@ -475,8 +475,8 @@ impl MetricsCollector {
         let mut metrics = IndexMetrics::default();
 
         // Get file and chunk counts from SQLite
-        if let Some(ref store) = self.sqlite_store {
-            if let Ok((files, chunks, failed, last_indexed)) = store
+        if let Some(ref store) = self.sqlite_store
+            && let Ok((files, chunks, failed, last_indexed)) = store
                 .query(|conn| {
                     let files: i32 =
                         conn.query_row("SELECT COUNT(*) FROM catalog", [], |row| row.get(0))?;
@@ -498,15 +498,14 @@ impl MetricsCollector {
                     Ok((files, chunks, failed, last_indexed))
                 })
                 .await
-            {
-                metrics.total_files = files;
-                metrics.total_chunks = chunks;
-                metrics.failed_chunks = failed;
-                metrics.last_indexed_at = last_indexed;
+        {
+            metrics.total_files = files;
+            metrics.total_chunks = chunks;
+            metrics.failed_chunks = failed;
+            metrics.last_indexed_at = last_indexed;
 
-                if files > 0 {
-                    metrics.avg_chunks_per_file = chunks as f32 / files as f32;
-                }
+            if files > 0 {
+                metrics.avg_chunks_per_file = chunks as f32 / files as f32;
             }
         }
 

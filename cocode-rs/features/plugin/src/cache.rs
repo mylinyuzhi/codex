@@ -111,22 +111,22 @@ pub fn resolve_version(
     marketplace_version: Option<&str>,
     install_path: Option<&Path>,
 ) -> String {
-    if let Some(v) = manifest_version {
-        if !v.is_empty() {
-            return v.to_string();
-        }
+    if let Some(v) = manifest_version
+        && !v.is_empty()
+    {
+        return v.to_string();
     }
-    if let Some(v) = marketplace_version {
-        if !v.is_empty() {
-            return v.to_string();
-        }
+    if let Some(v) = marketplace_version
+        && !v.is_empty()
+    {
+        return v.to_string();
     }
     if let Some(path) = install_path {
         // Try to read a version from the directory name
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.chars().next().map(|c| c.is_ascii_digit()) == Some(true) {
-                return name.to_string();
-            }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.chars().next().map(|c| c.is_ascii_digit()) == Some(true)
+        {
+            return name.to_string();
         }
     }
     "0.0.0".to_string()

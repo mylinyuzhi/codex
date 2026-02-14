@@ -157,11 +157,12 @@ impl Tool for McpToolWrapper {
         );
 
         // Prepare arguments - if input is an empty object, pass None
-        let arguments = if input.is_object() && input.as_object().map_or(true, |o| o.is_empty()) {
-            None
-        } else {
-            Some(input)
-        };
+        let arguments =
+            if input.is_object() && input.as_object().is_none_or(serde_json::Map::is_empty) {
+                None
+            } else {
+                Some(input)
+            };
 
         // Call the MCP tool - no locking needed since RmcpClient has internal synchronization
         let result = self

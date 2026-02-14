@@ -95,7 +95,8 @@ pub fn render_memory_files(ctx: &ConversationContext) -> String {
 /// Only includes policy lines for tools that are actually registered,
 /// avoiding wasted tokens for disabled tools.
 pub fn generate_tool_policy_lines(tool_names: &[String]) -> String {
-    let tools: std::collections::HashSet<&str> = tool_names.iter().map(|s| s.as_str()).collect();
+    let tools: std::collections::HashSet<&str> =
+        tool_names.iter().map(std::string::String::as_str).collect();
     let rules: Vec<&str> = [
         ("Read", "Use Read for reading files (not cat/head/tail)"),
         ("Edit", "Use Edit for modifying files (not sed/awk)"),

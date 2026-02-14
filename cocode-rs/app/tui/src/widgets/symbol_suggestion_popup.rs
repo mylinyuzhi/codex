@@ -48,7 +48,7 @@ impl<'a> SymbolSuggestionPopup<'a> {
         let height = (visible_count as u16 + 3).min(terminal_height / 3);
 
         // Width: Use most of the input area width (symbols need more room for file paths)
-        let width = input_area.width.min(70).max(30);
+        let width = input_area.width.clamp(30, 70);
 
         // Position: above input area
         let x = input_area.x;

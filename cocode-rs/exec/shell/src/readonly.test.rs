@@ -259,11 +259,8 @@ fn test_get_command_risks() {
 
     let risks = get_command_risks("ls -la");
     // Simple ls should have no or minimal risks
-    let high_risks: Vec<_> = risks
-        .iter()
-        .filter(|r| r.level >= RiskLevel::High)
-        .collect();
-    assert!(high_risks.is_empty(), "ls should have no high risks");
+    let has_high_risks = risks.iter().any(|r| r.level >= RiskLevel::High);
+    assert!(!has_high_risks, "ls should have no high risks");
 }
 
 #[test]

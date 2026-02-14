@@ -104,6 +104,7 @@ impl Redirect {
 }
 
 /// Tree-sitter query for extracting redirections.
+#[allow(clippy::expect_used)]
 static REDIRECT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_bash::LANGUAGE.into();
     Query::new(

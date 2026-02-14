@@ -72,6 +72,7 @@ impl Client {
     }
 
     /// Build the default headers for API requests.
+    #[allow(clippy::expect_used)]
     fn default_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -82,17 +83,17 @@ impl Client {
         );
 
         // Add optional organization header
-        if let Some(org) = &self.config.organization {
-            if let Ok(value) = HeaderValue::from_str(org) {
-                headers.insert("OpenAI-Organization", value);
-            }
+        if let Some(org) = &self.config.organization
+            && let Ok(value) = HeaderValue::from_str(org)
+        {
+            headers.insert("OpenAI-Organization", value);
         }
 
         // Add optional project header
-        if let Some(project) = &self.config.project {
-            if let Ok(value) = HeaderValue::from_str(project) {
-                headers.insert("OpenAI-Project", value);
-            }
+        if let Some(project) = &self.config.project
+            && let Ok(value) = HeaderValue::from_str(project)
+        {
+            headers.insert("OpenAI-Project", value);
         }
 
         headers
@@ -139,6 +140,7 @@ impl Client {
     }
 
     /// Send a POST request to the API.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -203,6 +205,7 @@ impl Client {
     }
 
     /// Send a GET request that returns Response with sdk_http_response populated.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn get_response(&self, path: &str) -> Result<Response> {
         let base_url = format!("{}{}", self.config.base_url, path);
         let (url, headers, _) =
@@ -281,6 +284,7 @@ impl Client {
     ///
     /// This is a specialized version of `post()` that captures the raw HTTP response
     /// body and stores it in `Response.sdk_http_response` for round-trip preservation.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post_response(
         &self,
         path: &str,

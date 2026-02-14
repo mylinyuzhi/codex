@@ -50,7 +50,7 @@ pub fn load_agents_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribu
         .max_depth(3)
         .follow_links(false)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
     {
         if entry.file_type().is_dir() {
             let agent_path = entry.path().join(AGENT_TOML);

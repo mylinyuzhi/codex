@@ -141,10 +141,10 @@ fn test_load_skills_fail_open() {
     let outcomes = load_skills_from_dir(root);
     assert_eq!(outcomes.len(), 2);
 
-    let successes: Vec<_> = outcomes.iter().filter(|o| o.is_success()).collect();
-    let failures: Vec<_> = outcomes.iter().filter(|o| !o.is_success()).collect();
-    assert_eq!(successes.len(), 1);
-    assert_eq!(failures.len(), 1);
+    let successes = outcomes.iter().filter(|o| o.is_success()).count();
+    let failures = outcomes.iter().filter(|o| !o.is_success()).count();
+    assert_eq!(successes, 1);
+    assert_eq!(failures, 1);
 }
 
 #[test]
@@ -171,7 +171,11 @@ fn test_load_all_skills_multiple_roots() {
     let roots = vec![tmp1.path().to_path_buf(), tmp2.path().to_path_buf()];
     let outcomes = load_all_skills(&roots);
     assert_eq!(outcomes.len(), 2);
-    assert!(outcomes.iter().all(|o| o.is_success()));
+    assert!(
+        outcomes
+            .iter()
+            .all(super::super::outcome::SkillLoadOutcome::is_success)
+    );
 }
 
 #[test]

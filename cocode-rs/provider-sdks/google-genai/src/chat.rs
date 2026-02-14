@@ -467,7 +467,7 @@ impl Chat {
 
                     // Accumulate all parts from response
                     if let Some(parts) = response.parts() {
-                        accumulated_parts.extend(parts.into_iter().cloned());
+                        accumulated_parts.extend(parts.iter().cloned());
                     }
 
                     // Call user's callback

@@ -384,7 +384,7 @@ impl AppConfig {
     pub fn resolve_features(&self) -> Features {
         self.features
             .clone()
-            .map(|f| f.into_features())
+            .map(FeaturesConfig::into_features)
             .unwrap_or_else(Features::with_defaults)
     }
 

@@ -459,7 +459,7 @@ impl InputState {
         let mut pos = (self.cursor - 1) as usize;
 
         // Skip any whitespace before cursor
-        while pos > 0 && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos > 0 && text.chars().nth(pos).is_some_and(char::is_whitespace) {
             pos -= 1;
         }
 
@@ -492,7 +492,7 @@ impl InputState {
         }
 
         // Skip whitespace
-        while pos < len && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos < len && text.chars().nth(pos).is_some_and(char::is_whitespace) {
             pos += 1;
         }
 
@@ -510,7 +510,7 @@ impl InputState {
         let mut pos = original_cursor;
 
         // Skip whitespace before cursor
-        while pos > 0 && text.chars().nth(pos - 1).is_some_and(|c| c.is_whitespace()) {
+        while pos > 0 && text.chars().nth(pos - 1).is_some_and(char::is_whitespace) {
             pos -= 1;
         }
 
@@ -547,7 +547,7 @@ impl InputState {
         }
 
         // Skip whitespace after word
-        while pos < len && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos < len && text.chars().nth(pos).is_some_and(char::is_whitespace) {
             pos += 1;
         }
 
@@ -655,7 +655,7 @@ impl InputState {
                     || before_cursor[..i]
                         .chars()
                         .last()
-                        .is_some_and(|c| c.is_whitespace());
+                        .is_some_and(char::is_whitespace);
                 if !is_valid_start {
                     return None;
                 }
@@ -679,7 +679,7 @@ impl InputState {
                 }
 
                 // Normal (unquoted) mode — no whitespace allowed between @ and cursor
-                if after_at.contains(|c: char| c == ' ' || c == '\n' || c == '\t') {
+                if after_at.contains([' ', '\n', '\t']) {
                     return None;
                 }
                 return Some((i as i32, after_at.to_string()));
@@ -694,7 +694,7 @@ impl InputState {
                         || prefix[..at_quote_pos]
                             .chars()
                             .last()
-                            .is_some_and(|ch| ch.is_whitespace());
+                            .is_some_and(char::is_whitespace);
                     let after_open = &prefix[at_quote_pos + 2..];
                     if valid_start && !after_open.contains('"') {
                         continue;
@@ -741,7 +741,7 @@ impl InputState {
                     slash_pos = Some(i);
                 } else {
                     let prev_char = before_cursor[..i].chars().last();
-                    if prev_char.is_some_and(|c| c.is_whitespace()) {
+                    if prev_char.is_some_and(char::is_whitespace) {
                         slash_pos = Some(i);
                     }
                 }

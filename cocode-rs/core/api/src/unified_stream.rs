@@ -199,10 +199,10 @@ impl UnifiedStream {
             match processor.next().await {
                 Some(Ok((update, snapshot))) => {
                     // Send update to UI if configured
-                    if let Some(tx) = event_tx {
-                        if let Err(e) = tx.send(update.clone()).await {
-                            tracing::debug!("Failed to send stream event to UI: {e}");
-                        }
+                    if let Some(tx) = event_tx
+                        && let Err(e) = tx.send(update.clone()).await
+                    {
+                        tracing::debug!("Failed to send stream event to UI: {e}");
                     }
 
                     // Check for completed content
@@ -320,8 +320,8 @@ impl UnifiedStream {
                     if result.usage.is_some() {
                         usage = result.usage;
                     }
-                    if result.finish_reason.is_some() {
-                        finish_reason = result.finish_reason.unwrap();
+                    if let Some(reason) = result.finish_reason {
+                        finish_reason = reason;
                     }
                 }
                 QueryResultType::Done => {

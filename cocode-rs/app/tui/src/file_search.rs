@@ -64,6 +64,7 @@ struct PendingSearch {
 }
 
 /// Cached file index with TTL.
+#[derive(Default)]
 struct FileIndexCache {
     /// List of files (relative paths).
     files: Vec<String>,
@@ -73,17 +74,6 @@ struct FileIndexCache {
     last_refresh: Option<Instant>,
     /// Whether a refresh is in progress.
     refreshing: bool,
-}
-
-impl Default for FileIndexCache {
-    fn default() -> Self {
-        Self {
-            files: Vec::new(),
-            directories: Vec::new(),
-            last_refresh: None,
-            refreshing: false,
-        }
-    }
 }
 
 impl FileIndexCache {
@@ -227,6 +217,7 @@ async fn search_directories(
 }
 
 /// Fuzzy search files using nucleo matcher.
+#[allow(clippy::expect_used)]
 async fn search_files_fuzzy(
     _file_index: &Arc<RwLock<FileIndexCache>>,
     cwd: &PathBuf,

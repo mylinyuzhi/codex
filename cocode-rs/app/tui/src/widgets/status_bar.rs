@@ -417,7 +417,7 @@ impl Widget for StatusBar<'_> {
         }
 
         // Calculate used width
-        let used_width: usize = spans.iter().map(|s| s.width()).sum();
+        let used_width: usize = spans.iter().map(ratatui::prelude::Span::width).sum();
 
         // Add hints if there's room
         let hints = self.format_hints();

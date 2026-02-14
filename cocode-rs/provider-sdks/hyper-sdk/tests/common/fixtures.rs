@@ -53,12 +53,11 @@ pub fn image_request(content: &str, image_data_url: &str) -> GenerateRequest {
 /// Parse a data URL into media type and base64 data.
 fn parse_data_url(data_url: &str) -> (String, String) {
     // Format: data:<media_type>;base64,<data>
-    if let Some(rest) = data_url.strip_prefix("data:") {
-        if let Some((meta, data)) = rest.split_once(",") {
-            if let Some((media_type, _)) = meta.split_once(";") {
-                return (media_type.to_string(), data.to_string());
-            }
-        }
+    if let Some(rest) = data_url.strip_prefix("data:")
+        && let Some((meta, data)) = rest.split_once(",")
+        && let Some((media_type, _)) = meta.split_once(";")
+    {
+        return (media_type.to_string(), data.to_string());
     }
     ("image/png".to_string(), data_url.to_string())
 }
@@ -225,6 +224,7 @@ pub fn assistant_tool_call(name: &str, arguments: Value, call_id: &str) -> Messa
 }
 
 /// Create tool result message.
+#[allow(clippy::unwrap_used)]
 pub fn tool_result_message(call_id: &str, output: Value) -> Message {
     Message::tool_result(
         call_id,

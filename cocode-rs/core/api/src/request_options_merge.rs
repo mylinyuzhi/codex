@@ -96,13 +96,12 @@ fn merge_anthropic(
         match key.as_str() {
             "cache_control" => {
                 // Only map "ephemeral" value
-                if opts.cache_control.is_none() {
-                    if let Some(s) = value.as_str() {
-                        if s == "ephemeral" {
-                            opts.cache_control =
-                                Some(hyper_sdk::options::anthropic::CacheControl::Ephemeral);
-                        }
-                    }
+                if opts.cache_control.is_none()
+                    && let Some(s) = value.as_str()
+                    && s == "ephemeral"
+                {
+                    opts.cache_control =
+                        Some(hyper_sdk::options::anthropic::CacheControl::Ephemeral);
                 }
             }
             _ => {

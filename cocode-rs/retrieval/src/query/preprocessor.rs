@@ -350,11 +350,9 @@ fn tokenize_code_identifier(text: &str) -> Vec<String> {
         }
 
         // Start new word on uppercase after lowercase
-        if c.is_uppercase() && i > 0 && chars[i - 1].is_lowercase() {
-            if !current.is_empty() {
-                tokens.push(current.clone());
-                current.clear();
-            }
+        if c.is_uppercase() && i > 0 && chars[i - 1].is_lowercase() && !current.is_empty() {
+            tokens.push(current.clone());
+            current.clear();
         }
 
         current.push(c);

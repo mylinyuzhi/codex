@@ -284,7 +284,7 @@ pub async fn write_with_format_async(
 
 // Internal: Decode UTF-16LE bytes to String
 fn decode_utf16le(bytes: &[u8]) -> Result<String, EncodingError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(EncodingError::InvalidUtf16(
             "UTF-16LE requires even number of bytes".to_string(),
         ));
@@ -299,7 +299,7 @@ fn decode_utf16le(bytes: &[u8]) -> Result<String, EncodingError> {
 
 // Internal: Decode UTF-16BE bytes to String
 fn decode_utf16be(bytes: &[u8]) -> Result<String, EncodingError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(EncodingError::InvalidUtf16(
             "UTF-16BE requires even number of bytes".to_string(),
         ));
@@ -314,18 +314,12 @@ fn decode_utf16be(bytes: &[u8]) -> Result<String, EncodingError> {
 
 // Internal: Encode String to UTF-16LE bytes
 fn encode_utf16le(content: &str) -> Vec<u8> {
-    content
-        .encode_utf16()
-        .flat_map(|code_unit| code_unit.to_le_bytes())
-        .collect()
+    content.encode_utf16().flat_map(u16::to_le_bytes).collect()
 }
 
 // Internal: Encode String to UTF-16BE bytes
 fn encode_utf16be(content: &str) -> Vec<u8> {
-    content
-        .encode_utf16()
-        .flat_map(|code_unit| code_unit.to_be_bytes())
-        .collect()
+    content.encode_utf16().flat_map(u16::to_be_bytes).collect()
 }
 
 #[cfg(test)]

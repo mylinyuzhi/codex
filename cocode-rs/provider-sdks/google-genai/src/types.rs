@@ -1657,7 +1657,7 @@ impl Candidate {
             .as_ref()
             .and_then(|c| c.parts.as_ref())
             .map(|parts| {
-                let summaries: Vec<String> = parts.iter().map(|p| Self::part_summary(p)).collect();
+                let summaries: Vec<String> = parts.iter().map(Self::part_summary).collect();
                 summaries.join(", ")
             })
             .unwrap_or_else(|| "no parts".to_string());
@@ -1997,8 +1997,8 @@ impl RequestExtensions {
 
     /// Check if empty.
     pub fn is_empty(&self) -> bool {
-        self.headers.as_ref().map_or(true, |h| h.is_empty())
-            && self.params.as_ref().map_or(true, |p| p.is_empty())
+        self.headers.as_ref().is_none_or(|h| h.is_empty())
+            && self.params.as_ref().is_none_or(|p| p.is_empty())
             && self.body.is_none()
     }
 }

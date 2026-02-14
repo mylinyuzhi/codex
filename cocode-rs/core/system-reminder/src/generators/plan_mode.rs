@@ -58,9 +58,9 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
             !ctx.should_use_full_content(self.attachment_type()) || ctx.is_plan_reentry;
 
         let content = if use_sparse {
-            format!("{}{}", PLAN_MODE_SPARSE_INSTRUCTIONS, plan_path_info)
+            format!("{PLAN_MODE_SPARSE_INSTRUCTIONS}{plan_path_info}")
         } else {
-            format!("{}{}", PLAN_MODE_FULL_INSTRUCTIONS, plan_path_info)
+            format!("{PLAN_MODE_FULL_INSTRUCTIONS}{plan_path_info}")
         };
 
         Ok(Some(SystemReminder::new(

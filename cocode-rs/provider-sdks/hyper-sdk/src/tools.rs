@@ -72,8 +72,10 @@ impl ToolDefinition {
 /// How the model should choose which tool to call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ToolChoice {
     /// Model decides whether to call tools.
+    #[default]
     Auto,
     /// Model must call a tool.
     Required,
@@ -84,12 +86,6 @@ pub enum ToolChoice {
         /// Name of the tool to call.
         name: String,
     },
-}
-
-impl Default for ToolChoice {
-    fn default() -> Self {
-        ToolChoice::Auto
-    }
 }
 
 /// A tool call made by the model.

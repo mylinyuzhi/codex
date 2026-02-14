@@ -170,7 +170,7 @@ impl PageRanker {
                 ranked_symbols.push(RankedSymbol {
                     tag: CodeTag {
                         name: symbol_name.clone(),
-                        kind: tag.kind.clone(),
+                        kind: tag.kind,
                         start_line: tag.start_line,
                         end_line: tag.end_line,
                         start_byte: tag.start_byte,

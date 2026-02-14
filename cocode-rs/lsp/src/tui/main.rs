@@ -69,21 +69,21 @@ async fn run_event_loop(
     let tx_input = tx.clone();
     tokio::spawn(async move {
         loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
-                if let Ok(event) = crossterm::event::read() {
-                    match event {
-                        crossterm::event::Event::Key(key) => {
-                            if tx_input.send(Event::Key(key)).await.is_err() {
-                                break;
-                            }
+            if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false)
+                && let Ok(event) = crossterm::event::read()
+            {
+                match event {
+                    crossterm::event::Event::Key(key) => {
+                        if tx_input.send(Event::Key(key)).await.is_err() {
+                            break;
                         }
-                        crossterm::event::Event::Resize(w, h) => {
-                            if tx_input.send(Event::Resize(w, h)).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => {}
                     }
+                    crossterm::event::Event::Resize(w, h) => {
+                        if tx_input.send(Event::Resize(w, h)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

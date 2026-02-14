@@ -70,20 +70,18 @@ impl FileWatcher {
         let debounce_duration = Duration::from_millis(debounce_ms);
 
         let mut debouncer = new_debouncer(debounce_duration, tx).map_err(|e| {
-            RetrievalErr::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create file watcher: {e}"),
-            ))
+            RetrievalErr::Io(std::io::Error::other(format!(
+                "Failed to create file watcher: {e}"
+            )))
         })?;
 
         debouncer
             .watcher()
             .watch(root, RecursiveMode::Recursive)
             .map_err(|e| {
-                RetrievalErr::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to watch directory: {e}"),
-                ))
+                RetrievalErr::Io(std::io::Error::other(format!(
+                    "Failed to watch directory: {e}"
+                )))
             })?;
 
         // Use same ignore config as walker for consistency
@@ -248,10 +246,10 @@ impl FileWatcher {
         }
 
         // Skip hidden files and directories (consistent with IgnoreConfig defaults)
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') {
-                return true;
-            }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+        {
+            return true;
         }
 
         // Check against cached exclude patterns from file-ignore

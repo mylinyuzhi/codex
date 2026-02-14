@@ -183,10 +183,10 @@ impl SessionMemoryConfig {
     /// Supported environment variables:
     /// - `COCODE_ENABLE_SM_COMPACT`: Enable/disable session memory compact (true/false)
     pub fn with_env_overrides(mut self) -> Self {
-        if let Ok(val) = std::env::var("COCODE_ENABLE_SM_COMPACT") {
-            if let Ok(enabled) = val.parse::<bool>() {
-                self.enable_sm_compact = enabled;
-            }
+        if let Ok(val) = std::env::var("COCODE_ENABLE_SM_COMPACT")
+            && let Ok(enabled) = val.parse::<bool>()
+        {
+            self.enable_sm_compact = enabled;
         }
         self
     }
@@ -316,45 +316,44 @@ impl TaskStatusRestoration {
     pub fn from_tool_calls(tool_calls: &[(String, serde_json::Value)]) -> Self {
         // Find the most recent TodoWrite call (scan from end)
         for (name, input) in tool_calls.iter().rev() {
-            if name == "TodoWrite" {
-                if let Some(todos) = input.get("todos").and_then(|t| t.as_array()) {
-                    let tasks: Vec<TaskInfo> = todos
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, todo)| {
-                            let id = todo
-                                .get("id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                                .unwrap_or_else(|| format!("{}", i + 1));
+            if name == "TodoWrite"
+                && let Some(todos) = input.get("todos").and_then(|t| t.as_array())
+            {
+                let tasks: Vec<TaskInfo> = todos
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, todo)| {
+                        let id = todo
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                            .unwrap_or_else(|| format!("{}", i + 1));
 
-                            let subject = todo
-                                .get("subject")
-                                .or_else(|| todo.get("content"))
-                                .and_then(|v| v.as_str())
-                                .map(String::from)?;
+                        let subject = todo
+                            .get("subject")
+                            .or_else(|| todo.get("content"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from)?;
 
-                            let status = todo
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                                .unwrap_or_else(|| "pending".to_string());
+                        let status = todo
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                            .unwrap_or_else(|| "pending".to_string());
 
-                            let owner =
-                                todo.get("owner").and_then(|v| v.as_str()).map(String::from);
+                        let owner = todo.get("owner").and_then(|v| v.as_str()).map(String::from);
 
-                            Some(TaskInfo {
-                                id,
-                                subject,
-                                status,
-                                owner,
-                            })
+                        Some(TaskInfo {
+                            id,
+                            subject,
+                            status,
+                            owner,
                         })
-                        .collect();
+                    })
+                    .collect();
 
-                    if !tasks.is_empty() {
-                        return Self { tasks };
-                    }
+                if !tasks.is_empty() {
+                    return Self { tasks };
                 }
             }
         }
@@ -581,20 +580,17 @@ pub fn calculate_keep_start_index(
                 .and_then(|v| {
                     if let Some(s) = v.as_str() {
                         Some(s.len())
-                    } else if let Some(arr) = v.as_array() {
-                        // Sum up content block lengths
-                        Some(
+                    } else {
+                        v.as_array().map(|arr| {
                             arr.iter()
                                 .map(|b| {
                                     b.get("text")
                                         .or_else(|| b.get("content"))
                                         .and_then(|t| t.as_str())
-                                        .map_or(0, |s| s.len())
+                                        .map_or(0, str::len)
                                 })
-                                .sum(),
-                        )
-                    } else {
-                        None
+                                .sum()
+                        })
                     }
                 })
                 .unwrap_or(0);
@@ -651,17 +647,17 @@ pub fn calculate_keep_start_index(
         }
 
         // Track tool_result IDs so we include their matching tool_use
-        if info.is_tool_result {
-            if let Some(ref id) = info.tool_use_id {
-                tool_use_ids_to_include.insert(id.clone());
-            }
+        if info.is_tool_result
+            && let Some(ref id) = info.tool_use_id
+        {
+            tool_use_ids_to_include.insert(id.clone());
         }
 
         // Remove tool_use ID from set when we include the tool_use
-        if info.is_tool_use {
-            if let Some(ref id) = info.tool_use_id {
-                tool_use_ids_to_include.remove(id);
-            }
+        if info.is_tool_use
+            && let Some(ref id) = info.tool_use_id
+        {
+            tool_use_ids_to_include.remove(id);
         }
     }
 
@@ -875,20 +871,17 @@ pub fn execute_micro_compact(
     let mut cleared_memory_uuids: Vec<String> = Vec::new();
     for msg in messages.iter() {
         // Check for memory attachment type messages
-        if let Some(msg_type) = msg.get("type").and_then(|t| t.as_str()) {
-            if msg_type == "attachment" {
-                if let Some(attachment) = msg.get("attachment") {
-                    if let Some(att_type) = attachment.get("type").and_then(|t| t.as_str()) {
-                        if att_type == "memory" {
-                            // Extract UUID and mark for clearing
-                            if let Some(uuid) = msg.get("uuid").and_then(|u| u.as_str()) {
-                                if !cleared_memory_uuids.contains(&uuid.to_string()) {
-                                    cleared_memory_uuids.push(uuid.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
+        if let Some(msg_type) = msg.get("type").and_then(|t| t.as_str())
+            && msg_type == "attachment"
+            && let Some(attachment) = msg.get("attachment")
+            && let Some(att_type) = attachment.get("type").and_then(|t| t.as_str())
+            && att_type == "memory"
+        {
+            // Extract UUID and mark for clearing
+            if let Some(uuid) = msg.get("uuid").and_then(|u| u.as_str())
+                && !cleared_memory_uuids.contains(&uuid.to_string())
+            {
+                cleared_memory_uuids.push(uuid.to_string());
             }
         }
     }
@@ -1046,7 +1039,7 @@ fn collect_tool_result_candidates(messages: &[serde_json::Value]) -> Vec<ToolRes
         let content_len = msg
             .get("content")
             .and_then(|v| v.as_str())
-            .map_or(0, |s| s.len());
+            .map_or(0, str::len);
         let token_count = (content_len / 4) as i32;
 
         // Check if this tool is compactable
@@ -1156,19 +1149,19 @@ pub fn format_restoration_with_tasks(
     }
 
     // Add task status if present
-    if let Some(task_status) = tasks {
-        if !task_status.tasks.is_empty() {
-            let tasks_str = task_status
-                .tasks
-                .iter()
-                .map(|t| {
-                    let owner = t.owner.as_deref().unwrap_or("unassigned");
-                    format!("- [{}] {} ({}): {}", t.status, t.id, owner, t.subject)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            parts.push(format!("<task_status>\n{tasks_str}\n</task_status>"));
-        }
+    if let Some(task_status) = tasks
+        && !task_status.tasks.is_empty()
+    {
+        let tasks_str = task_status
+            .tasks
+            .iter()
+            .map(|t| {
+                let owner = t.owner.as_deref().unwrap_or("unassigned");
+                format!("- [{}] {} ({}): {}", t.status, t.id, owner, t.subject)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("<task_status>\n{tasks_str}\n</task_status>"));
     }
 
     if !restoration.skills.is_empty() {
@@ -1226,7 +1219,7 @@ pub fn micro_compact_candidates(messages: &[serde_json::Value]) -> Vec<i32> {
         let content_len = msg
             .get("content")
             .and_then(|v| v.as_str())
-            .map_or(0, |s| s.len());
+            .map_or(0, str::len);
 
         // 2000 chars is a reasonable threshold for micro-compaction.
         if is_tool_result && content_len > 2000 {
@@ -1296,19 +1289,19 @@ fn parse_session_memory(content: &str) -> Option<SessionMemorySummary> {
     let mut summary_start = 0;
 
     // Check for YAML frontmatter
-    if content.starts_with("---") {
-        if let Some(end) = content[3..].find("---") {
-            let frontmatter = &content[3..3 + end];
-            for line in frontmatter.lines() {
-                if let Some(id) = line.strip_prefix("last_summarized_id:") {
-                    last_id = Some(id.trim().to_string());
-                }
+    if content.starts_with("---")
+        && let Some(end) = content[3..].find("---")
+    {
+        let frontmatter = &content[3..3 + end];
+        for line in frontmatter.lines() {
+            if let Some(id) = line.strip_prefix("last_summarized_id:") {
+                last_id = Some(id.trim().to_string());
             }
-            summary_start = 3 + end + 3;
-            // Skip leading newlines
-            while summary_start < content.len() && content[summary_start..].starts_with('\n') {
-                summary_start += 1;
-            }
+        }
+        summary_start = 3 + end + 3;
+        // Skip leading newlines
+        while summary_start < content.len() && content[summary_start..].starts_with('\n') {
+            summary_start += 1;
         }
     }
 
@@ -1357,8 +1350,7 @@ pub async fn write_session_memory(
         .unwrap_or(0);
 
     let content = format!(
-        "---\nlast_summarized_id: {}\ntimestamp: {}\n---\n{}",
-        last_summarized_id, timestamp, summary
+        "---\nlast_summarized_id: {last_summarized_id}\ntimestamp: {timestamp}\n---\n{summary}"
     );
 
     // Create parent directories if needed
@@ -1573,8 +1565,7 @@ pub fn format_summary_with_transcript(
 
     // Add token info
     parts.push(format!(
-        "The original conversation contained approximately {} tokens.",
-        pre_tokens
+        "The original conversation contained approximately {pre_tokens} tokens."
     ));
 
     // Add transcript path reference if available
@@ -1642,7 +1633,7 @@ pub fn create_compact_boundary_message(metadata: &CompactBoundaryMetadata) -> St
     ));
 
     if let Some(post) = metadata.post_tokens {
-        content.push_str(&format!("\nTokens after: {}", post));
+        content.push_str(&format!("\nTokens after: {post}"));
     }
 
     if let Some(path) = &metadata.transcript_path {
@@ -1699,7 +1690,7 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
         let content_len = msg
             .get("content")
             .and_then(|v| v.as_str())
-            .map_or(0, |s| s.len());
+            .map_or(0, str::len);
         let tokens = (content_len / 4) as i32;
 
         breakdown.total_tokens += tokens;
@@ -1722,24 +1713,18 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
         }
 
         // Check for tool use blocks in assistant messages
-        if role == "assistant" {
-            if let Some(content) = msg.get("content") {
-                if let Some(arr) = content.as_array() {
-                    for block in arr {
-                        if let Some(block_type) = block.get("type").and_then(|t| t.as_str()) {
-                            if block_type == "tool_use" {
-                                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                                    let input_len = block
-                                        .get("input")
-                                        .map(|i| i.to_string().len())
-                                        .unwrap_or(0);
-                                    let input_tokens = (input_len / 4) as i32;
-                                    *tool_request_tokens.entry(name.to_string()).or_insert(0) +=
-                                        input_tokens;
-                                }
-                            }
-                        }
-                    }
+        if role == "assistant"
+            && let Some(content) = msg.get("content")
+            && let Some(arr) = content.as_array()
+        {
+            for block in arr {
+                if let Some(block_type) = block.get("type").and_then(|t| t.as_str())
+                    && block_type == "tool_use"
+                    && let Some(name) = block.get("name").and_then(|n| n.as_str())
+                {
+                    let input_len = block.get("input").map(|i| i.to_string().len()).unwrap_or(0);
+                    let input_tokens = (input_len / 4) as i32;
+                    *tool_request_tokens.entry(name.to_string()).or_insert(0) += input_tokens;
                 }
             }
         }

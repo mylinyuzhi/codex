@@ -270,7 +270,7 @@ impl IndexService {
                             for event in &events {
                                 let watch_event = WatchEvent {
                                     path: event.path.clone(),
-                                    kind: event.kind.clone(),
+                                    kind: event.kind,
                                 };
                                 let _ = tx.send(watch_event).await;
                             }

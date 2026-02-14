@@ -32,7 +32,7 @@ fn test_respects_gitignore() {
 
     let files: Vec<_> = walker
         .build()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -57,7 +57,7 @@ fn test_respects_ignore() {
 
     let files: Vec<_> = walker
         .build()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -80,7 +80,7 @@ fn test_custom_excludes() {
 
     let files: Vec<_> = walker
         .build()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -117,7 +117,7 @@ fn test_include_hidden_files() {
     let walker = service.create_walk_builder(dir);
     let files: Vec<_> = walker
         .build()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -130,7 +130,7 @@ fn test_include_hidden_files() {
     let walker = service.create_walk_builder(dir);
     let files: Vec<_> = walker
         .build()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();

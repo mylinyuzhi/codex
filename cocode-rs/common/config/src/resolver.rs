@@ -181,7 +181,7 @@ impl ConfigResolver {
         self.providers
             .get(provider_name)
             .and_then(|p| p.find_model(slug))
-            .map(|m| m.api_model_name())
+            .map(super::types::ProviderModelEntry::api_model_name)
             .unwrap_or(slug)
     }
 
@@ -320,13 +320,12 @@ impl ConfigResolver {
     /// Resolve API key from env var or config.
     fn resolve_api_key(&self, config: &ProviderConfig) -> Option<String> {
         // Try environment variable first
-        if let Some(env_key) = &config.env_key {
-            if let Ok(key) = env::var(env_key) {
-                if !key.is_empty() {
-                    debug!(env_key = env_key, "Resolved API key from environment");
-                    return Some(key);
-                }
-            }
+        if let Some(env_key) = &config.env_key
+            && let Ok(key) = env::var(env_key)
+            && !key.is_empty()
+        {
+            debug!(env_key = env_key, "Resolved API key from environment");
+            return Some(key);
         }
 
         // Fall back to config

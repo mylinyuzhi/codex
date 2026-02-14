@@ -186,10 +186,10 @@ pub fn find_cache_breakpoints(messages: &[Message], config: &PromptCacheConfig) 
         .iter()
         .enumerate()
         .find(|(_, m)| m.role == hyper_sdk::Role::System)
+        && msg.should_cache(config)
+        && config.cache_system_prompt
     {
-        if msg.should_cache(config) && config.cache_system_prompt {
-            breakpoints.push(idx);
-        }
+        breakpoints.push(idx);
     }
 
     // Consider caching at conversation turn boundaries for long contexts

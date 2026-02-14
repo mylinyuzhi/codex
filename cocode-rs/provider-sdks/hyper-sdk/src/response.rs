@@ -8,8 +8,10 @@ use serde::Serialize;
 /// Reason why generation stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FinishReason {
     /// Natural end of generation.
+    #[default]
     Stop,
     /// Hit max tokens limit.
     MaxTokens,
@@ -21,12 +23,6 @@ pub enum FinishReason {
     InProgress,
     /// Unknown or other reason.
     Other,
-}
-
-impl Default for FinishReason {
-    fn default() -> Self {
-        FinishReason::Stop
-    }
 }
 
 /// Token usage statistics.
@@ -164,12 +160,16 @@ impl GenerateResponse {
 
     /// Check if the response contains tool calls.
     pub fn has_tool_calls(&self) -> bool {
-        self.content.iter().any(|b| b.is_tool_use())
+        self.content
+            .iter()
+            .any(super::messages::ContentBlock::is_tool_use)
     }
 
     /// Check if the response contains thinking.
     pub fn has_thinking(&self) -> bool {
-        self.content.iter().any(|b| b.is_thinking())
+        self.content
+            .iter()
+            .any(super::messages::ContentBlock::is_thinking)
     }
 
     /// Check if generation stopped due to tool calls.

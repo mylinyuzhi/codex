@@ -252,7 +252,7 @@ impl Model for VolcengineModel {
                 .filter(|t| t.custom_format.is_none())
                 .map(convert_tool_to_ark)
                 .collect();
-            params = params.tools(ark_tools.map_err(|e| HyperError::InvalidRequest(e))?);
+            params = params.tools(ark_tools.map_err(HyperError::InvalidRequest)?);
         }
 
         // Convert tool choice
@@ -261,31 +261,31 @@ impl Model for VolcengineModel {
         }
 
         // Handle provider-specific options
-        if let Some(ref options) = request.provider_options {
-            if let Some(volcengine_opts) = downcast_options::<VolcengineOptions>(options) {
-                if let Some(budget) = volcengine_opts.thinking_budget_tokens {
-                    params = params.thinking(ark::ThinkingConfig::enabled(budget));
-                }
-                if let Some(prev_id) = &volcengine_opts.previous_response_id {
-                    params = params.previous_response_id(prev_id);
-                }
-                if let Some(enabled) = volcengine_opts.caching_enabled {
-                    params = params.caching(ark::CachingConfig {
-                        enabled: Some(enabled),
-                    });
-                }
-                if let Some(effort) = &volcengine_opts.reasoning_effort {
-                    params = params.reasoning_effort(convert_reasoning_effort_to_ark(effort));
-                }
-                // Apply catchall extra params
-                if !volcengine_opts.extra.is_empty() {
-                    params.extra.extend(
-                        volcengine_opts
-                            .extra
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone())),
-                    );
-                }
+        if let Some(ref options) = request.provider_options
+            && let Some(volcengine_opts) = downcast_options::<VolcengineOptions>(options)
+        {
+            if let Some(budget) = volcengine_opts.thinking_budget_tokens {
+                params = params.thinking(ark::ThinkingConfig::enabled(budget));
+            }
+            if let Some(prev_id) = &volcengine_opts.previous_response_id {
+                params = params.previous_response_id(prev_id);
+            }
+            if let Some(enabled) = volcengine_opts.caching_enabled {
+                params = params.caching(ark::CachingConfig {
+                    enabled: Some(enabled),
+                });
+            }
+            if let Some(effort) = volcengine_opts.reasoning_effort {
+                params = params.reasoning_effort(convert_reasoning_effort_to_ark(effort));
+            }
+            // Apply catchall extra params
+            if !volcengine_opts.extra.is_empty() {
+                params.extra.extend(
+                    volcengine_opts
+                        .extra
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
             }
         }
 
@@ -353,7 +353,7 @@ fn convert_tool_choice_to_ark(choice: &crate::tools::ToolChoice) -> ark::ToolCho
 }
 
 fn convert_reasoning_effort_to_ark(
-    effort: &crate::options::volcengine::ReasoningEffort,
+    effort: crate::options::volcengine::ReasoningEffort,
 ) -> ark::ReasoningEffort {
     match effort {
         crate::options::volcengine::ReasoningEffort::Minimal => ark::ReasoningEffort::Minimal,

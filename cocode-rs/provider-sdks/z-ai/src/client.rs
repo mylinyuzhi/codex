@@ -84,10 +84,10 @@ impl BaseClient {
             headers.insert("x-source-channel", HeaderValue::from_static("rust-sdk"));
         }
 
-        if let Some(lang) = accept_language {
-            if let Ok(val) = HeaderValue::from_str(lang) {
-                headers.insert("Accept-Language", val);
-            }
+        if let Some(lang) = accept_language
+            && let Ok(val) = HeaderValue::from_str(lang)
+        {
+            headers.insert("Accept-Language", val);
         }
 
         headers
@@ -133,6 +133,7 @@ impl BaseClient {
         }
     }
 
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -201,6 +202,7 @@ impl BaseClient {
     }
 
     /// Send a POST request and capture HTTP metadata for Completion responses.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post_completion(
         &self,
         path: &str,

@@ -68,11 +68,11 @@ pub fn paste_image(mut cb: arboard::Clipboard) -> Result<(Vec<u8>, String), Clip
     if let Ok(files) = cb.get().file_list() {
         for file in files {
             let path = Path::new(&file);
-            if let Some(media_type) = media_type_from_path(path) {
-                if let Ok(data) = std::fs::read(path) {
-                    tracing::debug!(media_type, bytes = data.len(), "clipboard image from file");
-                    return Ok((data, media_type.to_string()));
-                }
+            if let Some(media_type) = media_type_from_path(path)
+                && let Ok(data) = std::fs::read(path)
+            {
+                tracing::debug!(media_type, bytes = data.len(), "clipboard image from file");
+                return Ok((data, media_type.to_string()));
             }
         }
     }

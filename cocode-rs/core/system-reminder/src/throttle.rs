@@ -9,7 +9,7 @@ use std::sync::RwLock;
 use crate::types::AttachmentType;
 
 /// Throttle configuration for a generator.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ThrottleConfig {
     /// Minimum turns between generating this reminder.
     pub min_turns_between: i32,
@@ -21,17 +21,6 @@ pub struct ThrottleConfig {
     /// `None` = always full content (default).
     /// `Some(n)` = full content on 1st generation and every n-th thereafter.
     pub full_content_every_n: Option<i32>,
-}
-
-impl Default for ThrottleConfig {
-    fn default() -> Self {
-        Self {
-            min_turns_between: 0,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
-            full_content_every_n: None,
-        }
-    }
 }
 
 impl ThrottleConfig {
@@ -102,6 +91,7 @@ pub struct ThrottleManager {
     state: RwLock<HashMap<AttachmentType, ThrottleState>>,
 }
 
+#[allow(clippy::expect_used)]
 impl ThrottleManager {
     /// Create a new throttle manager.
     pub fn new() -> Self {
@@ -129,24 +119,24 @@ impl ThrottleManager {
             None => true, // Never generated, allow
             Some(s) => {
                 // Check min_turns_after_trigger
-                if let Some(trigger) = s.trigger_turn {
-                    if current_turn - trigger < config.min_turns_after_trigger {
-                        return false;
-                    }
+                if let Some(trigger) = s.trigger_turn
+                    && current_turn - trigger < config.min_turns_after_trigger
+                {
+                    return false;
                 }
 
                 // Check min_turns_between
-                if let Some(last) = s.last_generated_turn {
-                    if current_turn - last < config.min_turns_between {
-                        return false;
-                    }
+                if let Some(last) = s.last_generated_turn
+                    && current_turn - last < config.min_turns_between
+                {
+                    return false;
                 }
 
                 // Check max_per_session
-                if let Some(max) = config.max_per_session {
-                    if s.session_count >= max {
-                        return false;
-                    }
+                if let Some(max) = config.max_per_session
+                    && s.session_count >= max
+                {
+                    return false;
                 }
 
                 true

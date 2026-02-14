@@ -158,10 +158,10 @@ pub fn find_matching_symbols(
         .iter()
         .filter_map(|sym| {
             // Filter by kind first (cheap check, no allocation)
-            if let Some(k) = kind {
-                if sym.kind != k {
-                    return None;
-                }
+            if let Some(k) = kind
+                && sym.kind != k
+            {
+                return None;
             }
 
             // Fast path: case-insensitive exact match (no allocation)

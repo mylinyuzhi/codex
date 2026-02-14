@@ -391,6 +391,7 @@ impl ExecutorBuilder {
     ///
     /// # Panics
     /// Panics if `api_client`, `model_hub`, or `tool_registry` have not been set.
+    #[allow(clippy::expect_used)]
     pub fn build(self) -> AgentExecutor {
         let mut config = self.config;
         config.features = self.features;

@@ -231,10 +231,10 @@ impl SSEDecoder {
                 buffer.drain(..line_info.ending_len);
 
                 // Decode line as UTF-8
-                if let Ok(line) = std::str::from_utf8(&line_bytes) {
-                    if let Some(event) = self.decode(line) {
-                        events.push(event);
-                    }
+                if let Ok(line) = std::str::from_utf8(&line_bytes)
+                    && let Some(event) = self.decode(line)
+                {
+                    events.push(event);
                 }
             } else {
                 break;

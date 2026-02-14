@@ -89,15 +89,15 @@ impl RateLimitSnapshot {
     /// - Requests: < 10 remaining
     /// - Tokens: < 10000 remaining
     pub fn is_approaching_limit(&self) -> bool {
-        if let Some(requests) = self.remaining_requests {
-            if requests < 10 {
-                return true;
-            }
+        if let Some(requests) = self.remaining_requests
+            && requests < 10
+        {
+            return true;
         }
-        if let Some(tokens) = self.remaining_tokens {
-            if tokens < 10000 {
-                return true;
-            }
+        if let Some(tokens) = self.remaining_tokens
+            && tokens < 10000
+        {
+            return true;
         }
         false
     }

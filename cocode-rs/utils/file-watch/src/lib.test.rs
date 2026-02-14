@@ -118,7 +118,7 @@ async fn watch_deduplicates_paths() {
 
     // Watching the same path twice should not error.
     watcher.watch(dir_path.clone(), RecursiveMode::NonRecursive);
-    watcher.watch(dir_path.clone(), RecursiveMode::NonRecursive);
+    watcher.watch(dir_path, RecursiveMode::NonRecursive);
 
     // Verify internal state: only one entry.
     let inner = watcher.inner.as_ref().unwrap().lock().unwrap();

@@ -87,28 +87,25 @@ async fn test_severity_filtering() {
 #[test]
 fn test_severity_filter_logic() {
     // Error passes Error filter
-    assert!(severity_passes_filter("error", &DiagnosticSeverity::Error));
+    assert!(severity_passes_filter("error", DiagnosticSeverity::Error));
 
     // Warning doesn't pass Error filter
     assert!(!severity_passes_filter(
         "warning",
-        &DiagnosticSeverity::Error
+        DiagnosticSeverity::Error
     ));
 
     // Warning passes Warning filter
     assert!(severity_passes_filter(
         "warning",
-        &DiagnosticSeverity::Warning
+        DiagnosticSeverity::Warning
     ));
 
     // Error passes Warning filter
-    assert!(severity_passes_filter(
-        "error",
-        &DiagnosticSeverity::Warning
-    ));
+    assert!(severity_passes_filter("error", DiagnosticSeverity::Warning));
 
     // Hint passes Hint filter
-    assert!(severity_passes_filter("hint", &DiagnosticSeverity::Hint));
+    assert!(severity_passes_filter("hint", DiagnosticSeverity::Hint));
 }
 
 #[test]

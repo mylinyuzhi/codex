@@ -616,7 +616,7 @@ mod mock_streaming {
         // Many tiny deltas
         let mut events = vec![StreamEvent::response_created("resp_1")];
         for c in "Hello, World!".chars() {
-            events.push(StreamEvent::text_delta(0, &c.to_string()));
+            events.push(StreamEvent::text_delta(0, c.to_string()));
         }
         events.push(StreamEvent::response_done("resp_1", FinishReason::Stop));
 
@@ -852,8 +852,7 @@ mod error_mapping {
         for err in errors {
             assert!(
                 err.is_retryable(),
-                "Network error should be retryable: {:?}",
-                err
+                "Network error should be retryable: {err:?}"
             );
         }
     }
@@ -926,6 +925,7 @@ mod hooks {
 
     #[async_trait]
     impl RequestHook for PriorityTrackingHook {
+        #[allow(clippy::unwrap_used)]
         async fn on_request(
             &self,
             _request: &mut GenerateRequest,
@@ -946,6 +946,7 @@ mod hooks {
 
     #[async_trait]
     impl ResponseHook for PriorityTrackingHook {
+        #[allow(clippy::unwrap_used)]
         async fn on_response(
             &self,
             _response: &mut GenerateResponse,
@@ -966,6 +967,7 @@ mod hooks {
 
     #[async_trait]
     impl StreamHook for PriorityTrackingHook {
+        #[allow(clippy::unwrap_used)]
         async fn on_event(
             &self,
             _event: &StreamEvent,

@@ -93,11 +93,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         lines.push(
             Line::from(vec![
                 Span::styled(prefix, row_style),
-                Span::styled(format!("{:<20}", id_display), id_style),
+                Span::styled(format!("{id_display:<20}"), id_style),
                 Span::styled(" ", row_style),
-                Span::styled(format!("{:<14}", ext_display), row_style),
+                Span::styled(format!("{ext_display:<14}"), row_style),
                 Span::styled(" ", row_style),
-                Span::styled(format!("{:<14}", status_text), status_style),
+                Span::styled(format!("{status_text:<14}"), status_style),
                 Span::styled(" ", row_style),
                 Span::styled(install_hint, Style::default().dim()),
             ])

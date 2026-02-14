@@ -12,6 +12,7 @@ pub struct ProviderRegistry {
     providers: RwLock<HashMap<String, Arc<dyn Provider>>>,
 }
 
+#[allow(clippy::expect_used)]
 impl ProviderRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {

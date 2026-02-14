@@ -58,24 +58,24 @@ pub fn set_locale(locale: &str) {
 /// 4. Default to "en"
 fn detect_locale() -> &'static str {
     // Check COCODE_LANG first (app-specific override)
-    if let Ok(lang) = std::env::var("COCODE_LANG") {
-        if let Some(locale) = parse_locale(&lang) {
-            return locale;
-        }
+    if let Ok(lang) = std::env::var("COCODE_LANG")
+        && let Some(locale) = parse_locale(&lang)
+    {
+        return locale;
     }
 
     // Check LANG
-    if let Ok(lang) = std::env::var("LANG") {
-        if let Some(locale) = parse_locale(&lang) {
-            return locale;
-        }
+    if let Ok(lang) = std::env::var("LANG")
+        && let Some(locale) = parse_locale(&lang)
+    {
+        return locale;
     }
 
     // Check LC_ALL
-    if let Ok(lang) = std::env::var("LC_ALL") {
-        if let Some(locale) = parse_locale(&lang) {
-            return locale;
-        }
+    if let Ok(lang) = std::env::var("LC_ALL")
+        && let Some(locale) = parse_locale(&lang)
+    {
+        return locale;
     }
 
     // Default to English

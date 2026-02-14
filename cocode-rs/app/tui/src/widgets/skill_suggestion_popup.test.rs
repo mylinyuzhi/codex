@@ -45,7 +45,11 @@ fn test_popup_render() {
     popup.render(area, &mut buf);
 
     // Should contain the query
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("com"));
 }
 
@@ -61,6 +65,10 @@ fn test_empty_suggestions() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("No matching"));
 }

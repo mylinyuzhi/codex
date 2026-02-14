@@ -225,10 +225,10 @@ impl ConfigManager {
     /// 3. Built-in defaults ("openai", "gpt-5")
     pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
         // 1. Check runtime overrides first (supports all roles)
-        if let Ok(runtime) = self.read_runtime() {
-            if let Some(selection) = runtime.get_or_main(role) {
-                return selection.model.clone();
-            }
+        if let Ok(runtime) = self.read_runtime()
+            && let Some(selection) = runtime.get_or_main(role)
+        {
+            return selection.model.clone();
         }
 
         // 2. Check JSON config (with profile resolution)
@@ -556,10 +556,10 @@ impl ConfigManager {
 
         // Add built-in providers not already in config
         for name in builtin::list_builtin_providers() {
-            if !summaries.iter().any(|s| s.name == name) {
-                if let Some(config) = builtin::get_provider_defaults(name) {
-                    summaries.push(ProviderSummary::from_builtin(name, &config));
-                }
+            if !summaries.iter().any(|s| s.name == name)
+                && let Some(config) = builtin::get_provider_defaults(name)
+            {
+                summaries.push(ProviderSummary::from_builtin(name, &config));
             }
         }
 
@@ -583,13 +583,13 @@ impl ConfigManager {
         }
 
         // If no models configured, suggest some built-in ones based on provider type
-        if summaries.is_empty() {
-            if let Some(provider_config) = resolver.get_provider_config(provider) {
-                let suggested = suggest_models_for_provider(provider_config.provider_type);
-                for model_id in suggested {
-                    if let Some(info) = builtin::get_model_defaults(model_id) {
-                        summaries.push(ModelSummary::from_model_info(model_id, &info));
-                    }
+        if summaries.is_empty()
+            && let Some(provider_config) = resolver.get_provider_config(provider)
+        {
+            let suggested = suggest_models_for_provider(provider_config.provider_type);
+            for model_id in suggested {
+                if let Some(info) = builtin::get_model_defaults(model_id) {
+                    summaries.push(ModelSummary::from_model_info(model_id, &info));
                 }
             }
         }
@@ -733,7 +733,7 @@ impl ConfigManager {
             permissions: resolved.permissions.clone(),
             hooks: resolved.hooks.clone(),
             otel,
-            output_style: resolved.output_style.clone(),
+            output_style: resolved.output_style,
         })
     }
 
@@ -824,14 +824,12 @@ impl ConfigManager {
     fn validate_provider(&self, provider: &str) -> Result<(), ConfigError> {
         let resolver = self.read_resolver()?;
 
-        if !resolver.has_provider(provider) {
-            if builtin::get_provider_defaults(provider).is_none() {
-                return NotFoundSnafu {
-                    kind: NotFoundKind::Provider,
-                    name: provider.to_string(),
-                }
-                .fail();
+        if !resolver.has_provider(provider) && builtin::get_provider_defaults(provider).is_none() {
+            return NotFoundSnafu {
+                kind: NotFoundKind::Provider,
+                name: provider.to_string(),
             }
+            .fail();
         }
 
         Ok(())
@@ -850,6 +848,7 @@ fn suggest_models_for_provider(provider_type: ProviderType) -> Vec<&'static str>
     }
 }
 
+#[allow(clippy::expect_used)]
 impl Clone for ConfigManager {
     fn clone(&self) -> Self {
         Self {

@@ -330,7 +330,7 @@ async fn run_agent_driver(
                     input_len = message.len(),
                     display_len = display_text.len(),
                     content_blocks = content.len(),
-                    correlation_id = ?correlation_id.as_ref().map(|id| id.as_str()),
+                    correlation_id = ?correlation_id.as_ref().map(cocode_protocol::SubmissionId::as_str),
                     "Processing user input"
                 );
 
@@ -380,7 +380,7 @@ async fn run_agent_driver(
             UserCommand::ExecuteSkill { name, args } => {
                 info!(
                     name, args,
-                    correlation_id = ?correlation_id.as_ref().map(|id| id.as_str()),
+                    correlation_id = ?correlation_id.as_ref().map(cocode_protocol::SubmissionId::as_str),
                     "Skill execution requested"
                 );
 
@@ -613,6 +613,7 @@ async fn handle_in_flight_command(
             // Push directly to the shared queue — the running AgentLoop
             // will drain it at its next Step 6.5 iteration.
             let id = queue_command_shared(shared_queue, &prompt);
+            #[allow(clippy::unwrap_used)]
             let count = shared_queue.lock().unwrap().len();
             info!(
                 prompt_len = prompt.len(),
@@ -629,7 +630,10 @@ async fn handle_in_flight_command(
                 .await;
         }
         UserCommand::ClearQueues => {
-            shared_queue.lock().unwrap().clear();
+            #[allow(clippy::unwrap_used)]
+            {
+                shared_queue.lock().unwrap().clear();
+            }
             info!("Cleared all queued commands (during turn)");
             let _ = event_tx
                 .send(LoopEvent::QueueStateChanged { queued: 0 })
@@ -662,6 +666,7 @@ async fn handle_in_flight_command(
 }
 
 /// Push a command to the shared queue, returning the assigned ID.
+#[allow(clippy::unwrap_used)]
 fn queue_command_shared(shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>, prompt: &str) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

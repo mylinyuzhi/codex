@@ -88,15 +88,15 @@ fn to_anthropic_options(level: &ThinkingLevel) -> Option<ProviderOptions> {
 /// OpenAI uses reasoning effort levels (Low/Medium/High).
 /// Also applies reasoning_summary from ModelInfo and always enables encrypted content.
 fn to_openai_options(level: &ThinkingLevel, model_info: &ModelInfo) -> Option<ProviderOptions> {
-    let effort = map_to_openai_effort(&level.effort)?;
+    let effort = map_to_openai_effort(level.effort)?;
 
     let mut opts = OpenAIOptions::new().with_reasoning_effort(effort);
 
     // Apply reasoning summary from ModelInfo
-    if let Some(summary) = &model_info.reasoning_summary {
-        if let Some(oai_summary) = map_to_openai_summary(summary) {
-            opts = opts.with_reasoning_summary(oai_summary);
-        }
+    if let Some(summary) = &model_info.reasoning_summary
+        && let Some(oai_summary) = map_to_openai_summary(*summary)
+    {
+        opts = opts.with_reasoning_summary(oai_summary);
     }
 
     // Always include encrypted content when thinking is enabled
@@ -110,7 +110,7 @@ fn to_openai_options(level: &ThinkingLevel, model_info: &ModelInfo) -> Option<Pr
 /// Gemini uses thinking levels (None/Low/Medium/High).
 /// Also applies include_thoughts from ModelInfo (defaults to true when thinking enabled).
 fn to_gemini_options(level: &ThinkingLevel, model_info: &ModelInfo) -> Option<ProviderOptions> {
-    let gem_level = map_to_gemini_level(&level.effort);
+    let gem_level = map_to_gemini_level(level.effort);
 
     // Only return options if thinking is enabled
     if gem_level != hyper_sdk::options::gemini::ThinkingLevel::None {
@@ -138,7 +138,7 @@ fn to_volcengine_options(level: &ThinkingLevel) -> Option<ProviderOptions> {
         has_thinking = true;
     }
 
-    if let Some(effort) = map_to_volcengine_effort(&level.effort) {
+    if let Some(effort) = map_to_volcengine_effort(level.effort) {
         opts = opts.with_reasoning_effort(effort);
         has_thinking = true;
     }
@@ -166,7 +166,7 @@ fn to_zai_options(level: &ThinkingLevel) -> Option<ProviderOptions> {
 
 /// Map protocol ReasoningSummary to hyper-sdk OpenAI ReasoningSummary.
 fn map_to_openai_summary(
-    summary: &ReasoningSummary,
+    summary: ReasoningSummary,
 ) -> Option<hyper_sdk::options::openai::ReasoningSummary> {
     use hyper_sdk::options::openai::ReasoningSummary as OaiSummary;
 
@@ -180,7 +180,7 @@ fn map_to_openai_summary(
 
 /// Map ReasoningEffort to OpenAI's ReasoningEffort.
 fn map_to_openai_effort(
-    effort: &ReasoningEffort,
+    effort: ReasoningEffort,
 ) -> Option<hyper_sdk::options::openai::ReasoningEffort> {
     use hyper_sdk::options::openai::ReasoningEffort as OE;
 
@@ -193,7 +193,7 @@ fn map_to_openai_effort(
 }
 
 /// Map ReasoningEffort to Gemini's ThinkingLevel.
-fn map_to_gemini_level(effort: &ReasoningEffort) -> hyper_sdk::options::gemini::ThinkingLevel {
+fn map_to_gemini_level(effort: ReasoningEffort) -> hyper_sdk::options::gemini::ThinkingLevel {
     use hyper_sdk::options::gemini::ThinkingLevel as GL;
 
     match effort {
@@ -206,7 +206,7 @@ fn map_to_gemini_level(effort: &ReasoningEffort) -> hyper_sdk::options::gemini::
 
 /// Map ReasoningEffort to Volcengine's ReasoningEffort.
 fn map_to_volcengine_effort(
-    effort: &ReasoningEffort,
+    effort: ReasoningEffort,
 ) -> Option<hyper_sdk::options::volcengine::ReasoningEffort> {
     use hyper_sdk::options::volcengine::ReasoningEffort as VE;
 

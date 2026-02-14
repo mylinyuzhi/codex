@@ -80,7 +80,7 @@ impl Tool for McpSearchTool {
         let server_filter = input
             .get("server")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let tools = self.mcp_tools.lock().await;
 
@@ -88,10 +88,10 @@ impl Tool for McpSearchTool {
             .iter()
             .filter(|t| {
                 // Filter by server if specified
-                if let Some(ref server) = server_filter {
-                    if &t.server != server {
-                        return false;
-                    }
+                if let Some(ref server) = server_filter
+                    && &t.server != server
+                {
+                    return false;
                 }
 
                 // Match against name and description

@@ -145,7 +145,7 @@ impl Tool for TaskTool {
             let hook_ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::SubagentStart,
                 ctx.session_id.clone(),
-                ctx.cwd.clone().into(),
+                ctx.cwd.clone(),
             )
             .with_metadata("agent_type", subagent_type)
             .with_metadata("description", description);
@@ -189,7 +189,7 @@ impl Tool for TaskTool {
                         let hook_ctx = cocode_hooks::HookContext::new(
                             cocode_hooks::HookEventType::SubagentStop,
                             ctx.session_id.clone(),
-                            ctx.cwd.clone().into(),
+                            ctx.cwd.clone(),
                         )
                         .with_metadata("agent_type", subagent_type)
                         .with_metadata("agent_id", result.agent_id.clone());

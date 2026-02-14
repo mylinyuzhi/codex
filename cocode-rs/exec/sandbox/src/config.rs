@@ -24,7 +24,7 @@ pub enum SandboxMode {
 }
 
 /// Configuration for the sandbox.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SandboxConfig {
     /// The sandbox enforcement mode.
     #[serde(default)]
@@ -38,17 +38,6 @@ pub struct SandboxConfig {
     /// Whether network access is allowed.
     #[serde(default)]
     pub allow_network: bool,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            mode: SandboxMode::default(),
-            allowed_paths: Vec::new(),
-            denied_paths: Vec::new(),
-            allow_network: false,
-        }
-    }
 }
 
 /// User/policy-level sandbox settings.

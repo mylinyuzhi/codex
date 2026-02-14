@@ -435,10 +435,10 @@ impl WorkerPermissionQueue {
             match rx.recv().await {
                 Ok(request_id) => {
                     let requests = self.requests.lock().await;
-                    if let Some(queued) = requests.get(&request_id) {
-                        if !queued.is_timed_out() {
-                            return Some(queued.request.clone());
-                        }
+                    if let Some(queued) = requests.get(&request_id)
+                        && !queued.is_timed_out()
+                    {
+                        return Some(queued.request.clone());
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -566,10 +566,10 @@ impl WorkerPermissionQueue {
 
     /// Emit a loop event.
     async fn emit_event(&self, event: LoopEvent) {
-        if let Some(tx) = &self.event_tx {
-            if let Err(e) = tx.send(event).await {
-                debug!("Failed to send permission event: {e}");
-            }
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(event).await
+        {
+            debug!("Failed to send permission event: {e}");
         }
     }
 }

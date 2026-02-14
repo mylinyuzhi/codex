@@ -65,6 +65,7 @@ impl Client {
     }
 
     /// Build the default headers for API requests.
+    #[allow(clippy::expect_used)]
     fn default_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -120,6 +121,7 @@ impl Client {
     }
 
     /// Send a POST request to the API.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -184,6 +186,7 @@ impl Client {
     }
 
     /// Send a POST request and capture HTTP metadata for Message responses.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post_message(
         &self,
         path: &str,

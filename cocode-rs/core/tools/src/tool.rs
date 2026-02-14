@@ -127,15 +127,15 @@ pub trait Tool: Send + Sync {
 
         if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
             for field in required {
-                if let Some(field_name) = field.as_str() {
-                    if input.get(field_name).is_none() {
-                        return ValidationResult::Invalid {
-                            errors: vec![ValidationError::with_path(
-                                format!("Missing required field: {field_name}"),
-                                field_name,
-                            )],
-                        };
-                    }
+                if let Some(field_name) = field.as_str()
+                    && input.get(field_name).is_none()
+                {
+                    return ValidationResult::Invalid {
+                        errors: vec![ValidationError::with_path(
+                            format!("Missing required field: {field_name}"),
+                            field_name,
+                        )],
+                    };
                 }
             }
         }

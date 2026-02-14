@@ -143,14 +143,14 @@ impl QueryRewriteService {
         let start = Instant::now();
 
         // Try cache first
-        if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache.get(query).await {
-                tracing::debug!(
-                    query = %query,
-                    "Query rewrite cache hit"
-                );
-                return Ok(cached.with_source(RewriteSource::Cache));
-            }
+        if let Some(ref cache) = self.cache
+            && let Ok(Some(cached)) = cache.get(query).await
+        {
+            tracing::debug!(
+                query = %query,
+                "Query rewrite cache hit"
+            );
+            return Ok(cached.with_source(RewriteSource::Cache));
         }
 
         // Try LLM if available, otherwise fall back to rules

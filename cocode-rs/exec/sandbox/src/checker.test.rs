@@ -122,7 +122,7 @@ fn test_is_allowed_path_prefix_match() {
 #[test]
 fn test_config_accessor() {
     let config = strict_config();
-    let checker = PermissionChecker::new(config.clone());
+    let checker = PermissionChecker::new(config);
     assert_eq!(checker.config().mode, SandboxMode::Strict);
     assert_eq!(checker.config().allowed_paths.len(), 1);
 }

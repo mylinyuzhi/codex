@@ -18,7 +18,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(
-        format!("  Installing: {}", server_name).cyan().bold(),
+        format!("  Installing: {server_name}").cyan().bold(),
     ));
     lines.push(Line::from(""));
     lines.push(Line::from(
@@ -47,7 +47,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     lines.push(
         Line::from(vec![
             Span::styled("      ", user_style),
-            Span::styled(format!("({})", user_dir), Style::default().dim()),
+            Span::styled(format!("({user_dir})"), Style::default().dim()),
         ])
         .style(user_style),
     );
@@ -82,7 +82,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     lines.push(
         Line::from(vec![
             Span::styled("      ", project_style),
-            Span::styled(format!("({})", project_dir), Style::default().dim()),
+            Span::styled(format!("({project_dir})"), Style::default().dim()),
         ])
         .style(project_style),
     );

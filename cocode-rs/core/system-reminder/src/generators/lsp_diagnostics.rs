@@ -54,7 +54,7 @@ impl AttachmentGenerator for LspDiagnosticsGenerator {
         let filtered: Vec<_> = ctx
             .diagnostics
             .iter()
-            .filter(|d| severity_passes_filter(&d.severity, min_severity))
+            .filter(|d| severity_passes_filter(&d.severity, *min_severity))
             .collect();
 
         if filtered.is_empty() {
@@ -74,7 +74,7 @@ impl AttachmentGenerator for LspDiagnosticsGenerator {
 }
 
 /// Check if a severity passes the minimum severity filter.
-fn severity_passes_filter(severity: &str, min_severity: &DiagnosticSeverity) -> bool {
+fn severity_passes_filter(severity: &str, min_severity: DiagnosticSeverity) -> bool {
     let severity_level = match severity.to_lowercase().as_str() {
         "error" => DiagnosticSeverity::Error,
         "warning" | "warn" => DiagnosticSeverity::Warning,
@@ -83,7 +83,7 @@ fn severity_passes_filter(severity: &str, min_severity: &DiagnosticSeverity) -> 
         _ => DiagnosticSeverity::Hint, // Unknown = show
     };
 
-    severity_level <= *min_severity
+    severity_level <= min_severity
 }
 
 /// Format diagnostics into a readable string.

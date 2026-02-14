@@ -225,7 +225,7 @@ pub fn combine_reminders(reminders: Vec<SystemReminder>) -> Option<String> {
 
     let parts: Vec<String> = reminders
         .iter()
-        .filter_map(|r| r.wrapped_content())
+        .filter_map(super::types::SystemReminder::wrapped_content)
         .collect();
 
     if parts.is_empty() {

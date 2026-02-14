@@ -87,6 +87,7 @@ pub struct ShellExecutor {
 }
 
 impl std::fmt::Debug for ShellExecutor {
+    #[allow(clippy::unwrap_used)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShellExecutor")
             .field("default_timeout_secs", &self.default_timeout_secs)
@@ -202,7 +203,9 @@ impl ShellExecutor {
 
     /// Returns the current shell snapshot if available.
     pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
-        self.shell.as_ref().and_then(|s| s.shell_snapshot())
+        self.shell
+            .as_ref()
+            .and_then(super::shell_types::Shell::shell_snapshot)
     }
 
     /// Returns whether snapshotting has been initialized.
@@ -211,11 +214,13 @@ impl ShellExecutor {
     }
 
     /// Returns the current working directory.
+    #[allow(clippy::unwrap_used)]
     pub fn cwd(&self) -> PathBuf {
         self.cwd.lock().unwrap().clone()
     }
 
     /// Updates the working directory.
+    #[allow(clippy::unwrap_used)]
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         *self.cwd.lock().unwrap() = cwd;
     }
@@ -317,6 +322,7 @@ impl ShellExecutor {
     /// This is similar to `execute()` but also tracks working directory changes.
     /// If the command succeeds and the CWD changed, the executor's internal CWD
     /// is updated to match.
+    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_cwd_tracking(
         &mut self,
         command: &str,
@@ -325,17 +331,17 @@ impl ShellExecutor {
         let result = self.execute(command, timeout_secs).await;
 
         // Update internal CWD if command succeeded and CWD changed
-        if result.exit_code == 0 {
-            if let Some(ref new_cwd) = result.new_cwd {
-                let current_cwd = self.cwd.lock().unwrap().clone();
-                if new_cwd.exists() && *new_cwd != current_cwd {
-                    tracing::debug!(
-                        "CWD changed: {} -> {}",
-                        current_cwd.display(),
-                        new_cwd.display()
-                    );
-                    *self.cwd.lock().unwrap() = new_cwd.clone();
-                }
+        if result.exit_code == 0
+            && let Some(ref new_cwd) = result.new_cwd
+        {
+            let current_cwd = self.cwd.lock().unwrap().clone();
+            if new_cwd.exists() && *new_cwd != current_cwd {
+                tracing::debug!(
+                    "CWD changed: {} -> {}",
+                    current_cwd.display(),
+                    new_cwd.display()
+                );
+                *self.cwd.lock().unwrap() = new_cwd.clone();
             }
         }
 
@@ -359,44 +365,46 @@ impl ShellExecutor {
     /// # Returns
     ///
     /// A `CommandResult` with `extracted_paths` populated if extraction was performed.
+    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_extraction(&self, command: &str, timeout_secs: i64) -> CommandResult {
         let mut result = self.execute(command, timeout_secs).await;
 
         // Only extract paths if command succeeded and extractor is available
-        if result.exit_code == 0 && self.has_path_extractor() {
-            if let Some(ref extractor) = self.path_extractor {
-                let extraction_start = Instant::now();
-                let cwd = self.cwd.lock().unwrap().clone();
+        if result.exit_code == 0
+            && self.has_path_extractor()
+            && let Some(ref extractor) = self.path_extractor
+        {
+            let extraction_start = Instant::now();
+            let cwd = self.cwd.lock().unwrap().clone();
 
-                // Truncate output for extraction efficiency
-                let output_for_extraction = truncate_for_extraction(&result.stdout);
+            // Truncate output for extraction efficiency
+            let output_for_extraction = truncate_for_extraction(&result.stdout);
 
-                match extractor
-                    .extract_paths(command, output_for_extraction, &cwd)
-                    .await
-                {
-                    Ok(extraction_result) => {
-                        // Filter to only existing files
-                        let existing_paths = filter_existing_files(extraction_result.paths, &cwd);
+            match extractor
+                .extract_paths(command, output_for_extraction, &cwd)
+                .await
+            {
+                Ok(extraction_result) => {
+                    // Filter to only existing files
+                    let existing_paths = filter_existing_files(extraction_result.paths, &cwd);
 
-                        let extraction_ms = extraction_start.elapsed().as_millis() as i64;
+                    let extraction_ms = extraction_start.elapsed().as_millis() as i64;
 
-                        if !existing_paths.is_empty() {
-                            tracing::debug!(
-                                "Extracted {} file paths from command output in {}ms",
-                                existing_paths.len(),
-                                extraction_ms
-                            );
-                        }
-
-                        result.extracted_paths =
-                            Some(ExtractedPaths::new(existing_paths, extraction_ms));
+                    if !existing_paths.is_empty() {
+                        tracing::debug!(
+                            "Extracted {} file paths from command output in {}ms",
+                            existing_paths.len(),
+                            extraction_ms
+                        );
                     }
-                    Err(e) => {
-                        // Log warning but don't fail the command
-                        tracing::warn!("Path extraction failed: {e}");
-                        result.extracted_paths = Some(ExtractedPaths::not_attempted());
-                    }
+
+                    result.extracted_paths =
+                        Some(ExtractedPaths::new(existing_paths, extraction_ms));
+                }
+                Err(e) => {
+                    // Log warning but don't fail the command
+                    tracing::warn!("Path extraction failed: {e}");
+                    result.extracted_paths = Some(ExtractedPaths::not_attempted());
                 }
             }
         }
@@ -408,6 +416,7 @@ impl ShellExecutor {
     ///
     /// Combines the functionality of `execute_with_cwd_tracking` and
     /// `execute_with_extraction` for main agent use cases.
+    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_cwd_tracking_and_extraction(
         &mut self,
         command: &str,
@@ -416,17 +425,17 @@ impl ShellExecutor {
         let result = self.execute_with_extraction(command, timeout_secs).await;
 
         // Update internal CWD if command succeeded and CWD changed
-        if result.exit_code == 0 {
-            if let Some(ref new_cwd) = result.new_cwd {
-                let current_cwd = self.cwd.lock().unwrap().clone();
-                if new_cwd.exists() && *new_cwd != current_cwd {
-                    tracing::debug!(
-                        "CWD changed: {} -> {}",
-                        current_cwd.display(),
-                        new_cwd.display()
-                    );
-                    *self.cwd.lock().unwrap() = new_cwd.clone();
-                }
+        if result.exit_code == 0
+            && let Some(ref new_cwd) = result.new_cwd
+        {
+            let current_cwd = self.cwd.lock().unwrap().clone();
+            if new_cwd.exists() && *new_cwd != current_cwd {
+                tracing::debug!(
+                    "CWD changed: {} -> {}",
+                    current_cwd.display(),
+                    new_cwd.display()
+                );
+                *self.cwd.lock().unwrap() = new_cwd.clone();
             }
         }
 
@@ -442,6 +451,7 @@ impl ShellExecutor {
     ///
     /// Otherwise the command completes normally and `ExecuteResult::Completed`
     /// is returned with the usual `CommandResult`.
+    #[allow(clippy::unwrap_used)]
     pub async fn execute_backgroundable(
         &self,
         command: &str,
@@ -467,7 +477,7 @@ impl ShellExecutor {
             "{}; __cocode_exit=$?; echo '{}' \"$(pwd)\" '{}'; exit $__cocode_exit",
             &args[2], CWD_MARKER_START, CWD_MARKER_END
         );
-        let shell_args = vec![args[0].clone(), args[1].clone(), wrapped_script];
+        let shell_args = [args[0].clone(), args[1].clone(), wrapped_script];
 
         let child = tokio::process::Command::new(&shell_args[0])
             .args(&shell_args[1..])
@@ -748,6 +758,7 @@ impl ShellExecutor {
     /// Executes a command with backgrounding support and CWD tracking.
     ///
     /// Combines `execute_backgroundable()` with CWD update on completion.
+    #[allow(clippy::unwrap_used)]
     pub async fn execute_backgroundable_with_cwd_tracking(
         &mut self,
         command: &str,
@@ -758,19 +769,18 @@ impl ShellExecutor {
             .execute_backgroundable(command, timeout_secs, signal_id)
             .await;
 
-        if let ExecuteResult::Completed(ref cmd_result) = result {
-            if cmd_result.exit_code == 0 {
-                if let Some(ref new_cwd) = cmd_result.new_cwd {
-                    let current_cwd = self.cwd.lock().unwrap().clone();
-                    if new_cwd.exists() && *new_cwd != current_cwd {
-                        tracing::debug!(
-                            "CWD changed: {} -> {}",
-                            current_cwd.display(),
-                            new_cwd.display()
-                        );
-                        *self.cwd.lock().unwrap() = new_cwd.clone();
-                    }
-                }
+        if let ExecuteResult::Completed(ref cmd_result) = result
+            && cmd_result.exit_code == 0
+            && let Some(ref new_cwd) = cmd_result.new_cwd
+        {
+            let current_cwd = self.cwd.lock().unwrap().clone();
+            if new_cwd.exists() && *new_cwd != current_cwd {
+                tracing::debug!(
+                    "CWD changed: {} -> {}",
+                    current_cwd.display(),
+                    new_cwd.display()
+                );
+                *self.cwd.lock().unwrap() = new_cwd.clone();
             }
         }
 
@@ -814,6 +824,7 @@ impl ShellExecutor {
     ///
     /// The command output is captured asynchronously and can be retrieved
     /// via the background registry using the returned task ID.
+    #[allow(clippy::unwrap_used)]
     pub async fn spawn_background(&self, command: &str) -> Result<String, String> {
         let task_id = format!("bg-{}", uuid_simple());
         let output = Arc::new(Mutex::new(String::new()));
@@ -927,6 +938,7 @@ impl ShellExecutor {
     }
 
     /// Internal: runs a command and captures output, tracking CWD changes.
+    #[allow(clippy::unwrap_used)]
     async fn run_command(&self, command: &str) -> CommandResult {
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
@@ -937,7 +949,7 @@ impl ShellExecutor {
             "{}; __cocode_exit=$?; echo '{}' \"$(pwd)\" '{}'; exit $__cocode_exit",
             &args[2], CWD_MARKER_START, CWD_MARKER_END
         );
-        let args = vec![args[0].clone(), args[1].clone(), wrapped_script];
+        let args = [args[0].clone(), args[1].clone(), wrapped_script];
 
         let child = tokio::process::Command::new(&args[0])
             .args(&args[1..])
@@ -1022,29 +1034,29 @@ fn truncate_output(bytes: &[u8]) -> (String, bool) {
 /// The markers are removed from the output.
 fn extract_cwd_from_output(output: &str) -> (String, Option<PathBuf>) {
     // Look for the CWD marker line at the end of output
-    if let Some(start) = output.rfind(CWD_MARKER_START) {
-        if let Some(end_offset) = output[start..].find(CWD_MARKER_END) {
-            let cwd_start = start + CWD_MARKER_START.len();
-            let cwd_end = start + end_offset;
-            let cwd_str = output[cwd_start..cwd_end].trim();
+    if let Some(start) = output.rfind(CWD_MARKER_START)
+        && let Some(end_offset) = output[start..].find(CWD_MARKER_END)
+    {
+        let cwd_start = start + CWD_MARKER_START.len();
+        let cwd_end = start + end_offset;
+        let cwd_str = output[cwd_start..cwd_end].trim();
 
-            // Clean the output: remove from the marker start to end of marker
-            let marker_end = start + end_offset + CWD_MARKER_END.len();
-            let cleaned = format!(
-                "{}{}",
-                output[..start].trim_end_matches('\n'),
-                &output[marker_end..]
-            )
-            .trim_end()
-            .to_string();
+        // Clean the output: remove from the marker start to end of marker
+        let marker_end = start + end_offset + CWD_MARKER_END.len();
+        let cleaned = format!(
+            "{}{}",
+            output[..start].trim_end_matches('\n'),
+            &output[marker_end..]
+        )
+        .trim_end()
+        .to_string();
 
-            // Only return CWD if it's a valid non-empty path
-            if !cwd_str.is_empty() {
-                return (cleaned, Some(PathBuf::from(cwd_str)));
-            }
-
-            return (cleaned, None);
+        // Only return CWD if it's a valid non-empty path
+        if !cwd_str.is_empty() {
+            return (cleaned, Some(PathBuf::from(cwd_str)));
         }
+
+        return (cleaned, None);
     }
 
     (output.to_string(), None)

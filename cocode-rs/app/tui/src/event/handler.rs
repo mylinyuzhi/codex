@@ -93,31 +93,23 @@ pub fn handle_key_event_full_with_symbols(
     }
 
     // Handle skill suggestion navigation (highest priority)
-    if has_skill_suggestions {
-        if let Some(cmd) = handle_skill_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_skill_suggestions && let Some(cmd) = handle_skill_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle agent suggestion navigation
-    if has_agent_suggestions {
-        if let Some(cmd) = handle_agent_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_agent_suggestions && let Some(cmd) = handle_agent_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle symbol suggestion navigation
-    if has_symbol_suggestions {
-        if let Some(cmd) = handle_symbol_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_symbol_suggestions && let Some(cmd) = handle_symbol_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle file suggestion navigation
-    if has_file_suggestions {
-        if let Some(cmd) = handle_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_file_suggestions && let Some(cmd) = handle_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle global shortcuts (with modifiers)

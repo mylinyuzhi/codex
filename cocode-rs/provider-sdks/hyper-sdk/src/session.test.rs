@@ -62,7 +62,7 @@ fn test_with_tools() {
         serde_json::json!({"type": "object"}),
     )];
 
-    let config = SessionConfig::new().tools(tools.clone());
+    let config = SessionConfig::new().tools(tools);
 
     let mut request = GenerateRequest::new(vec![Message::user("Hello")]);
     config.merge_into(&mut request);

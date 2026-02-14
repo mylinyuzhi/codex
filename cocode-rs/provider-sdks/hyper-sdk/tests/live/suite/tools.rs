@@ -58,8 +58,7 @@ pub async fn run_complete_flow(model: &Arc<dyn Model>) -> Result<()> {
     let text = extract_text(&result2);
     assert!(
         text.to_lowercase().contains("22") || text.to_lowercase().contains("sunny"),
-        "Expected response to include weather info from tool output, got: {}",
-        text
+        "Expected response to include weather info from tool output, got: {text}"
     );
     Ok(())
 }

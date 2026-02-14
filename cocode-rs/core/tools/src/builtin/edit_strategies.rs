@@ -67,7 +67,7 @@ pub fn try_flexible_replace(
     replace_all: bool,
 ) -> Option<(String, usize)> {
     let source_lines: Vec<&str> = content.lines().collect();
-    let search_lines: Vec<&str> = old_string.lines().map(|l| l.trim()).collect();
+    let search_lines: Vec<&str> = old_string.lines().map(str::trim).collect();
     let replace_lines: Vec<&str> = new_string.lines().collect();
 
     if search_lines.is_empty() || search_lines.iter().all(|l| l.is_empty()) {
@@ -104,7 +104,11 @@ pub fn try_flexible_replace(
                 occurrences += 1;
                 if !replace_all {
                     // Copy remaining lines verbatim
-                    result_lines.extend(source_lines[i..].iter().map(|s| s.to_string()));
+                    result_lines.extend(
+                        source_lines[i..]
+                            .iter()
+                            .map(std::string::ToString::to_string),
+                    );
                     break;
                 }
                 continue;

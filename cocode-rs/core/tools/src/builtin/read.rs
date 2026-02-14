@@ -218,7 +218,7 @@ impl Tool for ReadTool {
             } else {
                 line.to_string()
             };
-            output.push_str(&format!("{:>6}\t{}\n", line_num, truncated));
+            output.push_str(&format!("{line_num:>6}\t{truncated}\n"));
         }
 
         // Record file read with full state tracking

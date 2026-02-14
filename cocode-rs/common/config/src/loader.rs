@@ -173,7 +173,7 @@ impl ConfigLoader {
             .ok()
             .into_iter()
             .flatten()
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
             .filter(|path| {
                 path.is_file()

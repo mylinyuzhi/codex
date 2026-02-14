@@ -101,15 +101,15 @@ impl SmartEditTool {
             .build());
         }
 
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|e| {
-                    crate::error::tool_error::ExecutionFailedSnafu {
-                        message: format!("Failed to create directory: {e}"),
-                    }
-                    .build()
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to create directory: {e}"),
+                }
+                .build()
+            })?;
         }
 
         write_with_format_async(path, new_string, Encoding::Utf8, LineEnding::Lf)
@@ -316,17 +316,16 @@ impl Tool for SmartEditTool {
                 };
             }
 
-            if ctx.is_plan_mode {
-                if let Some(ref plan_file) = ctx.plan_file_path {
-                    if path != *plan_file {
-                        return PermissionResult::Denied {
-                            reason: format!(
-                                "Plan mode: cannot edit '{}'. Only the plan file can be modified.",
-                                path.display()
-                            ),
-                        };
-                    }
-                }
+            if ctx.is_plan_mode
+                && let Some(ref plan_file) = ctx.plan_file_path
+                && path != *plan_file
+            {
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Plan mode: cannot edit '{}'. Only the plan file can be modified.",
+                        path.display()
+                    ),
+                };
             }
 
             if crate::sensitive_files::is_sensitive_file(&path) {
@@ -488,19 +487,19 @@ impl Tool for SmartEditTool {
         let line_ending = detect_line_ending(&content);
 
         // ── SHA256 staleness check ──────────────────────────────────
-        if let Some(read_state) = ctx.file_read_state(&path).await {
-            if let Some(ref stored_hash) = read_state.content_hash {
-                let normalized = normalize_line_endings(&content, LineEnding::Lf);
-                let current_hash = FileReadState::compute_hash(&normalized);
-                if *stored_hash != current_hash {
-                    return Err(crate::error::tool_error::ExecutionFailedSnafu {
+        if let Some(read_state) = ctx.file_read_state(&path).await
+            && let Some(ref stored_hash) = read_state.content_hash
+        {
+            let normalized = normalize_line_endings(&content, LineEnding::Lf);
+            let current_hash = FileReadState::compute_hash(&normalized);
+            if *stored_hash != current_hash {
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
                         message: format!(
                             "File has been modified externally since last read: {}. Read the file again before editing.",
                             path.display()
                         ),
                     }
                     .build());
-                }
             }
         }
 

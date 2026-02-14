@@ -90,53 +90,51 @@ pub fn validate_skill(interface: &SkillInterface) -> Result<(), Vec<String>> {
     }
 
     // Validate inline prompt length
-    if let Some(ref prompt) = interface.prompt_inline {
-        if prompt.len() as i32 > MAX_PROMPT_LEN {
-            errors.push(format!(
-                "prompt_inline exceeds max length of {MAX_PROMPT_LEN}: got {}",
-                prompt.len()
-            ));
-        }
+    if let Some(ref prompt) = interface.prompt_inline
+        && prompt.len() as i32 > MAX_PROMPT_LEN
+    {
+        errors.push(format!(
+            "prompt_inline exceeds max length of {MAX_PROMPT_LEN}: got {}",
+            prompt.len()
+        ));
     }
 
     // Validate when_to_use length
-    if let Some(ref when) = interface.when_to_use {
-        if when.len() as i32 > MAX_WHEN_TO_USE_LEN {
-            errors.push(format!(
-                "when_to_use exceeds max length of {MAX_WHEN_TO_USE_LEN}: got {}",
-                when.len()
-            ));
-        }
+    if let Some(ref when) = interface.when_to_use
+        && when.len() as i32 > MAX_WHEN_TO_USE_LEN
+    {
+        errors.push(format!(
+            "when_to_use exceeds max length of {MAX_WHEN_TO_USE_LEN}: got {}",
+            when.len()
+        ));
     }
 
     // Validate argument_hint length
-    if let Some(ref hint) = interface.argument_hint {
-        if hint.len() as i32 > MAX_ARGUMENT_HINT_LEN {
-            errors.push(format!(
-                "argument_hint exceeds max length of {MAX_ARGUMENT_HINT_LEN}: got {}",
-                hint.len()
-            ));
-        }
+    if let Some(ref hint) = interface.argument_hint
+        && hint.len() as i32 > MAX_ARGUMENT_HINT_LEN
+    {
+        errors.push(format!(
+            "argument_hint exceeds max length of {MAX_ARGUMENT_HINT_LEN}: got {}",
+            hint.len()
+        ));
     }
 
     // Validate model value
-    if let Some(ref model) = interface.model {
-        if !VALID_MODELS.contains(&model.as_str()) {
-            errors.push(format!(
-                "model must be one of {:?}, got '{model}'",
-                VALID_MODELS
-            ));
-        }
+    if let Some(ref model) = interface.model
+        && !VALID_MODELS.contains(&model.as_str())
+    {
+        errors.push(format!(
+            "model must be one of {VALID_MODELS:?}, got '{model}'"
+        ));
     }
 
     // Validate context value
-    if let Some(ref context) = interface.context {
-        if !VALID_CONTEXTS.contains(&context.as_str()) {
-            errors.push(format!(
-                "context must be one of {:?}, got '{context}'",
-                VALID_CONTEXTS
-            ));
-        }
+    if let Some(ref context) = interface.context
+        && !VALID_CONTEXTS.contains(&context.as_str())
+    {
+        errors.push(format!(
+            "context must be one of {VALID_CONTEXTS:?}, got '{context}'"
+        ));
     }
 
     if errors.is_empty() {

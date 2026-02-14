@@ -8,6 +8,7 @@ use serde::Serialize;
 /// Controls whether the model outputs reasoning steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ThinkingConfig {
     /// Enable extended thinking.
     Enabled {
@@ -16,6 +17,7 @@ pub enum ThinkingConfig {
         budget_tokens: Option<i32>,
     },
     /// Disable extended thinking.
+    #[default]
     Disabled,
 }
 
@@ -36,12 +38,6 @@ impl ThinkingConfig {
 
     /// Create a disabled thinking config.
     pub fn disabled() -> Self {
-        Self::Disabled
-    }
-}
-
-impl Default for ThinkingConfig {
-    fn default() -> Self {
         Self::Disabled
     }
 }

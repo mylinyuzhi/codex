@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 
 use minijinja::Environment;
 
+#[allow(clippy::expect_used)]
 static ENGINE: LazyLock<Environment<'static>> = LazyLock::new(|| {
     let mut env = Environment::new();
     // Markdown output — disable HTML auto-escaping.
@@ -26,6 +27,7 @@ static ENGINE: LazyLock<Environment<'static>> = LazyLock::new(|| {
 /// Render a named template with the given context.
 ///
 /// Panics if the template or context is invalid (developer bug).
+#[allow(clippy::expect_used)]
 pub fn render(name: &str, ctx: minijinja::Value) -> String {
     let tmpl = ENGINE.get_template(name).expect("template must exist");
     tmpl.render(ctx).expect("template render must succeed")

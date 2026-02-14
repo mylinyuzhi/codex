@@ -91,17 +91,16 @@ pub fn read_plan_file_if_exists(cwd: &Path) -> Option<String> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "md") {
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    match &latest_file {
-                        None => latest_file = Some((path, modified)),
-                        Some((_, prev_time)) if modified > *prev_time => {
-                            latest_file = Some((path, modified));
-                        }
-                        _ => {}
-                    }
+        if path.extension().is_some_and(|e| e == "md")
+            && let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+        {
+            match &latest_file {
+                None => latest_file = Some((path, modified)),
+                Some((_, prev_time)) if modified > *prev_time => {
+                    latest_file = Some((path, modified));
                 }
+                _ => {}
             }
         }
     }

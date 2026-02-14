@@ -196,7 +196,7 @@ fn test_tokenizer_substitutions() {
         .tokenize("echo $(pwd) `date` $HOME ${PATH}")
         .unwrap();
 
-    let subs: Vec<_> = tokens
+    let subs_count = tokens
         .iter()
         .filter(|t| {
             matches!(
@@ -204,9 +204,9 @@ fn test_tokenizer_substitutions() {
                 TokenKind::CommandSubstitution | TokenKind::VariableExpansion
             )
         })
-        .collect();
+        .count();
 
-    assert_eq!(subs.len(), 4);
+    assert_eq!(subs_count, 4);
 }
 
 // =============================================================================
@@ -396,12 +396,12 @@ fn test_comment_only() {
     let tokenizer = Tokenizer::new();
     let tokens = tokenizer.tokenize("# this is a comment").unwrap();
 
-    let comments: Vec<_> = tokens
+    let comment_count = tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Comment)
-        .collect();
+        .count();
 
-    assert_eq!(comments.len(), 1);
+    assert_eq!(comment_count, 1);
 }
 
 #[test]

@@ -117,10 +117,9 @@ fn spawn_editor(editor: &str, file_path: &PathBuf) -> io::Result<()> {
     let status = cmd.status()?;
 
     if !status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Editor exited with status: {status}"),
-        ));
+        return Err(io::Error::other(format!(
+            "Editor exited with status: {status}"
+        )));
     }
 
     Ok(())

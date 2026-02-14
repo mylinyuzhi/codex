@@ -453,9 +453,7 @@ impl MessageStream {
     /// The returned message represents the accumulated state so far.
     pub fn current_message_snapshot(&self) -> Option<Result<Message>> {
         // Only return a snapshot if we have received message_start
-        if self.state.id.is_none() {
-            return None;
-        }
+        self.state.id.as_ref()?;
         Some(self.build_message())
     }
 
@@ -483,8 +481,7 @@ impl MessageStream {
                         builder.tool_name = Some(name.clone());
                         // Only set initial input if it's a non-empty object
                         // (deltas will be accumulated via input_json_delta events)
-                        if !input.is_null() && input.as_object().map_or(true, |obj| !obj.is_empty())
-                        {
+                        if !input.is_null() && input.as_object().is_none_or(|obj| !obj.is_empty()) {
                             builder.tool_input_json = input.to_string();
                         }
                     }
@@ -492,8 +489,7 @@ impl MessageStream {
                         builder.block_type = ContentBlockType::ServerToolUse;
                         builder.tool_id = Some(id.clone());
                         builder.tool_name = Some(name.clone());
-                        if !input.is_null() && input.as_object().map_or(true, |obj| !obj.is_empty())
-                        {
+                        if !input.is_null() && input.as_object().is_none_or(|obj| !obj.is_empty()) {
                             builder.tool_input_json = input.to_string();
                         }
                     }
@@ -572,7 +568,12 @@ impl MessageStream {
 
         let content: Vec<ContentBlock> = indices
             .into_iter()
-            .filter_map(|idx| self.state.content_blocks.get(&idx).map(|b| b.build()))
+            .filter_map(|idx| {
+                self.state
+                    .content_blocks
+                    .get(&idx)
+                    .map(ContentBlockBuilder::build)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Message {

@@ -99,7 +99,7 @@ impl StreamSnapshot {
         self.tool_calls
             .iter()
             .filter(|tc| tc.is_complete)
-            .map(|tc| tc.to_tool_call())
+            .map(ToolCallSnapshot::to_tool_call)
             .collect()
     }
 }

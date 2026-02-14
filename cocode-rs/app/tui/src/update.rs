@@ -397,13 +397,13 @@ pub async fn handle_command(
             }
         }
         TuiCommand::AcceptSuggestion => {
-            if let Some(suggestions) = state.ui.file_suggestions.take() {
-                if let Some(selected) = suggestions.selected_suggestion() {
-                    state
-                        .ui
-                        .input
-                        .insert_selected_path(suggestions.start_pos, &selected.path);
-                }
+            if let Some(suggestions) = state.ui.file_suggestions.take()
+                && let Some(selected) = suggestions.selected_suggestion()
+            {
+                state
+                    .ui
+                    .input
+                    .insert_selected_path(suggestions.start_pos, &selected.path);
             }
         }
         TuiCommand::DismissSuggestions => {
@@ -422,13 +422,13 @@ pub async fn handle_command(
             }
         }
         TuiCommand::AcceptSkillSuggestion => {
-            if let Some(suggestions) = state.ui.skill_suggestions.take() {
-                if let Some(selected) = suggestions.selected_suggestion() {
-                    state
-                        .ui
-                        .input
-                        .insert_selected_skill(suggestions.start_pos, &selected.name);
-                }
+            if let Some(suggestions) = state.ui.skill_suggestions.take()
+                && let Some(selected) = suggestions.selected_suggestion()
+            {
+                state
+                    .ui
+                    .input
+                    .insert_selected_skill(suggestions.start_pos, &selected.name);
             }
         }
         TuiCommand::DismissSkillSuggestions => {
@@ -447,13 +447,13 @@ pub async fn handle_command(
             }
         }
         TuiCommand::AcceptAgentSuggestion => {
-            if let Some(suggestions) = state.ui.agent_suggestions.take() {
-                if let Some(selected) = suggestions.selected_suggestion() {
-                    state
-                        .ui
-                        .input
-                        .insert_selected_agent(suggestions.start_pos, &selected.agent_type);
-                }
+            if let Some(suggestions) = state.ui.agent_suggestions.take()
+                && let Some(selected) = suggestions.selected_suggestion()
+            {
+                state
+                    .ui
+                    .input
+                    .insert_selected_agent(suggestions.start_pos, &selected.agent_type);
             }
         }
         TuiCommand::DismissAgentSuggestions => {
@@ -472,14 +472,14 @@ pub async fn handle_command(
             }
         }
         TuiCommand::AcceptSymbolSuggestion => {
-            if let Some(suggestions) = state.ui.symbol_suggestions.take() {
-                if let Some(selected) = suggestions.selected_suggestion() {
-                    state.ui.input.insert_selected_symbol(
-                        suggestions.start_pos,
-                        &selected.file_path,
-                        selected.line,
-                    );
-                }
+            if let Some(suggestions) = state.ui.symbol_suggestions.take()
+                && let Some(selected) = suggestions.selected_suggestion()
+            {
+                state.ui.input.insert_selected_symbol(
+                    suggestions.start_pos,
+                    &selected.file_path,
+                    selected.line,
+                );
             }
         }
         TuiCommand::DismissSymbolSuggestions => {
@@ -829,7 +829,7 @@ fn handle_history_up(state: &mut AppState) {
             .ui
             .input
             .history_text(idx as usize)
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         if let Some(text) = text {
             state.ui.input.set_text(text);
             state.ui.input.history_index = Some(idx);
@@ -852,7 +852,7 @@ fn handle_history_down(state: &mut AppState) {
                 .ui
                 .input
                 .history_text(new_idx as usize)
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
             if let Some(text) = text {
                 state.ui.input.set_text(text);
                 state.ui.input.history_index = Some(new_idx);
@@ -884,10 +884,10 @@ pub fn handle_symbol_search_event(
             suggestions,
         } => {
             // Only update if we're still showing suggestions for this query
-            if let Some(ref current) = state.ui.symbol_suggestions {
-                if current.query == query {
-                    state.ui.update_symbol_suggestions(suggestions);
-                }
+            if let Some(ref current) = state.ui.symbol_suggestions
+                && current.query == query
+            {
+                state.ui.update_symbol_suggestions(suggestions);
             }
         }
     }
@@ -905,20 +905,20 @@ pub fn handle_file_search_event(state: &mut AppState, event: FileSearchEvent) {
             suggestions,
         } => {
             // Only update if we're still showing suggestions for this query
-            if let Some(ref current) = state.ui.file_suggestions {
-                if current.query == query {
-                    let items: Vec<FileSuggestionItem> = suggestions
-                        .into_iter()
-                        .map(|s| FileSuggestionItem {
-                            path: s.path,
-                            display_text: s.display_text,
-                            score: s.score,
-                            match_indices: s.match_indices,
-                            is_directory: s.is_directory,
-                        })
-                        .collect();
-                    state.ui.update_file_suggestions(items);
-                }
+            if let Some(ref current) = state.ui.file_suggestions
+                && current.query == query
+            {
+                let items: Vec<FileSuggestionItem> = suggestions
+                    .into_iter()
+                    .map(|s| FileSuggestionItem {
+                        path: s.path,
+                        display_text: s.display_text,
+                        score: s.score,
+                        match_indices: s.match_indices,
+                        is_directory: s.is_directory,
+                    })
+                    .collect();
+                state.ui.update_file_suggestions(items);
             }
         }
     }

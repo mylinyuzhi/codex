@@ -100,7 +100,7 @@ impl PluginLoader {
             .follow_links(false)
             .into_iter();
 
-        for entry in walker.filter_map(|e| e.ok()) {
+        for entry in walker.filter_map(std::result::Result::ok) {
             if entry.file_type().is_dir() {
                 let manifest_path = entry.path().join(PLUGIN_TOML);
                 if manifest_path.is_file() {

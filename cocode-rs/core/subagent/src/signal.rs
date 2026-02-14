@@ -36,6 +36,7 @@ static BACKGROUND_SIGNAL_MAP: Lazy<RwLock<HashMap<String, oneshot::Sender<()>>>>
 /// # Returns
 ///
 /// A oneshot receiver that will receive a signal when backgrounding is requested.
+#[allow(clippy::expect_used)]
 pub fn register_backgroundable_agent(agent_id: String) -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
 
@@ -58,6 +59,7 @@ pub fn register_backgroundable_agent(agent_id: String) -> oneshot::Receiver<()> 
 ///
 /// `true` if the signal was sent successfully, `false` if the agent is not
 /// registered or the channel was already closed.
+#[allow(clippy::expect_used)]
 pub fn trigger_background_transition(agent_id: &str) -> bool {
     let mut map = BACKGROUND_SIGNAL_MAP.write().expect("lock poisoned");
 
@@ -77,6 +79,7 @@ pub fn trigger_background_transition(agent_id: &str) -> bool {
 /// # Arguments
 ///
 /// * `agent_id` - The agent ID to unregister
+#[allow(clippy::expect_used)]
 pub fn unregister_backgroundable_agent(agent_id: &str) {
     let mut map = BACKGROUND_SIGNAL_MAP.write().expect("lock poisoned");
     map.remove(agent_id);
@@ -91,6 +94,7 @@ pub fn unregister_backgroundable_agent(agent_id: &str) {
 /// # Returns
 ///
 /// `true` if the agent is registered and can receive a background signal.
+#[allow(clippy::expect_used)]
 pub fn is_agent_backgroundable(agent_id: &str) -> bool {
     let map = BACKGROUND_SIGNAL_MAP.read().expect("lock poisoned");
     map.contains_key(agent_id)
@@ -100,6 +104,7 @@ pub fn is_agent_backgroundable(agent_id: &str) -> bool {
 ///
 /// This is useful for UI elements that need to show which agents can be
 /// sent to background.
+#[allow(clippy::expect_used)]
 pub fn backgroundable_agent_ids() -> Vec<String> {
     let map = BACKGROUND_SIGNAL_MAP.read().expect("lock poisoned");
     map.keys().cloned().collect()

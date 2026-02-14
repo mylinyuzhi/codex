@@ -67,17 +67,20 @@ impl InterceptorRegistry {
         }
     }
 
+    #[allow(clippy::expect_used)]
     fn register(&self, interceptor: Arc<dyn HttpInterceptor>) {
         let name = interceptor.name().to_string();
         let mut interceptors = self.interceptors.write().expect("lock poisoned");
         interceptors.insert(name, interceptor);
     }
 
+    #[allow(clippy::expect_used)]
     fn get(&self, name: &str) -> Option<Arc<dyn HttpInterceptor>> {
         let interceptors = self.interceptors.read().expect("lock poisoned");
         interceptors.get(name).cloned()
     }
 
+    #[allow(clippy::expect_used)]
     fn list(&self) -> Vec<String> {
         let interceptors = self.interceptors.read().expect("lock poisoned");
         interceptors.keys().cloned().collect()

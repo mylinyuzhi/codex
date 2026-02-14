@@ -162,13 +162,13 @@ impl ShellSnapshot {
         };
 
         // Validate the snapshot
-        if let Some(ref snapshot) = snapshot {
-            if let Err(err) = validate_snapshot(shell, &snapshot.path, config.timeout).await {
-                tracing::error!("Shell snapshot validation failed: {err:?}");
-                // Clean up the invalid snapshot
-                let _ = fs::remove_file(&snapshot.path).await;
-                return None;
-            }
+        if let Some(ref snapshot) = snapshot
+            && let Err(err) = validate_snapshot(shell, &snapshot.path, config.timeout).await
+        {
+            tracing::error!("Shell snapshot validation failed: {err:?}");
+            // Clean up the invalid snapshot
+            let _ = fs::remove_file(&snapshot.path).await;
+            return None;
         }
 
         snapshot

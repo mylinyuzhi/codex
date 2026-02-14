@@ -30,6 +30,7 @@ const CACHE_SIZE: usize = 100;
 const CACHE_TTL_SECS: u64 = 15 * 60; // 15 minutes
 
 /// Static HTTP client for connection pooling
+#[allow(clippy::expect_used)]
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
@@ -45,6 +46,7 @@ struct CachedResult {
 }
 
 /// LRU cache for search results with TTL
+#[allow(clippy::expect_used)]
 static SEARCH_CACHE: LazyLock<Mutex<LruCache<String, CachedResult>>> = LazyLock::new(|| {
     Mutex::new(LruCache::new(
         NonZeroUsize::new(CACHE_SIZE).expect("CACHE_SIZE must be > 0"),
@@ -100,6 +102,7 @@ enum WebSearchErrorType {
     ParseError,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 impl WebSearchErrorType {
     fn as_str(&self) -> &'static str {
         match self {
@@ -240,7 +243,7 @@ impl Tool for WebSearchTool {
         // 2. Determine max_results (clamp to valid range)
         let max_results = input
             .get("max_results")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .map(|n| n as usize)
             .unwrap_or(config.max_results)
             .clamp(1, 20);
@@ -357,6 +360,7 @@ async fn search_duckduckgo(
 }
 
 /// Parse DuckDuckGo HTML results page
+#[allow(clippy::unwrap_used)]
 fn parse_duckduckgo_html(
     html: &str,
     query: &str,
@@ -408,11 +412,11 @@ fn percent_decode(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '%' {
             let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
+            if hex.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+            {
+                result.push(byte as char);
+                continue;
             }
             result.push('%');
             result.push_str(&hex);
@@ -509,7 +513,7 @@ async fn search_tavily(
     if !status.is_success() {
         return Err((
             WebSearchErrorType::ProviderError,
-            format!("Tavily API returned status {}", status),
+            format!("Tavily API returned status {status}"),
         ));
     }
 

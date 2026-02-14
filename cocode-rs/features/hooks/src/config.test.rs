@@ -97,7 +97,7 @@ command = "echo"
 
     let result = load_hooks_from_toml(&file);
     assert!(result.is_err());
-    assert!(result.err().expect("error").contains("invalid matcher"));
+    assert!(result.expect_err("error").contains("invalid matcher"));
 }
 
 #[test]

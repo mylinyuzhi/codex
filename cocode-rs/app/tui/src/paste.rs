@@ -96,6 +96,7 @@ impl PasteManager {
     }
 
     /// Create a new paste manager with a custom cache directory.
+    #[allow(clippy::expect_used)]
     pub fn with_cache_dir(cache_dir: PathBuf) -> Self {
         // Create cache directory if it doesn't exist
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
@@ -208,6 +209,7 @@ impl PasteManager {
     ///
     /// Returns a vector of content blocks suitable for sending to the API.
     /// Text between pills becomes text blocks, pills become their resolved content.
+    #[allow(clippy::expect_used)]
     pub fn resolve_to_blocks(&self, text: &str) -> Vec<ContentBlock> {
         let mut blocks = Vec::new();
         let mut last_end = 0;
@@ -224,30 +226,29 @@ impl PasteManager {
             }
 
             // Resolve pill to content
-            if let Some(id_match) = captures.get(2) {
-                if let Ok(id) = id_match.as_str().parse::<i32>() {
-                    if let Some(entry) = self.entries.get(&id) {
-                        match &entry.kind {
-                            PasteKind::Text => {
-                                if let Some(content) = self.get_text_content(entry) {
-                                    blocks.push(ContentBlock::text(content));
-                                }
-                            }
-                            PasteKind::Image { media_type } => {
-                                if let Some(data) = self.get_image_data(entry) {
-                                    let base64_data = base64::Engine::encode(
-                                        &base64::engine::general_purpose::STANDARD,
-                                        &data,
-                                    );
-                                    blocks.push(ContentBlock::Image {
-                                        source: ImageSource::Base64 {
-                                            data: base64_data,
-                                            media_type: media_type.clone(),
-                                        },
-                                        detail: None,
-                                    });
-                                }
-                            }
+            if let Some(id_match) = captures.get(2)
+                && let Ok(id) = id_match.as_str().parse::<i32>()
+                && let Some(entry) = self.entries.get(&id)
+            {
+                match &entry.kind {
+                    PasteKind::Text => {
+                        if let Some(content) = self.get_text_content(entry) {
+                            blocks.push(ContentBlock::text(content));
+                        }
+                    }
+                    PasteKind::Image { media_type } => {
+                        if let Some(data) = self.get_image_data(entry) {
+                            let base64_data = base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &data,
+                            );
+                            blocks.push(ContentBlock::Image {
+                                source: ImageSource::Base64 {
+                                    data: base64_data,
+                                    media_type: media_type.clone(),
+                                },
+                                detail: None,
+                            });
                         }
                     }
                 }
@@ -275,6 +276,7 @@ impl PasteManager {
     /// Resolve paste pills to plain text (for display/history).
     ///
     /// Returns the text with pills replaced by their actual content.
+    #[allow(clippy::expect_used)]
     pub fn resolve_pills(&self, text: &str) -> String {
         let mut result = String::new();
         let mut last_end = 0;

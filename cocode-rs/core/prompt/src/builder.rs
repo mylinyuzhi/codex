@@ -30,7 +30,7 @@ impl SystemPromptBuilder {
         let keep_coding = ctx
             .output_style
             .as_ref()
-            .map_or(true, |s| s.keep_coding_instructions);
+            .is_none_or(|s| s.keep_coding_instructions);
 
         // 1. Identity (strip Communication Style when output style is active)
         let identity = if has_output_style {

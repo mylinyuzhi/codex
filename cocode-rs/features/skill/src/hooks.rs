@@ -135,7 +135,7 @@ fn convert_single_hook(
     // Convert the matcher
     let matcher = config.matcher.as_ref().map(convert_matcher);
 
-    let hook_name = format!("{}:hook:{}", skill_name, index);
+    let hook_name = format!("{skill_name}:hook:{index}");
 
     Some(HookDefinition {
         name: hook_name,

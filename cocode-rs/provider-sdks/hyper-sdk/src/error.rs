@@ -192,6 +192,7 @@ pub fn parse_retry_after(message: &str) -> Option<Duration> {
     }
 }
 
+#[allow(clippy::expect_used)]
 fn retry_after_regex() -> &'static regex_lite::Regex {
     static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {

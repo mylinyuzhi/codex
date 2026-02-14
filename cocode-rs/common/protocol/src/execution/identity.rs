@@ -138,8 +138,8 @@ impl Default for ExecutionIdentity {
 impl fmt::Display for ExecutionIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Role(role) => write!(f, "role:{}", role),
-            Self::Spec(spec) => write!(f, "spec:{}", spec),
+            Self::Role(role) => write!(f, "role:{role}"),
+            Self::Spec(spec) => write!(f, "spec:{spec}"),
             Self::Inherit => write!(f, "inherit"),
         }
     }

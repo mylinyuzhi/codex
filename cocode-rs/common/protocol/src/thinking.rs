@@ -137,15 +137,15 @@ impl ThinkingLevel {
 
     /// Validate configuration values.
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(budget) = self.budget_tokens {
-            if budget < 0 {
-                return Err(format!("budget_tokens must be >= 0, got {budget}"));
-            }
+        if let Some(budget) = self.budget_tokens
+            && budget < 0
+        {
+            return Err(format!("budget_tokens must be >= 0, got {budget}"));
         }
-        if let Some(max_out) = self.max_output_tokens {
-            if max_out < 0 {
-                return Err(format!("max_output_tokens must be >= 0, got {max_out}"));
-            }
+        if let Some(max_out) = self.max_output_tokens
+            && max_out < 0
+        {
+            return Err(format!("max_output_tokens must be >= 0, got {max_out}"));
         }
         Ok(())
     }

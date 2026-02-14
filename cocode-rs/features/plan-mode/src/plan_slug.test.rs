@@ -55,7 +55,7 @@ fn test_get_unique_slug_collision_avoidance() {
 
     // Generate a slug and mark it as existing
     let existing_slug = generate_slug();
-    let existing = vec![existing_slug.clone()];
+    let existing = vec![existing_slug];
 
     // Get a new slug avoiding the existing one
     let new_slug = get_unique_slug("collision-test", Some(&existing));

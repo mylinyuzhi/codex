@@ -51,7 +51,7 @@ pub fn load_commands_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContri
         .max_depth(3)
         .follow_links(false)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
     {
         if entry.file_type().is_dir() {
             let command_path = entry.path().join(COMMAND_TOML);

@@ -32,7 +32,7 @@ fn test_submission_id_conversions() {
 #[test]
 fn test_correlated_event_uncorrelated() {
     let event = LoopEvent::StreamRequestStart;
-    let correlated = CorrelatedEvent::uncorrelated(event.clone());
+    let correlated = CorrelatedEvent::uncorrelated(event);
 
     assert!(!correlated.has_correlation());
     assert!(correlated.correlation_id().is_none());
@@ -43,7 +43,7 @@ fn test_correlated_event_uncorrelated() {
 fn test_correlated_event_with_id() {
     let event = LoopEvent::StreamRequestStart;
     let id = SubmissionId::from_string("sub-123");
-    let correlated = CorrelatedEvent::correlated(event, id.clone());
+    let correlated = CorrelatedEvent::correlated(event, id);
 
     assert!(correlated.has_correlation());
     assert_eq!(correlated.correlation_id().unwrap().as_str(), "sub-123");

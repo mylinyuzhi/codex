@@ -77,7 +77,11 @@ fn test_render() {
     bar.render(area, &mut buf);
 
     // Check that the buffer contains expected content
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("claude-sonnet-4"));
     assert!(content.contains("PLAN"));
 }

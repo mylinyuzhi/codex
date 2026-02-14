@@ -521,7 +521,7 @@ impl SessionState {
             let spec = if model_name.contains('/') {
                 model_name
                     .parse::<cocode_protocol::model::ModelSpec>()
-                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{model_name}': {e}"))?
             } else {
                 // Use current provider with the given model name
                 let provider = self.provider().to_string();
@@ -566,7 +566,7 @@ impl SessionState {
             let spec = if model_name.contains('/') {
                 model_name
                     .parse::<cocode_protocol::model::ModelSpec>()
-                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{model_name}': {e}"))?
             } else {
                 let provider = self.provider().to_string();
                 cocode_protocol::model::ModelSpec::new(provider, model_name)
@@ -822,7 +822,7 @@ impl SessionState {
                 if e.is_no_model_configured() {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("{}", e))
+                    Err(anyhow::anyhow!("{e}"))
                 }
             }
         }
@@ -835,7 +835,7 @@ impl SessionState {
         self.model_hub
             .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
             .map(|(m, _)| m)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Switch model for a specific role.
@@ -966,6 +966,7 @@ impl SessionState {
     /// at its next Step 6.5 drain.
     ///
     /// Returns the command ID.
+    #[allow(clippy::unwrap_used)]
     pub fn queue_command(&self, prompt: impl Into<String>) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -982,16 +983,19 @@ impl SessionState {
     }
 
     /// Get the number of queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn queued_count(&self) -> usize {
         self.queued_commands.lock().unwrap().len()
     }
 
     /// Take all queued commands (for passing to AgentLoop).
+    #[allow(clippy::unwrap_used)]
     pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
         std::mem::take(&mut *self.queued_commands.lock().unwrap())
     }
 
     /// Clear all queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn clear_queued_commands(&self) {
         self.queued_commands.lock().unwrap().clear();
     }

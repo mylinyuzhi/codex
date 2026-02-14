@@ -24,7 +24,7 @@ use serde::Serialize;
 ///   }
 /// }
 /// ```
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct AttachmentConfig {
     /// Disable all attachments.
     #[serde(default)]
@@ -33,15 +33,6 @@ pub struct AttachmentConfig {
     /// Enable token usage attachment in responses.
     #[serde(default)]
     pub enable_token_usage_attachment: bool,
-}
-
-impl Default for AttachmentConfig {
-    fn default() -> Self {
-        Self {
-            disable_attachments: false,
-            enable_token_usage_attachment: false,
-        }
-    }
 }
 
 impl AttachmentConfig {

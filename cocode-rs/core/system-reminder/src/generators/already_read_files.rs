@@ -127,7 +127,7 @@ impl AttachmentGenerator for AlreadyReadFilesGenerator {
                 role: MessageRole::User,
                 blocks: vec![ContentBlock::tool_result(
                     id,
-                    format!("[{} additional files previously read]", remaining),
+                    format!("[{remaining} additional files previously read]"),
                 )],
                 is_meta: true,
             });

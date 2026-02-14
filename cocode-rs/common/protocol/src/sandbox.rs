@@ -82,8 +82,7 @@ impl std::str::FromStr for SandboxMode {
             }
             "full-access" | "fullaccess" | "full_access" => Ok(SandboxMode::FullAccess),
             _ => Err(format!(
-                "unknown sandbox mode: '{}'. Expected: read-only, workspace-write, or full-access",
-                s
+                "unknown sandbox mode: '{s}'. Expected: read-only, workspace-write, or full-access",
             )),
         }
     }

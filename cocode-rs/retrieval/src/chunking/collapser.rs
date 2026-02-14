@@ -136,12 +136,12 @@ impl SmartCollapser {
                         }
                     }
                     '}' => {
-                        if depth == 2 {
-                            if let Some(start) = collapse_from.take() {
-                                // Replace nested block with placeholder
-                                result.truncate(start);
-                                result.push_str(&self.placeholder);
-                            }
+                        if depth == 2
+                            && let Some(start) = collapse_from.take()
+                        {
+                            // Replace nested block with placeholder
+                            result.truncate(start);
+                            result.push_str(&self.placeholder);
                         }
                         depth = depth.saturating_sub(1);
                         if depth < 1 {

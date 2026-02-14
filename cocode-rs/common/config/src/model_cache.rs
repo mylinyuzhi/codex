@@ -118,10 +118,10 @@ impl ModelCache {
         // PHASE 3: Build resolved_models from cache (for role lookups)
         let mut resolved_models = HashMap::new();
         for role in ModelRole::all() {
-            if let Some(spec) = roles.get(*role) {
-                if let Some(info) = self.get(spec) {
-                    resolved_models.insert(*role, info.clone());
-                }
+            if let Some(spec) = roles.get(*role)
+                && let Some(info) = self.get(spec)
+            {
+                resolved_models.insert(*role, info.clone());
             }
         }
 
@@ -156,7 +156,7 @@ mod tests {
             ..Default::default()
         };
 
-        cache.insert(spec.clone(), info.clone());
+        cache.insert(spec.clone(), info);
         assert_eq!(cache.cache.len(), 1);
         assert!(cache.get(&spec).is_some());
         assert_eq!(cache.get(&spec).unwrap().slug, "gpt-4");

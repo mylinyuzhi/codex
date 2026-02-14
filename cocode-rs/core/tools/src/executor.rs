@@ -379,6 +379,7 @@ impl StreamingToolExecutor {
     /// to tools the model was never offered (e.g. `apply_patch` when
     /// `apply_patch_tool_type` is `None`, or tools outside
     /// `experimental_supported_tools`).
+    #[allow(clippy::unwrap_used)]
     pub fn set_allowed_tool_names(&self, names: HashSet<String>) {
         *self.allowed_tool_names.write().unwrap() = Some(names);
     }
@@ -387,6 +388,7 @@ impl StreamingToolExecutor {
     ///
     /// When a skill specifies `allowed_tools`, only those tools (plus "Skill")
     /// are allowed during the skill's execution.
+    #[allow(clippy::unwrap_used)]
     pub fn set_skill_allowed_tools(&self, tools: Option<HashSet<String>>) {
         *self.skill_allowed_tools.write().unwrap() = tools;
     }
@@ -396,6 +398,7 @@ impl StreamingToolExecutor {
     /// Returns `true` only if the tool passes both checks:
     /// 1. Model allowlist: no allowlist set (all tools allowed) or the name is in the set
     /// 2. Skill restriction: no restriction set or the name is in the skill's allowed set
+    #[allow(clippy::unwrap_used)]
     fn is_tool_allowed(&self, name: &str) -> bool {
         // Check model-level allowlist
         let model_allowed = match self.allowed_tool_names.read().unwrap().as_ref() {
@@ -1003,10 +1006,10 @@ impl StreamingToolExecutor {
 
     /// Emit a loop event.
     async fn emit_event(&self, event: LoopEvent) {
-        if let Some(tx) = &self.event_tx {
-            if let Err(e) = tx.send(event).await {
-                debug!("Failed to send tool event: {e}");
-            }
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(event).await
+        {
+            debug!("Failed to send tool event: {e}");
         }
     }
 
@@ -1385,10 +1388,9 @@ async fn check_permission_pipeline(
             file_path.as_deref(),
             crate::permission_rules::RuleAction::Allow,
             command_input.as_deref(),
-        ) {
-            if decision.result.is_allowed() {
-                return cocode_protocol::PermissionResult::Allowed;
-            }
+        ) && decision.result.is_allowed()
+        {
+            return cocode_protocol::PermissionResult::Allowed;
         }
     }
 
@@ -1471,16 +1473,19 @@ async fn execute_tool_inner(
     // Defense-in-depth: reject calls to feature-gated tools that are disabled.
     // Normally the model never sees these (definitions_filtered excludes them),
     // but a hallucinated or injected tool name could still reach here.
-    if let Some(feature) = tool.feature_gate() {
-        if !ctx.features.enabled(feature) {
-            return Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
-        }
+    if let Some(feature) = tool.feature_gate()
+        && !ctx.features.enabled(feature)
+    {
+        return Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
     }
 
     // Validate input
     let validation = tool.validate(&input).await;
     if let ValidationResult::Invalid { errors } = validation {
-        let error_msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        let error_msgs: Vec<String> = errors
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         return Err(crate::error::tool_error::InvalidInputSnafu {
             message: error_msgs.join(", "),
         }

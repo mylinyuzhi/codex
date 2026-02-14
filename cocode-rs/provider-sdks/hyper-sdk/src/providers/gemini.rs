@@ -237,14 +237,13 @@ impl Model for GeminiModel {
         config.thinking_config = build_gemini_thinking_config(&request);
 
         // Apply catchall extra params from provider options
-        if let Some(ref options) = request.provider_options {
-            if let Some(gem_opts) = downcast_options::<GeminiOptions>(options) {
-                if !gem_opts.extra.is_empty() {
-                    config
-                        .extra
-                        .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
-            }
+        if let Some(ref options) = request.provider_options
+            && let Some(gem_opts) = downcast_options::<GeminiOptions>(options)
+            && !gem_opts.extra.is_empty()
+        {
+            config
+                .extra
+                .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
 
         // Make request
@@ -297,14 +296,13 @@ impl Model for GeminiModel {
         config.thinking_config = build_gemini_thinking_config(&request);
 
         // Apply catchall extra params from provider options
-        if let Some(ref options) = request.provider_options {
-            if let Some(gem_opts) = downcast_options::<GeminiOptions>(options) {
-                if !gem_opts.extra.is_empty() {
-                    config
-                        .extra
-                        .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
-            }
+        if let Some(ref options) = request.provider_options
+            && let Some(gem_opts) = downcast_options::<GeminiOptions>(options)
+            && !gem_opts.extra.is_empty()
+        {
+            config
+                .extra
+                .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
 
         // Get streaming response
@@ -371,23 +369,22 @@ impl Model for GeminiModel {
 /// 2. Unified request.thinking_config (if enabled)
 fn build_gemini_thinking_config(request: &GenerateRequest) -> Option<gem::types::ThinkingConfig> {
     // Check provider-specific GeminiOptions first (higher priority)
-    if let Some(ref opts) = request.provider_options {
-        if let Some(gem_opts) = downcast_options::<GeminiOptions>(opts) {
-            if let Some(level) = gem_opts.thinking_level {
-                // Convert hyper-sdk ThinkingLevel to google_genai ThinkingLevel
-                let gem_level = match level {
-                    ThinkingLevel::None => return None, // Explicitly disabled
-                    ThinkingLevel::Low => gem::types::ThinkingLevel::Low,
-                    ThinkingLevel::Medium => gem::types::ThinkingLevel::Medium,
-                    ThinkingLevel::High => gem::types::ThinkingLevel::High,
-                };
-                let mut config = gem::types::ThinkingConfig::with_level(gem_level);
-                // Apply include_thoughts if set (default true when thinking is enabled)
-                let include = gem_opts.include_thoughts.unwrap_or(true);
-                config.include_thoughts = Some(include);
-                return Some(config);
-            }
-        }
+    if let Some(ref opts) = request.provider_options
+        && let Some(gem_opts) = downcast_options::<GeminiOptions>(opts)
+        && let Some(level) = gem_opts.thinking_level
+    {
+        // Convert hyper-sdk ThinkingLevel to google_genai ThinkingLevel
+        let gem_level = match level {
+            ThinkingLevel::None => return None, // Explicitly disabled
+            ThinkingLevel::Low => gem::types::ThinkingLevel::Low,
+            ThinkingLevel::Medium => gem::types::ThinkingLevel::Medium,
+            ThinkingLevel::High => gem::types::ThinkingLevel::High,
+        };
+        let mut config = gem::types::ThinkingConfig::with_level(gem_level);
+        // Apply include_thoughts if set (default true when thinking is enabled)
+        let include = gem_opts.include_thoughts.unwrap_or(true);
+        config.include_thoughts = Some(include);
+        return Some(config);
     }
 
     None
@@ -693,80 +690,80 @@ fn convert_stream_chunk_to_events(
 ) -> Vec<Result<StreamEvent, HyperError>> {
     let mut events = Vec::new();
 
-    if let Some(candidates) = &chunk.candidates {
-        if let Some(first) = candidates.first() {
-            if let Some(content) = &first.content {
-                if let Some(parts) = &content.parts {
-                    for part in parts {
-                        // Text delta
-                        if let Some(text) = &part.text {
-                            if part.thought == Some(true) {
-                                events.push(Ok(StreamEvent::ThinkingDelta {
-                                    index: 0,
-                                    delta: text.clone(),
-                                }));
-                            } else {
-                                events.push(Ok(StreamEvent::TextDelta {
-                                    index: 0,
-                                    delta: text.clone(),
-                                }));
-                            }
-                        }
+    if let Some(candidates) = &chunk.candidates
+        && let Some(first) = candidates.first()
+    {
+        if let Some(content) = &first.content
+            && let Some(parts) = &content.parts
+        {
+            for part in parts {
+                // Text delta
+                if let Some(text) = &part.text {
+                    if part.thought == Some(true) {
+                        events.push(Ok(StreamEvent::ThinkingDelta {
+                            index: 0,
+                            delta: text.clone(),
+                        }));
+                    } else {
+                        events.push(Ok(StreamEvent::TextDelta {
+                            index: 0,
+                            delta: text.clone(),
+                        }));
+                    }
+                }
 
-                        // Function call
-                        if let Some(fc) = &part.function_call {
-                            let name = fc.name.clone().unwrap_or_default();
-                            let current_index = *fc_index;
-                            *fc_index += 1;
+                // Function call
+                if let Some(fc) = &part.function_call {
+                    let name = fc.name.clone().unwrap_or_default();
+                    let current_index = *fc_index;
+                    *fc_index += 1;
 
-                            // Generate enhanced call_id with embedded function name:
-                            // - Server-provided ID: srvgen@<name>@<original_id>
-                            // - Client-generated ID: cligen@<name>#<index>@<uuid>
-                            let call_id = match &fc.id {
-                                Some(server_id) => enhance_server_call_id(server_id, &name),
-                                None => generate_client_call_id(&name, current_index),
-                            };
+                    // Generate enhanced call_id with embedded function name:
+                    // - Server-provided ID: srvgen@<name>@<original_id>
+                    // - Client-generated ID: cligen@<name>#<index>@<uuid>
+                    let call_id = match &fc.id {
+                        Some(server_id) => enhance_server_call_id(server_id, &name),
+                        None => generate_client_call_id(&name, current_index),
+                    };
 
-                            events.push(Ok(StreamEvent::ToolCallStart {
-                                index: current_index,
-                                id: call_id.clone(),
-                                name: name.clone(),
-                            }));
-                            // Send arguments as a done event if available
-                            if let Some(args) = &fc.args {
-                                events.push(Ok(StreamEvent::ToolCallDone {
-                                    index: current_index,
-                                    tool_call: ToolCall {
-                                        id: call_id,
-                                        name,
-                                        arguments: args.clone(),
-                                    },
-                                }));
-                            }
-                        }
+                    events.push(Ok(StreamEvent::ToolCallStart {
+                        index: current_index,
+                        id: call_id.clone(),
+                        name: name.clone(),
+                    }));
+                    // Send arguments as a done event if available
+                    if let Some(args) = &fc.args {
+                        events.push(Ok(StreamEvent::ToolCallDone {
+                            index: current_index,
+                            tool_call: ToolCall {
+                                id: call_id,
+                                name,
+                                arguments: args.clone(),
+                            },
+                        }));
                     }
                 }
             }
+        }
 
-            // Check for finish reason
-            if let Some(reason) = first.finish_reason {
-                let finish = convert_finish_reason(reason);
-                let usage = chunk.usage_metadata.as_ref().map(|u| TokenUsage {
-                    prompt_tokens: u.prompt_token_count.unwrap_or(0) as i64,
-                    completion_tokens: u.candidates_token_count.unwrap_or(0) as i64,
-                    total_tokens: u.total_token_count.unwrap_or(0) as i64,
-                    cache_read_tokens: u.cached_content_token_count.map(|v| v as i64),
-                    cache_creation_tokens: None,
-                    reasoning_tokens: None,
-                });
+        // Check for finish reason
+        if let Some(reason) = first.finish_reason {
+            let finish = convert_finish_reason(reason);
+            let usage = chunk.usage_metadata.as_ref().map(|u| TokenUsage {
+                prompt_tokens: u.prompt_token_count.unwrap_or(0) as i64,
+                completion_tokens: u.candidates_token_count.unwrap_or(0) as i64,
+                total_tokens: u.total_token_count.unwrap_or(0) as i64,
+                cache_read_tokens: u.cached_content_token_count.map(|v| v as i64),
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
+            });
 
-                events.push(Ok(StreamEvent::response_done_full(
-                    chunk.response_id.clone().unwrap_or_default(),
-                    chunk.model_version.clone().unwrap_or_default(),
-                    usage,
-                    finish,
-                )));
-            }
+            events.push(Ok(StreamEvent::response_done_full(
+                chunk.response_id.clone().unwrap_or_default(),
+                chunk.model_version.clone().unwrap_or_default(),
+                usage,
+                finish,
+            )));
         }
     }
 

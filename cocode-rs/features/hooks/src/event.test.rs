@@ -50,6 +50,6 @@ fn test_clone_eq_hash() {
 
     // Test Hash by inserting into a HashSet
     let mut set = std::collections::HashSet::new();
-    set.insert(a.clone());
+    set.insert(a);
     assert!(set.contains(&b));
 }

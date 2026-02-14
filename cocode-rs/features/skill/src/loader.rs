@@ -160,22 +160,22 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
 /// Otherwise, falls back to `prompt_inline`.
 fn resolve_prompt(skill_dir: &Path, interface: &SkillInterface) -> Result<String, String> {
     // prompt_file takes precedence over prompt_inline
-    if let Some(ref file) = interface.prompt_file {
-        if !file.is_empty() {
-            let prompt_path = skill_dir.join(file);
-            return fs::read_to_string(&prompt_path).map_err(|err| {
-                format!(
-                    "failed to read prompt file '{}': {err}",
-                    prompt_path.display()
-                )
-            });
-        }
+    if let Some(ref file) = interface.prompt_file
+        && !file.is_empty()
+    {
+        let prompt_path = skill_dir.join(file);
+        return fs::read_to_string(&prompt_path).map_err(|err| {
+            format!(
+                "failed to read prompt file '{}': {err}",
+                prompt_path.display()
+            )
+        });
     }
 
-    if let Some(ref inline) = interface.prompt_inline {
-        if !inline.is_empty() {
-            return Ok(inline.clone());
-        }
+    if let Some(ref inline) = interface.prompt_inline
+        && !inline.is_empty()
+    {
+        return Ok(inline.clone());
     }
 
     Err("no prompt content available".to_string())

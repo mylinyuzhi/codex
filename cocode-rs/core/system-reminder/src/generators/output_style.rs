@@ -64,8 +64,7 @@ impl AttachmentGenerator for OutputStyleGenerator {
             .unwrap_or("custom");
 
         let reminder = format!(
-            "Remember: Follow the active output style \"{}\" instructions in your system prompt.",
-            style_name
+            "Remember: Follow the active output style \"{style_name}\" instructions in your system prompt."
         );
 
         Ok(Some(SystemReminder::new(

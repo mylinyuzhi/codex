@@ -34,7 +34,7 @@ use async_trait::async_trait;
 /// Reranker capabilities descriptor.
 ///
 /// Describes the runtime characteristics of a reranker implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RerankerCapabilities {
     /// Whether this reranker requires network access
     pub requires_network: bool,
@@ -44,17 +44,6 @@ pub struct RerankerCapabilities {
     pub max_batch_size: Option<i32>,
     /// Whether the rerank operation is truly async (vs sync wrapped in async)
     pub is_async: bool,
-}
-
-impl Default for RerankerCapabilities {
-    fn default() -> Self {
-        Self {
-            requires_network: false,
-            supports_batch: false,
-            max_batch_size: None,
-            is_async: false,
-        }
-    }
 }
 
 /// Async reranker trait for post-retrieval score adjustment.

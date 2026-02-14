@@ -271,19 +271,19 @@ impl SqliteVecStore {
                 cause: e.to_string(),
             })?;
 
-        if let Some(stored_dim) = Self::parse_vec0_dimension(&create_sql) {
-            if stored_dim != dimension {
-                tracing::warn!(
-                    stored = stored_dim,
-                    requested = dimension,
-                    "Embedding dimension mismatch — clearing vector data and reinitializing"
-                );
-                conn.execute_batch("DROP TABLE IF EXISTS chunks_vec")
-                    .map_err(|e| RetrievalErr::SqliteError {
-                        path: path.clone(),
-                        cause: format!("failed to drop chunks_vec for dimension reset: {e}"),
-                    })?;
-            }
+        if let Some(stored_dim) = Self::parse_vec0_dimension(&create_sql)
+            && stored_dim != dimension
+        {
+            tracing::warn!(
+                stored = stored_dim,
+                requested = dimension,
+                "Embedding dimension mismatch — clearing vector data and reinitializing"
+            );
+            conn.execute_batch("DROP TABLE IF EXISTS chunks_vec")
+                .map_err(|e| RetrievalErr::SqliteError {
+                    path: path.clone(),
+                    cause: format!("failed to drop chunks_vec for dimension reset: {e}"),
+                })?;
         }
 
         Ok(())

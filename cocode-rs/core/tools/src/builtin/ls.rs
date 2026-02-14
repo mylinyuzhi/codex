@@ -270,19 +270,19 @@ impl Tool for LsTool {
 
         let depth = input
             .get("depth")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .map(|v| v as i32)
             .unwrap_or(self.default_depth);
 
         let offset = input
             .get("offset")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .map(|v| v as i32)
             .unwrap_or(1);
 
         let limit = input
             .get("limit")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .map(|v| v as i32)
             .unwrap_or(self.default_limit);
 
@@ -376,8 +376,7 @@ impl Tool for LsTool {
 
         if truncated {
             output.push(format!(
-                "[Results truncated at {} entries — use a more specific path or reduce depth]",
-                MAX_COLLECT
+                "[Results truncated at {MAX_COLLECT} entries — use a more specific path or reduce depth]"
             ));
         }
 

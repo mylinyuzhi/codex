@@ -23,8 +23,7 @@ pub async fn run(model: &Arc<dyn Model>) -> Result<()> {
     let text = extract_text(&response);
     assert!(
         text.to_lowercase().contains("red"),
-        "Expected 'red' in response, got: {}",
-        text
+        "Expected 'red' in response, got: {text}"
     );
     Ok(())
 }

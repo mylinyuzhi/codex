@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn test_api_key_debug_redacted() {
         let key = ApiKey::new("secret-key".to_string());
-        let debug_output = format!("{:?}", key);
+        let debug_output = format!("{key:?}");
         assert_eq!(debug_output, "ApiKey([REDACTED])");
         assert!(!debug_output.contains("secret-key"));
     }

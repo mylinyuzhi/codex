@@ -308,26 +308,26 @@ impl Model for ZaiModel {
         }
 
         // Handle provider-specific options
-        if let Some(ref options) = request.provider_options {
-            if let Some(zai_opts) = downcast_options::<ZaiOptions>(options) {
-                if let Some(budget) = zai_opts.thinking_budget_tokens {
-                    params = params.thinking(zai::ThinkingConfig::enabled_with_budget(budget));
-                }
-                if let Some(do_sample) = zai_opts.do_sample {
-                    params = params.do_sample(do_sample);
-                }
-                if let Some(ref request_id) = zai_opts.request_id {
-                    params = params.request_id(request_id);
-                }
-                if let Some(ref user_id) = zai_opts.user_id {
-                    params = params.user_id(user_id);
-                }
-                // Apply catchall extra params
-                if !zai_opts.extra.is_empty() {
-                    params
-                        .extra
-                        .extend(zai_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
+        if let Some(ref options) = request.provider_options
+            && let Some(zai_opts) = downcast_options::<ZaiOptions>(options)
+        {
+            if let Some(budget) = zai_opts.thinking_budget_tokens {
+                params = params.thinking(zai::ThinkingConfig::enabled_with_budget(budget));
+            }
+            if let Some(do_sample) = zai_opts.do_sample {
+                params = params.do_sample(do_sample);
+            }
+            if let Some(ref request_id) = zai_opts.request_id {
+                params = params.request_id(request_id);
+            }
+            if let Some(ref user_id) = zai_opts.user_id {
+                params = params.user_id(user_id);
+            }
+            // Apply catchall extra params
+            if !zai_opts.extra.is_empty() {
+                params
+                    .extra
+                    .extend(zai_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
             }
         }
 
@@ -400,10 +400,10 @@ fn convert_zai_response(completion: zai::Completion) -> Result<GenerateResponse,
     // Get content from first choice
     if let Some(choice) = completion.choices.first() {
         // Add text content
-        if let Some(text) = &choice.message.content {
-            if !text.is_empty() {
-                content.push(ContentBlock::text(text));
-            }
+        if let Some(text) = &choice.message.content
+            && !text.is_empty()
+        {
+            content.push(ContentBlock::text(text));
         }
 
         // Add reasoning content as thinking

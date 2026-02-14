@@ -345,7 +345,7 @@ impl DependencyGraph {
             (0.0, default_prob)
         };
 
-        for (filepath, _idx) in &self.node_indices {
+        for filepath in self.node_indices.keys() {
             let prob = if chat_files.contains(filepath) {
                 chat_prob
             } else {

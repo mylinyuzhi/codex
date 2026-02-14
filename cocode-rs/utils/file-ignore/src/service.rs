@@ -98,10 +98,10 @@ impl IgnoreService {
             .require_git(false); // Don't require git repo
 
         // Apply custom exclude patterns
-        if !self.config.custom_excludes.is_empty() {
-            if let Ok(overrides) = self.build_overrides(root) {
-                builder.overrides(overrides);
-            }
+        if !self.config.custom_excludes.is_empty()
+            && let Ok(overrides) = self.build_overrides(root)
+        {
+            builder.overrides(overrides);
         }
 
         builder
@@ -191,7 +191,7 @@ pub fn find_ignore_files(root: &Path) -> Vec<PathBuf> {
         if depth >= MAX_PARENT_DEPTH || dir.join(".git").exists() {
             break;
         }
-        current = dir.parent().map(|p| p.to_path_buf());
+        current = dir.parent().map(Path::to_path_buf);
     }
 
     // 2. Walk DOWN into subdirectories (for nested ignores)
@@ -199,7 +199,7 @@ pub fn find_ignore_files(root: &Path) -> Vec<PathBuf> {
         for entry in WalkDir::new(root)
             .max_depth(10) // Limit depth to avoid performance issues
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
         {
             if entry.file_type().is_file() {
                 let name = entry.file_name().to_string_lossy();

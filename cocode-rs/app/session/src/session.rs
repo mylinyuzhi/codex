@@ -203,7 +203,10 @@ impl Session {
     ///
     /// Returns the provider from the main role selection.
     pub fn provider(&self) -> Option<&str> {
-        self.selections.main.as_ref().map(|s| s.provider())
+        self.selections
+            .main
+            .as_ref()
+            .map(cocode_protocol::RoleSelection::provider)
     }
 
     /// Get the primary provider type.
@@ -217,7 +220,10 @@ impl Session {
     ///
     /// Returns the model name from the main role selection.
     pub fn model(&self) -> Option<&str> {
-        self.selections.main.as_ref().map(|s| s.model_name())
+        self.selections
+            .main
+            .as_ref()
+            .map(cocode_protocol::RoleSelection::model_name)
     }
 
     /// Get the primary model spec.
@@ -313,6 +319,7 @@ impl SessionBuilder {
     /// # Panics
     ///
     /// Panics if working_dir is not set, or if neither selections nor main_selection is set.
+    #[allow(clippy::expect_used)]
     pub fn build(self) -> Session {
         let working_dir = self.working_dir.expect("working_dir is required");
 

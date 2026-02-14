@@ -10,11 +10,11 @@ use ratatui::widgets::Wrap;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let server_name = app.installing_server.as_deref().unwrap_or("Unknown");
-    let title = format!(" Installing {} ", server_name);
+    let title = format!(" Installing {server_name} ");
 
     // Build output lines
     let mut lines: Vec<Line> = vec![
-        Line::from(format!("Installing {}...", server_name).cyan().bold()),
+        Line::from(format!("Installing {server_name}...").cyan().bold()),
         Line::from(""),
     ];
 

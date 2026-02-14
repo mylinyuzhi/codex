@@ -32,7 +32,7 @@ fn test_plan_mode_state_lifecycle() {
     assert!(!state.needs_exit_attachment);
 
     // Re-enter plan mode
-    state.enter(path.clone(), "test-plan".to_string(), 6);
+    state.enter(path, "test-plan".to_string(), 6);
     assert!(state.is_active);
     assert!(state.is_reentry());
 }

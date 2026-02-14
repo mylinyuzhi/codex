@@ -22,6 +22,7 @@ const MAX_LINE_WIDTH: usize = 120;
 /// Static HTTP client for connection pooling.
 ///
 /// Uses a generous default timeout; per-request timeouts are set from config.
+#[allow(clippy::expect_used)]
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -211,14 +212,13 @@ impl Tool for WebFetchTool {
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok())
+            && content_length > max_content_length * 2
         {
-            if content_length > max_content_length * 2 {
-                return Ok(ToolOutput::error(format!(
-                    "[CONTENT_TOO_LARGE] Content too large: {} bytes (max: {} bytes)",
-                    content_length,
-                    max_content_length * 2
-                )));
-            }
+            return Ok(ToolOutput::error(format!(
+                "[CONTENT_TOO_LARGE] Content too large: {} bytes (max: {} bytes)",
+                content_length,
+                max_content_length * 2
+            )));
         }
 
         // Get content type

@@ -148,7 +148,7 @@ impl SpeculationBatch {
                 (
                     call_id.clone(),
                     SpeculativeToolCall {
-                        call_id: call_id.clone(),
+                        call_id,
                         name: String::new(), // Will be set when execution starts
                         result: None,
                         started_at: now,
@@ -299,16 +299,16 @@ impl SpeculationTracker {
         result: SpeculativeResult,
     ) {
         let mut batches = self.batches.lock().await;
-        if let Some(batch) = batches.get_mut(speculation_id) {
-            if batch.state == SpeculationState::Pending {
-                batch.set_tool_name(call_id, name);
-                batch.set_result(call_id, result);
-                debug!(
-                    speculation_id = %speculation_id,
-                    call_id = %call_id,
-                    "Recorded speculative result"
-                );
-            }
+        if let Some(batch) = batches.get_mut(speculation_id)
+            && batch.state == SpeculationState::Pending
+        {
+            batch.set_tool_name(call_id, name);
+            batch.set_result(call_id, result);
+            debug!(
+                speculation_id = %speculation_id,
+                call_id = %call_id,
+                "Recorded speculative result"
+            );
         }
     }
 
@@ -505,10 +505,10 @@ impl SpeculationTracker {
 
     /// Emit a loop event.
     async fn emit_event(&self, event: LoopEvent) {
-        if let Some(tx) = &self.event_tx {
-            if let Err(e) = tx.send(event).await {
-                debug!("Failed to send speculation event: {e}");
-            }
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(event).await
+        {
+            debug!("Failed to send speculation event: {e}");
         }
     }
 }

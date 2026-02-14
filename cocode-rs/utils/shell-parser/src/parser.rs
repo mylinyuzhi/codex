@@ -120,6 +120,7 @@ impl Default for ShellParser {
 
 impl ShellParser {
     /// Create a new shell parser.
+    #[allow(clippy::expect_used)]
     pub fn new() -> Self {
         let mut parser = Parser::new();
         parser
@@ -173,7 +174,7 @@ pub fn detect_shell_type(path: &Path) -> ShellType {
     let name = path
         .file_stem()
         .and_then(|n| n.to_str())
-        .map(|s| s.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
 
     match name.as_deref() {
         Some("bash") => ShellType::Bash,
@@ -368,10 +369,10 @@ fn extract_all_commands(tree: &Tree, src: &str) -> Vec<Vec<String>> {
     let mut stack = vec![root];
 
     while let Some(node) = stack.pop() {
-        if node.kind() == "command" {
-            if let Some(words) = extract_command_words(node, src) {
-                commands.push(words);
-            }
+        if node.kind() == "command"
+            && let Some(words) = extract_command_words(node, src)
+        {
+            commands.push(words);
         }
         for child in node.children(&mut cursor) {
             stack.push(child);

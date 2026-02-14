@@ -174,10 +174,10 @@ impl<E: Clone + Send + 'static> FileWatcher<E> {
             Ok(g) => g,
             Err(e) => e.into_inner(),
         };
-        if guard.watched_paths.remove(path).is_some() {
-            if let Err(err) = guard.watcher.unwatch(path) {
-                warn!("failed to unwatch {}: {err}", path.display());
-            }
+        if guard.watched_paths.remove(path).is_some()
+            && let Err(err) = guard.watcher.unwatch(path)
+        {
+            warn!("failed to unwatch {}: {err}", path.display());
         }
     }
 }
@@ -305,12 +305,11 @@ fn spawn_event_loop<E, C, M>(
                                 });
                             }
                             let now = Instant::now();
-                            if now >= next_allowed_at {
-                                if let Some(e) = pending.take() {
+                            if now >= next_allowed_at
+                                && let Some(e) = pending.take() {
                                     let _ = tx.send(e);
                                     next_allowed_at = now + throttle_interval;
                                 }
-                            }
                         }
                         Some(Err(err)) => {
                             warn!("file watcher error: {err}");
@@ -326,12 +325,11 @@ fn spawn_event_loop<E, C, M>(
                 }
                 _ = &mut timer => {
                     let now = Instant::now();
-                    if now >= next_allowed_at {
-                        if let Some(e) = pending.take() {
+                    if now >= next_allowed_at
+                        && let Some(e) = pending.take() {
                             let _ = tx.send(e);
                             next_allowed_at = now + throttle_interval;
                         }
-                    }
                 }
             }
         }

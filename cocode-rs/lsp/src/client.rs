@@ -882,18 +882,18 @@ impl LspClient {
             let current_version = tracker.versions.get(&path).copied().unwrap_or(0);
 
             let mut cache = self.symbol_cache.lock().await;
-            if let Some(cached) = cache.get_mut(&path) {
-                if cached.version == current_version {
-                    // Update last_access for LRU tracking
-                    cached.last_access = Instant::now();
-                    trace!(
-                        "Symbol cache hit for {} (version {})",
-                        path.display(),
-                        current_version
-                    );
-                    // Arc clone is cheap - just increments reference count
-                    return Ok(Arc::clone(&cached.symbols));
-                }
+            if let Some(cached) = cache.get_mut(&path)
+                && cached.version == current_version
+            {
+                // Update last_access for LRU tracking
+                cached.last_access = Instant::now();
+                trace!(
+                    "Symbol cache hit for {} (version {})",
+                    path.display(),
+                    current_version
+                );
+                // Arc clone is cheap - just increments reference count
+                return Ok(Arc::clone(&cached.symbols));
             }
         }
 

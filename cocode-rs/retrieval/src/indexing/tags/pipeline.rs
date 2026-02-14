@@ -66,7 +66,7 @@ use crate::indexing::now_timestamp;
 pub use crate::indexing::StrictModeConfig as TagStrictModeConfig;
 
 /// Tag extraction statistics.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TagStats {
     /// Number of files with extracted tags.
     pub file_count: i64,
@@ -74,16 +74,6 @@ pub struct TagStats {
     pub tag_count: i64,
     /// Unix timestamp of last extraction.
     pub last_extracted: Option<i64>,
-}
-
-impl Default for TagStats {
-    fn default() -> Self {
-        Self {
-            file_count: 0,
-            tag_count: 0,
-            last_extracted: None,
-        }
-    }
 }
 
 /// Type alias for tag pipeline state using common generic type.

@@ -167,10 +167,10 @@ impl AgentCoordinator {
     /// Wait for an agent to complete and return its output.
     pub async fn wait_for(&mut self, agent_id: &str) -> anyhow::Result<String> {
         // First check if we already have output
-        if let Some(agent) = self.agents.get(agent_id) {
-            if let Some(output) = &agent.output {
-                return Ok(output.clone());
-            }
+        if let Some(agent) = self.agents.get(agent_id)
+            && let Some(output) = &agent.output
+        {
+            return Ok(output.clone());
         }
 
         // Try to await the completion channel

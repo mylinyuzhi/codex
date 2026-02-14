@@ -142,7 +142,7 @@ fn test_chunk_overlap_prepends_content() {
     if chunks.len() >= 2 {
         // Second chunk should start with content from end of first chunk
         assert!(
-            chunks[1].content.len() > 0,
+            !chunks[1].content.is_empty(),
             "Second chunk should have content"
         );
     }
@@ -278,7 +278,7 @@ fn test_file_walker_finds_source_files() {
     // Should find at least the .rs files
     let rs_files: Vec<_> = files
         .iter()
-        .filter(|f| f.extension().map_or(false, |e| e == "rs"))
+        .filter(|f| f.extension().is_some_and(|e| e == "rs"))
         .collect();
     assert_eq!(rs_files.len(), 2);
 }

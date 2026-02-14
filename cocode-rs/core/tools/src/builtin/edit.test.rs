@@ -190,7 +190,7 @@ async fn test_edit_preserves_crlf_line_endings() {
     assert!(!result.is_error);
 
     let bytes = std::fs::read(&file_path).unwrap();
-    let content = String::from_utf8(bytes.clone()).unwrap();
+    let content = String::from_utf8(bytes).unwrap();
     assert!(content.contains("\r\n"), "CRLF should be preserved");
     assert!(content.contains("modified"), "Edit should be applied");
 }

@@ -272,7 +272,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         .session
         .current_selection
         .as_ref()
-        .map(|s| s.effective_thinking_level())
+        .map(cocode_protocol::RoleSelection::effective_thinking_level)
         .unwrap_or_default();
 
     let status_bar = StatusBar::new(
@@ -306,7 +306,7 @@ fn render_overlay(
     help_scroll: i32,
 ) {
     // Calculate centered area
-    let overlay_width = (area.width * 60 / 100).min(80).max(40);
+    let overlay_width = (area.width * 60 / 100).clamp(40, 80);
     let overlay_height = match overlay {
         Overlay::Permission(_) => 12,
         Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),

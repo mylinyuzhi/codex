@@ -45,7 +45,7 @@ impl std::fmt::Display for ConcurrencySafety {
 }
 
 /// Output from a tool execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolOutput {
     /// The content of the output.
     pub content: ToolResultContent,
@@ -55,16 +55,6 @@ pub struct ToolOutput {
     /// Context modifiers to apply after this tool execution.
     #[serde(default)]
     pub modifiers: Vec<ContextModifier>,
-}
-
-impl Default for ToolOutput {
-    fn default() -> Self {
-        Self {
-            content: ToolResultContent::default(),
-            is_error: false,
-            modifiers: Vec::new(),
-        }
-    }
 }
 
 impl ToolOutput {
@@ -109,18 +99,18 @@ impl ToolOutput {
 
     /// Truncate text content to at most `max_chars`, preserving start and end.
     pub fn truncate_to(&mut self, max_chars: usize) {
-        if let ToolResultContent::Text(ref text) = self.content {
-            if text.len() > max_chars {
-                let half = max_chars / 2;
-                let start_end = text.floor_char_boundary(half);
-                let suffix_start = text.ceil_char_boundary(text.len() - half);
-                let start = &text[..start_end];
-                let end = &text[suffix_start..];
-                let omitted = text.len() - start_end - (text.len() - suffix_start);
-                self.content = ToolResultContent::Text(format!(
-                    "{start}\n\n... (output truncated, {omitted} characters omitted) ...\n\n{end}"
-                ));
-            }
+        if let ToolResultContent::Text(ref text) = self.content
+            && text.len() > max_chars
+        {
+            let half = max_chars / 2;
+            let start_end = text.floor_char_boundary(half);
+            let suffix_start = text.ceil_char_boundary(text.len() - half);
+            let start = &text[..start_end];
+            let end = &text[suffix_start..];
+            let omitted = text.len() - start_end - (text.len() - suffix_start);
+            self.content = ToolResultContent::Text(format!(
+                "{start}\n\n... (output truncated, {omitted} characters omitted) ...\n\n{end}"
+            ));
         }
     }
 }

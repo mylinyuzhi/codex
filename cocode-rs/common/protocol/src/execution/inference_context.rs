@@ -159,7 +159,9 @@ impl InferenceContext {
 
     /// Check if thinking is enabled for this context.
     pub fn is_thinking_enabled(&self) -> bool {
-        self.thinking_level.as_ref().is_some_and(|l| l.is_enabled())
+        self.thinking_level
+            .as_ref()
+            .is_some_and(ThinkingLevel::is_enabled)
     }
 
     /// Get the effective thinking level.
