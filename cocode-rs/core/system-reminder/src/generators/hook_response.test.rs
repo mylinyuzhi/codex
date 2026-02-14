@@ -1,28 +1,25 @@
 use super::*;
+use crate::generator::HookState;
 use std::path::PathBuf;
 
 fn test_config() -> SystemReminderConfig {
     SystemReminderConfig::default()
 }
 
-fn make_ctx_with_extension<T: Send + Sync + 'static>(
-    key: &str,
-    value: T,
-) -> GeneratorContext<'static> {
+fn make_ctx_with_hook_state(hook_state: HookState) -> GeneratorContext<'static> {
     let config = Box::leak(Box::new(test_config()));
     GeneratorContext::builder()
         .config(config)
         .turn_number(1)
         .is_main_agent(true)
         .cwd(PathBuf::from("/tmp"))
-        .extension(key, value)
+        .hook_state(hook_state)
         .build()
 }
 
 #[tokio::test]
 async fn test_async_hook_response_empty() {
-    let ctx =
-        make_ctx_with_extension::<Vec<AsyncHookResponseInfo>>(ASYNC_HOOK_RESPONSES_KEY, vec![]);
+    let ctx = make_ctx_with_hook_state(HookState::default());
     let generator = AsyncHookResponseGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
     assert!(result.is_none());
@@ -30,15 +27,18 @@ async fn test_async_hook_response_empty() {
 
 #[tokio::test]
 async fn test_async_hook_response_with_data() {
-    let responses = vec![AsyncHookResponseInfo {
-        hook_name: "test-hook".to_string(),
-        additional_context: Some("Test context".to_string()),
-        was_blocking: false,
-        blocking_reason: None,
-        duration_ms: 100,
-    }];
+    let hook_state = HookState {
+        async_responses: vec![AsyncHookResponseInfo {
+            hook_name: "test-hook".to_string(),
+            additional_context: Some("Test context".to_string()),
+            was_blocking: false,
+            blocking_reason: None,
+            duration_ms: 100,
+        }],
+        ..Default::default()
+    };
 
-    let ctx = make_ctx_with_extension(ASYNC_HOOK_RESPONSES_KEY, responses);
+    let ctx = make_ctx_with_hook_state(hook_state);
     let generator = AsyncHookResponseGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
 
@@ -51,14 +51,17 @@ async fn test_async_hook_response_with_data() {
 
 #[tokio::test]
 async fn test_hook_blocking_generator() {
-    let blocking = vec![HookBlockingInfo {
-        hook_name: "security-check".to_string(),
-        event_type: "pre_tool_use".to_string(),
-        tool_name: Some("bash".to_string()),
-        reason: "Command not allowed".to_string(),
-    }];
+    let hook_state = HookState {
+        blocking: vec![HookBlockingInfo {
+            hook_name: "security-check".to_string(),
+            event_type: "pre_tool_use".to_string(),
+            tool_name: Some("bash".to_string()),
+            reason: "Command not allowed".to_string(),
+        }],
+        ..Default::default()
+    };
 
-    let ctx = make_ctx_with_extension(HOOK_BLOCKING_KEY, blocking);
+    let ctx = make_ctx_with_hook_state(hook_state);
     let generator = HookBlockingErrorGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
 
@@ -71,14 +74,17 @@ async fn test_hook_blocking_generator() {
 
 #[tokio::test]
 async fn test_hook_context_generator() {
-    let contexts = vec![HookContextInfo {
-        hook_name: "context-hook".to_string(),
-        event_type: "session_start".to_string(),
-        tool_name: None,
-        additional_context: "Session initialized with defaults".to_string(),
-    }];
+    let hook_state = HookState {
+        contexts: vec![HookContextInfo {
+            hook_name: "context-hook".to_string(),
+            event_type: "session_start".to_string(),
+            tool_name: None,
+            additional_context: "Session initialized with defaults".to_string(),
+        }],
+        ..Default::default()
+    };
 
-    let ctx = make_ctx_with_extension(HOOK_CONTEXT_KEY, contexts);
+    let ctx = make_ctx_with_hook_state(hook_state);
     let generator = HookAdditionalContextGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
 

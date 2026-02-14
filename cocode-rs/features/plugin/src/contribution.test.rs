@@ -30,6 +30,7 @@ fn test_contribution_skill() {
         argument_hint: None,
         aliases: Vec::new(),
         interface: None,
+        command_type: cocode_skill::CommandType::Prompt,
     };
 
     let contrib = PluginContribution::Skill {

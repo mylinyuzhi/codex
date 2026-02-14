@@ -17,12 +17,11 @@ use crate::loader::ConfigLoader;
 use crate::loader::load_instructions;
 use crate::resolver::ConfigResolver;
 use crate::types::ModelSummary;
-use crate::types::ProviderConfig;
 use crate::types::ProviderSummary;
-use crate::types::ProviderType;
 use cocode_protocol::Features;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderType;
 use cocode_protocol::RoleSelection;
 use cocode_protocol::RoleSelections;
 use cocode_protocol::SandboxMode;
@@ -35,16 +34,6 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use tracing::debug;
 use tracing::info;
-
-/// Runtime overrides for provider/model selection.
-///
-/// These take highest precedence in the layered resolution.
-/// Supports per-role model and thinking level switching.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeOverrides {
-    /// Role-specific selections (model + thinking_level per role).
-    pub selections: RoleSelections,
-}
 
 /// Configuration manager for multi-provider setup.
 ///
@@ -89,8 +78,8 @@ pub struct ConfigManager {
     resolver: RwLock<ConfigResolver>,
     /// Application configuration (from config.json).
     config: RwLock<AppConfig>,
-    /// Runtime overrides (highest precedence).
-    runtime_overrides: RwLock<RuntimeOverrides>,
+    /// Runtime role selections (highest precedence, in-memory only).
+    runtime_selections: RwLock<RoleSelections>,
 }
 
 impl ConfigManager {
@@ -131,7 +120,7 @@ impl ConfigManager {
             loader,
             resolver: RwLock::new(resolver),
             config: RwLock::new(config),
-            runtime_overrides: RwLock::new(RuntimeOverrides::default()),
+            runtime_selections: RwLock::new(RoleSelections::default()),
         })
     }
 
@@ -144,7 +133,7 @@ impl ConfigManager {
             loader: ConfigLoader::from_path(""),
             resolver: RwLock::new(ConfigResolver::empty()),
             config: RwLock::new(AppConfig::default()),
-            runtime_overrides: RwLock::new(RuntimeOverrides::default()),
+            runtime_selections: RwLock::new(RoleSelections::default()),
         }
     }
 
@@ -185,7 +174,7 @@ impl ConfigManager {
     ///
     /// This is cheaper than `list_models()` which resolves each model's full
     /// `ModelInfo`. Use this when you only need the slug strings.
-    pub fn list_model_slugs(&self, provider: &str) -> Result<Vec<String>, ConfigError> {
+    pub(crate) fn list_model_slugs(&self, provider: &str) -> Result<Vec<String>, ConfigError> {
         let resolver = self.read_resolver()?;
         Ok(resolver
             .list_models(provider)
@@ -236,20 +225,19 @@ impl ConfigManager {
     /// 3. Built-in defaults ("openai", "gpt-5")
     pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
         // 1. Check runtime overrides first (supports all roles)
-        {
-            let runtime = self.runtime_overrides.read().unwrap();
-            if let Some(selection) = runtime.selections.get_or_main(role) {
+        if let Ok(runtime) = self.read_runtime() {
+            if let Some(selection) = runtime.get_or_main(role) {
                 return selection.model.clone();
             }
         }
 
         // 2. Check JSON config (with profile resolution)
-        let config = self.config.read().unwrap();
-        let resolved = config.resolve();
-        if let Some(spec) = resolved.models.get(role) {
-            return spec.clone();
+        if let Ok(config) = self.read_config() {
+            let resolved = config.resolve();
+            if let Some(spec) = resolved.models.get(role) {
+                return spec.clone();
+            }
         }
-        drop(config);
 
         // 3. Fallback to built-in default
         ModelSpec::new("openai", "gpt-5")
@@ -265,9 +253,7 @@ impl ConfigManager {
 
         // Update runtime overrides (in-memory)
         let mut runtime = self.write_runtime()?;
-        runtime
-            .selections
-            .set(ModelRole::Main, RoleSelection::new(spec.clone()));
+        runtime.set(ModelRole::Main, RoleSelection::new(spec.clone()));
 
         info!(provider = %spec.provider, model = %spec.model, "Switched to new model");
         Ok(())
@@ -281,11 +267,9 @@ impl ConfigManager {
         // Validate the provider
         self.validate_provider(&spec.provider)?;
 
-        // Update runtime overrides
+        // Update runtime selections
         let mut runtime = self.write_runtime()?;
-        runtime
-            .selections
-            .set(role, RoleSelection::new(spec.clone()));
+        runtime.set(role, RoleSelection::new(spec.clone()));
 
         info!(
             provider = %spec.provider,
@@ -311,7 +295,7 @@ impl ConfigManager {
 
         // Update runtime overrides
         let mut runtime = self.write_runtime()?;
-        runtime.selections.set(
+        runtime.set(
             role,
             RoleSelection::with_thinking(spec.clone(), thinking_level.clone()),
         );
@@ -326,22 +310,9 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Set runtime overrides for provider/model selection.
-    ///
-    /// Runtime overrides take the highest precedence in layered resolution.
-    pub fn set_runtime_overrides(&self, overrides: RuntimeOverrides) {
-        let mut runtime = self.runtime_overrides.write().unwrap();
-        *runtime = overrides;
-    }
-
-    /// Get the current runtime overrides.
-    pub fn runtime_overrides(&self) -> RuntimeOverrides {
-        self.runtime_overrides.read().unwrap().clone()
-    }
-
     /// Get the application configuration.
     pub fn app_config(&self) -> AppConfig {
-        self.config.read().unwrap().clone()
+        self.read_config().map(|c| c.clone()).unwrap_or_default()
     }
 
     /// Set the active profile (in-memory only).
@@ -376,33 +347,31 @@ impl ConfigManager {
 
     /// Get the currently active profile name.
     pub fn current_profile(&self) -> Option<String> {
-        self.config.read().unwrap().profile.clone()
+        self.read_config().ok()?.profile.clone()
     }
 
     /// List all available profiles.
     pub fn list_profiles(&self) -> Vec<String> {
-        self.config
-            .read()
-            .unwrap()
-            .list_profiles()
-            .into_iter()
-            .map(String::from)
-            .collect()
+        self.read_config()
+            .ok()
+            .map(|c| c.list_profiles().into_iter().map(String::from).collect())
+            .unwrap_or_default()
     }
 
     /// Get the logging configuration from config.json.
     ///
     /// Returns `None` if no logging section is configured.
     pub fn logging_config(&self) -> Option<LoggingConfig> {
-        self.config.read().unwrap().logging.clone()
+        self.read_config().ok()?.logging.clone()
     }
 
     /// Get the current features configuration.
     ///
     /// Combines default features with config overrides and profile overrides.
     pub fn features(&self) -> Features {
-        let config = self.config.read().unwrap();
-        config.resolve().features
+        self.read_config()
+            .map(|c| c.resolve().features)
+            .unwrap_or_else(|_| Features::with_defaults())
     }
 
     /// Check if a specific feature is enabled.
@@ -423,9 +392,7 @@ impl ConfigManager {
     ) -> Result<bool, ConfigError> {
         let mut runtime = self.write_runtime()?;
 
-        let updated = runtime
-            .selections
-            .set_thinking_level(role, thinking_level.clone());
+        let updated = runtime.set_thinking_level(role, thinking_level.clone());
 
         if updated {
             info!(
@@ -477,14 +444,40 @@ impl ConfigManager {
 
     /// Build `RoleSelection`s for all configured models across all providers.
     ///
-    /// Used for the model picker.
+    /// Used for the model picker. Acquires the resolver lock once to avoid
+    /// O(n*m) lock acquisitions.
     pub fn all_model_selections(&self) -> Vec<RoleSelection> {
+        let Ok(resolver) = self.read_resolver() else {
+            return Vec::new();
+        };
+
         let mut selections = Vec::new();
-        for summary in self.list_providers() {
-            for slug in self.list_model_slugs(&summary.name).unwrap_or_default() {
-                if let Ok(selection) = self.resolve_selection(&summary.name, &slug) {
-                    selections.push(selection);
+        for provider_name in resolver.list_providers() {
+            let provider_type = match resolver.provider_type(provider_name) {
+                Ok(pt) => pt,
+                Err(_) => continue,
+            };
+            for slug in resolver.list_models(provider_name) {
+                let model_info = resolver.resolve_model_info(provider_name, slug).ok();
+
+                let mut spec = ModelSpec::with_type(provider_name, provider_type, slug);
+                if let Some(ref info) = model_info {
+                    spec.display_name = info.display_name_or_slug().to_string();
                 }
+
+                let mut selection = match model_info
+                    .as_ref()
+                    .and_then(|i| i.default_thinking_level.clone())
+                {
+                    Some(level) => RoleSelection::with_thinking(spec, level),
+                    None => RoleSelection::new(spec),
+                };
+
+                if let Some(info) = model_info {
+                    selection.supported_thinking_levels = info.supported_thinking_levels;
+                }
+
+                selections.push(selection);
             }
         }
         selections
@@ -494,16 +487,13 @@ impl ConfigManager {
     ///
     /// Returns the runtime override selection if set, or None if not overridden.
     pub fn current_selection(&self, role: ModelRole) -> Option<RoleSelection> {
-        let runtime = self.runtime_overrides.read().ok()?;
-        runtime.selections.get(role).cloned()
+        let runtime = self.read_runtime().ok()?;
+        runtime.get(role).cloned()
     }
 
     /// Get all current runtime selections.
     pub fn current_selections(&self) -> RoleSelections {
-        self.runtime_overrides
-            .read()
-            .map(|r| r.selections.clone())
-            .unwrap_or_default()
+        self.read_runtime().map(|r| r.clone()).unwrap_or_default()
     }
 
     /// Reload configuration from disk.
@@ -552,19 +542,15 @@ impl ConfigManager {
     ///
     /// Returns providers from both configuration files and built-in defaults.
     pub fn list_providers(&self) -> Vec<ProviderSummary> {
-        let resolver = self.resolver.read().unwrap();
+        let Ok(resolver) = self.read_resolver() else {
+            return Vec::new();
+        };
         let mut summaries = Vec::new();
 
         // Add configured providers
         for name in resolver.list_providers() {
             if let Some(config) = resolver.get_provider_config(name) {
-                summaries.push(ProviderSummary {
-                    name: name.to_string(),
-                    display_name: config.name.clone(),
-                    provider_type: config.provider_type,
-                    has_api_key: config.api_key.is_some() || config.env_key.is_some(),
-                    model_count: config.models.len() as i32,
-                });
+                summaries.push(ProviderSummary::from_config(name, config));
             }
         }
 
@@ -572,13 +558,7 @@ impl ConfigManager {
         for name in builtin::list_builtin_providers() {
             if !summaries.iter().any(|s| s.name == name) {
                 if let Some(config) = builtin::get_provider_defaults(name) {
-                    summaries.push(ProviderSummary {
-                        name: name.to_string(),
-                        display_name: config.name,
-                        provider_type: config.provider_type,
-                        has_api_key: config.env_key.is_some(),
-                        model_count: 0,
-                    });
+                    summaries.push(ProviderSummary::from_builtin(name, &config));
                 }
             }
         }
@@ -590,18 +570,15 @@ impl ConfigManager {
     ///
     /// Returns models from both configuration files and built-in defaults.
     pub fn list_models(&self, provider: &str) -> Vec<ModelSummary> {
-        let resolver = self.resolver.read().unwrap();
+        let Ok(resolver) = self.read_resolver() else {
+            return Vec::new();
+        };
         let mut summaries = Vec::new();
 
         // Add configured models for this provider
         for model_id in resolver.list_models(provider) {
             if let Ok(info) = resolver.resolve_model_info(provider, model_id) {
-                summaries.push(ModelSummary {
-                    id: model_id.to_string(),
-                    display_name: info.display_name_or_slug().to_string(),
-                    context_window: info.context_window,
-                    capabilities: info.capabilities.unwrap_or_default(),
-                });
+                summaries.push(ModelSummary::from_model_info(model_id, &info));
             }
         }
 
@@ -610,45 +587,14 @@ impl ConfigManager {
             if let Some(provider_config) = resolver.get_provider_config(provider) {
                 let suggested = suggest_models_for_provider(provider_config.provider_type);
                 for model_id in suggested {
-                    if let Some(config) = builtin::get_model_defaults(model_id) {
-                        summaries.push(ModelSummary {
-                            id: model_id.to_string(),
-                            display_name: config
-                                .display_name
-                                .unwrap_or_else(|| model_id.to_string()),
-                            context_window: config.context_window,
-                            capabilities: config.capabilities.unwrap_or_default(),
-                        });
+                    if let Some(info) = builtin::get_model_defaults(model_id) {
+                        summaries.push(ModelSummary::from_model_info(model_id, &info));
                     }
                 }
             }
         }
 
         summaries
-    }
-
-    /// Check if a provider is available (configured or built-in).
-    pub fn has_provider(&self, name: &str) -> bool {
-        let resolver = self.resolver.read().unwrap();
-        resolver.has_provider(name) || builtin::get_provider_defaults(name).is_some()
-    }
-
-    /// Get provider config by name.
-    pub fn get_provider_config(&self, name: &str) -> Option<ProviderConfig> {
-        let resolver = self.resolver.read().unwrap();
-        resolver
-            .get_provider_config(name)
-            .cloned()
-            .or_else(|| builtin::get_provider_defaults(name))
-    }
-
-    /// Get model config by ID.
-    pub fn get_model_config(&self, id: &str) -> Option<ModelInfo> {
-        let resolver = self.resolver.read().unwrap();
-        resolver
-            .get_model_config(id)
-            .cloned()
-            .or_else(|| builtin::get_model_defaults(id))
     }
 
     /// Build a complete Config snapshot from current state.
@@ -685,7 +631,7 @@ impl ConfigManager {
     /// ```
     pub fn build_config(&self, overrides: ConfigOverrides) -> Result<Config, ConfigError> {
         // Get resolved app config (with profile applied)
-        let app_config = self.config.read().unwrap();
+        let app_config = self.read_config()?;
         let resolved = app_config.resolve();
 
         // Merge model overrides
@@ -695,7 +641,7 @@ impl ConfigManager {
         }
 
         // Build model cache and providers
-        let (model_cache, resolved_models, providers) = self.build_model_cache(&models)?;
+        let (resolved_models, providers) = self.build_model_cache(&models)?;
 
         // Resolve cwd and instructions
         let cwd = overrides
@@ -738,14 +684,20 @@ impl ConfigManager {
         let env_loader = EnvLoader::new();
 
         // Merge individual config sections
-        let tool_config = self.merge_tool_config(&overrides, &resolved, &env_loader);
-        let mut compact_config = self.merge_compact_config(&overrides, &resolved, &env_loader);
+        use crate::config_builder::merge_path_section;
+        use crate::config_builder::merge_section;
+        let tool_config =
+            merge_section::<cocode_protocol::ToolConfig>(&overrides, &resolved, &env_loader);
+        let mut compact_config =
+            merge_section::<cocode_protocol::CompactConfig>(&overrides, &resolved, &env_loader);
         if let Some(main_info) = resolved_models.get(&ModelRole::Main) {
             compact_config.apply_model_overrides(main_info);
         }
-        let plan_config = self.merge_plan_config(&overrides, &resolved, &env_loader);
-        let attachment_config = self.merge_attachment_config(&overrides, &resolved, &env_loader);
-        let path_config = self.merge_path_config(&overrides, &resolved, &env_loader);
+        let plan_config =
+            merge_section::<cocode_protocol::PlanModeConfig>(&overrides, &resolved, &env_loader);
+        let attachment_config =
+            merge_section::<cocode_protocol::AttachmentConfig>(&overrides, &resolved, &env_loader);
+        let path_config = merge_path_section(&overrides, &resolved, &env_loader);
 
         // Web search and fetch configs
         let web_search_config = resolved.web_search.clone().unwrap_or_default();
@@ -781,239 +733,47 @@ impl ConfigManager {
             permissions: resolved.permissions.clone(),
             hooks: resolved.hooks.clone(),
             otel,
+            output_style: resolved.output_style.clone(),
         })
     }
 
     // Private helper methods for config building
 
-    /// Build model cache and providers from configured models.
+    /// Build resolved models and providers from configured model roles.
     ///
-    /// Returns (model_cache, resolved_models_by_role, providers).
+    /// Returns (resolved_models_by_role, providers).
     fn build_model_cache(
         &self,
         models: &cocode_protocol::ModelRoles,
-    ) -> Result<
-        (
-            HashMap<ModelSpec, ModelInfo>,
-            HashMap<ModelRole, ModelInfo>,
-            HashMap<String, ProviderInfo>,
-        ),
-        ConfigError,
-    > {
-        // PHASE 1: Collect all unique models from roles AND providers
-        let mut model_keys = std::collections::HashSet::new();
+    ) -> Result<(HashMap<ModelRole, ModelInfo>, HashMap<String, ProviderInfo>), ConfigError> {
+        use crate::model_cache::ModelCache;
 
-        // 1a. From configured roles
-        for role in ModelRole::all() {
-            if let Some(spec) = models.get(*role) {
-                model_keys.insert(spec.clone());
-            }
-        }
+        // Cache provider list (used twice: model collection + provider building)
+        let provider_names: Vec<String> = self
+            .list_providers()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
 
-        // 1b. From all providers (to build ProviderInfo.models)
-        for summary in self.list_providers() {
-            if let Ok(slugs) = self.list_model_slugs(&summary.name) {
-                for slug in slugs {
-                    model_keys.insert(ModelSpec::new(&summary.name, &slug));
-                }
-            }
-        }
+        // Phases 1-3: collect, resolve, build role lookups (delegated to ModelCache)
+        let mut cache = ModelCache::new();
+        let resolved_models = cache.build_for_roles(
+            models,
+            || provider_names.clone(),
+            |p| self.list_model_slugs(p),
+            |p, m| self.resolve_model_info(p, m),
+        )?;
 
-        // PHASE 2: Resolve each unique model ONCE into a cache
-        let mut model_cache: HashMap<ModelSpec, ModelInfo> = HashMap::new();
-        for spec in model_keys {
-            if let Ok(info) = self.resolve_model_info(&spec.provider, &spec.model) {
-                model_cache.insert(spec, info);
-            }
-        }
-
-        // PHASE 3: Build resolved_models from cache (for role lookups)
-        let mut resolved_models = HashMap::new();
-        for role in ModelRole::all() {
-            if let Some(spec) = models.get(*role) {
-                if let Some(info) = model_cache.get(spec) {
-                    resolved_models.insert(*role, info.clone());
-                }
-            }
-        }
-
-        // PHASE 4: Build providers using cached model resolutions
+        // Phase 4: build providers using cached resolutions
+        let model_cache = cache.into_inner();
         let mut providers = HashMap::new();
-        for summary in self.list_providers() {
-            if let Ok(info) = self.resolve_provider_with_cache(&summary.name, &model_cache) {
-                providers.insert(summary.name.clone(), info);
+        for name in &provider_names {
+            if let Ok(info) = self.resolve_provider_with_cache(name, &model_cache) {
+                providers.insert(name.clone(), info);
             }
         }
 
-        Ok((model_cache, resolved_models, providers))
-    }
-
-    /// Merge tool config: overrides > env > JSON > default.
-    fn merge_tool_config(
-        &self,
-        overrides: &ConfigOverrides,
-        resolved: &crate::json_config::ResolvedAppConfig,
-        env_loader: &EnvLoader,
-    ) -> cocode_protocol::ToolConfig {
-        overrides.tool_config.clone().unwrap_or_else(|| {
-            let mut config = env_loader.load_tool_config();
-            if let Some(json_config) = &resolved.tool {
-                // JSON config fills in gaps where env didn't set values
-                if config.max_tool_concurrency == cocode_protocol::DEFAULT_MAX_TOOL_CONCURRENCY {
-                    config.max_tool_concurrency = json_config.max_tool_concurrency;
-                }
-                if config.mcp_tool_timeout.is_none() {
-                    config.mcp_tool_timeout = json_config.mcp_tool_timeout;
-                }
-            }
-            config
-        })
-    }
-
-    /// Merge compact config: overrides > env > JSON > default.
-    fn merge_compact_config(
-        &self,
-        overrides: &ConfigOverrides,
-        resolved: &crate::json_config::ResolvedAppConfig,
-        env_loader: &EnvLoader,
-    ) -> cocode_protocol::CompactConfig {
-        overrides.compact_config.clone().unwrap_or_else(|| {
-            let mut config = env_loader.load_compact_config();
-            if let Some(json_config) = &resolved.compact {
-                // Merge ALL JSON values where env didn't set them
-                // Boolean fields: OR logic (true from either source wins)
-                if !config.disable_compact && json_config.disable_compact {
-                    config.disable_compact = true;
-                }
-                if !config.disable_auto_compact && json_config.disable_auto_compact {
-                    config.disable_auto_compact = true;
-                }
-                if !config.disable_micro_compact && json_config.disable_micro_compact {
-                    config.disable_micro_compact = true;
-                }
-                // Option fields: use JSON if env didn't set
-                if config.auto_compact_pct.is_none() {
-                    config.auto_compact_pct = json_config.auto_compact_pct;
-                }
-                if config.blocking_limit_override.is_none() {
-                    config.blocking_limit_override = json_config.blocking_limit_override;
-                }
-                // Numeric fields: use JSON if env produced the default value
-                if config.session_memory_min_tokens
-                    == cocode_protocol::DEFAULT_SESSION_MEMORY_MIN_TOKENS
-                {
-                    config.session_memory_min_tokens = json_config.session_memory_min_tokens;
-                }
-                if config.session_memory_max_tokens
-                    == cocode_protocol::DEFAULT_SESSION_MEMORY_MAX_TOKENS
-                {
-                    config.session_memory_max_tokens = json_config.session_memory_max_tokens;
-                }
-                if config.extraction_cooldown_secs
-                    == cocode_protocol::DEFAULT_EXTRACTION_COOLDOWN_SECS
-                {
-                    config.extraction_cooldown_secs = json_config.extraction_cooldown_secs;
-                }
-                if config.context_restore_max_files
-                    == cocode_protocol::DEFAULT_CONTEXT_RESTORE_MAX_FILES
-                {
-                    config.context_restore_max_files = json_config.context_restore_max_files;
-                }
-                if config.context_restore_budget == cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET
-                {
-                    config.context_restore_budget = json_config.context_restore_budget;
-                }
-            }
-            // Validate and log warning if invalid
-            if let Err(e) = config.validate() {
-                tracing::warn!(error = %e, "Invalid compact config");
-            }
-            config
-        })
-    }
-
-    /// Merge plan config: overrides > env > JSON > default.
-    fn merge_plan_config(
-        &self,
-        overrides: &ConfigOverrides,
-        resolved: &crate::json_config::ResolvedAppConfig,
-        env_loader: &EnvLoader,
-    ) -> cocode_protocol::PlanModeConfig {
-        overrides.plan_config.clone().unwrap_or_else(|| {
-            let mut config = env_loader.load_plan_config();
-            if let Some(json_config) = &resolved.plan {
-                // Merge JSON values where env didn't set them
-                // Note: env loader already calls clamp_all(), so we check against clamped defaults
-                if config.agent_count == cocode_protocol::DEFAULT_PLAN_AGENT_COUNT {
-                    config.agent_count = json_config.agent_count.clamp(
-                        cocode_protocol::MIN_AGENT_COUNT,
-                        cocode_protocol::MAX_AGENT_COUNT,
-                    );
-                }
-                if config.explore_agent_count == cocode_protocol::DEFAULT_PLAN_EXPLORE_AGENT_COUNT {
-                    config.explore_agent_count = json_config.explore_agent_count.clamp(
-                        cocode_protocol::MIN_AGENT_COUNT,
-                        cocode_protocol::MAX_AGENT_COUNT,
-                    );
-                }
-            }
-            // Validate and log warning if invalid (should always pass after clamp)
-            if let Err(e) = config.validate() {
-                tracing::warn!(error = %e, "Invalid plan config");
-            }
-            config
-        })
-    }
-
-    /// Merge attachment config: overrides > env > JSON > default.
-    fn merge_attachment_config(
-        &self,
-        overrides: &ConfigOverrides,
-        resolved: &crate::json_config::ResolvedAppConfig,
-        env_loader: &EnvLoader,
-    ) -> cocode_protocol::AttachmentConfig {
-        overrides.attachment_config.clone().unwrap_or_else(|| {
-            let mut config = env_loader.load_attachment_config();
-            if let Some(json_config) = &resolved.attachment {
-                // Merge JSON values where env didn't set them
-                // Boolean fields: OR logic (true from either source wins)
-                if !config.disable_attachments && json_config.disable_attachments {
-                    config.disable_attachments = true;
-                }
-                if !config.enable_token_usage_attachment
-                    && json_config.enable_token_usage_attachment
-                {
-                    config.enable_token_usage_attachment = true;
-                }
-            }
-            config
-        })
-    }
-
-    /// Merge path config: overrides > env > JSON > default.
-    fn merge_path_config(
-        &self,
-        overrides: &ConfigOverrides,
-        resolved: &crate::json_config::ResolvedAppConfig,
-        env_loader: &EnvLoader,
-    ) -> cocode_protocol::PathConfig {
-        let mut path_config = overrides
-            .path_config
-            .clone()
-            .unwrap_or_else(|| env_loader.load_path_config());
-        // Merge JSON path config
-        if let Some(json_paths) = &resolved.paths {
-            if path_config.project_dir.is_none() {
-                path_config.project_dir = json_paths.project_dir.clone();
-            }
-            if path_config.plugin_root.is_none() {
-                path_config.plugin_root = json_paths.plugin_root.clone();
-            }
-            if path_config.env_file.is_none() {
-                path_config.env_file = json_paths.env_file.clone();
-            }
-        }
-        path_config
+        Ok((resolved_models, providers))
     }
 
     // Private helper methods for lock management
@@ -1028,23 +788,19 @@ impl ConfigManager {
         })
     }
 
-    /// Acquire write lock on resolver.
-    fn write_resolver(
-        &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, ConfigResolver>, ConfigError> {
-        self.resolver.write().map_err(|e| {
+    /// Acquire read lock on config.
+    fn read_config(&self) -> Result<std::sync::RwLockReadGuard<'_, AppConfig>, ConfigError> {
+        self.config.read().map_err(|e| {
             InternalSnafu {
-                message: format!("Failed to acquire resolver write lock: {e}"),
+                message: format!("Failed to acquire config read lock: {e}"),
             }
             .build()
         })
     }
 
-    /// Acquire read lock on runtime overrides.
-    fn read_runtime(
-        &self,
-    ) -> Result<std::sync::RwLockReadGuard<'_, RuntimeOverrides>, ConfigError> {
-        self.runtime_overrides.read().map_err(|e| {
+    /// Acquire read lock on runtime selections.
+    fn read_runtime(&self) -> Result<std::sync::RwLockReadGuard<'_, RoleSelections>, ConfigError> {
+        self.runtime_selections.read().map_err(|e| {
             InternalSnafu {
                 message: format!("Failed to acquire runtime read lock: {e}"),
             }
@@ -1052,23 +808,13 @@ impl ConfigManager {
         })
     }
 
-    /// Acquire write lock on runtime overrides.
+    /// Acquire write lock on runtime selections.
     fn write_runtime(
         &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, RuntimeOverrides>, ConfigError> {
-        self.runtime_overrides.write().map_err(|e| {
+    ) -> Result<std::sync::RwLockWriteGuard<'_, RoleSelections>, ConfigError> {
+        self.runtime_selections.write().map_err(|e| {
             InternalSnafu {
                 message: format!("Failed to acquire runtime write lock: {e}"),
-            }
-            .build()
-        })
-    }
-
-    /// Acquire read lock on app config.
-    fn read_config(&self) -> Result<std::sync::RwLockReadGuard<'_, AppConfig>, ConfigError> {
-        self.config.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire config read lock: {e}"),
             }
             .build()
         })
@@ -1109,9 +855,19 @@ impl Clone for ConfigManager {
         Self {
             config_path: self.config_path.clone(),
             loader: ConfigLoader::from_path(&self.config_path),
-            resolver: RwLock::new(self.resolver.read().unwrap().clone()),
-            config: RwLock::new(self.config.read().unwrap().clone()),
-            runtime_overrides: RwLock::new(self.runtime_overrides.read().unwrap().clone()),
+            resolver: RwLock::new(
+                self.resolver
+                    .read()
+                    .expect("resolver lock poisoned")
+                    .clone(),
+            ),
+            config: RwLock::new(self.config.read().expect("config lock poisoned").clone()),
+            runtime_selections: RwLock::new(
+                self.runtime_selections
+                    .read()
+                    .expect("runtime lock poisoned")
+                    .clone(),
+            ),
         }
     }
 }

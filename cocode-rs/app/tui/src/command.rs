@@ -79,6 +79,12 @@ pub enum UserCommand {
     /// Clear all queued commands.
     ClearQueues,
 
+    /// Set the output style.
+    SetOutputStyle {
+        /// Style name to activate, or `None` to disable.
+        style: Option<String>,
+    },
+
     /// Request graceful shutdown.
     Shutdown,
 }
@@ -161,6 +167,10 @@ impl std::fmt::Display for UserCommand {
             }
             UserCommand::BackgroundAllTasks => write!(f, "BackgroundAllTasks"),
             UserCommand::ClearQueues => write!(f, "ClearQueues"),
+            UserCommand::SetOutputStyle { style } => match style {
+                Some(s) => write!(f, "SetOutputStyle({s})"),
+                None => write!(f, "SetOutputStyle(off)"),
+            },
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }
     }

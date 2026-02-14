@@ -70,7 +70,14 @@ impl PromptHandler {
     /// Template-mode execution: replaces `$ARGUMENTS` in the template with the
     /// serialized JSON of `arguments`, then returns a `ModifyInput` result.
     ///
-    /// This is the simple, non-LLM mode that just expands placeholders.
+    /// This is the only mode currently implemented. LLM Verification Mode
+    /// (triggered when `HookHandler::Prompt { model: Some(..) }`) is not yet
+    /// supported — the `model` field is silently ignored and execution always
+    /// falls through to template expansion. Full LLM verification requires an
+    /// `Arc<dyn Model>` (from `hyper-sdk`) or an `ApiClient` (from `core/api`)
+    /// to be injected into `HookRegistry`. Use `prepare_verification_request`
+    /// and `parse_verification_response` to build the full flow once LLM
+    /// access is available.
     pub fn execute(template: &str, arguments: &Value) -> HookResult {
         let args_str = match serde_json::to_string(arguments) {
             Ok(s) => s,
@@ -129,12 +136,12 @@ impl PromptHandler {
         }
 
         // Try to find JSON in the response (LLM might add explanation around it)
-        if let Some(start) = trimmed.find('{') {
-            if let Some(end) = trimmed.rfind('}') {
-                let json_str = &trimmed[start..=end];
-                if let Ok(resp) = serde_json::from_str::<LlmVerificationResponse>(json_str) {
-                    return Self::response_to_result(resp);
-                }
+        if let Some(start) = trimmed.find('{')
+            && let Some(end) = trimmed.rfind('}')
+        {
+            let json_str = &trimmed[start..=end];
+            if let Ok(resp) = serde_json::from_str::<LlmVerificationResponse>(json_str) {
+                return Self::response_to_result(resp);
             }
         }
 

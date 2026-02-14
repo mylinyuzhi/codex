@@ -149,7 +149,15 @@ impl Tool for TaskTool {
             )
             .with_metadata("agent_type", subagent_type)
             .with_metadata("description", description);
-            hooks.execute(&hook_ctx).await;
+            let outcomes = hooks.execute(&hook_ctx).await;
+            for outcome in &outcomes {
+                if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
+                    return Err(crate::error::tool_error::HookRejectedSnafu {
+                        reason: reason.clone(),
+                    }
+                    .build());
+                }
+            }
         }
 
         // Spawn the agent
@@ -185,7 +193,16 @@ impl Tool for TaskTool {
                         )
                         .with_metadata("agent_type", subagent_type)
                         .with_metadata("agent_id", result.agent_id.clone());
-                        hooks.execute(&hook_ctx).await;
+                        let outcomes = hooks.execute(&hook_ctx).await;
+                        for outcome in &outcomes {
+                            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
+                                tracing::warn!(
+                                    hook = %outcome.hook_name,
+                                    %reason,
+                                    "SubagentStop hook rejected (ignored, agent already completed)"
+                                );
+                            }
+                        }
                     }
 
                     // Foreground agent - return the result

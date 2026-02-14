@@ -125,6 +125,9 @@ impl SystemReminderOrchestrator {
 
     /// Generate all applicable reminders for the current context.
     ///
+    /// Takes `ctx` by value so the orchestrator can pre-compute
+    /// per-generator full-content flags before running generators.
+    ///
     /// Generators are filtered by:
     /// 1. Global enable flag
     /// 2. Per-generator enable flag
@@ -132,17 +135,28 @@ impl SystemReminderOrchestrator {
     /// 4. Throttle rules
     ///
     /// All applicable generators run in parallel with timeout protection.
-    pub async fn generate_all(&self, ctx: &GeneratorContext<'_>) -> Vec<SystemReminder> {
+    pub async fn generate_all(&self, mut ctx: GeneratorContext<'_>) -> Vec<SystemReminder> {
         if !self.config.enabled {
             debug!("System reminders disabled globally");
             return Vec::new();
+        }
+
+        // Pre-compute full-content flags for generators that have full_content_every_n
+        for g in &self.generators {
+            let config = g.throttle_config();
+            if config.full_content_every_n.is_some() {
+                let is_full = self
+                    .throttle_manager
+                    .should_use_full_content(g.attachment_type(), &config);
+                ctx.full_content_flags.insert(g.attachment_type(), is_full);
+            }
         }
 
         // Filter generators that should run
         let applicable_generators: Vec<_> = self
             .generators
             .iter()
-            .filter(|g| self.should_run_generator(g.as_ref(), ctx))
+            .filter(|g| self.should_run_generator(g.as_ref(), &ctx))
             .cloned()
             .collect();
 
@@ -158,6 +172,7 @@ impl SystemReminderOrchestrator {
         );
 
         // Run all generators in parallel with timeout
+        let ctx_ref = &ctx;
         let futures: Vec<_> = applicable_generators
             .iter()
             .map(|g| {
@@ -167,7 +182,7 @@ impl SystemReminderOrchestrator {
                     let name = generator.name().to_string();
                     let attachment_type = generator.attachment_type();
 
-                    match timeout(timeout_duration, generator.generate(ctx)).await {
+                    match timeout(timeout_duration, generator.generate(ctx_ref)).await {
                         Ok(Ok(Some(reminder))) => {
                             debug!("Generator '{}' produced reminder", name);
                             Some((attachment_type, reminder))

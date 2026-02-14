@@ -48,8 +48,7 @@ impl AttachmentGenerator for AlreadyReadFilesGenerator {
         // Only inject on first turn or every 5th turn (aligned with full reminders)
         ThrottleConfig {
             min_turns_between: 5,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 

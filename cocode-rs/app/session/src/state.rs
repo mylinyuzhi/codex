@@ -195,6 +195,10 @@ pub struct SessionState {
 
     /// Optional OTel manager for metrics and traces.
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+
+    /// Runtime output style override.
+    /// `None` = use config default, `Some(None)` = disabled, `Some(Some(name))` = active style.
+    output_style_override: Option<Option<String>>,
 }
 
 impl SessionState {
@@ -403,6 +407,7 @@ impl SessionState {
             permission_rules,
             todos: serde_json::json!([]),
             otel_manager,
+            output_style_override: None,
         })
     }
 
@@ -435,23 +440,24 @@ impl SessionState {
         });
 
         // Build environment info
-        let model_name = self
-            .session
-            .model()
-            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(model_name)
             .context_window(self.context_window)
             .max_output_tokens(16_384)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
 
         // Build conversation context
-        let context = ConversationContext::builder()
+        let mut ctx_builder = ConversationContext::builder()
             .environment(environment)
             .tool_names(self.tool_registry.tool_names())
-            .injections(self.build_suffix_injections())
+            .injections(self.build_suffix_injections());
+
+        if let Some(style_config) = self.resolve_output_style() {
+            ctx_builder = ctx_builder.output_style(style_config);
+        }
+
+        let context = ctx_builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
@@ -913,6 +919,28 @@ impl SessionState {
         self.system_prompt_suffix = Some(suffix);
     }
 
+    /// Resolve the active output style for prompt generation.
+    ///
+    /// Priority: runtime override > config file setting.
+    fn resolve_output_style(&self) -> Option<cocode_context::OutputStylePromptConfig> {
+        // Determine the effective style name
+        let style_name: Option<&str> = match &self.output_style_override {
+            Some(override_style) => override_style.as_deref(),
+            None => self.config.output_style.as_deref(),
+        };
+
+        let name = style_name?;
+
+        // Find the style info (from built-in or custom styles)
+        let info = cocode_config::builtin::find_output_style(name, &self.config.cocode_home)?;
+
+        Some(cocode_context::OutputStylePromptConfig {
+            name: info.name,
+            content: info.content,
+            keep_coding_instructions: info.keep_coding_instructions,
+        })
+    }
+
     /// Build context injections from the system prompt suffix.
     fn build_suffix_injections(&self) -> Vec<ContextInjection> {
         self.system_prompt_suffix
@@ -966,6 +994,25 @@ impl SessionState {
     /// Clear all queued commands.
     pub fn clear_queued_commands(&self) {
         self.queued_commands.lock().unwrap().clear();
+    }
+
+    /// Set the active output style.
+    ///
+    /// `None` disables the output style; `Some(name)` activates the named style.
+    /// Takes effect on the next turn (system prompt regeneration).
+    pub fn set_output_style(&mut self, style: Option<String>) {
+        info!(?style, "Setting output style");
+        self.output_style_override = Some(style);
+    }
+
+    /// Get the current output style name (for display in /output-style status).
+    ///
+    /// Priority: runtime override > config file setting.
+    pub fn current_output_style_name(&self) -> Option<&str> {
+        match &self.output_style_override {
+            Some(override_style) => override_style.as_deref(),
+            None => self.config.output_style.as_deref(),
+        }
     }
 
     /// Get a shared handle to the queued commands.
@@ -1048,23 +1095,24 @@ impl SessionState {
         self.session.touch();
 
         // Build environment info
-        let model_name = self
-            .session
-            .model()
-            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(model_name)
             .context_window(self.context_window)
             .max_output_tokens(16_384)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
 
         // Build conversation context
-        let context = ConversationContext::builder()
+        let mut ctx_builder = ConversationContext::builder()
             .environment(environment)
             .tool_names(self.tool_registry.tool_names())
-            .injections(self.build_suffix_injections())
+            .injections(self.build_suffix_injections());
+
+        if let Some(style_config) = self.resolve_output_style() {
+            ctx_builder = ctx_builder.output_style(style_config);
+        }
+
+        let context = ctx_builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 

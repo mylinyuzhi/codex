@@ -44,8 +44,7 @@ impl AttachmentGenerator for TokenUsageGenerator {
         // Report every 10 turns normally
         ThrottleConfig {
             min_turns_between: 10,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 

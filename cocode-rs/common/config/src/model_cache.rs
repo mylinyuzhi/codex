@@ -6,7 +6,8 @@
 
 use crate::error::ConfigError;
 use cocode_protocol::ModelInfo;
-use cocode_protocol::model::{ModelRole, ModelSpec};
+use cocode_protocol::model::ModelRole;
+use cocode_protocol::model::ModelSpec;
 use std::collections::HashMap;
 
 /// Cache for resolved model information.
@@ -52,29 +53,9 @@ impl ModelCache {
         self.cache.insert(spec, info);
     }
 
-    /// Get the underlying HashMap for external iteration or transfer.
-    pub fn inner(&self) -> &HashMap<ModelSpec, ModelInfo> {
-        &self.cache
-    }
-
     /// Consume the cache and extract the inner HashMap.
     pub fn into_inner(self) -> HashMap<ModelSpec, ModelInfo> {
         self.cache
-    }
-
-    /// Get the number of cached models.
-    pub fn len(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Check if the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
-    }
-
-    /// Clear all cached models.
-    pub fn clear(&mut self) {
-        self.cache.clear();
     }
 
     /// Build cache and resolved models for the given roles.
@@ -161,8 +142,7 @@ mod tests {
     #[test]
     fn test_model_cache_new() {
         let cache = ModelCache::new();
-        assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
+        assert!(cache.cache.is_empty());
     }
 
     #[test]
@@ -177,7 +157,7 @@ mod tests {
         };
 
         cache.insert(spec.clone(), info.clone());
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.cache.len(), 1);
         assert!(cache.get(&spec).is_some());
         assert_eq!(cache.get(&spec).unwrap().slug, "gpt-4");
     }
@@ -198,7 +178,7 @@ mod tests {
         cache.insert(spec2.clone(), info.clone());
         cache.insert(spec3.clone(), info);
 
-        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.cache.len(), 3);
         assert!(cache.get(&spec1).is_some());
         assert!(cache.get(&spec2).is_some());
         assert!(cache.get(&spec3).is_some());
@@ -214,11 +194,10 @@ mod tests {
         };
 
         cache.insert(spec, info);
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.cache.len(), 1);
 
-        cache.clear();
-        assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
+        cache.cache.clear();
+        assert!(cache.cache.is_empty());
     }
 
     #[test]

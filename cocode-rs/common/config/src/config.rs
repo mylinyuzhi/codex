@@ -147,46 +147,52 @@ pub struct Config {
     pub plan_config: PlanModeConfig,
 
     // ============================================================
-    // 11. Attachments
+    // 10. Attachments
     // ============================================================
     /// Attachment configuration.
     pub attachment_config: AttachmentConfig,
 
     // ============================================================
-    // 12. Extended Paths
+    // 11. Extended Paths
     // ============================================================
     /// Extended path configuration.
     pub path_config: PathConfig,
 
     // ============================================================
-    // 13. Web Search
+    // 12. Web Search
     // ============================================================
     /// Web search configuration (provider, api_key, max_results).
     pub web_search_config: WebSearchConfig,
 
     // ============================================================
-    // 14. Web Fetch
+    // 13. Web Fetch
     // ============================================================
     /// Web fetch configuration (timeout, max_content_length, user_agent).
     pub web_fetch_config: WebFetchConfig,
 
     // ============================================================
-    // 15. Permissions
+    // 14. Permissions
     // ============================================================
     /// Permission rules from config (allow/deny/ask patterns).
     pub permissions: Option<PermissionsConfig>,
 
     // ============================================================
-    // 16. Hooks
+    // 15. Hooks
     // ============================================================
     /// Hook definitions from config.json.
     pub hooks: Vec<crate::json_config::HookConfig>,
 
     // ============================================================
-    // 17. OpenTelemetry
+    // 16. OpenTelemetry
     // ============================================================
     /// OpenTelemetry settings (resolved from JSON config + env vars).
     pub otel: Option<cocode_otel::config::OtelSettings>,
+
+    // ============================================================
+    // 17. Output Style
+    // ============================================================
+    /// Active output style name (e.g., "explanatory", "learning", or custom).
+    pub output_style: Option<String>,
 }
 
 impl Config {
@@ -261,11 +267,6 @@ impl Config {
     /// Check if sandbox allows write operations.
     pub fn allows_write(&self) -> bool {
         self.sandbox_mode.allows_write()
-    }
-
-    /// Get `ProviderInfo` by name (for ModelHub provider creation).
-    pub fn resolve_provider(&self, name: &str) -> Option<&ProviderInfo> {
-        self.providers.get(name)
     }
 
     /// Get complete ProviderModel (ModelInfo + alias) for a provider/model.
@@ -368,6 +369,7 @@ impl Default for Config {
             permissions: None,
             hooks: Vec::new(),
             otel: None,
+            output_style: None,
         }
     }
 }
@@ -491,154 +493,6 @@ impl ConfigOverrides {
     pub fn with_path_config(mut self, config: PathConfig) -> Self {
         self.path_config = Some(config);
         self
-    }
-}
-
-/// Builder for creating Config instances.
-///
-/// Use this builder when you need fine-grained control over configuration
-/// loading and resolution.
-///
-/// # Example
-///
-/// ```no_run
-/// use cocode_config::ConfigBuilder;
-/// use cocode_protocol::SandboxMode;
-///
-/// # fn example() -> Result<(), cocode_config::error::ConfigError> {
-/// let config = ConfigBuilder::new()
-///     .cwd("/my/project")
-///     .sandbox_mode(SandboxMode::WorkspaceWrite)
-///     .build()?;
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Debug, Default)]
-pub struct ConfigBuilder {
-    cocode_home: Option<PathBuf>,
-    cwd: Option<PathBuf>,
-    profile: Option<String>,
-    overrides: ConfigOverrides,
-}
-
-impl ConfigBuilder {
-    /// Create a new ConfigBuilder with default settings.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the cocode home directory.
-    ///
-    /// If not set, uses `COCODE_HOME` environment variable or `~/.cocode`.
-    pub fn cocode_home(mut self, path: impl Into<PathBuf>) -> Self {
-        self.cocode_home = Some(path.into());
-        self
-    }
-
-    /// Set the current working directory.
-    ///
-    /// If not set, uses the current process working directory.
-    pub fn cwd(mut self, path: impl Into<PathBuf>) -> Self {
-        self.cwd = Some(path.into());
-        self
-    }
-
-    /// Set the profile to use.
-    ///
-    /// This overrides the profile setting in config.json.
-    pub fn profile(mut self, name: impl Into<String>) -> Self {
-        self.profile = Some(name.into());
-        self
-    }
-
-    /// Set configuration overrides.
-    pub fn overrides(mut self, overrides: ConfigOverrides) -> Self {
-        self.overrides = overrides;
-        self
-    }
-
-    /// Set sandbox mode.
-    pub fn sandbox_mode(mut self, mode: SandboxMode) -> Self {
-        self.overrides.sandbox_mode = Some(mode);
-        self
-    }
-
-    /// Set ephemeral mode.
-    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
-        self.overrides.ephemeral = Some(ephemeral);
-        self
-    }
-
-    /// Add a feature override.
-    pub fn feature(mut self, key: impl Into<String>, enabled: bool) -> Self {
-        self.overrides.features.insert(key.into(), enabled);
-        self
-    }
-
-    /// Set tool configuration.
-    pub fn tool_config(mut self, config: ToolConfig) -> Self {
-        self.overrides.tool_config = Some(config);
-        self
-    }
-
-    /// Set compaction configuration.
-    pub fn compact_config(mut self, config: CompactConfig) -> Self {
-        self.overrides.compact_config = Some(config);
-        self
-    }
-
-    /// Set plan mode configuration.
-    pub fn plan_config(mut self, config: PlanModeConfig) -> Self {
-        self.overrides.plan_config = Some(config);
-        self
-    }
-
-    /// Set attachment configuration.
-    pub fn attachment_config(mut self, config: AttachmentConfig) -> Self {
-        self.overrides.attachment_config = Some(config);
-        self
-    }
-
-    /// Set path configuration.
-    pub fn path_config(mut self, config: PathConfig) -> Self {
-        self.overrides.path_config = Some(config);
-        self
-    }
-
-    /// Build the Config.
-    ///
-    /// This method:
-    /// 1. Determines cocode_home (from builder, env var, or default)
-    /// 2. Creates ConfigManager and loads configuration
-    /// 3. Applies profile if set
-    /// 4. Resolves all configured roles
-    /// 5. Loads instructions from AGENTS.md in cwd
-    /// 6. Applies overrides
-    /// 7. Returns the complete Config
-    pub fn build(self) -> Result<Config, crate::error::ConfigError> {
-        use crate::ConfigManager;
-        use crate::loader::find_cocode_home;
-
-        // 1. Determine cocode_home
-        let cocode_home = self.cocode_home.unwrap_or_else(find_cocode_home);
-
-        // 2. Create ConfigManager
-        let manager = ConfigManager::from_path(&cocode_home)?;
-
-        // 3. Apply profile if set (update overrides)
-        let mut overrides = self.overrides;
-        if self.profile.is_some() {
-            // Profile is handled by ConfigManager's app_config
-            // For now, we pass through to build_config
-        }
-
-        // 4. Set cwd in overrides if provided
-        if let Some(cwd) = self.cwd {
-            overrides.cwd = Some(cwd);
-        }
-
-        // 5. Build config from manager
-        manager.build_config(overrides)
     }
 }
 

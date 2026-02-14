@@ -34,7 +34,7 @@ fn test_orchestrator_disabled() {
     let ctx = test_ctx(&config);
 
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let reminders = rt.block_on(orchestrator.generate_all(&ctx));
+    let reminders = rt.block_on(orchestrator.generate_all(ctx));
 
     assert!(reminders.is_empty());
 }
@@ -90,7 +90,7 @@ async fn test_generate_all_basic() {
     let ctx = test_ctx(&config);
 
     // Should run without panicking
-    let reminders = orchestrator.generate_all(&ctx).await;
+    let reminders = orchestrator.generate_all(ctx).await;
 
     // Most generators will return None without proper setup,
     // but the orchestrator should handle that gracefully

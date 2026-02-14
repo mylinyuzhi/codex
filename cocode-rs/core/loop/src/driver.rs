@@ -28,24 +28,20 @@ use cocode_protocol::RoleSelections;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
+use cocode_system_reminder::AsyncHookResponseInfo;
 use cocode_system_reminder::FileTracker;
 use cocode_system_reminder::GeneratorContext;
+use cocode_system_reminder::HookBlockingInfo;
+use cocode_system_reminder::HookContextInfo;
+use cocode_system_reminder::HookState;
 use cocode_system_reminder::InjectedBlock;
 use cocode_system_reminder::InjectedMessage;
+use cocode_system_reminder::InvokedSkillInfo;
 use cocode_system_reminder::QueuedCommandInfo;
+use cocode_system_reminder::SkillInfo;
 use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::create_injected_messages;
-use cocode_system_reminder::generators::ASYNC_HOOK_RESPONSES_KEY;
-use cocode_system_reminder::generators::AVAILABLE_SKILLS_KEY;
-use cocode_system_reminder::generators::AsyncHookResponseInfo;
-use cocode_system_reminder::generators::HOOK_BLOCKING_KEY;
-use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
-use cocode_system_reminder::generators::HookBlockingInfo;
-use cocode_system_reminder::generators::HookContextInfo;
-use cocode_system_reminder::generators::INVOKED_SKILLS_KEY;
-use cocode_system_reminder::generators::InvokedSkillInfo;
-use cocode_system_reminder::generators::SkillInfo;
 use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
@@ -697,6 +693,16 @@ impl AgentLoop {
         {
             let ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::Stop,
+                session_id.clone(),
+                self.context.environment.cwd.clone(),
+            );
+            self.execute_lifecycle_hooks(ctx).await;
+        }
+
+        // Execute SessionEnd hooks to signal session lifecycle completion
+        {
+            let ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::SessionEnd,
                 session_id,
                 self.context.environment.cwd.clone(),
             );
@@ -904,16 +910,12 @@ impl AgentLoop {
             gen_ctx_builder = gen_ctx_builder.plan_file_path(path);
         }
 
-        // Add async hook responses to generator context
-        if !async_responses.is_empty() {
-            gen_ctx_builder = gen_ctx_builder.extension(ASYNC_HOOK_RESPONSES_KEY, async_responses);
-        }
-        if !blocking_hooks.is_empty() {
-            gen_ctx_builder = gen_ctx_builder.extension(HOOK_BLOCKING_KEY, blocking_hooks);
-        }
-        if !context_hooks.is_empty() {
-            gen_ctx_builder = gen_ctx_builder.extension(HOOK_CONTEXT_KEY, context_hooks);
-        }
+        // Add hook state to generator context
+        gen_ctx_builder = gen_ctx_builder.hook_state(HookState {
+            async_responses: async_responses,
+            contexts: context_hooks,
+            blocking: blocking_hooks,
+        });
 
         // Add available skills to generator context for system reminders
         // Use llm_invocable_skills() to filter out hidden and disable_model_invocation skills
@@ -929,7 +931,7 @@ impl AgentLoop {
                 .collect();
 
             if !skill_infos.is_empty() {
-                gen_ctx_builder = gen_ctx_builder.extension(AVAILABLE_SKILLS_KEY, skill_infos);
+                gen_ctx_builder = gen_ctx_builder.available_skills(skill_infos);
             }
         }
 
@@ -947,7 +949,7 @@ impl AgentLoop {
                         prompt_content: String::new(),
                     })
                     .collect();
-                gen_ctx_builder = gen_ctx_builder.extension(INVOKED_SKILLS_KEY, skill_infos);
+                gen_ctx_builder = gen_ctx_builder.invoked_skills(skill_infos);
             }
         }
 
@@ -966,7 +968,7 @@ impl AgentLoop {
 
         let gen_ctx = gen_ctx_builder.build();
 
-        let reminders = self.reminder_orchestrator.generate_all(&gen_ctx).await;
+        let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
         let injected_messages = create_injected_messages(reminders);
 
         // ── STEP 7: Resolve model (permissions checked externally) ──
@@ -2205,20 +2207,32 @@ impl AgentLoop {
             })
             .await;
 
-            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                info!(
-                    hook_name = %outcome.hook_name,
-                    reason = %reason,
-                    event = %ctx.event_type,
-                    "Lifecycle hook rejected"
-                );
-                rejected = true;
-            }
-
-            // Track async hooks
-            if let cocode_hooks::HookResult::Async { task_id, hook_name } = &outcome.result {
-                self.async_hook_tracker
-                    .register(task_id.clone(), hook_name.clone());
+            match &outcome.result {
+                cocode_hooks::HookResult::Reject { reason } => {
+                    info!(
+                        hook_name = %outcome.hook_name,
+                        reason = %reason,
+                        event = %ctx.event_type,
+                        "Lifecycle hook rejected"
+                    );
+                    rejected = true;
+                }
+                cocode_hooks::HookResult::Async { task_id, hook_name } => {
+                    self.async_hook_tracker
+                        .register(task_id.clone(), hook_name.clone());
+                }
+                cocode_hooks::HookResult::ContinueWithContext {
+                    additional_context, ..
+                } => {
+                    if let Some(ctx_str) = additional_context {
+                        info!(
+                            hook_name = %outcome.hook_name,
+                            event = %ctx.event_type,
+                            "Lifecycle hook provided additional context: {ctx_str}"
+                        );
+                    }
+                }
+                _ => {}
             }
         }
 

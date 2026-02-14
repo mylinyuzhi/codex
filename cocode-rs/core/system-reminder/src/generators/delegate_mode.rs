@@ -38,8 +38,7 @@ impl AttachmentGenerator for DelegateModeGenerator {
         // Reminder every 5 turns while in delegate mode
         ThrottleConfig {
             min_turns_between: 5,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 

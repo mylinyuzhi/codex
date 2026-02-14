@@ -2,15 +2,11 @@ use super::*;
 
 #[test]
 fn test_builder_required_fields() {
-    let result = EnvironmentInfo::builder()
-        .cwd("/tmp/test")
-        .model("claude-3-opus")
-        .build();
+    let result = EnvironmentInfo::builder().cwd("/tmp/test").build();
     assert!(result.is_ok());
 
     let env = result.unwrap();
     assert_eq!(env.cwd, PathBuf::from("/tmp/test"));
-    assert_eq!(env.model, "claude-3-opus");
     assert!(!env.date.is_empty());
 }
 
@@ -23,7 +19,6 @@ fn test_builder_all_fields() {
         .is_git_repo(true)
         .git_branch("main")
         .date("2025-01-29")
-        .model("claude-3-opus")
         .context_window(200000)
         .max_output_tokens(16384)
         .build()
@@ -40,13 +35,7 @@ fn test_builder_all_fields() {
 
 #[test]
 fn test_builder_missing_cwd() {
-    let result = EnvironmentInfo::builder().model("test-model").build();
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_builder_missing_model() {
-    let result = EnvironmentInfo::builder().cwd("/tmp").build();
+    let result = EnvironmentInfo::builder().build();
     assert!(result.is_err());
 }
 
@@ -55,7 +44,6 @@ fn test_serde_roundtrip() {
     let env = EnvironmentInfo::builder()
         .platform("linux")
         .cwd("/tmp/test")
-        .model("test-model")
         .date("2025-01-29")
         .build()
         .unwrap();
@@ -63,5 +51,16 @@ fn test_serde_roundtrip() {
     let json = serde_json::to_string(&env).unwrap();
     let parsed: EnvironmentInfo = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.platform, env.platform);
-    assert_eq!(parsed.model, env.model);
+}
+
+#[test]
+fn test_is_git_repo_explicit_false() {
+    let env = EnvironmentInfo::builder()
+        .cwd("/tmp/test")
+        .is_git_repo(false)
+        .build()
+        .unwrap();
+
+    assert!(!env.is_git_repo);
+    assert!(env.git_branch.is_none());
 }

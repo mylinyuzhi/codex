@@ -3,7 +3,6 @@ use super::*;
 fn test_env() -> EnvironmentInfo {
     EnvironmentInfo::builder()
         .cwd("/tmp/test")
-        .model("test-model")
         .context_window(200000)
         .max_output_tokens(16384)
         .build()
@@ -17,7 +16,6 @@ fn test_builder_minimal() {
         .build()
         .unwrap();
 
-    assert_eq!(ctx.environment.model, "test-model");
     assert!(!ctx.has_tools());
     assert!(!ctx.has_mcp_servers());
     assert!(!ctx.is_subagent());

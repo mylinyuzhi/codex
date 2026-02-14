@@ -96,6 +96,9 @@ command.queue_input: "排队输入"
 # 后台
 command.background_all_tasks: "后台运行所有任务"
 
+# 工具折叠
+command.toggle_tool_collapse: "切换工具结果折叠"
+
 # 退出
 command.quit: "退出"
 
@@ -193,6 +196,7 @@ help.alt_up_down: "滚动聊天"
 help.pgup_pgdn: "翻页"
 help.ctrl_left_right: "单词移动"
 help.ctrl_bksp: "删除前一个单词"
+help.ctrl_shift_e: "切换工具结果显示"
 
 # ============================================================
 # 提示通知
@@ -267,6 +271,33 @@ palette.interrupt: "中断"
 palette.interrupt_desc: "取消当前操作"
 palette.quit: "退出"
 palette.quit_desc: "退出应用程序"
+
+# ============================================================
+# 头部栏
+# ============================================================
+
+header.new_session: "新会话"
+header.turn_count: "%{count} 轮"
+header.compacting: "压缩中..."
+header.fallback: "回退: %{model}"
+
+# ============================================================
+# 状态栏（附加）
+# ============================================================
+
+status.context_gauge: "%{percent}%"
+
+# ============================================================
+# 帮助覆盖层分类
+# ============================================================
+
+help.category_navigation: "导航"
+help.category_editing: "编辑"
+help.category_mode: "模式"
+help.category_tools: "工具"
+help.category_ui: "界面"
+help.ctrl_p: "命令面板"
+help.ctrl_s: "会话浏览器"
 
 # ============================================================
 # 工具面板

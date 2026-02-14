@@ -23,6 +23,8 @@ fn test_as_str() {
         HookEventType::PermissionRequest.as_str(),
         "permission_request"
     );
+    assert_eq!(HookEventType::TeammateIdle.as_str(), "teammate_idle");
+    assert_eq!(HookEventType::TaskCompleted.as_str(), "task_completed");
 }
 
 #[test]

@@ -2,8 +2,9 @@ use super::*;
 
 #[test]
 fn test_chat_widget_empty() {
+    let theme = Theme::default();
     let messages: Vec<ChatMessage> = vec![];
-    let widget = ChatWidget::new(&messages);
+    let widget = ChatWidget::new(&messages, &theme);
 
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
@@ -14,11 +15,12 @@ fn test_chat_widget_empty() {
 
 #[test]
 fn test_chat_widget_with_messages() {
+    let theme = Theme::default();
     let messages = vec![
         ChatMessage::user("1", "Hello"),
         ChatMessage::assistant("2", "Hi there!"),
     ];
-    let widget = ChatWidget::new(&messages);
+    let widget = ChatWidget::new(&messages, &theme);
 
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
@@ -32,7 +34,8 @@ fn test_chat_widget_with_messages() {
 
 #[test]
 fn test_format_message_user() {
-    let widget = ChatWidget::new(&[]);
+    let theme = Theme::default();
+    let widget = ChatWidget::new(&[], &theme);
     let msg = ChatMessage::user("1", "Test message");
     let lines = widget.format_message(&msg);
 
@@ -48,7 +51,8 @@ fn test_format_message_user() {
 
 #[test]
 fn test_format_message_with_thinking() {
-    let widget = ChatWidget::new(&[]).show_thinking(true);
+    let theme = Theme::default();
+    let widget = ChatWidget::new(&[], &theme).show_thinking(true);
     let mut msg = ChatMessage::assistant("1", "Response");
     msg.thinking = Some("I'm thinking about this...".to_string());
 
@@ -73,11 +77,12 @@ fn test_format_duration() {
 
 #[test]
 fn test_thinking_animation_char() {
-    let widget = ChatWidget::new(&[]);
+    let theme = Theme::default();
+    let widget = ChatWidget::new(&[], &theme);
     let char0 = widget.thinking_animation_char();
     assert!(!char0.is_ascii()); // Should be a Unicode spinner char
 
-    let widget = ChatWidget::new(&[]).animation_frame(4);
+    let widget = ChatWidget::new(&[], &theme).animation_frame(4);
     let char4 = widget.thinking_animation_char();
     assert_ne!(char0, char4); // Different frames have different chars
 }

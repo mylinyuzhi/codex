@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::GitToolingError;
 
-pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
+pub fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
         path,
         vec![
@@ -26,6 +26,30 @@ pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> 
             })
         }
         Err(err) => Err(err),
+    }
+}
+
+/// Check whether `path` is inside a git work tree.
+pub fn is_inside_git_repo(path: &Path) -> bool {
+    ensure_git_repository(path).is_ok()
+}
+
+/// Return the current branch name (e.g. `main`), or `None` for a detached HEAD.
+pub fn get_current_branch(path: &Path) -> Result<Option<String>, GitToolingError> {
+    let branch = run_git_for_stdout(
+        path,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--abbrev-ref"),
+            OsString::from("HEAD"),
+        ],
+        None,
+    )?;
+    if branch == "HEAD" {
+        // Detached HEAD
+        Ok(None)
+    } else {
+        Ok(Some(branch))
     }
 }
 

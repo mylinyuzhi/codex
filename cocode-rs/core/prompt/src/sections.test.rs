@@ -12,7 +12,6 @@ fn test_ctx() -> ConversationContext {
         .is_git_repo(true)
         .git_branch("main")
         .date("2025-01-29")
-        .model("claude-3-opus")
         .context_window(200000)
         .max_output_tokens(16384)
         .build()
@@ -59,9 +58,9 @@ fn test_render_environment() {
     assert!(rendered.contains("darwin"));
     assert!(rendered.contains("/home/user/project"));
     assert!(rendered.contains("2025-01-29"));
-    assert!(rendered.contains("claude-3-opus"));
     assert!(rendered.contains("main"));
     assert!(rendered.contains("true"));
+    assert!(rendered.contains("OS Version: Darwin 24.0.0"));
     assert!(!rendered.contains("{{"));
 }
 
@@ -75,11 +74,7 @@ fn test_permission_section() {
 
 #[test]
 fn test_render_memory_files() {
-    let env = EnvironmentInfo::builder()
-        .cwd("/tmp")
-        .model("test")
-        .build()
-        .unwrap();
+    let env = EnvironmentInfo::builder().cwd("/tmp").build().unwrap();
 
     let ctx = ConversationContext::builder()
         .environment(env)
@@ -117,11 +112,7 @@ fn test_render_memory_files_empty() {
 
 #[test]
 fn test_render_injections() {
-    let env = EnvironmentInfo::builder()
-        .cwd("/tmp")
-        .model("test")
-        .build()
-        .unwrap();
+    let env = EnvironmentInfo::builder().cwd("/tmp").build().unwrap();
 
     let ctx = ConversationContext::builder()
         .environment(env)
@@ -166,7 +157,6 @@ fn test_render_environment_with_language_preference() {
         .is_git_repo(true)
         .git_branch("main")
         .date("2025-01-29")
-        .model("claude-3-opus")
         .language_preference("中文")
         .build()
         .unwrap();

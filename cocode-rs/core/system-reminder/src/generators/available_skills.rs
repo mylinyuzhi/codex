@@ -13,20 +13,6 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
-/// Key for storing available skills in extension data.
-pub const AVAILABLE_SKILLS_KEY: &str = "available_skills";
-
-/// Information about a skill for the system reminder.
-#[derive(Debug, Clone)]
-pub struct SkillInfo {
-    /// Skill name (slash command identifier).
-    pub name: String,
-    /// Human-readable description.
-    pub description: String,
-    /// Guidance for the LLM on when to invoke this skill.
-    pub when_to_use: Option<String>,
-}
-
 /// Generator for available skills reminder.
 #[derive(Debug)]
 pub struct AvailableSkillsGenerator;
@@ -58,22 +44,14 @@ impl AttachmentGenerator for AvailableSkillsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get skills from extension data
-        // The extension builder wraps values in Arc<T>, so the Arc contains Vec<SkillInfo>
-        let skills: Option<&Vec<SkillInfo>> = ctx
-            .extension_data
-            .get(AVAILABLE_SKILLS_KEY)
-            .and_then(|v| v.downcast_ref());
-
-        let skills = match skills {
-            Some(s) if !s.is_empty() => s,
-            _ => return Ok(None),
-        };
+        if ctx.available_skills.is_empty() {
+            return Ok(None);
+        }
 
         let mut content = String::new();
         content.push_str("The following skills are available for use with the Skill tool:\n\n");
 
-        for skill in skills.iter() {
+        for skill in &ctx.available_skills {
             content.push_str(&format!("- {}: {}\n", skill.name, skill.description));
             if let Some(ref when) = skill.when_to_use {
                 content.push_str(&format!("  When to use: {when}\n"));

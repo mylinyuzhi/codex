@@ -10,6 +10,9 @@ use crate::event::HookEventType;
 use crate::matcher::HookMatcher;
 use crate::scope::HookSource;
 
+/// Maximum allowed timeout in seconds (10 minutes).
+pub const MAX_TIMEOUT_SECS: i32 = 600;
+
 /// Defines a single hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDefinition {
@@ -50,6 +53,13 @@ pub struct HookDefinition {
     pub once: bool,
 }
 
+impl HookDefinition {
+    /// Returns the effective timeout in seconds, clamped to [`MAX_TIMEOUT_SECS`].
+    pub fn effective_timeout_secs(&self) -> i32 {
+        self.timeout_secs.min(MAX_TIMEOUT_SECS)
+    }
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -71,17 +81,38 @@ pub enum HookHandler {
         args: Vec<String>,
     },
 
-    /// Inject a prompt template.
+    /// Inject a prompt template or perform LLM verification.
     Prompt {
         /// Template string. `$ARGUMENTS` is replaced with the JSON context.
         template: String,
+        /// Model to use for LLM verification mode.
+        /// When set, the template is sent to this model for verification
+        /// instead of simple template expansion.
+        ///
+        /// **Not yet effective** — currently ignored by the handler.
+        /// Requires LLM callback injection into `HookRegistry`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
 
-    /// Delegate to a sub-agent.
+    /// Delegate to a sub-agent for verification.
+    ///
+    /// **Not yet functional** — the handler is a stub that returns `Continue`.
+    /// Requires a `SpawnAgentFn` callback to be injected into `HookRegistry`.
     Agent {
-        /// Maximum number of turns the agent can run.
+        /// Maximum number of turns the agent can run (capped at 50).
         #[serde(default = "default_max_turns")]
         max_turns: i32,
+        /// Prompt template for the agent. `$ARGUMENTS` is replaced with context JSON.
+        ///
+        /// **Not yet effective** — currently ignored by the handler stub.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+        /// Timeout in seconds for the agent handler (default: 60s).
+        ///
+        /// **Not yet effective** — currently ignored by the handler stub.
+        #[serde(default = "default_agent_timeout_secs")]
+        timeout: i32,
     },
 
     /// Send an HTTP webhook.
@@ -96,7 +127,11 @@ pub enum HookHandler {
 }
 
 fn default_max_turns() -> i32 {
-    5
+    50
+}
+
+fn default_agent_timeout_secs() -> i32 {
+    60
 }
 
 #[cfg(test)]

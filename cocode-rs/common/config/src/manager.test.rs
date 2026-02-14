@@ -110,31 +110,11 @@ fn test_reload() {
 
     manager.reload().unwrap();
 
-    // Reset runtime overrides to use JSON config
-    manager.set_runtime_overrides(RuntimeOverrides::default());
-
+    // After reload, runtime selections are preserved but JSON config changed.
+    // Since no runtime override was set, it should pick up the new JSON config.
     let spec = manager.current_spec();
     assert_eq!(spec.provider, "test-openai");
     assert_eq!(spec.model, "gpt-5-mini");
-}
-
-#[test]
-fn test_has_provider() {
-    let (_temp, manager) = create_test_manager();
-
-    assert!(manager.has_provider("test-openai"));
-    assert!(manager.has_provider("openai")); // Built-in
-    assert!(!manager.has_provider("nonexistent"));
-}
-
-#[test]
-fn test_get_model_config() {
-    let (_temp, manager) = create_test_manager();
-
-    // Built-in model
-    let config = manager.get_model_config("gpt-5");
-    assert!(config.is_some());
-    assert_eq!(config.unwrap().display_name, Some("GPT-5".to_string()));
 }
 
 #[test]

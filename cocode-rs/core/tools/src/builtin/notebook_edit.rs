@@ -237,6 +237,10 @@ impl Tool for NotebookEditTool {
         })
     }
 
+    fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+        Some(cocode_protocol::Feature::NotebookEdit)
+    }
+
     fn concurrency_safety(&self) -> ConcurrencySafety {
         ConcurrencySafety::Unsafe
     }

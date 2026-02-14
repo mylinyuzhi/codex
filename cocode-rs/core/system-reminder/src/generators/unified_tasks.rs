@@ -18,9 +18,6 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
-/// Key for unified task info in generator context extension data.
-pub const UNIFIED_TASKS_KEY: &str = "unified_tasks";
-
 /// Generator for background task status reminders.
 ///
 /// This generator produces reminders that inform the model about

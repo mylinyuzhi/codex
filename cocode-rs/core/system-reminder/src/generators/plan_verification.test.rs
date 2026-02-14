@@ -1,118 +1,173 @@
-use super::*;
-use crate::generator::PlanState;
 use std::path::PathBuf;
+
+use super::*;
 
 fn test_config() -> SystemReminderConfig {
     SystemReminderConfig::default()
 }
 
-#[tokio::test]
-async fn test_not_triggered_in_plan_mode() {
-    let config = test_config();
-    let ctx = GeneratorContext::builder()
-        .config(&config)
-        .turn_number(1)
-        .cwd(PathBuf::from("/tmp"))
-        .is_plan_mode(true)
-        .plan_state(PlanState {
-            is_empty: false,
-            last_update_turn: 1,
-            steps: vec![PlanStep {
-                step: "Step 1".to_string(),
-                status: "pending".to_string(),
-            }],
-        })
-        .build();
-
-    let generator = PlanVerificationGenerator;
-    let result = generator.generate(&ctx).await.expect("generate");
-    assert!(result.is_none());
+fn completed_todo(id: &str) -> TodoItem {
+    TodoItem {
+        id: id.to_string(),
+        subject: format!("Task {id}"),
+        status: TodoStatus::Completed,
+        is_blocked: false,
+    }
 }
 
-#[tokio::test]
-async fn test_not_triggered_without_plan() {
-    let config = test_config();
-    let ctx = GeneratorContext::builder()
-        .config(&config)
-        .turn_number(1)
-        .cwd(PathBuf::from("/tmp"))
-        .is_plan_mode(false)
-        // No plan_state
-        .build();
-
-    let generator = PlanVerificationGenerator;
-    let result = generator.generate(&ctx).await.expect("generate");
-    assert!(result.is_none());
+fn pending_todo(id: &str) -> TodoItem {
+    TodoItem {
+        id: id.to_string(),
+        subject: format!("Task {id}"),
+        status: TodoStatus::Pending,
+        is_blocked: false,
+    }
 }
 
-#[tokio::test]
-async fn test_not_triggered_for_empty_plan() {
-    let config = test_config();
-    let ctx = GeneratorContext::builder()
-        .config(&config)
-        .turn_number(1)
-        .cwd(PathBuf::from("/tmp"))
-        .is_plan_mode(false)
-        .plan_state(PlanState {
-            is_empty: true,
-            last_update_turn: 1,
-            steps: vec![],
-        })
-        .build();
-
-    let generator = PlanVerificationGenerator;
-    let result = generator.generate(&ctx).await.expect("generate");
-    assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn test_shows_progress() {
-    let config = test_config();
-    let ctx = GeneratorContext::builder()
-        .config(&config)
+/// Helper: build a context that satisfies all trigger conditions.
+fn firing_context(config: &SystemReminderConfig) -> GeneratorContext<'_> {
+    GeneratorContext::builder()
+        .config(config)
         .turn_number(10)
         .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(true)
         .is_plan_mode(false)
-        .plan_state(PlanState {
-            is_empty: false,
-            last_update_turn: 5,
-            steps: vec![
-                PlanStep {
-                    step: "Set up database".to_string(),
-                    status: "completed".to_string(),
-                },
-                PlanStep {
-                    step: "Create API endpoints".to_string(),
-                    status: "in_progress".to_string(),
-                },
-                PlanStep {
-                    step: "Add authentication".to_string(),
-                    status: "pending".to_string(),
-                },
-                PlanStep {
-                    step: "Write tests".to_string(),
-                    status: "pending".to_string(),
-                },
-            ],
-        })
+        .plan_file_path(PathBuf::from("/tmp/plan.md"))
+        .todos(vec![completed_todo("1"), completed_todo("2")])
+        .build()
+}
+
+use crate::generator::TodoItem;
+
+#[tokio::test]
+async fn test_returns_none_in_plan_mode() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(5)
+        .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(true)
+        .is_plan_mode(true)
+        .plan_file_path(PathBuf::from("/tmp/plan.md"))
+        .todos(vec![completed_todo("1")])
         .build();
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_returns_none_for_subagent() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(5)
+        .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(false)
+        .is_plan_mode(false)
+        .plan_file_path(PathBuf::from("/tmp/plan.md"))
+        .todos(vec![completed_todo("1")])
+        .build();
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_returns_none_without_plan_file() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(5)
+        .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(true)
+        .is_plan_mode(false)
+        .todos(vec![completed_todo("1")])
+        .build();
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_returns_none_without_todos() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(5)
+        .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(true)
+        .is_plan_mode(false)
+        .plan_file_path(PathBuf::from("/tmp/plan.md"))
+        .build();
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_returns_none_with_pending_todos() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(5)
+        .cwd(PathBuf::from("/tmp"))
+        .is_main_agent(true)
+        .is_plan_mode(false)
+        .plan_file_path(PathBuf::from("/tmp/plan.md"))
+        .todos(vec![pending_todo("1"), completed_todo("2")])
+        .build();
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_fires_when_all_todos_completed() {
+    let config = test_config();
+    let ctx = firing_context(&config);
 
     let generator = PlanVerificationGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
     assert!(result.is_some());
 
-    let reminder = result.expect("reminder");
-    assert!(reminder.content().unwrap().contains("Plan Progress: 1/4"));
-    assert!(reminder.content().unwrap().contains("Current:"));
-    assert!(reminder.content().unwrap().contains("Create API endpoints"));
-    assert!(reminder.content().unwrap().contains("Next:"));
-    assert!(reminder.content().unwrap().contains("Add authentication"));
+    let reminder = result.unwrap();
+    assert_eq!(reminder.attachment_type, AttachmentType::PlanVerification);
+}
+
+#[tokio::test]
+async fn test_content_matches_cc_template() {
+    let config = test_config();
+    let ctx = firing_context(&config);
+
+    let generator = PlanVerificationGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    let reminder = result.expect("should fire");
+
+    let expected = "You have completed implementing the plan. \
+                    Please call the \"\" tool directly \
+                    (NOT the Task tool or an agent) to verify \
+                    that all plan items were completed correctly.";
+    assert_eq!(reminder.content(), Some(expected));
 }
 
 #[test]
-fn test_throttle_config() {
+fn test_attachment_type() {
+    let generator = PlanVerificationGenerator;
+    assert_eq!(
+        generator.attachment_type(),
+        AttachmentType::PlanVerification
+    );
+}
+
+#[test]
+fn test_throttle_config_min_turns_between() {
     let generator = PlanVerificationGenerator;
     let throttle = generator.throttle_config();
     assert_eq!(throttle.min_turns_between, 5);
-    assert_eq!(throttle.min_turns_after_trigger, 3);
 }

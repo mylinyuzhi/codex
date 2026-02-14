@@ -8,6 +8,7 @@ license.workspace = true
 cocode-protocol.workspace = true
 cocode-error.workspace = true
 cocode-config.workspace = true
+cocode-context.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 serde = { workspace = true, features = ["derive"] }

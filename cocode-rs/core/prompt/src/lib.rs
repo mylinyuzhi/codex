@@ -11,6 +11,7 @@
 //! All operations are sync — pure string assembly with no I/O.
 
 pub mod builder;
+mod engine;
 pub mod error;
 pub mod sections;
 pub mod summarization;

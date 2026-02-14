@@ -260,6 +260,10 @@ pub enum TuiCommand {
     /// Background all running foreground tasks (Ctrl+B).
     BackgroundAllTasks,
 
+    // ========== Tool Collapse ==========
+    /// Toggle collapse of tool results in chat.
+    ToggleToolCollapse,
+
     // ========== Quit ==========
     /// Request to quit the application.
     Quit,
@@ -358,6 +362,9 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
             TuiCommand::BackgroundAllTasks => {
                 write!(f, "{}", t!("command.background_all_tasks"))
+            }
+            TuiCommand::ToggleToolCollapse => {
+                write!(f, "{}", t!("command.toggle_tool_collapse"))
             }
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }

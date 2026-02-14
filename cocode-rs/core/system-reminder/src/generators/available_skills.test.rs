@@ -1,4 +1,5 @@
 use super::*;
+use crate::generator::SkillInfo;
 use std::path::PathBuf;
 
 fn test_config() -> SystemReminderConfig {
@@ -41,7 +42,7 @@ async fn test_with_skills() {
         .turn_number(1)
         .is_main_agent(true)
         .cwd(PathBuf::from("/tmp"))
-        .extension(AVAILABLE_SKILLS_KEY, skills)
+        .available_skills(skills)
         .build();
 
     let generator = AvailableSkillsGenerator;

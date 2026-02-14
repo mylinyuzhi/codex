@@ -20,8 +20,8 @@ pub const TASK_MANAGEMENT: &str = include_str!("task_management.md");
 /// MCP server usage instructions.
 pub const MCP_INSTRUCTIONS: &str = include_str!("mcp_instructions.md");
 
-/// Environment template with placeholders.
-pub const ENVIRONMENT_TEMPLATE: &str = include_str!("environment.md");
+// Note: environment.md is now a Jinja2 template registered in engine.rs,
+// no longer exposed as a constant here.
 
 /// Default permission mode instructions.
 pub const PERMISSION_DEFAULT: &str = include_str!("permission_default.md");

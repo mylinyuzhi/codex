@@ -13,20 +13,23 @@ use ratatui::widgets::Widget;
 use crate::i18n::t;
 use crate::state::SubagentInstance;
 use crate::state::SubagentStatus;
+use crate::theme::Theme;
 
 /// Subagent panel widget.
 ///
 /// Displays a list of active subagents with their status and progress.
 pub struct SubagentPanel<'a> {
     subagents: &'a [SubagentInstance],
+    theme: &'a Theme,
     max_display: i32,
 }
 
 impl<'a> SubagentPanel<'a> {
     /// Create a new subagent panel.
-    pub fn new(subagents: &'a [SubagentInstance]) -> Self {
+    pub fn new(subagents: &'a [SubagentInstance], theme: &'a Theme) -> Self {
         Self {
             subagents,
+            theme,
             max_display: 5,
         }
     }
@@ -48,7 +51,7 @@ impl Widget for SubagentPanel<'_> {
         let block = Block::default()
             .title(format!(" {} ", t!("subagent.title")).bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().cyan());
+            .border_style(Style::default().fg(self.theme.border));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -66,28 +69,46 @@ impl Widget for SubagentPanel<'_> {
 
             // Status icon
             let (icon, style) = match subagent.status {
-                SubagentStatus::Running => ("⚙", Style::default().yellow()),
-                SubagentStatus::Completed => ("✓", Style::default().green()),
-                SubagentStatus::Failed => ("✗", Style::default().red()),
-                SubagentStatus::Backgrounded => ("◐", Style::default().blue()),
+                SubagentStatus::Running => ("⚙", Style::default().fg(self.theme.tool_running)),
+                SubagentStatus::Completed => ("✓", Style::default().fg(self.theme.tool_completed)),
+                SubagentStatus::Failed => ("✗", Style::default().fg(self.theme.tool_error)),
+                SubagentStatus::Backgrounded => ("◐", Style::default().fg(self.theme.secondary)),
             };
 
-            // Format: "icon type: description"
+            // Agent type icon based on type name
+            let type_icon = match subagent.agent_type.to_lowercase().as_str() {
+                "explore" => "~ ",
+                "plan" => "# ",
+                "bash" => "> ",
+                "code" | "code-simplifier" => "* ",
+                _ => "",
+            };
+
+            // Format: "icon type_icon type: description"
             let type_str = &subagent.agent_type;
             let desc_str = &subagent.description;
 
-            // Render icon
+            // Render status icon
             buf.set_string(inner.x, y, icon, style);
 
+            // Render agent type icon
+            let icon_x = inner.x + 2;
+            buf.set_string(
+                icon_x,
+                y,
+                type_icon,
+                Style::default().fg(self.theme.text_dim),
+            );
+
             // Render agent type
-            let type_x = inner.x + 2;
+            let type_x = icon_x + type_icon.len() as u16;
             let type_width = type_str.len().min((inner.width as usize).saturating_sub(3));
             buf.set_string(type_x, y, &type_str[..type_width], style.bold());
 
             // Render colon
             let colon_x = type_x + type_width as u16;
             if colon_x < inner.x + inner.width - 1 {
-                buf.set_string(colon_x, y, ": ", Style::default().dim());
+                buf.set_string(colon_x, y, ": ", Style::default().fg(self.theme.text_dim));
             }
 
             // Render description (truncated if needed)
@@ -127,7 +148,7 @@ impl Widget for SubagentPanel<'_> {
                         } else {
                             progress_str
                         };
-                        buf.set_string(inner.x, y, text, Style::default().dim());
+                        buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
                         y += 1;
                     }
                 }
@@ -139,7 +160,7 @@ impl Widget for SubagentPanel<'_> {
             if y < inner.y + inner.height {
                 let remaining = self.subagents.len() - self.max_display as usize;
                 let text = format!("  {}", t!("subagent.more", count = remaining));
-                buf.set_string(inner.x, y, text, Style::default().dim());
+                buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
             }
         }
     }

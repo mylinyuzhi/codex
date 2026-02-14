@@ -14,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::theme::Theme;
 
 /// Widget to render queued commands above the input box.
 ///
@@ -25,14 +26,16 @@ use crate::i18n::t;
 /// ```
 pub struct QueuedListWidget<'a> {
     commands: &'a [UserQueuedCommand],
+    theme: &'a Theme,
     max_display: i32,
 }
 
 impl<'a> QueuedListWidget<'a> {
     /// Create a new queued list widget.
-    pub fn new(commands: &'a [UserQueuedCommand]) -> Self {
+    pub fn new(commands: &'a [UserQueuedCommand], theme: &'a Theme) -> Self {
         Self {
             commands,
+            theme,
             max_display: 5,
         }
     }
@@ -67,7 +70,9 @@ impl Widget for QueuedListWidget<'_> {
 
         // Header line: "🕐 Waiting:" (dimmed)
         let waiting_label = t!("status.waiting").to_string();
-        lines.push(Line::from(Span::raw(format!("  {waiting_label}")).dim()));
+        lines.push(Line::from(
+            Span::raw(format!("  {waiting_label}")).fg(self.theme.text_dim),
+        ));
 
         // Command lines
         for cmd in self.commands.iter().take(self.max_display as usize) {
@@ -80,9 +85,9 @@ impl Widget for QueuedListWidget<'_> {
             };
 
             lines.push(Line::from(vec![
-                Span::raw("    ").dim(),
-                Span::raw("• ").dim(),
-                Span::raw(format!("\"{prompt}\"")).dim(),
+                Span::raw("    ").fg(self.theme.text_dim),
+                Span::raw("• ").fg(self.theme.text_dim),
+                Span::raw(format!("\"{prompt}\"")).fg(self.theme.text_dim),
             ]));
         }
 
@@ -91,7 +96,7 @@ impl Widget for QueuedListWidget<'_> {
         if remaining > 0 {
             lines.push(Line::from(
                 Span::raw(format!("    +{remaining} more..."))
-                    .dim()
+                    .fg(self.theme.text_dim)
                     .italic(),
             ));
         }

@@ -19,6 +19,7 @@ snafu-virtstack.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::SystemReminderConfig;
+use crate::generator::CompactedLargeFile;
 use crate::types::ReminderTier;
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ async fn test_no_large_files() {
         .config(&config)
         .turn_number(1)
         .cwd(PathBuf::from("/tmp"))
-        // No extension data
+        // No compacted_large_files
         .build();
 
     let generator = CompactFileReferenceGenerator;
@@ -29,7 +30,7 @@ async fn test_empty_large_files() {
         .config(&config)
         .turn_number(1)
         .cwd(PathBuf::from("/tmp"))
-        .extension(COMPACTED_LARGE_FILES_KEY, Vec::<CompactedLargeFile>::new())
+        .compacted_large_files(vec![])
         .build();
 
     let generator = CompactFileReferenceGenerator;
@@ -57,7 +58,7 @@ async fn test_generates_reference() {
         .config(&config)
         .turn_number(1)
         .cwd(PathBuf::from("/tmp"))
-        .extension(COMPACTED_LARGE_FILES_KEY, large_files)
+        .compacted_large_files(large_files)
         .build();
 
     let generator = CompactFileReferenceGenerator;

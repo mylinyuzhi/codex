@@ -257,6 +257,9 @@ pub async fn handle_command(
                 Some(Overlay::SessionBrowser(browser)) => {
                     browser.move_up();
                 }
+                Some(Overlay::Help) => {
+                    state.ui.help_scroll = (state.ui.help_scroll - 1).max(0);
+                }
                 _ => {
                     // History navigation
                     handle_history_up(state);
@@ -277,6 +280,9 @@ pub async fn handle_command(
                 }
                 Some(Overlay::SessionBrowser(browser)) => {
                     browser.move_down();
+                }
+                Some(Overlay::Help) => {
+                    state.ui.help_scroll += 1;
                 }
                 _ => {
                     // History navigation
@@ -514,6 +520,7 @@ pub async fn handle_command(
 
         // ========== Help ==========
         TuiCommand::ShowHelp => {
+            state.ui.help_scroll = 0;
             state.ui.set_overlay(Overlay::Help);
         }
 
@@ -577,6 +584,31 @@ pub async fn handle_command(
             }
         }
 
+        // ========== Tool Collapse ==========
+        TuiCommand::ToggleToolCollapse => {
+            // Toggle collapse state for all tool calls
+            // If any are expanded (not in set), collapse all; otherwise expand all
+            let all_ids: Vec<String> = state
+                .session
+                .messages
+                .iter()
+                .flat_map(|m| m.tool_calls.iter().map(|tc| tc.tool_name.clone()))
+                .collect();
+            if state.ui.collapsed_tools.is_empty() {
+                // Collapse all
+                for id in all_ids {
+                    state.ui.collapsed_tools.insert(id);
+                }
+            } else {
+                // Expand all
+                state.ui.collapsed_tools.clear();
+            }
+            tracing::debug!(
+                collapsed = state.ui.collapsed_tools.len(),
+                "Toggled tool collapse"
+            );
+        }
+
         // ========== Quit ==========
         TuiCommand::Quit => {
             state.quit();
@@ -594,6 +626,7 @@ async fn handle_local_command(
 ) {
     match local_cmd.name {
         "help" => {
+            state.ui.help_scroll = 0;
             state.ui.set_overlay(Overlay::Help);
         }
         "clear" => {
@@ -642,7 +675,7 @@ async fn handle_local_command(
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
         // Commands that need the agent driver: dispatch via ExecuteSkill
-        "compact" | "skills" | "todos" => {
+        "compact" | "skills" | "todos" | "output-style" => {
             let msg_id = format!("user-{}", state.session.messages.len());
             let display = format!("/{}", local_cmd.name);
             state
@@ -697,6 +730,7 @@ async fn execute_command_action(
             tracing::info!("Model picker requested from command palette");
         }
         CommandAction::ShowHelp => {
+            state.ui.help_scroll = 0;
             state.ui.set_overlay(Overlay::Help);
         }
         CommandAction::ShowSessionBrowser => {

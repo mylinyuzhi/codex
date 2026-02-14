@@ -277,6 +277,13 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
             Some(TuiCommand::ToggleThinking)
         }
 
+        // Toggle tool results collapse (Ctrl+Shift+E)
+        (m, KeyCode::Char('E'))
+            if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+        {
+            Some(TuiCommand::ToggleToolCollapse)
+        }
+
         // Show help (? or F1)
         (KeyModifiers::NONE, KeyCode::F(1)) => Some(TuiCommand::ShowHelp),
         (KeyModifiers::SHIFT, KeyCode::Char('?')) => Some(TuiCommand::ShowHelp),

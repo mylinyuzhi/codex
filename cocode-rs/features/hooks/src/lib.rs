@@ -43,6 +43,7 @@ pub use config::load_hooks_from_toml;
 pub use context::HookContext;
 pub use definition::HookDefinition;
 pub use definition::HookHandler;
+pub use definition::MAX_TIMEOUT_SECS;
 pub use error::HookError;
 pub use event::HookEventType;
 pub use handlers::command::HookOutput;

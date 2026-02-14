@@ -26,25 +26,6 @@ fn test_config_overrides_builder() {
 }
 
 #[test]
-fn test_config_builder_new() {
-    let builder = ConfigBuilder::new()
-        .cocode_home("/custom/home")
-        .cwd("/my/project")
-        .profile("fast")
-        .sandbox_mode(SandboxMode::FullAccess)
-        .ephemeral(true);
-
-    assert_eq!(builder.cocode_home, Some(PathBuf::from("/custom/home")));
-    assert_eq!(builder.cwd, Some(PathBuf::from("/my/project")));
-    assert_eq!(builder.profile, Some("fast".to_string()));
-    assert_eq!(
-        builder.overrides.sandbox_mode,
-        Some(SandboxMode::FullAccess)
-    );
-    assert_eq!(builder.overrides.ephemeral, Some(true));
-}
-
-#[test]
 fn test_is_path_writable_read_only() {
     let config = Config {
         sandbox_mode: SandboxMode::ReadOnly,

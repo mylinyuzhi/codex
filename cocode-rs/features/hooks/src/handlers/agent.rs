@@ -73,9 +73,15 @@ impl Default for AgentVerificationConfig {
 pub struct AgentHandler;
 
 impl AgentHandler {
-    /// Synchronous stub implementation. Returns `Continue`.
+    /// Stub implementation — always returns `Continue`.
     ///
-    /// This is the fallback when async agent spawning isn't available.
+    /// Full implementation requires a `SpawnAgentFn` callback (defined in
+    /// `core/tools/src/context.rs`) to be injected into `HookRegistry` by
+    /// `core/loop` or `core/executor`. The callback spawns a sub-agent with
+    /// restricted tools (Read, Grep, Glob) that analyzes the hook context
+    /// and returns `{ "ok": true/false }`. Use `prepare_verification_request`
+    /// and `parse_verification_response` to build the full flow once the
+    /// callback is available.
     pub fn execute(max_turns: i32) -> HookResult {
         debug!(max_turns, "Agent hook stub invoked (not yet implemented)");
         HookResult::Continue
@@ -88,13 +94,14 @@ impl AgentHandler {
         ctx: &HookContext,
         max_turns: i32,
     ) -> (AgentVerificationConfig, String) {
-        let mut config = AgentVerificationConfig::default();
-        config.max_turns = max_turns;
+        let config = AgentVerificationConfig {
+            max_turns,
+            ..AgentVerificationConfig::default()
+        };
 
         let ctx_json = serde_json::to_string_pretty(ctx).unwrap_or_else(|_| "{}".to_string());
         let user_message = format!(
-            "Please analyze the following hook context and determine if this action should proceed:\n\n```json\n{}\n```",
-            ctx_json
+            "Please analyze the following hook context and determine if this action should proceed:\n\n```json\n{ctx_json}\n```"
         );
 
         (config, user_message)
@@ -107,12 +114,12 @@ impl AgentHandler {
         let trimmed = response.trim();
 
         // Try to extract JSON from the response
-        if let Some(start) = trimmed.rfind('{') {
-            if let Some(end) = trimmed.rfind('}') {
-                let json_str = &trimmed[start..=end];
-                if let Ok(resp) = serde_json::from_str::<AgentVerificationResponse>(json_str) {
-                    return Self::response_to_result(resp);
-                }
+        if let Some(start) = trimmed.rfind('{')
+            && let Some(end) = trimmed.rfind('}')
+        {
+            let json_str = &trimmed[start..=end];
+            if let Ok(resp) = serde_json::from_str::<AgentVerificationResponse>(json_str) {
+                return Self::response_to_result(resp);
             }
         }
 

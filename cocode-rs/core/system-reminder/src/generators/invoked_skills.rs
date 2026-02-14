@@ -14,22 +14,10 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
-/// Key for storing invoked skills in extension data.
-pub const INVOKED_SKILLS_KEY: &str = "invoked_skills";
-
-/// Information about an invoked skill.
-#[derive(Debug, Clone)]
-pub struct InvokedSkillInfo {
-    /// Skill name (slash command identifier, e.g., "commit", "review-pr").
-    pub name: String,
-    /// The skill's prompt content (typically from SKILL.md or similar).
-    pub prompt_content: String,
-}
-
 /// Generator for invoked skills.
 ///
 /// Injects skill prompt content when a user invokes a skill via `/skill-name`.
-/// The skill content is passed via extension_data using INVOKED_SKILLS_KEY.
+/// The skill content is passed via the typed `invoked_skills` field.
 #[derive(Debug)]
 pub struct InvokedSkillsGenerator;
 
@@ -52,20 +40,13 @@ impl AttachmentGenerator for InvokedSkillsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get invoked skills from extension data
-        let skills: Option<&Vec<InvokedSkillInfo>> = ctx
-            .extension_data
-            .get(INVOKED_SKILLS_KEY)
-            .and_then(|v| v.downcast_ref());
-
-        let skills = match skills {
-            Some(s) if !s.is_empty() => s,
-            _ => return Ok(None),
-        };
+        if ctx.invoked_skills.is_empty() {
+            return Ok(None);
+        }
 
         let mut content = String::new();
 
-        for skill in skills.iter() {
+        for skill in &ctx.invoked_skills {
             // Format: inject the skill's prompt content with a header
             content.push_str(&format!("<command-name>{}</command-name>\n", skill.name));
             content.push_str(&skill.prompt_content);

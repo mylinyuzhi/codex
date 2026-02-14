@@ -25,8 +25,10 @@
 //! - `HOOK_EVENT` - Event type name (e.g., "pre_tool_use")
 //! - `HOOK_TOOL_NAME` - Tool name (if applicable, otherwise empty)
 //!
-//! If the process exits with a non-zero status or produces invalid JSON,
-//! the hook returns `Continue`.
+//! Exit code semantics (matching Claude Code v2.1.7):
+//! - Exit code 0: Success, parse stdout for response
+//! - Exit code 2: Block the action, stderr becomes the rejection reason
+//! - Any other non-zero: Error (logged but not blocking, returns `Continue`)
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -72,6 +74,20 @@ pub struct HookOutput {
     /// When set to "deny", blocks the tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_decision: Option<String>,
+
+    /// Decision field for PostToolUse/Stop events.
+    /// When set to "block", blocks the action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+
+    /// Hook-specific structured output wrapper.
+    /// Claude Code v2.1.7 wraps certain outputs in this field.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "hookSpecificOutput"
+    )]
+    pub hook_specific_output: Option<Value>,
 }
 
 impl HookOutput {
@@ -91,6 +107,18 @@ impl HookOutput {
             return HookResult::PermissionOverride {
                 decision,
                 reason: self.stop_reason,
+            };
+        }
+
+        // Check decision field (PostToolUse/Stop events use "block")
+        if let Some(ref decision) = self.decision
+            && decision == "block"
+        {
+            return HookResult::Reject {
+                reason: self
+                    .stop_reason
+                    .clone()
+                    .unwrap_or_else(|| "Hook blocked execution (decision: block)".to_string()),
             };
         }
 
@@ -189,10 +217,24 @@ impl CommandHandler {
         };
 
         if !output.status.success() {
+            let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Exit code 2 = block the action, stderr becomes Claude's feedback
+            if exit_code == 2 {
+                let reason = if stderr.trim().is_empty() {
+                    "Hook blocked execution (exit code 2)".to_string()
+                } else {
+                    stderr.trim().to_string()
+                };
+                debug!(command, %reason, "Hook command blocked action (exit code 2)");
+                return HookResult::Reject { reason };
+            }
+
+            // Any other non-zero exit = error, logged but not blocking
             warn!(
                 command,
-                exit_code = output.status.code().unwrap_or(-1),
+                exit_code,
                 stderr = %stderr,
                 "Hook command exited with error"
             );

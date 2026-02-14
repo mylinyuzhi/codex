@@ -27,7 +27,8 @@ fn create_test_state() -> SymbolSuggestionState {
 #[test]
 fn test_popup_creation() {
     let state = create_test_state();
-    let popup = SymbolSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SymbolSuggestionPopup::new(&state, &theme);
 
     let input_area = Rect::new(0, 20, 80, 3);
     let area = popup.calculate_area(input_area, 24);
@@ -39,7 +40,8 @@ fn test_popup_creation() {
 #[test]
 fn test_popup_render() {
     let state = create_test_state();
-    let popup = SymbolSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SymbolSuggestionPopup::new(&state, &theme);
 
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
@@ -55,7 +57,8 @@ fn test_popup_render() {
 fn test_empty_suggestions() {
     let mut state = SymbolSuggestionState::new("xyz".to_string(), 0);
     state.update_suggestions(vec![]);
-    let popup = SymbolSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SymbolSuggestionPopup::new(&state, &theme);
 
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
@@ -70,7 +73,8 @@ fn test_empty_suggestions() {
 fn test_loading_state() {
     let state = SymbolSuggestionState::new("test".to_string(), 0);
     // state.loading is true by default
-    let popup = SymbolSuggestionPopup::new(&state);
+    let theme = Theme::default();
+    let popup = SymbolSuggestionPopup::new(&state, &theme);
 
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);

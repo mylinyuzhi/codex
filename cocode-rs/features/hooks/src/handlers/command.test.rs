@@ -44,6 +44,8 @@ fn test_hook_output_continue() {
         additional_context: None,
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result: HookResult = output.into();
     assert!(matches!(result, HookResult::Continue));
@@ -58,6 +60,8 @@ fn test_hook_output_reject() {
         additional_context: None,
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -76,6 +80,8 @@ fn test_hook_output_reject_default_reason() {
         additional_context: None,
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -94,6 +100,8 @@ fn test_hook_output_modify_input() {
         additional_context: None,
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ModifyInput { new_input } = result {
@@ -112,6 +120,8 @@ fn test_hook_output_additional_context() {
         additional_context: Some("Extra info".to_string()),
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ContinueWithContext { additional_context } = result {
@@ -130,6 +140,8 @@ fn test_hook_output_async() {
         additional_context: None,
         is_async: true,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let result = output.into_result(Some("test-hook"));
     if let HookResult::Async { task_id, hook_name } = result {
@@ -188,6 +200,8 @@ fn test_hook_output_serde() {
         additional_context: Some("context".to_string()),
         is_async: false,
         permission_decision: None,
+        decision: None,
+        hook_specific_output: None,
     };
     let json = serde_json::to_string(&output).expect("serialize");
     let parsed: HookOutput = serde_json::from_str(&json).expect("deserialize");
@@ -210,4 +224,74 @@ fn test_parse_hook_response_async() {
     let json = r#"{"continue_execution":true,"async":true}"#;
     let result = parse_hook_response(json);
     assert!(matches!(result, HookResult::Async { .. }));
+}
+
+#[tokio::test]
+async fn test_execute_exit_code_2_blocks() {
+    let ctx = make_ctx();
+    // `exit 2` on unix should produce exit code 2
+    let result = CommandHandler::execute(
+        "sh",
+        &[
+            "-c".to_string(),
+            "echo 'blocked reason' >&2; exit 2".to_string(),
+        ],
+        &ctx,
+    )
+    .await;
+    if let HookResult::Reject { reason } = result {
+        assert!(reason.contains("blocked reason"));
+    } else {
+        panic!("Expected Reject for exit code 2, got: {result:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_execute_exit_code_2_default_reason() {
+    let ctx = make_ctx();
+    // exit 2 with no stderr should give a default reason
+    let result =
+        CommandHandler::execute("sh", &["-c".to_string(), "exit 2".to_string()], &ctx).await;
+    if let HookResult::Reject { reason } = result {
+        assert!(reason.contains("exit code 2"));
+    } else {
+        panic!("Expected Reject for exit code 2, got: {result:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_execute_exit_code_1_continues() {
+    let ctx = make_ctx();
+    // exit 1 should not block (only exit code 2 blocks)
+    let result =
+        CommandHandler::execute("sh", &["-c".to_string(), "exit 1".to_string()], &ctx).await;
+    assert!(matches!(result, HookResult::Continue));
+}
+
+#[test]
+fn test_hook_output_decision_block() {
+    let output = HookOutput {
+        continue_execution: true,
+        stop_reason: Some("stopped by hook".to_string()),
+        updated_input: None,
+        additional_context: None,
+        is_async: false,
+        permission_decision: None,
+        decision: Some("block".to_string()),
+        hook_specific_output: None,
+    };
+    let result: HookResult = output.into();
+    if let HookResult::Reject { reason } = result {
+        assert_eq!(reason, "stopped by hook");
+    } else {
+        panic!("Expected Reject for decision=block, got: {result:?}");
+    }
+}
+
+#[test]
+fn test_hook_output_hook_specific_output() {
+    let json = r#"{"continue_execution":true,"hookSpecificOutput":{"key":"value"}}"#;
+    let parsed: HookOutput = serde_json::from_str(json).expect("deserialize");
+    assert!(parsed.hook_specific_output.is_some());
+    assert_eq!(parsed.hook_specific_output.unwrap()["key"], "value");
 }

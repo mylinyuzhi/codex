@@ -52,8 +52,7 @@ impl AttachmentGenerator for SecurityGuidelinesGenerator {
     }
 
     fn throttle_config(&self) -> ThrottleConfig {
-        // No throttle - always check, but use sparse content when appropriate
-        ThrottleConfig::none()
+        ThrottleConfig::security_guidelines()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -62,8 +61,8 @@ impl AttachmentGenerator for SecurityGuidelinesGenerator {
             return Ok(None);
         }
 
-        // Use turn-based sparse logic
-        let content = if ctx.should_use_full_reminders() {
+        // Use per-generator full-content flag (pre-computed by orchestrator)
+        let content = if ctx.should_use_full_content(self.attachment_type()) {
             SECURITY_GUIDELINES_FULL
         } else {
             SECURITY_GUIDELINES_SPARSE

@@ -5,6 +5,7 @@
 //! - [`ChatWidget`]: Displays the conversation history
 //! - [`InputWidget`]: Multi-line input field
 //! - [`ToolPanel`]: Shows tool execution progress
+//! - [`HeaderBar`]: Session context header bar
 //! - [`FileSuggestionPopup`]: File autocomplete dropdown
 //! - [`SkillSuggestionPopup`]: Skill autocomplete dropdown
 //! - [`AgentSuggestionPopup`]: Agent autocomplete dropdown
@@ -15,7 +16,9 @@
 mod agent_suggestion_popup;
 mod chat;
 mod file_suggestion_popup;
+mod header_bar;
 mod input;
+pub mod markdown;
 mod queued_list;
 mod skill_suggestion_popup;
 mod status_bar;
@@ -27,6 +30,7 @@ mod tool_panel;
 pub use agent_suggestion_popup::AgentSuggestionPopup;
 pub use chat::ChatWidget;
 pub use file_suggestion_popup::FileSuggestionPopup;
+pub use header_bar::HeaderBar;
 pub use input::InputWidget;
 pub use queued_list::QueuedListWidget;
 pub use skill_suggestion_popup::SkillSuggestionPopup;

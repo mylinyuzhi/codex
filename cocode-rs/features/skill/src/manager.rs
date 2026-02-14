@@ -105,6 +105,7 @@ impl SkillManager {
                         argument_hint: None,
                         aliases: Vec::new(),
                         interface: None,
+                        command_type: bundled.command_type,
                     },
                 );
             }
@@ -210,15 +211,22 @@ impl SkillManager {
 
     /// Get skills that can be invoked by the LLM via the Skill tool.
     ///
-    /// Filters out skills that have `disable_model_invocation` set, builtin
-    /// skills, and skills without a description or `when_to_use` hint.
+    /// Two-layer filter aligned with Claude Code's `getLLMInvocableSkills()`:
+    /// 1. **Type filter**: only `CommandType::Prompt` skills pass (excludes `LocalJsx`)
+    /// 2. **Field filter**: `!disable_model_invocation`, not `Builtin` source,
+    ///    and at least one of: bundled, has description, or has `when_to_use`
     pub fn llm_invocable_skills(&self) -> Vec<&SkillPromptCommand> {
         self.skills
             .values()
             .filter(|s| {
-                !s.disable_model_invocation
+                // Layer 1: type filter (aligned with `c.type !== 'prompt'`)
+                s.command_type == CommandType::Prompt
+                // Layer 2: field filter (aligned with getLLMInvocableSkills)
+                    && !s.disable_model_invocation
                     && s.source != SkillSource::Builtin
-                    && (!s.description.is_empty() || s.when_to_use.is_some())
+                    && (s.loaded_from == LoadedFrom::Bundled
+                        || !s.description.is_empty()
+                        || s.when_to_use.is_some())
             })
             .collect()
     }
@@ -261,7 +269,7 @@ impl SkillManager {
             commands.push(SlashCommand {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
-                command_type: CommandType::Prompt,
+                command_type: skill.command_type,
             });
         }
 
@@ -283,7 +291,7 @@ impl SkillManager {
                 return Some(SlashCommand {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
-                    command_type: CommandType::Prompt,
+                    command_type: skill.command_type,
                 });
             }
         }

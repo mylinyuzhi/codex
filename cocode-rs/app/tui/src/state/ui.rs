@@ -3,6 +3,7 @@
 //! This module contains state that is local to the TUI and not
 //! synchronized with the agent.
 
+use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -68,6 +69,12 @@ pub struct UiState {
 
     /// Toast ID counter for generating unique IDs.
     toast_id_counter: i32,
+
+    /// Set of tool call IDs that are collapsed in the chat view.
+    pub collapsed_tools: HashSet<String>,
+
+    /// Scroll offset for help overlay.
+    pub help_scroll: i32,
 }
 
 impl UiState {

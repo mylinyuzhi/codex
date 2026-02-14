@@ -43,21 +43,21 @@ fn test_compute_fingerprint_length() {
 #[test]
 fn test_bundled_skills_returns_vec() {
     let skills = bundled_skills();
-    // Should contain output-style skill
     assert!(!skills.is_empty());
-    assert!(skills.iter().any(|s| s.name == "output-style"));
+    assert!(skills.iter().any(|s| s.name == "plugin"));
 }
 
 #[test]
-fn test_output_style_skill() {
+fn test_bundled_skills_are_local_jsx() {
     let skills = bundled_skills();
-    let output_style = skills.iter().find(|s| s.name == "output-style").unwrap();
-    assert_eq!(
-        output_style.description,
-        "Manage response output styles (explanatory, learning, etc.)"
-    );
-    assert!(output_style.prompt.contains("/output-style"));
-    assert_eq!(output_style.fingerprint.len(), 64);
+    for skill in &skills {
+        assert_eq!(
+            skill.command_type,
+            crate::command::CommandType::LocalJsx,
+            "bundled skill '{}' should be LocalJsx",
+            skill.name
+        );
+    }
 }
 
 #[test]
@@ -67,6 +67,7 @@ fn test_bundled_skill_struct() {
         description: "Test skill".to_string(),
         prompt: "Do something".to_string(),
         fingerprint: compute_fingerprint(b"Do something"),
+        command_type: crate::command::CommandType::Prompt,
     };
     assert_eq!(skill.name, "test");
     assert_eq!(skill.fingerprint.len(), 64);

@@ -15,14 +15,11 @@ pub use domain::ApiKey;
 use crate::error::config_error::ConfigValidationSnafu;
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
+use cocode_protocol::ProviderType;
+use cocode_protocol::WireApi;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-
-// Re-export from protocol for backwards compatibility.
-pub use cocode_protocol::ProviderInfo;
-pub use cocode_protocol::ProviderType;
-pub use cocode_protocol::WireApi;
 
 /// Internal storage for model configurations.
 ///
@@ -304,6 +301,30 @@ pub struct ProviderSummary {
     pub model_count: i32,
 }
 
+impl ProviderSummary {
+    /// Create from a configured `ProviderConfig`.
+    pub fn from_config(key: &str, config: &ProviderConfig) -> Self {
+        Self {
+            name: key.to_string(),
+            display_name: config.name.clone(),
+            provider_type: config.provider_type,
+            has_api_key: config.api_key.is_some() || config.env_key.is_some(),
+            model_count: config.models.len() as i32,
+        }
+    }
+
+    /// Create from a built-in provider defaults.
+    pub fn from_builtin(name: &str, config: &ProviderConfig) -> Self {
+        Self {
+            name: name.to_string(),
+            display_name: config.name.clone(),
+            provider_type: config.provider_type,
+            has_api_key: config.env_key.is_some(),
+            model_count: 0,
+        }
+    }
+}
+
 /// Summary of a model for listing.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelSummary {
@@ -315,6 +336,18 @@ pub struct ModelSummary {
     pub context_window: Option<i64>,
     /// Capabilities summary.
     pub capabilities: Vec<Capability>,
+}
+
+impl ModelSummary {
+    /// Create from a resolved `ModelInfo`.
+    pub fn from_model_info(id: &str, info: &ModelInfo) -> Self {
+        Self {
+            id: id.to_string(),
+            display_name: info.display_name_or_slug().to_string(),
+            context_window: info.context_window,
+            capabilities: info.capabilities.clone().unwrap_or_default(),
+        }
+    }
 }
 
 #[cfg(test)]

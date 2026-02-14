@@ -1,5 +1,6 @@
 use super::*;
 use crate::generator::ApprovedPlanInfo;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn test_config() -> SystemReminderConfig {
@@ -24,6 +25,7 @@ async fn test_plan_mode_enter_not_in_plan_mode() {
 #[tokio::test]
 async fn test_plan_mode_enter_full() {
     let config = test_config();
+    // Default (no flag) → full content
     let ctx = GeneratorContext::builder()
         .config(&config)
         .turn_number(1)
@@ -71,16 +73,18 @@ async fn test_plan_mode_enter_sparse_via_reentry() {
 }
 
 #[tokio::test]
-async fn test_plan_mode_enter_sparse_via_turn() {
+async fn test_plan_mode_enter_sparse_via_flag() {
     let config = test_config();
-    // Turn 2 should use sparse reminders (not turn 1 or turn % 5 == 1)
-    let ctx = GeneratorContext::builder()
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::PlanModeEnter, false);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
         .turn_number(2)
         .cwd(PathBuf::from("/tmp"))
         .is_plan_mode(true)
         .is_plan_reentry(false)
         .build();
+    ctx.full_content_flags = flags;
 
     let generator = PlanModeEnterGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
@@ -92,10 +96,11 @@ async fn test_plan_mode_enter_sparse_via_turn() {
 }
 
 #[tokio::test]
-async fn test_plan_mode_enter_full_on_turn_6() {
+async fn test_plan_mode_enter_full_via_flag() {
     let config = test_config();
-    // Turn 6 (5+1) should use full reminders
-    let ctx = GeneratorContext::builder()
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::PlanModeEnter, true);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
         .turn_number(6)
         .cwd(PathBuf::from("/tmp"))
@@ -103,6 +108,7 @@ async fn test_plan_mode_enter_full_on_turn_6() {
         .is_plan_reentry(false)
         .plan_file_path(PathBuf::from("/tmp/plan.md"))
         .build();
+    ctx.full_content_flags = flags;
 
     let generator = PlanModeEnterGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
@@ -182,6 +188,7 @@ fn test_throttle_configs() {
     let enter_generator = PlanModeEnterGenerator;
     let throttle = enter_generator.throttle_config();
     assert_eq!(throttle.min_turns_between, 5);
+    assert_eq!(throttle.full_content_every_n, Some(5));
 
     let tool_generator = PlanToolReminderGenerator;
     let throttle = tool_generator.throttle_config();

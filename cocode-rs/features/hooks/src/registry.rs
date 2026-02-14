@@ -89,14 +89,16 @@ impl HookRegistry {
     /// They are NOT removed on timeout or failure, allowing retry.
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
         // Get matching hooks (clone to release lock during execution)
+        // The match target varies by event type (tool_name, source, notification_type, etc.)
+        let match_target = ctx.match_target();
         let matching: Vec<HookDefinition> = if let Ok(hooks) = self.hooks.read() {
             hooks
                 .iter()
                 .filter(|h| h.enabled && h.event_type == ctx.event_type)
                 .filter(|h| {
-                    match (&h.matcher, &ctx.tool_name) {
-                        (Some(matcher), Some(tool)) => matcher.matches(tool),
-                        (Some(_), None) => false, // matcher present but no tool name to match against
+                    match (&h.matcher, match_target) {
+                        (Some(matcher), Some(target)) => matcher.matches(target),
+                        (Some(_), None) => false, // matcher present but no target to match against
                         (None, _) => true,        // no matcher means always match
                     }
                 })
@@ -106,52 +108,70 @@ impl HookRegistry {
             return Vec::new();
         };
 
-        let mut outcomes = Vec::with_capacity(matching.len());
+        // Execute all matching hooks in parallel
+        let futures: Vec<_> = matching
+            .iter()
+            .map(|hook| {
+                let handler = hook.handler.clone();
+                let hook_name = hook.name.clone();
+                let timeout_secs = hook.effective_timeout_secs();
+                let once = hook.once;
+                let ctx = ctx.clone();
+                async move {
+                    let start = Instant::now();
+                    let timeout = tokio::time::Duration::from_secs(timeout_secs as u64);
+                    let result =
+                        tokio::time::timeout(timeout, execute_handler(&handler, &ctx)).await;
+
+                    let duration_ms = start.elapsed().as_millis() as i64;
+
+                    let (result, is_success) = match result {
+                        Ok(r) => {
+                            let success = !matches!(r, HookResult::Reject { .. });
+                            (r, success)
+                        }
+                        Err(_) => {
+                            warn!(
+                                hook_name = %hook_name,
+                                timeout_secs,
+                                "Hook timed out"
+                            );
+                            (HookResult::Continue, false)
+                        }
+                    };
+
+                    info!(
+                        hook_name = %hook_name,
+                        duration_ms,
+                        once,
+                        success = is_success,
+                        "Hook executed"
+                    );
+
+                    (
+                        HookOutcome {
+                            hook_name: hook_name.clone(),
+                            result,
+                            duration_ms,
+                        },
+                        once && is_success,
+                        hook_name,
+                    )
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        let mut outcomes = Vec::with_capacity(results.len());
         let mut once_hooks_to_remove: Vec<String> = Vec::new();
 
-        for hook in &matching {
-            let start = Instant::now();
-
-            let timeout = tokio::time::Duration::from_secs(hook.timeout_secs as u64);
-            let result = tokio::time::timeout(timeout, execute_handler(&hook.handler, ctx)).await;
-
-            let duration_ms = start.elapsed().as_millis() as i64;
-
-            let (result, is_success) = match result {
-                Ok(r) => {
-                    // Consider it a success unless it's a Reject
-                    let success = !matches!(r, HookResult::Reject { .. });
-                    (r, success)
-                }
-                Err(_) => {
-                    warn!(
-                        hook_name = %hook.name,
-                        timeout_secs = hook.timeout_secs,
-                        "Hook timed out"
-                    );
-                    (HookResult::Continue, false) // Timeout is not a success
-                }
-            };
-
-            info!(
-                hook_name = %hook.name,
-                duration_ms,
-                once = hook.once,
-                success = is_success,
-                "Hook executed"
-            );
-
-            // Mark one-shot hook for removal if successful
-            if hook.once && is_success {
-                debug!(hook_name = %hook.name, "One-shot hook will be removed");
-                once_hooks_to_remove.push(hook.name.clone());
+        for (outcome, should_remove, name) in results {
+            if should_remove {
+                debug!(hook_name = %name, "One-shot hook will be removed");
+                once_hooks_to_remove.push(name);
             }
-
-            outcomes.push(HookOutcome {
-                hook_name: hook.name.clone(),
-                result,
-                duration_ms,
-            });
+            outcomes.push(outcome);
         }
 
         // Remove one-shot hooks that executed successfully
@@ -236,7 +256,10 @@ async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult
             // Pass full HookContext to command handler for env vars and stdin JSON
             handlers::command::CommandHandler::execute(command, args, ctx).await
         }
-        HookHandler::Prompt { template } => {
+        // NOTE: `model` field is ignored — LLM verification mode is not yet implemented.
+        // When `model` is set, this should call an LLM via a callback instead of
+        // template expansion. See `PromptHandler::prepare_verification_request`.
+        HookHandler::Prompt { template, .. } => {
             let arguments = ctx
                 .tool_input
                 .as_ref()
@@ -244,7 +267,10 @@ async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult
                 .unwrap_or(serde_json::Value::Null);
             handlers::prompt::PromptHandler::execute(template, &arguments)
         }
-        HookHandler::Agent { max_turns } => handlers::agent::AgentHandler::execute(*max_turns),
+        // NOTE: `prompt` and `timeout` fields are ignored — agent handler is a stub.
+        // Full implementation requires a `SpawnAgentFn` callback injected into
+        // `HookRegistry`. See `AgentHandler::prepare_verification_request`.
+        HookHandler::Agent { max_turns, .. } => handlers::agent::AgentHandler::execute(*max_turns),
         HookHandler::Webhook { url } => handlers::webhook::WebhookHandler::execute(url, ctx).await,
         HookHandler::Inline => {
             warn!("Inline handler cannot be dispatched through the registry");

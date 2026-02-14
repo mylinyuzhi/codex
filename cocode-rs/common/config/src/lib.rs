@@ -55,10 +55,7 @@ pub mod loader;
 pub mod manager;
 mod model_cache;
 pub mod resolver;
-pub mod runtime;
-pub mod store;
 pub mod types;
-mod validation;
 
 // Re-export protocol types (model)
 pub use cocode_protocol::Capability;
@@ -79,10 +76,7 @@ pub use cocode_protocol::is_known_feature_key;
 pub use loader::ConfigLoader;
 pub use loader::LoadedConfig;
 pub use manager::ConfigManager;
-pub use manager::RuntimeOverrides;
 pub use resolver::ConfigResolver;
-pub use runtime::RuntimeState;
-pub use store::ConfigStore;
 pub use types::ApiKey;
 pub use types::ModelSummary;
 pub use types::ModelsFile;
@@ -90,11 +84,11 @@ pub use types::ProviderConfig;
 pub use types::ProviderModelEntry;
 pub use types::ProviderSummary;
 pub use types::ProvidersFile;
-// Re-export provider types from protocol (via types)
+// Re-export provider types from protocol
+pub use cocode_protocol::ProviderInfo;
 pub use cocode_protocol::ProviderModel;
-pub use types::ProviderInfo;
-pub use types::ProviderType;
-pub use types::WireApi;
+pub use cocode_protocol::ProviderType;
+pub use cocode_protocol::WireApi;
 
 // Re-export JSON config types
 pub use json_config::AppConfig;
@@ -121,7 +115,6 @@ pub use loader::log_dir;
 
 // Re-export Config types
 pub use config::Config;
-pub use config::ConfigBuilder;
 pub use config::ConfigOverrides;
 
 // Re-export sandbox types from protocol

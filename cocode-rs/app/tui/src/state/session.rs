@@ -4,6 +4,7 @@
 //! the core agent loop.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use cocode_protocol::AgentProgress;
 use cocode_protocol::RoleSelection;
@@ -56,6 +57,21 @@ pub struct SessionState {
     /// Commands are consumed once in the agent loop and injected as steering
     /// system-reminders (consume-then-remove pattern).
     pub queued_commands: Vec<UserQueuedCommand>,
+
+    /// Current working directory from shell.
+    pub working_dir: Option<String>,
+
+    /// Number of completed turns.
+    pub turn_count: i32,
+
+    /// Context window tokens used.
+    pub context_window_used: i32,
+
+    /// Context window total capacity.
+    pub context_window_total: i32,
+
+    /// Estimated cost in cents.
+    pub estimated_cost_cents: i32,
 }
 
 impl Default for SessionState {
@@ -75,6 +91,11 @@ impl Default for SessionState {
             fallback_model: None,
             is_compacting: false,
             queued_commands: Vec::new(),
+            working_dir: None,
+            turn_count: 0,
+            context_window_used: 0,
+            context_window_total: 0,
+            estimated_cost_cents: 0,
         }
     }
 }
@@ -151,6 +172,7 @@ impl SessionState {
             status: ToolStatus::Running,
             progress: None,
             output: None,
+            started_at: Some(Instant::now()),
         });
     }
 
@@ -334,6 +356,20 @@ pub struct ChatMessage {
 
     /// Thinking content (if applicable).
     pub thinking: Option<String>,
+
+    /// Inline tool calls associated with this message.
+    pub tool_calls: Vec<InlineToolCall>,
+}
+
+/// An inline tool call displayed within a chat message.
+#[derive(Debug, Clone)]
+pub struct InlineToolCall {
+    /// Tool name (e.g., "Bash", "Read", "Edit").
+    pub tool_name: String,
+    /// Current status of the tool call.
+    pub status: ToolStatus,
+    /// Short description (e.g., "ls -la src/" or "src/main.rs").
+    pub description: String,
 }
 
 impl ChatMessage {
@@ -345,6 +381,7 @@ impl ChatMessage {
             content: content.into(),
             streaming: false,
             thinking: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -356,6 +393,7 @@ impl ChatMessage {
             content: content.into(),
             streaming: false,
             thinking: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -367,6 +405,7 @@ impl ChatMessage {
             content: String::new(),
             streaming: true,
             thinking: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -423,6 +462,8 @@ pub struct ToolExecution {
     pub progress: Option<String>,
     /// Output (when completed).
     pub output: Option<String>,
+    /// When this tool started executing.
+    pub started_at: Option<Instant>,
 }
 
 /// Status of a subagent.
