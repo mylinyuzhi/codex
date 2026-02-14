@@ -22,8 +22,7 @@ fn test_throttle_manager_min_turns_between() {
     let manager = ThrottleManager::new();
     let config = ThrottleConfig {
         min_turns_between: 3,
-        min_turns_after_trigger: 0,
-        max_per_session: None,
+        ..Default::default()
     };
 
     // Mark as generated at turn 1
@@ -41,9 +40,8 @@ fn test_throttle_manager_min_turns_between() {
 fn test_throttle_manager_max_per_session() {
     let manager = ThrottleManager::new();
     let config = ThrottleConfig {
-        min_turns_between: 0,
-        min_turns_after_trigger: 0,
         max_per_session: Some(2),
+        ..Default::default()
     };
 
     // First two should be allowed
@@ -61,9 +59,8 @@ fn test_throttle_manager_max_per_session() {
 fn test_throttle_manager_trigger_turn() {
     let manager = ThrottleManager::new();
     let config = ThrottleConfig {
-        min_turns_between: 0,
         min_turns_after_trigger: 5,
-        max_per_session: None,
+        ..Default::default()
     };
 
     // Set trigger at turn 1
@@ -80,8 +77,7 @@ fn test_throttle_manager_reset() {
     let manager = ThrottleManager::new();
     let config = ThrottleConfig {
         min_turns_between: 10,
-        min_turns_after_trigger: 0,
-        max_per_session: None,
+        ..Default::default()
     };
 
     manager.mark_generated(AttachmentType::ChangedFiles, 1);
@@ -95,6 +91,7 @@ fn test_throttle_manager_reset() {
 fn test_predefined_configs() {
     let plan_mode = ThrottleConfig::plan_mode();
     assert_eq!(plan_mode.min_turns_between, 5);
+    assert_eq!(plan_mode.full_content_every_n, Some(5));
 
     let plan_tool = ThrottleConfig::plan_tool_reminder();
     assert_eq!(plan_tool.min_turns_between, 3);
@@ -106,4 +103,64 @@ fn test_predefined_configs() {
     let output_style = ThrottleConfig::output_style();
     assert_eq!(output_style.min_turns_between, 0);
     assert_eq!(output_style.max_per_session, Some(1));
+
+    let security = ThrottleConfig::security_guidelines();
+    assert_eq!(security.full_content_every_n, Some(5));
+    assert_eq!(security.min_turns_between, 0);
+}
+
+#[test]
+fn test_should_use_full_content_always_full() {
+    let manager = ThrottleManager::new();
+    let config = ThrottleConfig::default(); // full_content_every_n: None
+
+    // None means always full
+    assert!(manager.should_use_full_content(AttachmentType::ChangedFiles, &config));
+    manager.mark_generated(AttachmentType::ChangedFiles, 1);
+    assert!(manager.should_use_full_content(AttachmentType::ChangedFiles, &config));
+}
+
+#[test]
+fn test_should_use_full_content_every_n() {
+    let manager = ThrottleManager::new();
+    let config = ThrottleConfig {
+        full_content_every_n: Some(5),
+        ..Default::default()
+    };
+
+    // First generation (count=0) → full
+    assert!(manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    // Generations 1-4 → sparse
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 1);
+    assert!(!manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 2);
+    assert!(!manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 3);
+    assert!(!manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 4);
+    assert!(!manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    // Generation 5 (count=5, 5 % 5 == 0) → full
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 5);
+    assert!(manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+}
+
+#[test]
+fn test_should_use_full_content_reset() {
+    let manager = ThrottleManager::new();
+    let config = ThrottleConfig {
+        full_content_every_n: Some(3),
+        ..Default::default()
+    };
+
+    manager.mark_generated(AttachmentType::SecurityGuidelines, 1);
+    assert!(!manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
+
+    manager.reset();
+    // After reset, count=0 → full
+    assert!(manager.should_use_full_content(AttachmentType::SecurityGuidelines, &config));
 }

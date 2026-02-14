@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn test_config() -> SystemReminderConfig {
@@ -6,7 +7,7 @@ fn test_config() -> SystemReminderConfig {
 }
 
 #[tokio::test]
-async fn test_security_guidelines_full_on_turn_1() {
+async fn test_security_guidelines_full_default() {
     let config = test_config();
     let ctx = GeneratorContext::builder()
         .config(&config)
@@ -35,14 +36,17 @@ async fn test_security_guidelines_full_on_turn_1() {
 }
 
 #[tokio::test]
-async fn test_security_guidelines_sparse_on_turn_2() {
+async fn test_security_guidelines_sparse_via_flag() {
     let config = test_config();
-    let ctx = GeneratorContext::builder()
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::SecurityGuidelines, false);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
         .turn_number(2)
         .is_main_agent(true)
         .cwd(PathBuf::from("/tmp"))
         .build();
+    ctx.full_content_flags = flags;
 
     let generator = SecurityGuidelinesGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
@@ -64,14 +68,17 @@ async fn test_security_guidelines_sparse_on_turn_2() {
 }
 
 #[tokio::test]
-async fn test_security_guidelines_full_on_turn_6() {
+async fn test_security_guidelines_full_via_flag() {
     let config = test_config();
-    let ctx = GeneratorContext::builder()
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::SecurityGuidelines, true);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
-        .turn_number(6) // 5 + 1 = full reminders
+        .turn_number(6)
         .is_main_agent(true)
         .cwd(PathBuf::from("/tmp"))
         .build();
+    ctx.full_content_flags = flags;
 
     let generator = SecurityGuidelinesGenerator;
     let result = generator.generate(&ctx).await.expect("generate");
@@ -122,7 +129,6 @@ fn test_generator_properties() {
     let config = test_config();
     assert!(generator.is_enabled(&config));
 
-    // No throttle
     let throttle = generator.throttle_config();
-    assert_eq!(throttle.min_turns_between, 0);
+    assert_eq!(throttle.full_content_every_n, Some(5));
 }

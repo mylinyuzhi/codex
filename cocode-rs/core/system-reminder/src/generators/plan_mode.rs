@@ -52,11 +52,10 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
             .map(|p| format!("\n\n## Plan File Info:\n\nYour plan file is at: `{}`\n\nYou should create your plan at this path using the Write tool. You can read it and make incremental edits using the Edit tool.", p.display()))
             .unwrap_or_default();
 
-        // Use turn-based sparse logic: full on turn 1 and every 5th turn,
-        // sparse otherwise. This reduces token usage while maintaining guidance.
-        // Note: is_plan_reentry is kept for backwards compatibility but
-        // turn-based logic is the primary driver.
-        let use_sparse = ctx.should_use_sparse_reminders() || ctx.is_plan_reentry;
+        // Use per-generator full-content flag (pre-computed by orchestrator).
+        // is_plan_reentry forces sparse regardless of the flag.
+        let use_sparse =
+            !ctx.should_use_full_content(self.attachment_type()) || ctx.is_plan_reentry;
 
         let content = if use_sparse {
             format!("{}{}", PLAN_MODE_SPARSE_INSTRUCTIONS, plan_path_info)

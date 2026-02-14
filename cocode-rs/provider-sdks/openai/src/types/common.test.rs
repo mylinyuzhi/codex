@@ -171,7 +171,10 @@ fn test_function_tool_flat_serialization() {
     assert_eq!(v["type"], "function");
     assert_eq!(v["name"], "LS");
     assert!(v.get("parameters").is_some());
-    assert!(v.get("function").is_none(), "must not have nested 'function' key");
+    assert!(
+        v.get("function").is_none(),
+        "must not have nested 'function' key"
+    );
 
     // Roundtrip
     let parsed: Tool = serde_json::from_str(&json).unwrap();

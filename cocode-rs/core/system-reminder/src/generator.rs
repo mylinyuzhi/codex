@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -227,8 +226,77 @@ pub struct BudgetInfo {
     pub is_low: bool,
 }
 
-/// Key for compacted large files in extension_data.
-pub const COMPACTED_LARGE_FILES_KEY: &str = "compacted_large_files";
+/// Information about a skill for the system reminder.
+#[derive(Debug, Clone)]
+pub struct SkillInfo {
+    /// Skill name (slash command identifier).
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Guidance for the LLM on when to invoke this skill.
+    pub when_to_use: Option<String>,
+}
+
+/// Information about an invoked skill.
+#[derive(Debug, Clone)]
+pub struct InvokedSkillInfo {
+    /// Skill name (slash command identifier, e.g., "commit", "review-pr").
+    pub name: String,
+    /// The skill's prompt content (typically from SKILL.md or similar).
+    pub prompt_content: String,
+}
+
+/// Information about a completed async hook response.
+#[derive(Debug, Clone)]
+pub struct AsyncHookResponseInfo {
+    /// Name of the hook that completed.
+    pub hook_name: String,
+    /// The additional context returned by the hook.
+    pub additional_context: Option<String>,
+    /// Whether the hook blocked execution.
+    pub was_blocking: bool,
+    /// Reason for blocking (if was_blocking is true).
+    pub blocking_reason: Option<String>,
+    /// Execution duration in milliseconds.
+    pub duration_ms: i64,
+}
+
+/// Information about hook context to inject.
+#[derive(Debug, Clone)]
+pub struct HookContextInfo {
+    /// Name of the hook.
+    pub hook_name: String,
+    /// Event type (e.g., "pre_tool_use").
+    pub event_type: String,
+    /// Tool name if applicable.
+    pub tool_name: Option<String>,
+    /// Additional context from the hook.
+    pub additional_context: String,
+}
+
+/// Information about a hook that blocked execution.
+#[derive(Debug, Clone)]
+pub struct HookBlockingInfo {
+    /// Name of the hook that blocked.
+    pub hook_name: String,
+    /// Event type (e.g., "pre_tool_use").
+    pub event_type: String,
+    /// Tool name that was blocked.
+    pub tool_name: Option<String>,
+    /// Reason for blocking.
+    pub reason: String,
+}
+
+/// Grouped hook state for the generator context.
+#[derive(Debug, Clone, Default)]
+pub struct HookState {
+    /// Completed async hook responses.
+    pub async_responses: Vec<AsyncHookResponseInfo>,
+    /// Hook contexts to inject.
+    pub contexts: Vec<HookContextInfo>,
+    /// Hooks that blocked execution.
+    pub blocking: Vec<HookBlockingInfo>,
+}
 
 /// Information about a large file that was compacted.
 ///
@@ -337,9 +405,21 @@ pub struct GeneratorContext<'a> {
     /// Paths that trigger nested memory lookup.
     pub nested_memory_triggers: HashSet<PathBuf>,
 
-    // === Extension data ===
-    /// Additional data that generators can use.
-    pub extension_data: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
+    // === Full content flags ===
+    /// Per-generator full-content flags, pre-computed by the orchestrator.
+    /// Maps attachment type to whether full (true) or sparse (false) content
+    /// should be generated this turn.
+    pub full_content_flags: HashMap<AttachmentType, bool>,
+
+    // === Typed extension data ===
+    /// Hook state (async responses, contexts, blocking).
+    pub hook_state: HookState,
+    /// Available skills for the Skill tool.
+    pub available_skills: Vec<SkillInfo>,
+    /// Currently invoked skills.
+    pub invoked_skills: Vec<InvokedSkillInfo>,
+    /// Large files compacted but not restored.
+    pub compacted_large_files: Vec<CompactedLargeFile>,
 
     // === Delegate mode state ===
     /// Whether delegate mode is active.
@@ -432,28 +512,13 @@ impl<'a> GeneratorContext<'a> {
         self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
     }
 
-    /// Get extension data by key, downcast to the expected type.
-    pub fn get_extension<T: 'static + Send + Sync>(&self, key: &str) -> Option<&T> {
-        self.extension_data
-            .get(key)
-            .and_then(|v| v.downcast_ref::<T>())
-    }
-
-    /// Check if full reminders should be used this turn.
-    ///
-    /// Full reminders are used on turn 1 and every 5th turn thereafter
-    /// (i.e., turns 1, 6, 11, 16, ...). This follows Claude Code's steering
-    /// pattern to reduce token usage while maintaining model guidance.
-    pub fn should_use_full_reminders(&self) -> bool {
-        self.turn_number == 1 || self.turn_number % 5 == 1
-    }
-
-    /// Check if sparse reminders should be used this turn.
-    ///
-    /// Sparse reminders are brief summaries used on turns where full
-    /// reminders are not needed. This is the inverse of `should_use_full_reminders()`.
-    pub fn should_use_sparse_reminders(&self) -> bool {
-        !self.should_use_full_reminders()
+    /// Check if this generator should produce full content this turn.
+    /// Falls back to `true` (full) when no flag is set (e.g., in tests).
+    pub fn should_use_full_content(&self, attachment_type: AttachmentType) -> bool {
+        self.full_content_flags
+            .get(&attachment_type)
+            .copied()
+            .unwrap_or(true)
     }
 }
 
@@ -480,7 +545,11 @@ pub struct GeneratorContextBuilder<'a> {
     diagnostics: Vec<DiagnosticInfo>,
     todos: Vec<TodoItem>,
     nested_memory_triggers: HashSet<PathBuf>,
-    extension_data: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
+    full_content_flags: HashMap<AttachmentType, bool>,
+    hook_state: HookState,
+    available_skills: Vec<SkillInfo>,
+    invoked_skills: Vec<InvokedSkillInfo>,
+    compacted_large_files: Vec<CompactedLargeFile>,
     // New fields
     is_delegate_mode: bool,
     delegate_mode_exiting: bool,
@@ -593,8 +662,23 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
-    pub fn extension<T: Send + Sync + 'static>(mut self, key: &str, value: T) -> Self {
-        self.extension_data.insert(key.to_string(), Arc::new(value));
+    pub fn hook_state(mut self, state: HookState) -> Self {
+        self.hook_state = state;
+        self
+    }
+
+    pub fn available_skills(mut self, skills: Vec<SkillInfo>) -> Self {
+        self.available_skills = skills;
+        self
+    }
+
+    pub fn invoked_skills(mut self, skills: Vec<InvokedSkillInfo>) -> Self {
+        self.invoked_skills = skills;
+        self
+    }
+
+    pub fn compacted_large_files(mut self, files: Vec<CompactedLargeFile>) -> Self {
+        self.compacted_large_files = files;
         self
     }
 
@@ -665,7 +749,11 @@ impl<'a> GeneratorContextBuilder<'a> {
             diagnostics: self.diagnostics,
             todos: self.todos,
             nested_memory_triggers: self.nested_memory_triggers,
-            extension_data: self.extension_data,
+            full_content_flags: self.full_content_flags,
+            hook_state: self.hook_state,
+            available_skills: self.available_skills,
+            invoked_skills: self.invoked_skills,
+            compacted_large_files: self.compacted_large_files,
             // New fields
             is_delegate_mode: self.is_delegate_mode,
             delegate_mode_exiting: self.delegate_mode_exiting,

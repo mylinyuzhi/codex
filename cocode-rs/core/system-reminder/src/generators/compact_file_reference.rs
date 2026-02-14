@@ -8,8 +8,6 @@ use async_trait::async_trait;
 use crate::Result;
 use crate::config::SystemReminderConfig;
 use crate::generator::AttachmentGenerator;
-use crate::generator::COMPACTED_LARGE_FILES_KEY;
-use crate::generator::CompactedLargeFile;
 use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
@@ -43,14 +41,7 @@ impl AttachmentGenerator for CompactFileReferenceGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get large files from extension_data
-        let large_files = ctx.get_extension::<Vec<CompactedLargeFile>>(COMPACTED_LARGE_FILES_KEY);
-
-        let Some(files) = large_files else {
-            return Ok(None);
-        };
-
-        if files.is_empty() {
+        if ctx.compacted_large_files.is_empty() {
             return Ok(None);
         }
 
@@ -60,7 +51,7 @@ impl AttachmentGenerator for CompactFileReferenceGenerator {
                 .to_string(),
         ];
 
-        for file in files {
+        for file in &ctx.compacted_large_files {
             lines.push(format!(
                 "- {} ({} lines, {} bytes) - use Read tool to access",
                 file.path.display(),

@@ -412,8 +412,7 @@ impl StreamingToolExecutor {
     ///
     /// ```ignore
     /// use cocode_system_reminder::{
-    ///     AsyncHookResponseInfo, ASYNC_HOOK_RESPONSES_KEY,
-    ///     GeneratorContextBuilder,
+    ///     AsyncHookResponseInfo, HookState, GeneratorContextBuilder,
     /// };
     ///
     /// // Collect completed hooks
@@ -431,9 +430,9 @@ impl StreamingToolExecutor {
     ///     })
     ///     .collect();
     ///
-    /// // Pass to generator context
+    /// // Pass to generator context via typed HookState
     /// let ctx = GeneratorContextBuilder::new(&config)
-    ///     .extension(ASYNC_HOOK_RESPONSES_KEY, responses)
+    ///     .hook_state(HookState { async_responses: responses, ..Default::default() })
     ///     .build();
     /// ```
     pub fn async_hook_tracker(&self) -> &Arc<AsyncHookTracker> {

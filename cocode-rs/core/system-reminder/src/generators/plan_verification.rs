@@ -40,7 +40,7 @@ impl AttachmentGenerator for PlanVerificationGenerator {
         ThrottleConfig {
             min_turns_between: 5,
             min_turns_after_trigger: 3,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 

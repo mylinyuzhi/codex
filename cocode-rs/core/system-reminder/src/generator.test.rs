@@ -88,57 +88,39 @@ fn test_background_task_info() {
 }
 
 #[test]
-fn test_should_use_full_reminders() {
+fn test_should_use_full_content() {
     let config = test_config();
 
-    // Turn 1 - should be full
+    // Default (no flag set) → full
     let ctx = GeneratorContext::builder()
         .config(&config)
         .turn_number(1)
         .cwd(PathBuf::from("/tmp"))
         .build();
-    assert!(ctx.should_use_full_reminders());
-    assert!(!ctx.should_use_sparse_reminders());
+    assert!(ctx.should_use_full_content(AttachmentType::SecurityGuidelines));
 
-    // Turn 2, 3, 4, 5 - should be sparse
-    for turn in [2, 3, 4, 5] {
-        let ctx = GeneratorContext::builder()
-            .config(&config)
-            .turn_number(turn)
-            .cwd(PathBuf::from("/tmp"))
-            .build();
-        assert!(
-            !ctx.should_use_full_reminders(),
-            "Turn {turn} should be sparse"
-        );
-        assert!(
-            ctx.should_use_sparse_reminders(),
-            "Turn {turn} should be sparse"
-        );
-    }
-
-    // Turn 6 (5+1) - should be full
-    let ctx = GeneratorContext::builder()
+    // Explicit full flag
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::SecurityGuidelines, true);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
-        .turn_number(6)
+        .turn_number(1)
         .cwd(PathBuf::from("/tmp"))
         .build();
-    assert!(ctx.should_use_full_reminders());
-    assert!(!ctx.should_use_sparse_reminders());
+    ctx.full_content_flags = flags;
+    assert!(ctx.should_use_full_content(AttachmentType::SecurityGuidelines));
 
-    // Turn 11 (10+1) - should be full
-    let ctx = GeneratorContext::builder()
+    // Explicit sparse flag
+    let mut flags = HashMap::new();
+    flags.insert(AttachmentType::SecurityGuidelines, false);
+    let mut ctx = GeneratorContext::builder()
         .config(&config)
-        .turn_number(11)
+        .turn_number(2)
         .cwd(PathBuf::from("/tmp"))
         .build();
-    assert!(ctx.should_use_full_reminders());
+    ctx.full_content_flags = flags;
+    assert!(!ctx.should_use_full_content(AttachmentType::SecurityGuidelines));
 
-    // Turn 16 (15+1) - should be full
-    let ctx = GeneratorContext::builder()
-        .config(&config)
-        .turn_number(16)
-        .cwd(PathBuf::from("/tmp"))
-        .build();
-    assert!(ctx.should_use_full_reminders());
+    // Flag for one type doesn't affect another
+    assert!(ctx.should_use_full_content(AttachmentType::PlanModeEnter));
 }

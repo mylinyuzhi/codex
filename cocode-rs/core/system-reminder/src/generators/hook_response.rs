@@ -17,53 +17,10 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
-/// Information about a completed async hook response.
-#[derive(Debug, Clone)]
-pub struct AsyncHookResponseInfo {
-    /// Name of the hook that completed.
-    pub hook_name: String,
-    /// The additional context returned by the hook.
-    pub additional_context: Option<String>,
-    /// Whether the hook blocked execution.
-    pub was_blocking: bool,
-    /// Reason for blocking (if was_blocking is true).
-    pub blocking_reason: Option<String>,
-    /// Execution duration in milliseconds.
-    pub duration_ms: i64,
-}
-
-/// Information about hook context to inject.
-#[derive(Debug, Clone)]
-pub struct HookContextInfo {
-    /// Name of the hook.
-    pub hook_name: String,
-    /// Event type (e.g., "pre_tool_use").
-    pub event_type: String,
-    /// Tool name if applicable.
-    pub tool_name: Option<String>,
-    /// Additional context from the hook.
-    pub additional_context: String,
-}
-
-/// Information about a hook that blocked execution.
-#[derive(Debug, Clone)]
-pub struct HookBlockingInfo {
-    /// Name of the hook that blocked.
-    pub hook_name: String,
-    /// Event type (e.g., "pre_tool_use").
-    pub event_type: String,
-    /// Tool name that was blocked.
-    pub tool_name: Option<String>,
-    /// Reason for blocking.
-    pub reason: String,
-}
-
-/// Extension key for async hook responses.
-pub const ASYNC_HOOK_RESPONSES_KEY: &str = "async_hook_responses";
-/// Extension key for hook context to inject.
-pub const HOOK_CONTEXT_KEY: &str = "hook_context";
-/// Extension key for hook blocking errors.
-pub const HOOK_BLOCKING_KEY: &str = "hook_blocking";
+// Re-export types from generator.rs for external consumers
+pub use crate::generator::AsyncHookResponseInfo;
+pub use crate::generator::HookBlockingInfo;
+pub use crate::generator::HookContextInfo;
 
 /// Generator for async hook responses.
 ///
@@ -87,16 +44,10 @@ impl AttachmentGenerator for AsyncHookResponseGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get async hook responses from extension data
-        let responses = ctx
-            .extension_data
-            .get(ASYNC_HOOK_RESPONSES_KEY)
-            .and_then(|v| v.downcast_ref::<Vec<AsyncHookResponseInfo>>());
-
-        let responses = match responses {
-            Some(r) if !r.is_empty() => r,
-            _ => return Ok(None),
-        };
+        let responses = &ctx.hook_state.async_responses;
+        if responses.is_empty() {
+            return Ok(None);
+        }
 
         let mut content = String::from("# Async Hook Results\n\n");
         content.push_str("The following hooks completed in the background:\n\n");
@@ -156,16 +107,10 @@ impl AttachmentGenerator for HookAdditionalContextGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get hook context from extension data
-        let contexts = ctx
-            .extension_data
-            .get(HOOK_CONTEXT_KEY)
-            .and_then(|v| v.downcast_ref::<Vec<HookContextInfo>>());
-
-        let contexts = match contexts {
-            Some(c) if !c.is_empty() => c,
-            _ => return Ok(None),
-        };
+        let contexts = &ctx.hook_state.contexts;
+        if contexts.is_empty() {
+            return Ok(None);
+        }
 
         let mut content = String::from("# Hook Context\n\n");
         content.push_str("The following hooks added context:\n\n");
@@ -216,16 +161,10 @@ impl AttachmentGenerator for HookBlockingErrorGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // Get hook blocking info from extension data
-        let blocking = ctx
-            .extension_data
-            .get(HOOK_BLOCKING_KEY)
-            .and_then(|v| v.downcast_ref::<Vec<HookBlockingInfo>>());
-
-        let blocking = match blocking {
-            Some(b) if !b.is_empty() => b,
-            _ => return Ok(None),
-        };
+        let blocking = &ctx.hook_state.blocking;
+        if blocking.is_empty() {
+            return Ok(None);
+        }
 
         let mut content = String::from("# Hook Blocked Execution\n\n");
         content.push_str(

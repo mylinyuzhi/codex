@@ -17,6 +17,10 @@ pub struct ThrottleConfig {
     pub min_turns_after_trigger: i32,
     /// Maximum times to generate per session (None = unlimited).
     pub max_per_session: Option<i32>,
+    /// Full content every N-th generation, sparse otherwise.
+    /// `None` = always full content (default).
+    /// `Some(n)` = full content on 1st generation and every n-th thereafter.
+    pub full_content_every_n: Option<i32>,
 }
 
 impl Default for ThrottleConfig {
@@ -25,6 +29,7 @@ impl Default for ThrottleConfig {
             min_turns_between: 0,
             min_turns_after_trigger: 0,
             max_per_session: None,
+            full_content_every_n: None,
         }
     }
 }
@@ -39,8 +44,8 @@ impl ThrottleConfig {
     pub fn plan_mode() -> Self {
         Self {
             min_turns_between: 5,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
+            full_content_every_n: Some(5),
+            ..Default::default()
         }
     }
 
@@ -49,7 +54,7 @@ impl ThrottleConfig {
         Self {
             min_turns_between: 3,
             min_turns_after_trigger: 5,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 
@@ -57,8 +62,7 @@ impl ThrottleConfig {
     pub fn todo_reminder() -> Self {
         Self {
             min_turns_between: 5,
-            min_turns_after_trigger: 0,
-            max_per_session: None,
+            ..Default::default()
         }
     }
 
@@ -66,9 +70,17 @@ impl ThrottleConfig {
     /// Injects once per session at the start, consistent with Claude Code behavior.
     pub fn output_style() -> Self {
         Self {
-            min_turns_between: 0,
-            min_turns_after_trigger: 0,
             max_per_session: Some(1),
+            ..Default::default()
+        }
+    }
+
+    /// Standard throttle for security guidelines.
+    /// Full content every 5th generation, sparse otherwise.
+    pub fn security_guidelines() -> Self {
+        Self {
+            full_content_every_n: Some(5),
+            ..Default::default()
         }
     }
 }
@@ -162,6 +174,27 @@ impl ThrottleManager {
         let mut state = self.state.write().expect("lock poisoned");
         if let Some(entry) = state.get_mut(&attachment_type) {
             entry.trigger_turn = None;
+        }
+    }
+
+    /// Check if a generator should produce full (vs sparse) content this generation.
+    /// Based on session_count: full on 1st generation and every n-th thereafter.
+    pub fn should_use_full_content(
+        &self,
+        attachment_type: AttachmentType,
+        config: &ThrottleConfig,
+    ) -> bool {
+        match config.full_content_every_n {
+            None => true,
+            Some(n) => {
+                let state = self.state.read().expect("lock poisoned");
+                let count = state
+                    .get(&attachment_type)
+                    .map(|s| s.session_count)
+                    .unwrap_or(0);
+                // Full on first generation (count 0) and every n-th
+                count == 0 || (count % n == 0)
+            }
         }
     }
 
