@@ -1,6 +1,6 @@
 //! Plugin manifest parsing.
 //!
-//! Each plugin contains a `PLUGIN.toml` manifest that declares its metadata
+//! Each plugin contains a `plugin.json` manifest that declares its metadata
 //! and contributions.
 
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 
 /// The expected manifest file name.
-pub const PLUGIN_TOML: &str = "PLUGIN.toml";
+pub const PLUGIN_JSON: &str = "plugin.json";
 
 /// Check if a version string is valid semver format.
 ///
@@ -50,20 +50,23 @@ fn is_valid_semver(version: &str) -> bool {
     true
 }
 
-/// Plugin manifest as defined in `PLUGIN.toml`.
+/// Plugin manifest as defined in `plugin.json`.
 ///
 /// # Example
 ///
-/// ```toml
-/// [plugin]
-/// name = "my-plugin"
-/// version = "0.1.0"
-/// description = "My custom plugin"
-/// author = "Author Name"
-///
-/// [contributions]
-/// skills = ["skills/"]
-/// hooks = ["hooks.toml"]
+/// ```json
+/// {
+///   "plugin": {
+///     "name": "my-plugin",
+///     "version": "0.1.0",
+///     "description": "My custom plugin",
+///     "author": "Author Name"
+///   },
+///   "contributions": {
+///     "skills": ["skills/"],
+///     "hooks": ["hooks.json"]
+///   }
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
@@ -126,9 +129,9 @@ pub struct PluginMetadata {
 impl PluginManifest {
     /// Load a plugin manifest from a directory.
     ///
-    /// Looks for `PLUGIN.toml` in the given directory.
+    /// Looks for `plugin.json` in the given directory.
     pub fn from_dir(dir: &Path) -> Result<Self> {
-        let manifest_path = dir.join(PLUGIN_TOML);
+        let manifest_path = dir.join(PLUGIN_JSON);
 
         if !manifest_path.exists() {
             return Err(ManifestNotFoundSnafu {
@@ -153,9 +156,9 @@ impl PluginManifest {
         Self::from_str(&content, path)
     }
 
-    /// Parse a plugin manifest from a TOML string.
+    /// Parse a plugin manifest from a JSON string.
     pub fn from_str(content: &str, path: &Path) -> Result<Self> {
-        toml::from_str(content).map_err(|e| {
+        serde_json::from_str(content).map_err(|e| {
             InvalidManifestSnafu {
                 path: path.to_path_buf(),
                 message: e.to_string(),
@@ -177,10 +180,11 @@ impl PluginManifest {
             .plugin
             .name
             .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         {
             errors.push(
-                "Plugin name can only contain alphanumeric, hyphen, or underscore".to_string(),
+                "Plugin name can only contain lowercase alphanumeric characters and hyphens"
+                    .to_string(),
             );
         }
 

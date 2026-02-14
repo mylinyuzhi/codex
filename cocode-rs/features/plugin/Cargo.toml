@@ -21,7 +21,6 @@ serde_json.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 tokio = { workspace = true, features = ["process", "fs"] }
-toml.workspace = true
 tracing.workspace = true
 walkdir.workspace = true
 

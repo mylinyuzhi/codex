@@ -337,7 +337,7 @@ pub struct SkillExecutionResult {
     /// Base directory of the skill.
     pub base_dir: Option<PathBuf>,
 
-    /// The skill interface (SKILL.toml metadata) for hook registration.
+    /// The skill interface (SKILL.md frontmatter) for hook registration.
     ///
     /// Callers can use this to register skill-scoped hooks via
     /// [`register_skill_hooks`](crate::register_skill_hooks).

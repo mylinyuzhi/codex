@@ -1,6 +1,6 @@
 //! Agent loading from plugin directories.
 //!
-//! Loads AGENT.toml files from plugin-specified agent directories.
+//! Loads agent.json files from plugin-specified agent directories.
 
 use std::path::Path;
 
@@ -12,26 +12,28 @@ use walkdir::WalkDir;
 use crate::contribution::PluginContribution;
 
 /// Agent manifest filename.
-pub const AGENT_TOML: &str = "AGENT.toml";
+pub const AGENT_JSON: &str = "agent.json";
 
 /// Load agent definitions from a directory.
 ///
-/// Scans the directory for AGENT.toml files and loads them into
+/// Scans the directory for agent.json files and loads them into
 /// PluginContribution::Agent variants.
 ///
 /// # Arguments
-/// * `dir` - Directory to scan for AGENT.toml files
+/// * `dir` - Directory to scan for agent.json files
 /// * `plugin_name` - Name of the plugin providing these agents
 ///
-/// # Example AGENT.toml format:
-/// ```toml
-/// name = "code-review"
-/// description = "Reviews code for quality"
-/// agent_type = "code-review"
-/// tools = ["Read", "Grep", "Glob"]
-/// disallowed_tools = ["Write", "Edit"]
-/// model = "claude-sonnet"  # Optional
-/// max_turns = 20           # Optional
+/// # Example agent.json format:
+/// ```json
+/// {
+///   "name": "code-review",
+///   "description": "Reviews code for quality",
+///   "agent_type": "code-review",
+///   "tools": ["Read", "Grep", "Glob"],
+///   "disallowed_tools": ["Write", "Edit"],
+///   "model": "claude-sonnet",
+///   "max_turns": 20
+/// }
 /// ```
 pub fn load_agents_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribution> {
     if !dir.is_dir() {
@@ -45,7 +47,7 @@ pub fn load_agents_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribu
 
     let mut results = Vec::new();
 
-    // Walk the directory looking for AGENT.toml files
+    // Walk the directory looking for agent.json files
     for entry in WalkDir::new(dir)
         .max_depth(3)
         .follow_links(false)
@@ -53,7 +55,7 @@ pub fn load_agents_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribu
         .filter_map(std::result::Result::ok)
     {
         if entry.file_type().is_dir() {
-            let agent_path = entry.path().join(AGENT_TOML);
+            let agent_path = entry.path().join(AGENT_JSON);
             if agent_path.is_file() {
                 match load_agent_from_file(&agent_path, plugin_name) {
                     Ok(contrib) => results.push(contrib),
@@ -80,10 +82,10 @@ pub fn load_agents_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribu
     results
 }
 
-/// Load a single agent definition from a TOML file.
+/// Load a single agent definition from a JSON file.
 fn load_agent_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContribution> {
     let content = std::fs::read_to_string(path)?;
-    let definition: AgentDefinition = toml::from_str(&content)?;
+    let definition: AgentDefinition = serde_json::from_str(&content)?;
 
     debug!(
         plugin = %plugin_name,

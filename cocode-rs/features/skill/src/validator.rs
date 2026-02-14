@@ -1,9 +1,9 @@
 //! Skill validation.
 //!
-//! Validates that a [`SkillInterface`] conforms to the required constraints
-//! before it can be used as a loaded skill. Validation is fail-open at the
-//! collection level but strict per-skill: a skill that fails validation is
-//! reported but does not block other skills from loading.
+//! Validates that a [`SkillInterface`] and its prompt conform to the required
+//! constraints before it can be used as a loaded skill. Validation is fail-open
+//! at the collection level but strict per-skill: a skill that fails validation
+//! is reported but does not block other skills from loading.
 
 use crate::interface::SkillInterface;
 
@@ -22,7 +22,7 @@ pub const MAX_WHEN_TO_USE_LEN: i32 = 1024;
 /// Maximum allowed length for the `argument_hint` field.
 pub const MAX_ARGUMENT_HINT_LEN: i32 = 256;
 
-/// Maximum allowed length for skill prompt content (inline or file).
+/// Maximum allowed length for skill prompt content (from SKILL.md body).
 pub const SKILL_PROMPT_MAX_CHARS: i32 = 15000;
 
 /// Valid values for the `model` field.
@@ -31,7 +31,7 @@ const VALID_MODELS: &[&str] = &["sonnet", "opus", "haiku", "inherit"];
 /// Valid values for the `context` field.
 const VALID_CONTEXTS: &[&str] = &["main", "fork"];
 
-/// Validates a skill interface and returns any validation errors.
+/// Validates a skill interface and prompt, returning any validation errors.
 ///
 /// Returns `Ok(())` if the skill passes all validation checks, or
 /// `Err(errors)` with a list of human-readable error messages.
@@ -41,13 +41,13 @@ const VALID_CONTEXTS: &[&str] = &["main", "fork"];
 /// - `name` must not be empty and must not exceed [`MAX_NAME_LEN`] characters
 /// - `name` must contain only alphanumeric characters, hyphens, and underscores
 /// - `description` must not be empty and must not exceed [`MAX_DESCRIPTION_LEN`]
-/// - At least one of `prompt_file` or `prompt_inline` must be present
-/// - If `prompt_inline` is present, it must not exceed [`MAX_PROMPT_LEN`]
+/// - `prompt` (from SKILL.md body) must not be empty
+/// - `prompt` must not exceed [`SKILL_PROMPT_MAX_CHARS`]
 /// - `when_to_use` must not exceed [`MAX_WHEN_TO_USE_LEN`] if present
 /// - `argument_hint` must not exceed [`MAX_ARGUMENT_HINT_LEN`] if present
 /// - `model` must be one of: sonnet, opus, haiku, inherit (if present)
 /// - `context` must be one of: main, fork (if present)
-pub fn validate_skill(interface: &SkillInterface) -> Result<(), Vec<String>> {
+pub fn validate_skill(interface: &SkillInterface, prompt: &str) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
     // Validate name
@@ -75,26 +75,12 @@ pub fn validate_skill(interface: &SkillInterface) -> Result<(), Vec<String>> {
         ));
     }
 
-    // Validate prompt source
-    let has_file = interface
-        .prompt_file
-        .as_ref()
-        .is_some_and(|f| !f.is_empty());
-    let has_inline = interface
-        .prompt_inline
-        .as_ref()
-        .is_some_and(|p| !p.is_empty());
-
-    if !has_file && !has_inline {
-        errors.push("either prompt_file or prompt_inline must be specified".to_string());
-    }
-
-    // Validate inline prompt length
-    if let Some(ref prompt) = interface.prompt_inline
-        && prompt.len() as i32 > MAX_PROMPT_LEN
-    {
+    // Validate prompt (from SKILL.md body)
+    if prompt.is_empty() {
+        errors.push("prompt must not be empty (SKILL.md body is empty)".to_string());
+    } else if prompt.len() as i32 > SKILL_PROMPT_MAX_CHARS {
         errors.push(format!(
-            "prompt_inline exceeds max length of {MAX_PROMPT_LEN}: got {}",
+            "prompt exceeds max length of {SKILL_PROMPT_MAX_CHARS}: got {}",
             prompt.len()
         ));
     }

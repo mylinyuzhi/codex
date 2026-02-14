@@ -69,7 +69,7 @@ impl McpToolWrapper {
 
     /// Get the qualified name following the `mcp__<server>__<tool>` convention.
     pub fn qualified_name(&self) -> String {
-        format!("mcp__{}_{}", self.server_name, self.mcp_tool.name)
+        format!("mcp__{}__{}", self.server_name, self.mcp_tool.name)
     }
 
     /// Get the server name.

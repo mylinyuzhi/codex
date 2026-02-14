@@ -264,20 +264,20 @@ impl SessionState {
             hook_registry.register_all(config_hooks);
         }
 
-        // Load hooks from TOML file if it exists (~/.cocode/hooks.toml)
-        let hooks_toml_path = config.cocode_home.join("hooks.toml");
-        if hooks_toml_path.is_file() {
-            match cocode_hooks::load_hooks_from_toml(&hooks_toml_path) {
-                Ok(toml_hooks) => {
+        // Load hooks from JSON file if it exists (~/.cocode/hooks.json)
+        let hooks_json_path = config.cocode_home.join("hooks.json");
+        if hooks_json_path.is_file() {
+            match cocode_hooks::load_hooks_from_json(&hooks_json_path) {
+                Ok(json_hooks) => {
                     tracing::info!(
-                        count = toml_hooks.len(),
-                        path = %hooks_toml_path.display(),
-                        "Loaded hooks from TOML"
+                        count = json_hooks.len(),
+                        path = %hooks_json_path.display(),
+                        "Loaded hooks from JSON"
                     );
-                    hook_registry.register_all(toml_hooks);
+                    hook_registry.register_all(json_hooks);
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "Failed to load hooks.toml");
+                    tracing::warn!(error = %e, "Failed to load hooks.json");
                 }
             }
         }

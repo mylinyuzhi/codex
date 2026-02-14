@@ -102,7 +102,7 @@ core/skill/
     ├── scanner.rs      # SkillScanner with symlink safety
     ├── validator.rs    # Field validation
     ├── outcome.rs      # SkillLoadOutcome (partial success)
-    ├── interface.rs    # SkillInterface (SKILL.toml metadata)
+    ├── interface.rs    # SkillInterface (SKILL.md frontmatter)
     ├── bundled.rs      # Bundled skills with fingerprinting
     └── bundled/        # Embedded bundled skills
         └── ...
@@ -113,7 +113,7 @@ core/skill/
 - `SkillSource` - configuration source (Builtin, Bundled, User, Project, etc.)
 - `SkillLoadOutcome` - partial success with errors collection
 - `SkillScanner` - safe traversal with cycle detection
-- `SkillInterface` - optional UI metadata from SKILL.toml
+- `SkillInterface` - skill metadata from SKILL.md frontmatter
 
 **Safety features (from codex-rs patterns):**
 - Field length limits (MAX_NAME_LEN, MAX_DESCRIPTION_LEN, etc.)
@@ -129,7 +129,7 @@ core/skill/
 **Dependencies:**
 - `include_dir` - embed skill files at build time
 - `sha2` - fingerprint computation
-- `toml` - SKILL.toml parsing
+- `serde_yml` - SKILL.md YAML frontmatter parsing
 
 ### Verification
 ```bash
@@ -579,7 +579,7 @@ cocode-rs/tests/fixtures/
 ### External (new for Phase 1)
 - `include_dir` - Embed bundled skills at build time
 - `sha2` - Fingerprint computation for bundled skills
-- `toml` - SKILL.toml parsing for interface metadata
+- `serde_yml` - SKILL.md YAML frontmatter parsing
 
 ### Internal (existing)
 - `hyper-sdk` - LLM provider abstraction

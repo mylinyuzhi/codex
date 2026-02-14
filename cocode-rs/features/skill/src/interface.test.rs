@@ -2,17 +2,16 @@ use super::*;
 
 #[test]
 fn test_deserialize_full() {
-    let toml_str = r#"
-name = "commit"
-description = "Generate a commit message"
-prompt_file = "prompt.md"
-allowed_tools = ["Bash", "Read"]
+    let yaml = r#"
+name: commit
+description: Generate a commit message
+allowed-tools:
+  - Bash
+  - Read
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse YAML");
     assert_eq!(iface.name, "commit");
     assert_eq!(iface.description, "Generate a commit message");
-    assert_eq!(iface.prompt_file, Some("prompt.md".to_string()));
-    assert!(iface.prompt_inline.is_none());
     assert_eq!(
         iface.allowed_tools,
         Some(vec!["Bash".to_string(), "Read".to_string()])
@@ -20,51 +19,33 @@ allowed_tools = ["Bash", "Read"]
 }
 
 #[test]
-fn test_deserialize_inline_prompt() {
-    let toml_str = r#"
-name = "review"
-description = "Review code"
-prompt_inline = "Please review the following code changes."
-"#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
-    assert_eq!(iface.name, "review");
-    assert_eq!(
-        iface.prompt_inline,
-        Some("Please review the following code changes.".to_string())
-    );
-    assert!(iface.prompt_file.is_none());
-    assert!(iface.allowed_tools.is_none());
-}
-
-#[test]
 fn test_deserialize_minimal() {
-    let toml_str = r#"
-name = "test"
-description = "A test skill"
+    let yaml = r#"
+name: test
+description: A test skill
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse YAML");
     assert_eq!(iface.name, "test");
-    assert!(iface.prompt_file.is_none());
-    assert!(iface.prompt_inline.is_none());
     assert!(iface.allowed_tools.is_none());
 }
 
 #[test]
 fn test_deserialize_new_fields() {
-    let toml_str = r#"
-name = "deploy"
-description = "Deploy to staging"
-prompt_inline = "Deploy the app"
-user_invocable = true
-disable_model_invocation = true
-model = "sonnet"
-context = "fork"
-agent = "deploy-agent"
-argument_hint = "<environment>"
-when_to_use = "When the user wants to deploy"
-aliases = ["dep", "ship"]
+    let yaml = r#"
+name: deploy
+description: Deploy to staging
+user-invocable: true
+disable-model-invocation: true
+model: sonnet
+context: fork
+agent: deploy-agent
+argument-hint: "<environment>"
+when-to-use: When the user wants to deploy
+aliases:
+  - dep
+  - ship
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse YAML");
     assert_eq!(iface.name, "deploy");
     assert_eq!(iface.user_invocable, Some(true));
     assert_eq!(iface.disable_model_invocation, Some(true));
@@ -87,8 +68,6 @@ fn test_serialize_roundtrip() {
     let iface = SkillInterface {
         name: "roundtrip".to_string(),
         description: "Roundtrip test".to_string(),
-        prompt_file: None,
-        prompt_inline: Some("Do things".to_string()),
         allowed_tools: Some(vec!["Bash".to_string()]),
         when_to_use: None,
         user_invocable: None,
@@ -100,30 +79,25 @@ fn test_serialize_roundtrip() {
         aliases: None,
         hooks: None,
     };
-    let serialized = toml::to_string(&iface).expect("serialize");
-    let deserialized: SkillInterface = toml::from_str(&serialized).expect("deserialize");
+    let serialized = serde_yml::to_string(&iface).expect("serialize");
+    let deserialized: SkillInterface = serde_yml::from_str(&serialized).expect("deserialize");
     assert_eq!(deserialized.name, "roundtrip");
-    assert_eq!(deserialized.prompt_inline, Some("Do things".to_string()));
     assert_eq!(deserialized.allowed_tools, Some(vec!["Bash".to_string()]));
 }
 
 #[test]
 fn test_deserialize_with_hooks() {
-    let toml_str = r#"
-name = "lint-check"
-description = "Skill with hooks"
-prompt_inline = "Do the thing"
-
-[[hooks.PreToolUse]]
-command = "npm run lint"
-timeout_secs = 10
-once = true
-
-[hooks.PreToolUse.matcher]
-type = "exact"
-value = "Write"
+    let yaml = r#"
+name: lint-check
+description: Skill with hooks
+hooks:
+  PreToolUse:
+    - command: npm run lint
+      timeout_secs: 10
+      once: true
+      matcher: "Write"
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse YAML");
     assert_eq!(iface.name, "lint-check");
     assert!(iface.hooks.is_some());
 
@@ -133,51 +107,36 @@ value = "Write"
     assert_eq!(pre_hooks[0].command, Some("npm run lint".to_string()));
     assert_eq!(pre_hooks[0].timeout_secs, 10);
     assert!(pre_hooks[0].once);
+    assert_eq!(pre_hooks[0].matcher, Some("Write".to_string()));
 }
 
 #[test]
-fn test_deserialize_hook_or_matcher() {
-    let toml_str = r#"
-name = "multi-matcher"
-description = "Skill with OR matcher"
-prompt_inline = "test"
-
-[[hooks.PreToolUse]]
-command = "check"
-
-[hooks.PreToolUse.matcher]
-type = "or"
-
-[[hooks.PreToolUse.matcher.matchers]]
-type = "exact"
-value = "Write"
-
-[[hooks.PreToolUse.matcher.matchers]]
-type = "exact"
-value = "Edit"
+fn test_deserialize_hook_pipe_matcher() {
+    let yaml = r#"
+name: multi-matcher
+description: Skill with pipe matcher
+hooks:
+  PreToolUse:
+    - command: check
+      matcher: "Write|Edit"
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse SKILL.toml");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse YAML");
     let hooks = iface.hooks.expect("hooks");
     let pre_hooks = hooks.get("PreToolUse").expect("PreToolUse");
 
-    if let Some(SkillHookMatcher::Or { matchers }) = &pre_hooks[0].matcher {
-        assert_eq!(matchers.len(), 2);
-    } else {
-        panic!("Expected Or matcher");
-    }
+    assert_eq!(pre_hooks[0].matcher, Some("Write|Edit".to_string()));
 }
 
 #[test]
 fn test_skill_hook_config_defaults() {
-    let toml_str = r#"
-name = "defaults"
-description = "Test defaults"
-prompt_inline = "test"
-
-[[hooks.PostToolUse]]
-command = "echo done"
+    let yaml = r#"
+name: defaults
+description: Test defaults
+hooks:
+  PostToolUse:
+    - command: echo done
 "#;
-    let iface: SkillInterface = toml::from_str(toml_str).expect("parse");
+    let iface: SkillInterface = serde_yml::from_str(yaml).expect("parse");
     let hooks = iface.hooks.expect("hooks");
     let post_hooks = hooks.get("PostToolUse").expect("PostToolUse");
 

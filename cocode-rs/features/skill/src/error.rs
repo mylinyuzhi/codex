@@ -15,7 +15,7 @@ use std::any::Any;
 /// use snafu::ResultExt;
 ///
 /// // Wrapping std::io::Error
-/// fs::read(path).context(IoSnafu { message: "read SKILL.toml" })?;
+/// fs::read(path).context(IoSnafu { message: "read SKILL.md" })?;
 ///
 /// // For errors without a source, use .fail()
 /// return ValidationSnafu { message: "name too long" }.fail();
@@ -34,12 +34,21 @@ pub enum SkillError {
         location: Location,
     },
 
-    /// TOML parse error (wraps toml::de::Error).
-    #[snafu(display("TOML parse error in {file}: {source}"))]
-    TomlParse {
+    /// YAML parse error (wraps serde_yml::Error).
+    #[snafu(display("YAML parse error in {file}: {source}"))]
+    YamlParse {
         file: String,
         #[snafu(source)]
-        source: toml::de::Error,
+        source: serde_yml::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Frontmatter parse error.
+    #[snafu(display("Frontmatter parse error in {file}: {message}"))]
+    FrontmatterParse {
+        file: String,
+        message: String,
         #[snafu(implicit)]
         location: Location,
     },
@@ -73,7 +82,9 @@ impl ErrorExt for SkillError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Io { .. } => StatusCode::IoError,
-            Self::TomlParse { .. } | Self::Validation { .. } => StatusCode::InvalidConfig,
+            Self::YamlParse { .. } | Self::FrontmatterParse { .. } | Self::Validation { .. } => {
+                StatusCode::InvalidConfig
+            }
             Self::Internal { .. } => StatusCode::Internal,
             Self::NotFound { .. } => StatusCode::FileNotFound,
         }

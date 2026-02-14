@@ -81,7 +81,7 @@ impl Tool for WebFetchTool {
     }
 
     fn is_read_only(&self) -> bool {
-        false // Network access requires approval
+        true
     }
 
     fn max_result_size_chars(&self) -> i32 {

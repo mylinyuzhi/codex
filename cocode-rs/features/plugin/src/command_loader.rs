@@ -1,6 +1,6 @@
 //! Command loading from plugin directories.
 //!
-//! Loads COMMAND.toml files from plugin-specified command directories.
+//! Loads command.json files from plugin-specified command directories.
 
 use std::path::Path;
 
@@ -12,27 +12,29 @@ use crate::command::PluginCommand;
 use crate::contribution::PluginContribution;
 
 /// Command manifest filename.
-pub const COMMAND_TOML: &str = "COMMAND.toml";
+pub const COMMAND_JSON: &str = "command.json";
 
 /// Load command definitions from a directory.
 ///
-/// Scans the directory for COMMAND.toml files and loads them into
+/// Scans the directory for command.json files and loads them into
 /// PluginContribution::Command variants.
 ///
 /// # Arguments
-/// * `dir` - Directory to scan for COMMAND.toml files
+/// * `dir` - Directory to scan for command.json files
 /// * `plugin_name` - Name of the plugin providing these commands
 ///
-/// # Example COMMAND.toml format:
-/// ```toml
-/// name = "build"
-/// description = "Build the project"
-/// visible = true
-///
-/// [handler]
-/// type = "shell"
-/// command = "cargo build"
-/// timeout_sec = 300
+/// # Example command.json format:
+/// ```json
+/// {
+///   "name": "build",
+///   "description": "Build the project",
+///   "visible": true,
+///   "handler": {
+///     "type": "shell",
+///     "command": "cargo build",
+///     "timeout_sec": 300
+///   }
+/// }
 /// ```
 pub fn load_commands_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribution> {
     if !dir.is_dir() {
@@ -46,7 +48,7 @@ pub fn load_commands_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContri
 
     let mut results = Vec::new();
 
-    // Walk the directory looking for COMMAND.toml files
+    // Walk the directory looking for command.json files
     for entry in WalkDir::new(dir)
         .max_depth(3)
         .follow_links(false)
@@ -54,7 +56,7 @@ pub fn load_commands_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContri
         .filter_map(std::result::Result::ok)
     {
         if entry.file_type().is_dir() {
-            let command_path = entry.path().join(COMMAND_TOML);
+            let command_path = entry.path().join(COMMAND_JSON);
             if command_path.is_file() {
                 match load_command_from_file(&command_path, plugin_name) {
                     Ok(contrib) => results.push(contrib),
@@ -81,10 +83,10 @@ pub fn load_commands_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContri
     results
 }
 
-/// Load a single command definition from a TOML file.
+/// Load a single command definition from a JSON file.
 fn load_command_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContribution> {
     let content = std::fs::read_to_string(path)?;
-    let command: PluginCommand = toml::from_str(&content)?;
+    let command: PluginCommand = serde_json::from_str(&content)?;
 
     debug!(
         plugin = %plugin_name,

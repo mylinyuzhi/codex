@@ -1,7 +1,8 @@
 //! Skill system for cocode-rs.
 //!
 //! This crate implements a skill loading and management system that supports:
-//! - Scanning directories for `SKILL.toml` files
+//! - Scanning directories for `SKILL.md` files
+//! - Parsing YAML frontmatter and markdown body as prompt content
 //! - Validating skill metadata (name, description, prompt)
 //! - Bundled skills with SHA-256 fingerprinting
 //! - Deduplication of loaded skills by name
@@ -13,7 +14,7 @@
 //! user-global, plugin) and loaded through a pipeline:
 //!
 //! 1. **Scan** - [`scanner::SkillScanner`] discovers skill directories
-//! 2. **Load** - [`loader`] reads and parses `SKILL.toml` files
+//! 2. **Load** - [`loader`] reads `SKILL.md`, parses frontmatter + body
 //! 3. **Validate** - [`validator`] checks constraints on skill metadata
 //! 4. **Dedup** - [`dedup`] removes duplicate skills by name
 //! 5. **Hooks** - [`hooks`] registers skill-scoped hooks with the registry
@@ -21,6 +22,7 @@
 pub mod bundled;
 pub mod command;
 pub mod dedup;
+pub mod frontmatter;
 pub mod hooks;
 pub mod interface;
 pub mod loader;
