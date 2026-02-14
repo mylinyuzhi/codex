@@ -18,8 +18,10 @@ pub enum HookScope {
     Plugin = 1,
     /// Session-level hooks.
     Session = 2,
+    /// Agent/subagent-level hooks.
+    Agent = 3,
     /// Skill-level hooks (lowest priority).
-    Skill = 3,
+    Skill = 4,
 }
 
 /// The source of a hook, providing more detail than scope alone.
@@ -28,7 +30,7 @@ pub enum HookScope {
 /// - Policy enforcement (only managed hooks)
 /// - Cleanup when plugins/skills are unloaded
 /// - Debugging and logging
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookSource {
     /// Registered by organization policy.
@@ -41,7 +43,14 @@ pub enum HookSource {
     },
 
     /// Registered for the current session.
+    #[default]
     Session,
+
+    /// Registered by an agent or subagent.
+    Agent {
+        /// The name of the agent.
+        name: String,
+    },
 
     /// Registered by a skill.
     Skill {
@@ -57,6 +66,7 @@ impl HookSource {
             Self::Policy => HookScope::Policy,
             Self::Plugin { .. } => HookScope::Plugin,
             Self::Session => HookScope::Session,
+            Self::Agent { .. } => HookScope::Agent,
             Self::Skill { .. } => HookScope::Skill,
         }
     }
@@ -72,14 +82,8 @@ impl HookSource {
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Policy | Self::Session => None,
-            Self::Plugin { name } | Self::Skill { name } => Some(name),
+            Self::Plugin { name } | Self::Agent { name } | Self::Skill { name } => Some(name),
         }
-    }
-}
-
-impl Default for HookSource {
-    fn default() -> Self {
-        Self::Session
     }
 }
 
@@ -89,6 +93,7 @@ impl std::fmt::Display for HookSource {
             Self::Policy => write!(f, "policy"),
             Self::Plugin { name } => write!(f, "plugin:{name}"),
             Self::Session => write!(f, "session"),
+            Self::Agent { name } => write!(f, "agent:{name}"),
             Self::Skill { name } => write!(f, "skill:{name}"),
         }
     }
@@ -101,6 +106,7 @@ impl HookScope {
             Self::Policy => "policy",
             Self::Plugin => "plugin",
             Self::Session => "session",
+            Self::Agent => "agent",
             Self::Skill => "skill",
         }
     }

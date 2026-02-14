@@ -18,6 +18,7 @@ fn make_hook(name: &str, event: HookEventType, matcher: Option<HookMatcher>) -> 
         matcher,
         handler: HookHandler::Prompt {
             template: "test".to_string(),
+            model: None,
         },
         source: Default::default(),
         enabled: true,
@@ -33,6 +34,7 @@ fn make_once_hook(name: &str, event: HookEventType) -> HookDefinition {
         matcher: None,
         handler: HookHandler::Prompt {
             template: "test".to_string(),
+            model: None,
         },
         source: Default::default(),
         enabled: true,

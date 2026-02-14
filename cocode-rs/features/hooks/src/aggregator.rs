@@ -13,7 +13,7 @@ use crate::settings::HookSettings;
 /// This struct handles:
 /// - Setting the source field on hooks
 /// - Filtering hooks based on `allow_managed_hooks_only` setting
-/// - Ordering hooks by scope priority (Policy > Plugin > Session > Skill)
+/// - Ordering hooks by scope priority (Policy > Plugin > Session > Agent > Skill)
 #[derive(Debug, Default)]
 pub struct HookAggregator {
     hooks: Vec<HookDefinition>,
@@ -50,6 +50,19 @@ impl HookAggregator {
     pub fn add_session_hooks(&mut self, hooks: impl IntoIterator<Item = HookDefinition>) {
         for mut hook in hooks {
             hook.source = HookSource::Session;
+            self.hooks.push(hook);
+        }
+    }
+
+    /// Adds hooks from an agent or subagent.
+    pub fn add_agent_hooks(
+        &mut self,
+        agent_name: impl Into<String>,
+        hooks: impl IntoIterator<Item = HookDefinition>,
+    ) {
+        let name = agent_name.into();
+        for mut hook in hooks {
+            hook.source = HookSource::Agent { name: name.clone() };
             self.hooks.push(hook);
         }
     }
@@ -99,10 +112,11 @@ impl HookAggregator {
     }
 
     /// Returns hooks grouped by scope.
-    pub fn hooks_by_scope(&self) -> impl Iterator<Item = (HookScope, &[HookDefinition])> {
+    pub fn hooks_by_scope(&self) -> Vec<(HookScope, Vec<&HookDefinition>)> {
         let mut policy = Vec::new();
         let mut plugin = Vec::new();
         let mut session = Vec::new();
+        let mut agent = Vec::new();
         let mut skill = Vec::new();
 
         for hook in &self.hooks {
@@ -110,6 +124,7 @@ impl HookAggregator {
                 HookScope::Policy => policy.push(hook),
                 HookScope::Plugin => plugin.push(hook),
                 HookScope::Session => session.push(hook),
+                HookScope::Agent => agent.push(hook),
                 HookScope::Skill => skill.push(hook),
             }
         }
@@ -118,16 +133,12 @@ impl HookAggregator {
             (HookScope::Policy, policy),
             (HookScope::Plugin, plugin),
             (HookScope::Session, session),
+            (HookScope::Agent, agent),
             (HookScope::Skill, skill),
         ]
         .into_iter()
         .filter(|(_, hooks)| !hooks.is_empty())
-        .map(|(scope, hooks)| {
-            // SAFETY: We're only holding references to self.hooks which lives as long as self
-            let slice: &[HookDefinition] =
-                unsafe { std::slice::from_raw_parts(hooks[0] as *const _, hooks.len()) };
-            (scope, slice)
-        })
+        .collect()
     }
 }
 

@@ -220,6 +220,19 @@ pub struct StreamingToolExecutor {
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
+/// Result of pre-hook execution.
+///
+/// Carries the (possibly modified) input along with signals collected
+/// from hook outcomes that the caller must act on.
+struct PreHookOutcome {
+    /// The (possibly modified) input.
+    input: Value,
+    /// If true, a hook returned PermissionOverride "allow" — skip permission checks.
+    skip_permission: bool,
+    /// Additional contexts collected from `ContinueWithContext` hooks.
+    additional_contexts: Vec<String>,
+}
+
 impl StreamingToolExecutor {
     /// Create a new executor.
     pub fn new(
@@ -525,8 +538,8 @@ impl StreamingToolExecutor {
         let original_input = tool_call.arguments.clone();
 
         // Execute pre-hooks before starting the tool
-        let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
-            Ok(input) => input,
+        let pre_hook = match self.execute_pre_hooks(&name, original_input.clone()).await {
+            Ok(outcome) => outcome,
             Err(reason) => {
                 // Pre-hook rejected the tool call
                 let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
@@ -542,6 +555,21 @@ impl StreamingToolExecutor {
                 return;
             }
         };
+        let modified_input = pre_hook.input;
+
+        // If a hook granted permission override "allow", pre-approve this tool
+        if pre_hook.skip_permission {
+            let pattern = format!("hook-override-{call_id}");
+            self.approval_store
+                .lock()
+                .await
+                .approve_pattern(&name, &pattern);
+        }
+
+        // Log any additional contexts collected from pre-hooks
+        for ctx_str in &pre_hook.additional_contexts {
+            debug!(tool = %name, "Pre-hook additional context: {ctx_str}");
+        }
 
         // Emit started event
         self.emit_event(LoopEvent::ToolUseStarted {
@@ -686,8 +714,8 @@ impl StreamingToolExecutor {
         let original_input = tool_call.arguments.clone();
 
         // Execute pre-hooks before starting the tool
-        let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
-            Ok(input) => input,
+        let pre_hook = match self.execute_pre_hooks(&name, original_input.clone()).await {
+            Ok(outcome) => outcome,
             Err(reason) => {
                 let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
                 self.emit_completed(&call_id, &result).await;
@@ -702,6 +730,21 @@ impl StreamingToolExecutor {
                 return;
             }
         };
+        let modified_input = pre_hook.input;
+
+        // If a hook granted permission override "allow", pre-approve this tool
+        if pre_hook.skip_permission {
+            let pattern = format!("hook-override-{call_id}");
+            self.approval_store
+                .lock()
+                .await
+                .approve_pattern(&name, &pattern);
+        }
+
+        // Log any additional contexts collected from pre-hooks
+        for ctx_str in &pre_hook.additional_contexts {
+            debug!(tool = %name, "Pre-hook additional context: {ctx_str}");
+        }
 
         // Emit started event
         self.emit_event(LoopEvent::ToolUseStarted {
@@ -987,15 +1030,21 @@ impl StreamingToolExecutor {
 
     /// Execute pre-tool-use hooks and return the (possibly modified) input.
     ///
-    /// Returns `None` if the tool call should be rejected.
+    /// Returns `Err` if the tool call should be rejected.
     async fn execute_pre_hooks(
         &self,
         tool_name: &str,
         input: Value,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<PreHookOutcome, String> {
         let hooks = match &self.hooks {
             Some(h) => h,
-            None => return Ok(input),
+            None => {
+                return Ok(PreHookOutcome {
+                    input,
+                    skip_permission: false,
+                    additional_contexts: Vec::new(),
+                });
+            }
         };
 
         let ctx = HookContext::new(
@@ -1007,6 +1056,8 @@ impl StreamingToolExecutor {
 
         let outcomes = hooks.execute(&ctx).await;
         let mut current_input = input;
+        let mut skip_permission = false;
+        let mut additional_contexts = Vec::new();
 
         for outcome in outcomes {
             // Emit hook executed event
@@ -1017,8 +1068,15 @@ impl StreamingToolExecutor {
             .await;
 
             match outcome.result {
-                HookResult::Continue | HookResult::ContinueWithContext { .. } => {
+                HookResult::Continue => {
                     // Continue with current input
+                }
+                HookResult::ContinueWithContext {
+                    additional_context, ..
+                } => {
+                    if let Some(ctx_str) = additional_context {
+                        additional_contexts.push(ctx_str);
+                    }
                 }
                 HookResult::Reject { reason } => {
                     warn!(
@@ -1056,20 +1114,25 @@ impl StreamingToolExecutor {
                         reason = ?reason,
                         "Hook returned permission override"
                     );
-                    // Permission override is handled by the permission pipeline
                     // "deny" is treated like Reject
                     if decision == "deny" {
                         return Err(reason.unwrap_or_else(|| {
                             "Tool denied by hook permission override".to_string()
                         }));
                     }
-                    // "allow" - continue without further permission checks
-                    // (the caller will need to check for this in the permission pipeline)
+                    // "allow" - skip permission checks for this tool call
+                    if decision == "allow" {
+                        skip_permission = true;
+                    }
                 }
             }
         }
 
-        Ok(current_input)
+        Ok(PreHookOutcome {
+            input: current_input,
+            skip_permission,
+            additional_contexts,
+        })
     }
 
     /// Execute post-tool-use hooks.

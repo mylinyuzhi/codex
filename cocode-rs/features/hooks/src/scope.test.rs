@@ -4,7 +4,8 @@ use super::*;
 fn test_priority_order() {
     assert!(HookScope::Policy < HookScope::Plugin);
     assert!(HookScope::Plugin < HookScope::Session);
-    assert!(HookScope::Session < HookScope::Skill);
+    assert!(HookScope::Session < HookScope::Agent);
+    assert!(HookScope::Agent < HookScope::Skill);
 }
 
 #[test]
@@ -12,6 +13,7 @@ fn test_sorting() {
     let mut scopes = vec![
         HookScope::Skill,
         HookScope::Policy,
+        HookScope::Agent,
         HookScope::Session,
         HookScope::Plugin,
     ];
@@ -22,6 +24,7 @@ fn test_sorting() {
             HookScope::Policy,
             HookScope::Plugin,
             HookScope::Session,
+            HookScope::Agent,
             HookScope::Skill,
         ]
     );
@@ -32,6 +35,7 @@ fn test_display() {
     assert_eq!(format!("{}", HookScope::Policy), "policy");
     assert_eq!(format!("{}", HookScope::Plugin), "plugin");
     assert_eq!(format!("{}", HookScope::Session), "session");
+    assert_eq!(format!("{}", HookScope::Agent), "agent");
     assert_eq!(format!("{}", HookScope::Skill), "skill");
 }
 
@@ -58,6 +62,13 @@ fn test_hook_source_scope() {
     );
     assert_eq!(HookSource::Session.scope(), HookScope::Session);
     assert_eq!(
+        HookSource::Agent {
+            name: "test".to_string()
+        }
+        .scope(),
+        HookScope::Agent
+    );
+    assert_eq!(
         HookSource::Skill {
             name: "test".to_string()
         }
@@ -77,6 +88,12 @@ fn test_hook_source_is_managed() {
     );
     assert!(!HookSource::Session.is_managed());
     assert!(
+        !HookSource::Agent {
+            name: "test".to_string()
+        }
+        .is_managed()
+    );
+    assert!(
         !HookSource::Skill {
             name: "test".to_string()
         }
@@ -95,6 +112,13 @@ fn test_hook_source_name() {
         Some("my-plugin")
     );
     assert!(HookSource::Session.name().is_none());
+    assert_eq!(
+        HookSource::Agent {
+            name: "my-agent".to_string()
+        }
+        .name(),
+        Some("my-agent")
+    );
     assert_eq!(
         HookSource::Skill {
             name: "my-skill".to_string()
@@ -120,6 +144,15 @@ fn test_hook_source_display() {
     assert_eq!(
         format!(
             "{}",
+            HookSource::Agent {
+                name: "my-agent".to_string()
+            }
+        ),
+        "agent:my-agent"
+    );
+    assert_eq!(
+        format!(
+            "{}",
             HookSource::Skill {
                 name: "my-skill".to_string()
             }
@@ -141,6 +174,9 @@ fn test_hook_source_serde_roundtrip() {
             name: "test-plugin".to_string(),
         },
         HookSource::Session,
+        HookSource::Agent {
+            name: "test-agent".to_string(),
+        },
         HookSource::Skill {
             name: "test-skill".to_string(),
         },
@@ -165,4 +201,11 @@ fn test_hook_source_serde_format() {
     let json = serde_json::to_string(&plugin).expect("serialize");
     assert!(json.contains("\"type\":\"plugin\""));
     assert!(json.contains("\"name\":\"test\""));
+
+    let agent = HookSource::Agent {
+        name: "verify".to_string(),
+    };
+    let json = serde_json::to_string(&agent).expect("serialize");
+    assert!(json.contains("\"type\":\"agent\""));
+    assert!(json.contains("\"name\":\"verify\""));
 }
