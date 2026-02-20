@@ -67,11 +67,11 @@ impl Tool for ExitPlanModeTool {
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        ConcurrencySafety::Unsafe
+        ConcurrencySafety::Safe
     }
 
     fn is_read_only(&self) -> bool {
-        false
+        true
     }
 
     async fn execute(&self, _input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

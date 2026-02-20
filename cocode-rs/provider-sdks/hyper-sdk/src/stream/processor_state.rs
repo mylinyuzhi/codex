@@ -37,10 +37,10 @@ impl ToolCallManager {
 
     /// Append arguments delta to a tool call.
     pub fn append_delta(&mut self, index: i64, delta: &str) {
-        if let Some(&vec_idx) = self.index_map.get(&index) {
-            if let Some(tc) = self.calls.get_mut(vec_idx) {
-                tc.append_arguments(delta);
-            }
+        if let Some(&vec_idx) = self.index_map.get(&index)
+            && let Some(tc) = self.calls.get_mut(vec_idx)
+        {
+            tc.append_arguments(delta);
         }
     }
 

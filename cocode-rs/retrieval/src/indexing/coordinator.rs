@@ -25,9 +25,10 @@ use crate::error::Result;
 use crate::storage::SqliteStore;
 
 /// Index state representing the current status of the index.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum IndexState {
     /// Index has not been initialized yet.
+    #[default]
     Uninitialized,
     /// Index is currently being built.
     Building {
@@ -57,12 +58,6 @@ pub enum IndexState {
         /// Unix timestamp when failure occurred.
         failed_at: i64,
     },
-}
-
-impl Default for IndexState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 /// Reason why the index is considered stale.
@@ -441,7 +436,7 @@ impl IndexCoordinator {
         }
 
         // Check for deleted files - processor will check existence
-        for (rel_path, _) in &indexed_map {
+        for rel_path in indexed_map.keys() {
             if !current_paths.contains(rel_path) {
                 let full_path = self.workdir.join(rel_path);
                 changes.push(CoordinatorFileChange::new(full_path));

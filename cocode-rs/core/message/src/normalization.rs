@@ -72,13 +72,12 @@ pub fn normalize_messages_for_api(
         }
 
         // Merge with previous if consecutive same role
-        if options.merge_consecutive {
-            if let Some(last) = normalized.last_mut() {
-                if can_merge(last, &message) {
-                    merge_messages(last, &message);
-                    continue;
-                }
-            }
+        if options.merge_consecutive
+            && let Some(last) = normalized.last_mut()
+            && can_merge(last, &message)
+        {
+            merge_messages(last, &message);
+            continue;
         }
 
         normalized.push(message);
@@ -153,22 +152,23 @@ pub fn validate_messages(messages: &[Message]) -> Result<(), ValidationError> {
         }
 
         // Check User/Assistant alternation (Tool messages exempt as they follow Assistant)
-        if msg.role != Role::System && msg.role != Role::Tool {
-            if let Some(prev_role) = last_role {
-                // Skip alternation check if previous was System
-                if prev_role != Role::System && prev_role != Role::Tool {
-                    // Consecutive User or Assistant messages are not allowed
-                    if msg.role == prev_role {
-                        return Err(ValidationError::InvalidAlternation {
-                            index: idx,
-                            expected: if msg.role == Role::User {
-                                Role::Assistant
-                            } else {
-                                Role::User
-                            },
-                            found: msg.role,
-                        });
-                    }
+        if msg.role != Role::System
+            && msg.role != Role::Tool
+            && let Some(prev_role) = last_role
+        {
+            // Skip alternation check if previous was System
+            if prev_role != Role::System && prev_role != Role::Tool {
+                // Consecutive User or Assistant messages are not allowed
+                if msg.role == prev_role {
+                    return Err(ValidationError::InvalidAlternation {
+                        index: idx,
+                        expected: if msg.role == Role::User {
+                            Role::Assistant
+                        } else {
+                            Role::User
+                        },
+                        found: msg.role,
+                    });
                 }
             }
         }
@@ -199,10 +199,10 @@ fn has_matching_tool_use(messages: &[Message], current_idx: usize, tool_use_id: 
     for msg in messages[..current_idx].iter().rev() {
         if msg.role == Role::Assistant {
             for block in &msg.content {
-                if let ContentBlock::ToolUse { id, .. } = block {
-                    if id == tool_use_id {
-                        return true;
-                    }
+                if let ContentBlock::ToolUse { id, .. } = block
+                    && id == tool_use_id
+                {
+                    return true;
                 }
             }
             // If we hit an assistant message without the tool use, stop looking

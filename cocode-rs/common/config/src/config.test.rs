@@ -96,7 +96,7 @@ fn test_model_for_role_fallback() {
     };
 
     let mut resolved_models = HashMap::new();
-    resolved_models.insert(ModelRole::Main, main_info.clone());
+    resolved_models.insert(ModelRole::Main, main_info);
 
     let config = Config {
         resolved_models,

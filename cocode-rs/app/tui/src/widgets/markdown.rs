@@ -111,17 +111,18 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, _width: u16) -> Vec<Line<'st
         // Numbered list items
         if raw_line.len() > 2 {
             let trimmed = raw_line.trim_start();
-            if let Some(dot_pos) = trimmed.find(". ") {
-                if dot_pos <= 3 && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit()) {
-                    let num = &trimmed[..dot_pos];
-                    let rest = &trimmed[dot_pos + 2..];
-                    let styled = parse_inline_styles(rest, theme);
-                    let indent = "  ".repeat(1 + (raw_line.len() - trimmed.len()) / 2);
-                    let mut spans = vec![Span::raw(format!("{indent}{num}. "))];
-                    spans.extend(styled);
-                    lines.push(Line::from(spans));
-                    continue;
-                }
+            if let Some(dot_pos) = trimmed.find(". ")
+                && dot_pos <= 3
+                && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit())
+            {
+                let num = &trimmed[..dot_pos];
+                let rest = &trimmed[dot_pos + 2..];
+                let styled = parse_inline_styles(rest, theme);
+                let indent = "  ".repeat(1 + (raw_line.len() - trimmed.len()) / 2);
+                let mut spans = vec![Span::raw(format!("{indent}{num}. "))];
+                spans.extend(styled);
+                lines.push(Line::from(spans));
+                continue;
             }
         }
 

@@ -72,30 +72,30 @@ impl Client {
     }
 
     /// Build the default headers for API requests.
-    fn default_headers(&self) -> HeaderMap {
+    fn default_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", self.config.api_key))
-                .expect("valid api key"),
+                .map_err(|_| OpenAIError::Configuration("invalid API key format".into()))?,
         );
 
         // Add optional organization header
-        if let Some(org) = &self.config.organization {
-            if let Ok(value) = HeaderValue::from_str(org) {
-                headers.insert("OpenAI-Organization", value);
-            }
+        if let Some(org) = &self.config.organization
+            && let Ok(value) = HeaderValue::from_str(org)
+        {
+            headers.insert("OpenAI-Organization", value);
         }
 
         // Add optional project header
-        if let Some(project) = &self.config.project {
-            if let Ok(value) = HeaderValue::from_str(project) {
-                headers.insert("OpenAI-Project", value);
-            }
+        if let Some(project) = &self.config.project
+            && let Ok(value) = HeaderValue::from_str(project)
+        {
+            headers.insert("OpenAI-Project", value);
         }
 
-        headers
+        Ok(headers)
     }
 
     /// Apply request hook if configured.
@@ -139,13 +139,14 @@ impl Client {
     }
 
     /// Send a POST request to the API.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post<T: DeserializeOwned>(
         &self,
         path: &str,
         body: serde_json::Value,
     ) -> Result<T> {
         let base_url = format!("{}{}", self.config.base_url, path);
-        let (url, headers, body) = self.apply_hook(base_url, self.default_headers(), body);
+        let (url, headers, body) = self.apply_hook(base_url, self.default_headers()?, body);
         let mut last_error = None;
 
         for attempt in 0..=self.config.max_retries {
@@ -199,14 +200,15 @@ impl Client {
             }
         }
 
-        Err(last_error.expect("at least one error should have occurred"))
+        Err(last_error.unwrap_or_else(|| OpenAIError::Configuration("no attempts made".into())))
     }
 
     /// Send a GET request that returns Response with sdk_http_response populated.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn get_response(&self, path: &str) -> Result<Response> {
         let base_url = format!("{}{}", self.config.base_url, path);
         let (url, headers, _) =
-            self.apply_hook(base_url, self.default_headers(), serde_json::json!({}));
+            self.apply_hook(base_url, self.default_headers()?, serde_json::json!({}));
         let mut last_error = None;
 
         for attempt in 0..=self.config.max_retries {
@@ -274,20 +276,21 @@ impl Client {
             }
         }
 
-        Err(last_error.expect("at least one error should have occurred"))
+        Err(last_error.unwrap_or_else(|| OpenAIError::Configuration("no attempts made".into())))
     }
 
     /// Send a POST request that returns Response with sdk_http_response populated.
     ///
     /// This is a specialized version of `post()` that captures the raw HTTP response
     /// body and stores it in `Response.sdk_http_response` for round-trip preservation.
+    #[allow(clippy::expect_used)]
     pub(crate) async fn post_response(
         &self,
         path: &str,
         body: serde_json::Value,
     ) -> Result<Response> {
         let base_url = format!("{}{}", self.config.base_url, path);
-        let (url, headers, body) = self.apply_hook(base_url, self.default_headers(), body);
+        let (url, headers, body) = self.apply_hook(base_url, self.default_headers()?, body);
         let mut last_error = None;
 
         for attempt in 0..=self.config.max_retries {
@@ -356,7 +359,7 @@ impl Client {
             }
         }
 
-        Err(last_error.expect("at least one error should have occurred"))
+        Err(last_error.unwrap_or_else(|| OpenAIError::Configuration("no attempts made".into())))
     }
 
     /// Send a POST request that returns a byte stream for SSE processing.
@@ -374,7 +377,7 @@ impl Client {
     ) -> Result<impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static>
     {
         let base_url = format!("{}{}", self.config.base_url, path);
-        let (url, headers, body) = self.apply_hook(base_url, self.default_headers(), body);
+        let (url, headers, body) = self.apply_hook(base_url, self.default_headers()?, body);
 
         let response = self
             .http_client
@@ -412,7 +415,7 @@ impl Client {
     {
         let base_url = format!("{}{}", self.config.base_url, path);
         let (url, headers, _) =
-            self.apply_hook(base_url, self.default_headers(), serde_json::json!({}));
+            self.apply_hook(base_url, self.default_headers()?, serde_json::json!({}));
 
         let response = self.http_client.get(&url).headers(headers).send().await?;
 

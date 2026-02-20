@@ -314,5 +314,5 @@ async fn test_cross_provider_streaming_openai_to_anthropic() -> Result<()> {
 #[test]
 fn test_list_configured_providers() {
     let providers = common::config::list_configured_providers();
-    eprintln!("Configured providers: {:?}", providers);
+    eprintln!("Configured providers: {providers:?}");
 }

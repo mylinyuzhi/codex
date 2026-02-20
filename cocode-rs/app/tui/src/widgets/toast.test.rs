@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use super::*;
 use crate::theme::Theme;
 
@@ -35,10 +37,10 @@ fn test_toast_expired() {
 #[test]
 fn test_toast_widget_render() {
     let theme = Theme::default();
-    let toasts = vec![
+    let toasts: VecDeque<Toast> = VecDeque::from([
         Toast::info("t1", "Info message"),
         Toast::warning("t2", "Warning message"),
-    ];
+    ]);
     let widget = ToastWidget::new(&toasts, &theme);
 
     let area = Rect::new(0, 0, 50, 10);
@@ -51,7 +53,7 @@ fn test_toast_widget_render() {
 #[test]
 fn test_toast_widget_calculate_area() {
     let theme = Theme::default();
-    let toasts = vec![Toast::info("t1", "Test")];
+    let toasts: VecDeque<Toast> = VecDeque::from([Toast::info("t1", "Test")]);
     let widget = ToastWidget::new(&toasts, &theme);
 
     let frame_area = Rect::new(0, 0, 100, 50);

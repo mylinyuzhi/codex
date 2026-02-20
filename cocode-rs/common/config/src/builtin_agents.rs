@@ -1,7 +1,7 @@
 //! Configuration overrides for builtin agents.
 //!
 //! This module provides JSON-based configuration for the builtin subagent types
-//! (bash, general, explore, plan, guide, statusline). Third-party agents continue
+//! (bash, general, explore, plan, guide, statusline, code-simplifier). Third-party agents continue
 //! using the plugin system.
 //!
 //! # Configuration File
@@ -53,6 +53,18 @@ pub struct BuiltinAgentOverride {
     /// Override denied tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disallowed_tools: Option<Vec<String>>,
+
+    /// Override whether to fork parent conversation context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_context: Option<bool>,
+
+    /// Override display color for TUI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+
+    /// Override the critical reminder injected into the agent's prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_reminder: Option<String>,
 }
 
 /// Configuration file for builtin agent overrides.
@@ -127,8 +139,15 @@ pub fn apply_env_overrides(config: &mut BuiltinAgentsConfig) {
 }
 
 /// Known builtin agent types.
-pub const BUILTIN_AGENT_TYPES: &[&str] =
-    &["bash", "general", "explore", "plan", "guide", "statusline"];
+pub const BUILTIN_AGENT_TYPES: &[&str] = &[
+    "bash",
+    "general",
+    "explore",
+    "plan",
+    "guide",
+    "statusline",
+    "code-simplifier",
+];
 
 /// Check if an agent type is a builtin agent.
 pub fn is_builtin_agent(agent_type: &str) -> bool {

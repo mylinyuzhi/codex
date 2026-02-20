@@ -83,6 +83,9 @@ pub struct SpawnAgentResult {
     /// in `agent_cancel_tokens` for TaskStop to cancel by ID.
     #[serde(skip)]
     pub cancel_token: Option<CancellationToken>,
+    /// Display color from agent definition (for TUI rendering).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Input for a single-shot model call (no agent loop).
@@ -751,6 +754,7 @@ impl ToolContext {
     ///
     /// Called when the user selects "Allow always" — writes the pattern
     /// into `permissions.allow` so it's remembered across sessions.
+    #[allow(clippy::expect_used)]
     pub async fn persist_permission_rule(&self, tool_name: &str, pattern: &str) {
         use cocode_config::default_config_dir;
 

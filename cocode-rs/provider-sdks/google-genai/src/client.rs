@@ -301,19 +301,19 @@ impl Client {
         config_ext: Option<&RequestExtensions>,
     ) -> String {
         let merged = self.merge_extensions(config_ext);
-        if let Some(params) = merged.as_ref().and_then(|e| e.params.as_ref()) {
-            if !params.is_empty() {
-                let query: String = params
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-                    .collect::<Vec<_>>()
-                    .join("&");
-                return if base_url.contains('?') {
-                    format!("{base_url}&{query}")
-                } else {
-                    format!("{base_url}?{query}")
-                };
-            }
+        if let Some(params) = merged.as_ref().and_then(|e| e.params.as_ref())
+            && !params.is_empty()
+        {
+            let query: String = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            return if base_url.contains('?') {
+                format!("{base_url}&{query}")
+            } else {
+                format!("{base_url}?{query}")
+            };
         }
         base_url.to_string()
     }
@@ -349,11 +349,11 @@ impl Client {
     ) -> serde_json::Value {
         // Merge extensions first, then apply to body
         let merged = self.merge_extensions(config_ext);
-        if let Some(ext_body) = merged.as_ref().and_then(|e| e.body.as_ref()) {
-            if let (Some(body_obj), Some(ext_obj)) = (body.as_object_mut(), ext_body.as_object()) {
-                for (k, v) in ext_obj {
-                    body_obj.insert(k.clone(), v.clone());
-                }
+        if let Some(ext_body) = merged.as_ref().and_then(|e| e.body.as_ref())
+            && let (Some(body_obj), Some(ext_obj)) = (body.as_object_mut(), ext_body.as_object())
+        {
+            for (k, v) in ext_obj {
+                body_obj.insert(k.clone(), v.clone());
             }
         }
         body

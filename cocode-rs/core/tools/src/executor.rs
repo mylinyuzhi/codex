@@ -218,6 +218,8 @@ pub struct StreamingToolExecutor {
     skill_allowed_tools: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
     /// Optional OTel manager for metrics and traces.
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+    /// Optional LSP server manager for language intelligence tools.
+    lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
 }
 
 /// Result of pre-hook execution.
@@ -266,6 +268,7 @@ impl StreamingToolExecutor {
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
             otel_manager: None,
+            lsp_manager: None,
         }
     }
 
@@ -371,6 +374,12 @@ impl StreamingToolExecutor {
         self
     }
 
+    /// Set the LSP server manager for language intelligence tools.
+    pub fn with_lsp_manager(mut self, manager: Arc<cocode_lsp::LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
+        self
+    }
+
     /// Set the allowlist of tool names that the model was given.
     ///
     /// Called from the driver after `select_tools_for_model()` resolves the
@@ -379,6 +388,7 @@ impl StreamingToolExecutor {
     /// to tools the model was never offered (e.g. `apply_patch` when
     /// `apply_patch_tool_type` is `None`, or tools outside
     /// `experimental_supported_tools`).
+    #[allow(clippy::unwrap_used)]
     pub fn set_allowed_tool_names(&self, names: HashSet<String>) {
         *self.allowed_tool_names.write().unwrap() = Some(names);
     }
@@ -387,6 +397,7 @@ impl StreamingToolExecutor {
     ///
     /// When a skill specifies `allowed_tools`, only those tools (plus "Skill")
     /// are allowed during the skill's execution.
+    #[allow(clippy::unwrap_used)]
     pub fn set_skill_allowed_tools(&self, tools: Option<HashSet<String>>) {
         *self.skill_allowed_tools.write().unwrap() = tools;
     }
@@ -396,6 +407,7 @@ impl StreamingToolExecutor {
     /// Returns `true` only if the tool passes both checks:
     /// 1. Model allowlist: no allowlist set (all tools allowed) or the name is in the set
     /// 2. Skill restriction: no restriction set or the name is in the skill's allowed set
+    #[allow(clippy::unwrap_used)]
     fn is_tool_allowed(&self, name: &str) -> bool {
         // Check model-level allowlist
         let model_allowed = match self.allowed_tool_names.read().unwrap().as_ref() {
@@ -538,7 +550,10 @@ impl StreamingToolExecutor {
         let original_input = tool_call.arguments.clone();
 
         // Execute pre-hooks before starting the tool
-        let pre_hook = match self.execute_pre_hooks(&name, original_input.clone()).await {
+        let pre_hook = match self
+            .execute_pre_hooks(&name, &call_id, original_input.clone())
+            .await
+        {
             Ok(outcome) => outcome,
             Err(reason) => {
                 // Pre-hook rejected the tool call
@@ -615,12 +630,12 @@ impl StreamingToolExecutor {
             let tool_duration = tool_start.elapsed();
 
             // Execute post-hooks (shared logic with execute_single_tool)
-            let is_error = result.is_err();
             run_post_hooks(
                 hooks.as_deref(),
                 &name,
+                &call_id,
                 &modified_input,
-                is_error,
+                &result,
                 &session_id,
                 &cwd,
             )
@@ -628,7 +643,7 @@ impl StreamingToolExecutor {
 
             // Record tool metrics in OTel
             if let Some(otel) = &otel_manager {
-                otel.tool_result(&name, &call_id, "", tool_duration, !is_error, "");
+                otel.tool_result(&name, &call_id, "", tool_duration, result.is_ok(), "");
             }
 
             ToolExecutionResult {
@@ -714,7 +729,10 @@ impl StreamingToolExecutor {
         let original_input = tool_call.arguments.clone();
 
         // Execute pre-hooks before starting the tool
-        let pre_hook = match self.execute_pre_hooks(&name, original_input.clone()).await {
+        let pre_hook = match self
+            .execute_pre_hooks(&name, &call_id, original_input.clone())
+            .await
+        {
             Ok(outcome) => outcome,
             Err(reason) => {
                 let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
@@ -771,13 +789,12 @@ impl StreamingToolExecutor {
         let tool_duration = tool_start.elapsed();
 
         // Execute post-hooks
-        let is_error = result.is_err();
-        self.execute_post_hooks(&name, &modified_input, is_error)
+        self.execute_post_hooks(&name, &call_id, &modified_input, &result)
             .await;
 
         // Record tool metrics in OTel
         if let Some(otel) = &self.otel_manager {
-            otel.tool_result(&name, &call_id, "", tool_duration, !is_error, "");
+            otel.tool_result(&name, &call_id, "", tool_duration, result.is_ok(), "");
         }
 
         // Emit completed event
@@ -978,6 +995,11 @@ impl StreamingToolExecutor {
             builder = builder.skill_manager(sm.clone());
         }
 
+        // Add lsp_manager if available
+        if let Some(ref lm) = self.lsp_manager {
+            builder = builder.lsp_manager(lm.clone());
+        }
+
         // Add session_dir if available
         if let Some(ref dir) = self.config.session_dir {
             builder = builder.session_dir(dir.clone());
@@ -1003,10 +1025,10 @@ impl StreamingToolExecutor {
 
     /// Emit a loop event.
     async fn emit_event(&self, event: LoopEvent) {
-        if let Some(tx) = &self.event_tx {
-            if let Err(e) = tx.send(event).await {
-                debug!("Failed to send tool event: {e}");
-            }
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(event).await
+        {
+            debug!("Failed to send tool event: {e}");
         }
     }
 
@@ -1034,6 +1056,7 @@ impl StreamingToolExecutor {
     async fn execute_pre_hooks(
         &self,
         tool_name: &str,
+        tool_use_id: &str,
         input: Value,
     ) -> std::result::Result<PreHookOutcome, String> {
         let hooks = match &self.hooks {
@@ -1052,7 +1075,8 @@ impl StreamingToolExecutor {
             self.config.session_id.clone(),
             self.config.cwd.clone(),
         )
-        .with_tool(tool_name, input.clone());
+        .with_tool(tool_name, input.clone())
+        .with_tool_use_id(tool_use_id);
 
         let outcomes = hooks.execute(&ctx).await;
         let mut current_input = input;
@@ -1062,7 +1086,7 @@ impl StreamingToolExecutor {
         for outcome in outcomes {
             // Emit hook executed event
             self.emit_event(LoopEvent::HookExecuted {
-                hook_type: HookEventType::PreToolUse.into(),
+                hook_type: HookEventType::PreToolUse,
                 hook_name: outcome.hook_name.clone(),
             })
             .await;
@@ -1136,12 +1160,19 @@ impl StreamingToolExecutor {
     }
 
     /// Execute post-tool-use hooks.
-    async fn execute_post_hooks(&self, tool_name: &str, input: &Value, is_error: bool) {
+    async fn execute_post_hooks(
+        &self,
+        tool_name: &str,
+        tool_use_id: &str,
+        input: &Value,
+        result: &Result<ToolOutput>,
+    ) {
         run_post_hooks(
             self.hooks.as_deref(),
             tool_name,
+            tool_use_id,
             input,
-            is_error,
+            result,
             &self.config.session_id,
             &self.config.cwd,
         )
@@ -1156,8 +1187,9 @@ impl StreamingToolExecutor {
 async fn run_post_hooks(
     hooks: Option<&HookRegistry>,
     tool_name: &str,
+    tool_use_id: &str,
     input: &Value,
-    is_error: bool,
+    result: &Result<ToolOutput>,
     session_id: &str,
     cwd: &Path,
 ) {
@@ -1166,14 +1198,29 @@ async fn run_post_hooks(
         None => return,
     };
 
+    let is_error = result.is_err();
     let event_type = if is_error {
         HookEventType::PostToolUseFailure
     } else {
         HookEventType::PostToolUse
     };
 
-    let ctx = HookContext::new(event_type, session_id.to_string(), cwd.to_path_buf())
-        .with_tool(tool_name, input.clone());
+    let mut ctx = HookContext::new(event_type, session_id.to_string(), cwd.to_path_buf())
+        .with_tool(tool_name, input.clone())
+        .with_tool_use_id(tool_use_id);
+
+    // Enrich context with result-specific fields
+    match result {
+        Ok(output) => {
+            // Convert ToolResultContent to serde_json::Value for tool_response
+            if let Ok(response_value) = serde_json::to_value(&output.content) {
+                ctx = ctx.with_tool_response(response_value);
+            }
+        }
+        Err(e) => {
+            ctx = ctx.with_error(e.to_string());
+        }
+    }
 
     let outcomes = hooks.execute(&ctx).await;
     for outcome in outcomes {
@@ -1242,7 +1289,10 @@ fn is_read_only_or_plan_tool(name: &str) -> bool {
         "Read"
             | "Glob"
             | "Grep"
+            | "Task"
             | "TaskOutput"
+            | "WebFetch"
+            | "WebSearch"
             | "EnterPlanMode"
             | "ExitPlanMode"
             | "AskUserQuestion"
@@ -1385,10 +1435,9 @@ async fn check_permission_pipeline(
             file_path.as_deref(),
             crate::permission_rules::RuleAction::Allow,
             command_input.as_deref(),
-        ) {
-            if decision.result.is_allowed() {
-                return cocode_protocol::PermissionResult::Allowed;
-            }
+        ) && decision.result.is_allowed()
+        {
+            return cocode_protocol::PermissionResult::Allowed;
         }
     }
 
@@ -1471,16 +1520,19 @@ async fn execute_tool_inner(
     // Defense-in-depth: reject calls to feature-gated tools that are disabled.
     // Normally the model never sees these (definitions_filtered excludes them),
     // but a hallucinated or injected tool name could still reach here.
-    if let Some(feature) = tool.feature_gate() {
-        if !ctx.features.enabled(feature) {
-            return Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
-        }
+    if let Some(feature) = tool.feature_gate()
+        && !ctx.features.enabled(feature)
+    {
+        return Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
     }
 
     // Validate input
     let validation = tool.validate(&input).await;
     if let ValidationResult::Invalid { errors } = validation {
-        let error_msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        let error_msgs: Vec<String> = errors
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         return Err(crate::error::tool_error::InvalidInputSnafu {
             message: error_msgs.join(", "),
         }

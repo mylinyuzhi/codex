@@ -58,13 +58,13 @@ impl Token {
 fn tokenize(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut current_text = String::new();
-    let mut chars = text.chars().peekable();
+    let chars = text.chars().peekable();
     let mut in_mention = false;
     let mut in_command = false;
     let mut in_pill = false;
     let mut pill_buffer = String::new();
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         match c {
             '[' if !in_mention && !in_command && !in_pill => {
                 // Potential start of a paste pill

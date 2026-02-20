@@ -47,10 +47,10 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .timeout_secs(info.timeout_secs);
 
             // Handle organization ID from provider options
-            if let Some(options) = &info.options {
-                if let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str()) {
-                    builder = builder.organization_id(org_id);
-                }
+            if let Some(options) = &info.options
+                && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
+            {
+                builder = builder.organization_id(org_id);
             }
 
             Arc::new(builder.build().map_err(|e| {
@@ -106,10 +106,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .timeout_secs(info.timeout_secs);
 
             // Handle use_zhipuai from provider options
-            if let Some(options) = &info.options {
-                if let Some(use_zhipuai) = options.get("use_zhipuai").and_then(|v| v.as_bool()) {
-                    builder = builder.use_zhipuai(use_zhipuai);
-                }
+            if let Some(options) = &info.options
+                && let Some(use_zhipuai) = options
+                    .get("use_zhipuai")
+                    .and_then(serde_json::Value::as_bool)
+            {
+                builder = builder.use_zhipuai(use_zhipuai);
             }
 
             Arc::new(builder.build().map_err(|e| {

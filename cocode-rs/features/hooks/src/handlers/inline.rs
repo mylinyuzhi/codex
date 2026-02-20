@@ -12,7 +12,7 @@ use crate::result::HookResult;
 /// receives a `HookContext` and returns a `HookResult`.
 ///
 /// Inline handlers are not serializable and must be registered through the
-/// `HookRegistry` API (not via TOML config).
+/// `HookRegistry` API (not via JSON config).
 pub type InlineHandler = Box<dyn Fn(&HookContext) -> HookResult + Send + Sync>;
 
 #[cfg(test)]

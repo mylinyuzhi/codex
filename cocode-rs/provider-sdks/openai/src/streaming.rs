@@ -188,10 +188,10 @@ impl SSEDecoder {
                     buffer.drain(..skip); // Remove line ending
 
                     // Decode as UTF-8
-                    if let Ok(line) = std::str::from_utf8(&line_bytes) {
-                        if let Some(event) = self.decode(line) {
-                            events.push(event);
-                        }
+                    if let Ok(line) = std::str::from_utf8(&line_bytes)
+                        && let Some(event) = self.decode(line)
+                    {
+                        events.push(event);
                     }
                 }
                 None => break,
@@ -396,22 +396,21 @@ where
 
     // Process any remaining data in buffer
     if !buffer.is_empty() {
-        if let Ok(line) = std::str::from_utf8(&buffer) {
-            if let Some(sse) = decoder.decode(line) {
-                if sse.has_data() && !sse.data.starts_with("[DONE]") {
-                    if let Ok(event) = sse.json::<ResponseStreamEvent>() {
-                        let _ = tx.send(Ok(event)).await;
-                    }
-                }
-            }
+        if let Ok(line) = std::str::from_utf8(&buffer)
+            && let Some(sse) = decoder.decode(line)
+            && sse.has_data()
+            && !sse.data.starts_with("[DONE]")
+            && let Ok(event) = sse.json::<ResponseStreamEvent>()
+        {
+            let _ = tx.send(Ok(event)).await;
         }
         // Trigger final event emission with empty line
-        if let Some(sse) = decoder.decode("") {
-            if sse.has_data() && !sse.data.starts_with("[DONE]") {
-                if let Ok(event) = sse.json::<ResponseStreamEvent>() {
-                    let _ = tx.send(Ok(event)).await;
-                }
-            }
+        if let Some(sse) = decoder.decode("")
+            && sse.has_data()
+            && !sse.data.starts_with("[DONE]")
+            && let Ok(event) = sse.json::<ResponseStreamEvent>()
+        {
+            let _ = tx.send(Ok(event)).await;
         }
     }
 }

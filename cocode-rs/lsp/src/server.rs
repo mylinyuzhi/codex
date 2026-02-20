@@ -112,6 +112,17 @@ impl LspServerManager {
         debug!("LSP configuration reloaded");
     }
 
+    /// Merge additional server configurations at runtime.
+    ///
+    /// This is used by the plugin system to register plugin-contributed LSP
+    /// servers. Merged servers are available on-demand when matching file
+    /// types are opened.
+    pub async fn merge_config(&self, other: LspServersConfig) {
+        let mut config = self.config.write().await;
+        config.merge(other);
+        debug!("LSP configuration merged");
+    }
+
     /// Get or create a client for a file
     pub async fn get_client(&self, file_path: &Path) -> Result<Arc<LspClient>> {
         let file_path = match file_path.canonicalize() {

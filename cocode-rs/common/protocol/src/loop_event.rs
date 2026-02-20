@@ -175,6 +175,8 @@ pub enum LoopEvent {
         agent_type: String,
         /// Description of what the agent will do.
         description: String,
+        /// Display color from agent definition (for TUI rendering).
+        color: Option<String>,
     },
     /// Progress update from a sub-agent.
     SubagentProgress {
@@ -523,6 +525,17 @@ pub enum LoopEvent {
         queued: i32,
     },
 
+    // ========== Plugin Events ==========
+    /// Plugin agents have been loaded and are available for use.
+    ///
+    /// Emitted after session initialization when plugin agents are registered
+    /// with the subagent manager. The TUI uses this to update its agent
+    /// autocomplete.
+    PluginAgentsLoaded {
+        /// Agent definitions (name, agent_type, description).
+        agents: Vec<PluginAgentInfo>,
+    },
+
     // ========== Errors & Control ==========
     /// An error occurred in the loop.
     Error {
@@ -533,6 +546,17 @@ pub enum LoopEvent {
     Interrupted,
     /// Maximum turns reached.
     MaxTurnsReached,
+}
+
+/// Lightweight agent info for plugin agent events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAgentInfo {
+    /// Agent name (display name).
+    pub name: String,
+    /// Agent type identifier (used in @agent-type mentions).
+    pub agent_type: String,
+    /// Short description of what the agent does.
+    pub description: String,
 }
 
 /// Raw SSE event from the stream.
@@ -808,6 +832,30 @@ impl HookEventType {
 impl std::fmt::Display for HookEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for HookEventType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PreToolUse" | "pre_tool_use" => Ok(Self::PreToolUse),
+            "PostToolUse" | "post_tool_use" => Ok(Self::PostToolUse),
+            "PostToolUseFailure" | "post_tool_use_failure" => Ok(Self::PostToolUseFailure),
+            "UserPromptSubmit" | "user_prompt_submit" => Ok(Self::UserPromptSubmit),
+            "SessionStart" | "session_start" => Ok(Self::SessionStart),
+            "SessionEnd" | "session_end" => Ok(Self::SessionEnd),
+            "Stop" | "stop" => Ok(Self::Stop),
+            "SubagentStart" | "subagent_start" => Ok(Self::SubagentStart),
+            "SubagentStop" | "subagent_stop" => Ok(Self::SubagentStop),
+            "PreCompact" | "pre_compact" => Ok(Self::PreCompact),
+            "Notification" | "notification" => Ok(Self::Notification),
+            "PermissionRequest" | "permission_request" => Ok(Self::PermissionRequest),
+            "TeammateIdle" | "teammate_idle" => Ok(Self::TeammateIdle),
+            "TaskCompleted" | "task_completed" => Ok(Self::TaskCompleted),
+            other => Err(format!("unknown hook event type: {other}")),
+        }
     }
 }
 

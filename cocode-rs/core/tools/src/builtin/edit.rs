@@ -81,15 +81,15 @@ impl EditTool {
         }
 
         // Create parent directories
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|e| {
-                    crate::error::tool_error::ExecutionFailedSnafu {
-                        message: format!("Failed to create directory: {e}"),
-                    }
-                    .build()
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to create directory: {e}"),
+                }
+                .build()
+            })?;
         }
 
         // Write file with UTF-8 / LF defaults (same as Write tool for new files)
@@ -189,17 +189,16 @@ impl Tool for EditTool {
             }
 
             // Plan mode: only plan file allowed
-            if ctx.is_plan_mode {
-                if let Some(ref plan_file) = ctx.plan_file_path {
-                    if path != *plan_file {
-                        return PermissionResult::Denied {
-                            reason: format!(
-                                "Plan mode: cannot edit '{}'. Only the plan file can be modified.",
-                                path.display()
-                            ),
-                        };
-                    }
-                }
+            if ctx.is_plan_mode
+                && let Some(ref plan_file) = ctx.plan_file_path
+                && path != *plan_file
+            {
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Plan mode: cannot edit '{}'. Only the plan file can be modified.",
+                        path.display()
+                    ),
+                };
             }
 
             // Sensitive file → NeedsApproval (high severity)
@@ -361,19 +360,19 @@ impl Tool for EditTool {
         let line_ending = detect_line_ending(&content);
 
         // ── SHA256 staleness check ──────────────────────────────────
-        if let Some(read_state) = ctx.file_read_state(&path).await {
-            if let Some(ref stored_hash) = read_state.content_hash {
-                let normalized = normalize_line_endings(&content, LineEnding::Lf);
-                let current_hash = FileReadState::compute_hash(&normalized);
-                if *stored_hash != current_hash {
-                    return Err(crate::error::tool_error::ExecutionFailedSnafu {
+        if let Some(read_state) = ctx.file_read_state(&path).await
+            && let Some(ref stored_hash) = read_state.content_hash
+        {
+            let normalized = normalize_line_endings(&content, LineEnding::Lf);
+            let current_hash = FileReadState::compute_hash(&normalized);
+            if *stored_hash != current_hash {
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
                         message: format!(
                             "File has been modified externally since last read: {}. Read the file again before editing.",
                             path.display()
                         ),
                     }
                     .build());
-                }
             }
         }
 

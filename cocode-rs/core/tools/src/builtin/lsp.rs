@@ -114,6 +114,7 @@ impl Tool for LspTool {
         Some(cocode_protocol::Feature::Lsp)
     }
 
+    #[allow(clippy::unwrap_used)]
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let manager = ctx.lsp_manager.as_ref().ok_or_else(|| {
             tool_error::ExecutionFailedSnafu {

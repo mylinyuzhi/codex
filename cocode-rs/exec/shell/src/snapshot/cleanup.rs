@@ -76,11 +76,11 @@ pub async fn cleanup_stale_snapshots(
             }
         };
 
-        if let Ok(age) = now.duration_since(modified) {
-            if age >= retention {
-                remove_snapshot_file(&path).await;
-                removed_count += 1;
-            }
+        if let Ok(age) = now.duration_since(modified)
+            && age >= retention
+        {
+            remove_snapshot_file(&path).await;
+            removed_count += 1;
         }
     }
 
@@ -107,10 +107,10 @@ pub async fn cleanup_session_snapshots(snapshot_dir: &Path, session_id: &str) ->
         let file_name = file_name.to_string_lossy();
 
         // Check if this file belongs to the target session
-        if let Some((stem, _ext)) = file_name.rsplit_once('.') {
-            if stem == session_id {
-                remove_snapshot_file(&entry.path()).await;
-            }
+        if let Some((stem, _ext)) = file_name.rsplit_once('.')
+            && stem == session_id
+        {
+            remove_snapshot_file(&entry.path()).await;
         }
     }
 

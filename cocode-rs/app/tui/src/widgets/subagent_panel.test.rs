@@ -16,6 +16,7 @@ fn create_test_subagents() -> Vec<SubagentInstance> {
             }),
             result: None,
             output_file: None,
+            color: None,
         },
         SubagentInstance {
             id: "agent-2".to_string(),
@@ -25,6 +26,7 @@ fn create_test_subagents() -> Vec<SubagentInstance> {
             progress: None,
             result: Some("Plan created".to_string()),
             output_file: None,
+            color: None,
         },
     ]
 }
@@ -40,7 +42,11 @@ fn test_panel_creation() {
 
     panel.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Subagents"));
 }
 
@@ -56,7 +62,11 @@ fn test_empty_panel() {
     panel.render(area, &mut buf);
 
     // Should still render the border
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Subagents"));
 }
 
@@ -67,13 +77,14 @@ fn test_max_display() {
     // Add more subagents
     for i in 3..10 {
         subagents.push(SubagentInstance {
-            id: format!("agent-{}", i),
+            id: format!("agent-{i}"),
             agent_type: "Test".to_string(),
-            description: format!("Test agent {}", i),
+            description: format!("Test agent {i}"),
             status: SubagentStatus::Running,
             progress: None,
             result: None,
             output_file: None,
+            color: None,
         });
     }
 
@@ -84,6 +95,10 @@ fn test_max_display() {
 
     panel.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("more"));
 }

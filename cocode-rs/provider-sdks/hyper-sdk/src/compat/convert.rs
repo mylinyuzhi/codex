@@ -28,15 +28,15 @@ pub fn json_to_request(json: &Value) -> Result<GenerateRequest, HyperError> {
 
     let mut request = GenerateRequest::new(messages);
 
-    if let Some(temp) = json.get("temperature").and_then(|v| v.as_f64()) {
+    if let Some(temp) = json.get("temperature").and_then(serde_json::Value::as_f64) {
         request = request.temperature(temp);
     }
 
-    if let Some(max) = json.get("max_tokens").and_then(|v| v.as_i64()) {
+    if let Some(max) = json.get("max_tokens").and_then(serde_json::Value::as_i64) {
         request = request.max_tokens(max as i32);
     }
 
-    if let Some(top_p) = json.get("top_p").and_then(|v| v.as_f64()) {
+    if let Some(top_p) = json.get("top_p").and_then(serde_json::Value::as_f64) {
         request = request.top_p(top_p);
     }
 
@@ -154,7 +154,7 @@ fn json_to_content_block(json: &Value) -> Result<ContentBlock, HyperError> {
             };
             let is_error = json
                 .get("is_error")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             Ok(ContentBlock::tool_result(tool_use_id, content, is_error))
         }

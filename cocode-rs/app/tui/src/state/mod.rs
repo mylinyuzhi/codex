@@ -36,6 +36,7 @@ pub use ui::SessionSummary;
 pub use ui::SkillSuggestionItem;
 pub use ui::SkillSuggestionState;
 pub use ui::StreamingState;
+pub use ui::SuggestionState;
 pub use ui::SymbolSuggestionItem;
 pub use ui::SymbolSuggestionState;
 pub use ui::UiState;

@@ -7,9 +7,24 @@ const SYSTEM_BLOCKED: &[&str] = &[
     "ExitPlanMode",
     "TaskStop",
     "AskUserQuestion",
+    "EnterWorktree",
 ];
 
-/// Apply three-layer tool filtering for a subagent.
+/// Tools safe for async/background execution (no user interaction required).
+const ASYNC_SAFE_TOOLS: &[&str] = &[
+    "Read",
+    "Edit",
+    "Write",
+    "Glob",
+    "Grep",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "NotebookEdit",
+    "TaskOutput",
+];
+
+/// Apply four-layer tool filtering for a subagent.
 ///
 /// Filtering is applied in order:
 ///
@@ -18,8 +33,8 @@ const SYSTEM_BLOCKED: &[&str] = &[
 ///    those tools are retained.
 /// 3. **Definition deny-list** - tools in `definition.disallowed_tools` are
 ///    removed.
-///
-/// When `background` is `true`, additional interactive tools are blocked.
+/// 4. **Background filter** - when `background` is `true`, only tools in
+///    `ASYNC_SAFE_TOOLS` are retained.
 pub fn filter_tools_for_agent(
     all_tools: &[String],
     definition: &AgentDefinition,
@@ -41,12 +56,9 @@ pub fn filter_tools_for_agent(
         result.retain(|t| !definition.disallowed_tools.contains(t));
     }
 
-    // Background agents cannot use interactive tools.
-    // Note: AskUserQuestion is already in SYSTEM_BLOCKED for all subagents.
-    // This filter catches any additional interactive tools not in SYSTEM_BLOCKED.
+    // Layer 4: background agents can only use async-safe tools.
     if background {
-        let interactive_blocked: &[&str] = &[];
-        result.retain(|t| !interactive_blocked.contains(&t.as_str()));
+        result.retain(|t| ASYNC_SAFE_TOOLS.contains(&t.as_str()));
     }
 
     result

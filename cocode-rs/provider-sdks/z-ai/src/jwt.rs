@@ -68,10 +68,10 @@ impl JwtTokenCache {
         // Check cache first
         {
             let cache = self.cache.read().await;
-            if let Some(ref cached) = *cache {
-                if cached.created_at.elapsed() < CACHE_TTL {
-                    return Ok(cached.token.clone());
-                }
+            if let Some(ref cached) = *cache
+                && cached.created_at.elapsed() < CACHE_TTL
+            {
+                return Ok(cached.token.clone());
             }
         }
 

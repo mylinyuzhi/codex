@@ -268,6 +268,6 @@ fn test_jitter_ratio_clamped() {
 fn test_simple_random_produces_valid_range() {
     for _ in 0..100 {
         let r = simple_random();
-        assert!(r >= 0.0 && r <= 1.0);
+        assert!((0.0..=1.0).contains(&r));
     }
 }

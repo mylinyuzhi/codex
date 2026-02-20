@@ -229,16 +229,16 @@ impl RepoMapCache {
                     .ok();
 
                 // If DB has a newer version (higher mtime), skip write
-                if let Some(db_mtime) = existing_mtime {
-                    if db_mtime > file_mtime {
-                        tracing::debug!(
-                            filepath = %fp,
-                            db_mtime = db_mtime,
-                            expected_mtime = file_mtime,
-                            "Skipping put_tags: DB has newer version"
-                        );
-                        return Ok(false);
-                    }
+                if let Some(db_mtime) = existing_mtime
+                    && db_mtime > file_mtime
+                {
+                    tracing::debug!(
+                        filepath = %fp,
+                        db_mtime = db_mtime,
+                        expected_mtime = file_mtime,
+                        "Skipping put_tags: DB has newer version"
+                    );
+                    return Ok(false);
                 }
 
                 // Delete old entries and insert new ones

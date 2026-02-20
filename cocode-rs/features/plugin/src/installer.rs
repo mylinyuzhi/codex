@@ -15,6 +15,8 @@ use crate::marketplace_manager::MarketplaceManager;
 use crate::marketplace_types::MarketplacePluginSource;
 use crate::marketplace_types::MarketplaceSource;
 use crate::plugin_settings::PluginSettings;
+use crate::policy::PluginPolicy;
+use crate::policy::PolicyDecision;
 use crate::scope::PluginScope;
 
 /// Result of a successful installation.
@@ -54,7 +56,19 @@ impl PluginInstaller {
     }
 
     /// Install a plugin from a marketplace.
+    ///
+    /// Checks enterprise policy before proceeding with installation.
     pub async fn install(&self, plugin_id: &str, scope: PluginScope) -> Result<InstallResult> {
+        // Check enterprise policy
+        let policy = PluginPolicy::load(&crate::policy::policy_path(&self.plugins_dir));
+        if let PolicyDecision::Deny(reason) = policy.check_plugin(plugin_id) {
+            return Err(InstallationFailedSnafu {
+                plugin_id: plugin_id.to_string(),
+                message: reason,
+            }
+            .build());
+        }
+
         let marketplace = MarketplaceManager::new(self.plugins_dir.clone());
         let found = marketplace.find_plugin(plugin_id).ok_or_else(|| {
             InstallationFailedSnafu {
@@ -63,6 +77,15 @@ impl PluginInstaller {
             }
             .build()
         })?;
+
+        // Check marketplace policy
+        if let PolicyDecision::Deny(reason) = policy.check_marketplace(&found.marketplace_name) {
+            return Err(InstallationFailedSnafu {
+                plugin_id: plugin_id.to_string(),
+                message: reason,
+            }
+            .build());
+        }
 
         // Determine where to fetch the plugin source from
         let tmp_path =
@@ -103,12 +126,12 @@ impl PluginInstaller {
         };
 
         // Read manifest from source to get version
-        let manifest_path = source_dir.join("PLUGIN.toml");
+        let manifest_path = source_dir.join("plugin.json");
         let manifest_version = if manifest_path.exists() {
             std::fs::read_to_string(&manifest_path)
                 .ok()
                 .and_then(|content| {
-                    let manifest: toml::Value = toml::from_str(&content).ok()?;
+                    let manifest: serde_json::Value = serde_json::from_str(&content).ok()?;
                     manifest
                         .get("plugin")?
                         .get("version")?
@@ -266,7 +289,7 @@ async fn clone_source(source: &MarketplaceSource, target: &std::path::Path) -> R
                 }
                 .build()
             })?;
-            std::fs::copy(path, target.join("PLUGIN.toml")).map_err(|e| {
+            std::fs::copy(path, target.join("plugin.json")).map_err(|e| {
                 InstallationFailedSnafu {
                     plugin_id: path.display().to_string(),
                     message: format!("Failed to copy: {e}"),
@@ -324,16 +347,16 @@ async fn clone_source(source: &MarketplaceSource, target: &std::path::Path) -> R
                     let _ = std::fs::remove_file(&tar_path);
                 }
                 _ => {
-                    // Not a tarball — treat the downloaded file as PLUGIN.toml directly
-                    let _ = std::fs::rename(&tar_path, target.join("PLUGIN.toml"));
+                    // Not a tarball — treat the downloaded file as plugin.json directly
+                    let _ = std::fs::rename(&tar_path, target.join("plugin.json"));
                 }
             }
 
-            // Verify PLUGIN.toml exists
-            if !target.join("PLUGIN.toml").exists() {
+            // Verify plugin.json exists
+            if !target.join("plugin.json").exists() {
                 return Err(InstallationFailedSnafu {
                     plugin_id: url.clone(),
-                    message: "Downloaded content does not contain PLUGIN.toml".to_string(),
+                    message: "Downloaded content does not contain plugin.json".to_string(),
                 }
                 .build());
             }

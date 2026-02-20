@@ -69,6 +69,7 @@ pub enum CellType {
     Raw,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 impl CellType {
     fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
@@ -287,16 +288,14 @@ impl Tool for NotebookEditTool {
         }
 
         // Plan mode check
-        if ctx.is_plan_mode {
-            if !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
-                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+        if ctx.is_plan_mode && !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
                         "Plan mode: cannot edit '{}'. Only the plan file can be modified during plan mode.",
                         path.display()
                     ),
                 }
                 .build());
-            }
         }
 
         // Verify file was read first
@@ -360,10 +359,10 @@ impl Tool for NotebookEditTool {
                 })?;
 
                 // Update cell type if specified
-                if let Some(ct_str) = cell_type_str {
-                    if let Some(ct) = CellType::from_str(ct_str) {
-                        cell.cell_type = ct.as_str().to_string();
-                    }
+                if let Some(ct_str) = cell_type_str
+                    && let Some(ct) = CellType::from_str(ct_str)
+                {
+                    cell.cell_type = ct.as_str().to_string();
                 }
 
                 // Update source

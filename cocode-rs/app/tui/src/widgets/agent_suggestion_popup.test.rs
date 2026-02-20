@@ -2,7 +2,7 @@ use super::*;
 use crate::state::AgentSuggestionItem;
 
 fn create_test_state() -> AgentSuggestionState {
-    let mut state = AgentSuggestionState::new("agent-exp".to_string(), 0);
+    let mut state = AgentSuggestionState::new("agent-exp".to_string(), 0, false);
     state.update_suggestions(vec![
         AgentSuggestionItem {
             agent_type: "explore".to_string(),
@@ -47,13 +47,17 @@ fn test_popup_render() {
     popup.render(area, &mut buf);
 
     // Should contain the query
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("agent-exp"));
 }
 
 #[test]
 fn test_empty_suggestions() {
-    let mut state = AgentSuggestionState::new("agent-xyz".to_string(), 0);
+    let mut state = AgentSuggestionState::new("agent-xyz".to_string(), 0, false);
     state.update_suggestions(vec![]);
     let theme = Theme::default();
     let popup = AgentSuggestionPopup::new(&state, &theme);
@@ -63,6 +67,10 @@ fn test_empty_suggestions() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("No matching"));
 }

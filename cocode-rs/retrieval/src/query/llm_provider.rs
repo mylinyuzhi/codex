@@ -156,7 +156,7 @@ impl LlmProvider for OpenAiProvider {
         for attempt in 0..=self.config.max_retries {
             let response = self
                 .client
-                .post(&self.endpoint())
+                .post(self.endpoint())
                 .header("Authorization", format!("Bearer {api_key}"))
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -373,10 +373,11 @@ fn extract_json(s: &str) -> &str {
     let s = s.trim();
 
     // Try to parse as-is first (fast path)
-    if s.starts_with('{') && s.ends_with('}') {
-        if serde_json::from_str::<serde_json::Value>(s).is_ok() {
-            return s;
-        }
+    if s.starts_with('{')
+        && s.ends_with('}')
+        && serde_json::from_str::<serde_json::Value>(s).is_ok()
+    {
+        return s;
     }
 
     // Find balanced JSON object using depth tracking

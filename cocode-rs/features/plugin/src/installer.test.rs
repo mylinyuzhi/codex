@@ -32,15 +32,17 @@ fn setup_marketplace_with_plugin(base: &std::path::Path) -> PathBuf {
     let plugin_dir = market_dir.join("plugins").join("test-plugin");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(
-        plugin_dir.join("PLUGIN.toml"),
-        r#"[plugin]
-name = "test-plugin"
-version = "1.0.0"
-description = "A test plugin"
-
-[contributions]
-skills = ["skills/"]
-"#,
+        plugin_dir.join("plugin.json"),
+        r#"{
+  "plugin": {
+    "name": "test-plugin",
+    "version": "1.0.0",
+    "description": "A test plugin"
+  },
+  "contributions": {
+    "skills": ["skills/"]
+  }
+}"#,
     )
     .unwrap();
 
@@ -48,11 +50,8 @@ skills = ["skills/"]
     let skill_dir = plugin_dir.join("skills").join("greet");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(
-        skill_dir.join("SKILL.toml"),
-        r#"name = "greet"
-description = "Greet the user"
-prompt_inline = "Say hello!"
-"#,
+        skill_dir.join("SKILL.md"),
+        "---\nname: greet\ndescription: Greet the user\n---\nSay hello!\n",
     )
     .unwrap();
 

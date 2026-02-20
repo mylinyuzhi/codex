@@ -67,6 +67,7 @@ pub struct FileTracker {
     nested_memory_triggers: RwLock<HashSet<PathBuf>>,
 }
 
+#[allow(clippy::expect_used)]
 impl FileTracker {
     /// Create a new file tracker.
     pub fn new() -> Self {
@@ -189,10 +190,10 @@ impl FileTracker {
         let path = path.as_ref();
         let mut files = self.files.write().expect("lock poisoned");
 
-        if let Some(state) = files.get_mut(path) {
-            if let Ok(meta) = std::fs::metadata(path) {
-                state.last_modified = meta.modified().ok();
-            }
+        if let Some(state) = files.get_mut(path)
+            && let Ok(meta) = std::fs::metadata(path)
+        {
+            state.last_modified = meta.modified().ok();
         }
     }
 

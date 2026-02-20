@@ -50,6 +50,7 @@ pub enum Mode {
     Help,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 impl Mode {
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -84,6 +85,7 @@ pub enum Operation {
     ConfigureServers,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 impl Operation {
     pub fn all() -> &'static [Operation] {
         &[
@@ -266,10 +268,10 @@ impl std::fmt::Display for LspErrorContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}] {}", self.operation, self.error)?;
         if let Some(ref file) = self.file {
-            write!(f, " (file: {})", file)?;
+            write!(f, " (file: {file})")?;
         }
         if let Some(ref symbol) = self.symbol {
-            write!(f, " (symbol: {})", symbol)?;
+            write!(f, " (symbol: {symbol})")?;
         }
         Ok(())
     }
@@ -422,8 +424,7 @@ impl App {
         match event {
             InstallEvent::Started { server_id, method } => {
                 self.install_output.push(format!(
-                    "Starting installation of {} using {}...",
-                    server_id, method
+                    "Starting installation of {server_id} using {method}..."
                 ));
             }
             InstallEvent::Output(line) => {
@@ -431,12 +432,12 @@ impl App {
             }
             InstallEvent::Completed { server_id } => {
                 self.install_output
-                    .push(format!("Successfully installed {}!", server_id));
+                    .push(format!("Successfully installed {server_id}!"));
                 self.install_output.push(String::new());
                 self.install_output.push(
                     "Binary installed. Use 'Configure Servers' to add to config.".to_string(),
                 );
-                self.status_message = Some(format!("{} binary installed!", server_id));
+                self.status_message = Some(format!("{server_id} binary installed!"));
                 self.loading = false;
 
                 // Refresh server list to show new installation status
@@ -444,8 +445,8 @@ impl App {
             }
             InstallEvent::Failed { server_id, error } => {
                 self.install_output
-                    .push(format!("ERROR: Failed to install {}: {}", server_id, error));
-                self.status_message = Some(format!("Failed to install {}", server_id));
+                    .push(format!("ERROR: Failed to install {server_id}: {error}"));
+                self.status_message = Some(format!("Failed to install {server_id}"));
                 self.loading = false;
             }
         }
@@ -817,7 +818,7 @@ impl App {
                             server
                                 .config_level
                                 .as_ref()
-                                .map(|l| l.to_string())
+                                .map(std::string::ToString::to_string)
                                 .unwrap_or_default()
                         ));
                     }
@@ -996,10 +997,8 @@ impl App {
             if let Err(e) = LspServersConfig::add_server_to_file(&dir, server_id) {
                 self.status_message = Some(format!("Failed to add server: {e}"));
             } else {
-                self.status_message = Some(format!(
-                    "{} added to config. Restart to activate.",
-                    server_id
-                ));
+                self.status_message =
+                    Some(format!("{server_id} added to config. Restart to activate."));
             }
         }
         Ok(())
@@ -1038,7 +1037,7 @@ impl App {
         let (progress_tx, mut progress_rx) = mpsc::channel::<InstallEvent>(100);
 
         // Spawn installer task
-        let server_id_clone = server_id.clone();
+        let server_id_clone = server_id;
         tokio::spawn(async move {
             let installer = LspInstaller::new(Some(progress_tx));
             let _ = installer.install_server(&server_id_clone).await;

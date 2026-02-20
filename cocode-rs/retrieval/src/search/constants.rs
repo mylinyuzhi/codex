@@ -12,7 +12,7 @@ pub const SECONDS_PER_DAY: f32 = 86400.0;
 ///
 /// ln(2) = 0.693147180559945...
 /// Used in half-life decay formula: score = exp(-ln(2) * age / half_life)
-pub const LN_2: f32 = 0.693147180559945;
+pub const LN_2: f32 = std::f32::consts::LN_2;
 
 /// Default RRF (Reciprocal Rank Fusion) k parameter.
 ///

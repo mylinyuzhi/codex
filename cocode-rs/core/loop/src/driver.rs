@@ -216,6 +216,10 @@ pub struct AgentLoop {
     // OpenTelemetry
     /// Optional OTel manager for metrics and traces.
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+
+    // LSP
+    /// Optional LSP server manager for language intelligence tools.
+    lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -247,6 +251,7 @@ pub struct AgentLoopBuilder {
     web_fetch_config: cocode_protocol::WebFetchConfig,
     permission_rules: Vec<cocode_tools::PermissionRule>,
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+    lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
 }
 
 impl AgentLoopBuilder {
@@ -280,6 +285,7 @@ impl AgentLoopBuilder {
             web_fetch_config: cocode_protocol::WebFetchConfig::default(),
             permission_rules: Vec::new(),
             otel_manager: None,
+            lsp_manager: None,
         }
     }
 
@@ -464,6 +470,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the LSP server manager for language intelligence tools.
+    pub fn lsp_manager(mut self, manager: Arc<cocode_lsp::LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
+        self
+    }
+
     /// Set the OTel manager for metrics and traces.
     pub fn otel_manager(mut self, otel: Option<Arc<cocode_otel::OtelManager>>) -> Self {
         self.otel_manager = otel;
@@ -475,6 +487,7 @@ impl AgentLoopBuilder {
     /// # Panics
     /// Panics if required fields (`api_client`, `tool_registry`,
     /// `context`, `event_tx`, `model_hub`, `selections`) have not been set.
+    #[allow(clippy::expect_used)]
     pub fn build(self) -> AgentLoop {
         let model_name = self
             .config
@@ -496,7 +509,7 @@ impl AgentLoopBuilder {
             .unwrap_or_else(|| watch::channel(AgentStatus::default()).0);
 
         let context = self.context.expect("context is required");
-        let cwd: std::path::PathBuf = context.environment.cwd.clone().into();
+        let cwd: std::path::PathBuf = context.environment.cwd.clone();
         let shell_executor = self
             .shell_executor
             .unwrap_or_else(|| ShellExecutor::new(cwd));
@@ -542,6 +555,7 @@ impl AgentLoopBuilder {
             permission_rules: self.permission_rules,
             status_tx,
             otel_manager: self.otel_manager,
+            lsp_manager: self.lsp_manager,
         }
     }
 }
@@ -564,6 +578,7 @@ impl AgentLoop {
     /// injected as steering system-reminders. The steering prompt asks the model
     /// to address the message and continue, so no separate post-idle execution
     /// is needed (consume-then-remove pattern).
+    #[allow(clippy::unwrap_used)]
     pub fn queue_command(&self, prompt: impl Into<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -578,11 +593,13 @@ impl AgentLoop {
     }
 
     /// Drain all queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
         std::mem::take(&mut *self.queued_commands.lock().unwrap())
     }
 
     /// Get the number of queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn queued_count(&self) -> usize {
         self.queued_commands.lock().unwrap().len()
     }
@@ -647,12 +664,18 @@ impl AgentLoop {
 
         // Execute SessionStart hooks at real session start (turn_number == 0 means first run)
         if self.turn_number == 0 {
+            let model_name = self
+                .config
+                .fallback_model
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
             let ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::SessionStart,
                 session_id.clone(),
                 self.context.environment.cwd.clone(),
             )
-            .with_metadata("source", "init");
+            .with_source("startup")
+            .with_model(model_name);
             self.execute_lifecycle_hooks(ctx).await;
         }
 
@@ -663,7 +686,7 @@ impl AgentLoop {
                 session_id.clone(),
                 self.context.environment.cwd.clone(),
             )
-            .with_metadata("prompt", initial_message);
+            .with_prompt(initial_message);
             self.execute_lifecycle_hooks(ctx).await;
         }
 
@@ -691,21 +714,40 @@ impl AgentLoop {
 
         // Execute Stop hooks when the agent loop finishes
         {
-            let ctx = cocode_hooks::HookContext::new(
+            let mut ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::Stop,
                 session_id.clone(),
                 self.context.environment.cwd.clone(),
-            );
+            )
+            .with_stop_hook_active(false);
+            // Pass last assistant message if available
+            if let Ok(ref loop_result) = result {
+                if !loop_result.final_text.is_empty() {
+                    ctx = ctx.with_last_assistant_message(&loop_result.final_text);
+                }
+            }
             self.execute_lifecycle_hooks(ctx).await;
         }
 
         // Execute SessionEnd hooks to signal session lifecycle completion
         {
+            let reason = match &result {
+                Ok(r) => match r.stop_reason {
+                    crate::result::StopReason::MaxTurnsReached => "max_turns",
+                    crate::result::StopReason::ModelStopSignal => "end_turn",
+                    crate::result::StopReason::UserInterrupted => "user_interrupted",
+                    crate::result::StopReason::Error { .. } => "error",
+                    crate::result::StopReason::PlanModeExit { .. } => "plan_mode_exit",
+                    crate::result::StopReason::HookStopped => "hook_stopped",
+                },
+                Err(_) => "error",
+            };
             let ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::SessionEnd,
                 session_id,
                 self.context.environment.cwd.clone(),
-            );
+            )
+            .with_reason(reason);
             self.execute_lifecycle_hooks(ctx).await;
         }
 
@@ -912,7 +954,7 @@ impl AgentLoop {
 
         // Add hook state to generator context
         gen_ctx_builder = gen_ctx_builder.hook_state(HookState {
-            async_responses: async_responses,
+            async_responses,
             contexts: context_hooks,
             blocking: blocking_hooks,
         });
@@ -960,6 +1002,7 @@ impl AgentLoop {
         // The shared Mutex allows the TUI driver to push new commands while the
         // loop is running; they will be picked up on the next iteration.
         {
+            #[allow(clippy::unwrap_used)]
             let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
             if !drained.is_empty() {
                 gen_ctx_builder = gen_ctx_builder.queued_commands(drained);
@@ -1010,7 +1053,7 @@ impl AgentLoop {
         let executor_config = ExecutorConfig {
             session_id: query_tracking.chain_id.clone(),
             permission_mode: self.config.permission_mode,
-            cwd: self.context.environment.cwd.clone().into(),
+            cwd: self.context.environment.cwd.clone(),
             is_plan_mode: self.plan_mode_state.is_active,
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
             features: self.features.clone(),
@@ -1073,6 +1116,11 @@ impl AgentLoop {
         // Add skill_manager if available for Skill tool
         if let Some(ref sm) = self.skill_manager {
             executor = executor.with_skill_manager(sm.clone());
+        }
+
+        // Add LSP server manager if available
+        if let Some(ref lm) = self.lsp_manager {
+            executor = executor.with_lsp_manager(lm.clone());
         }
 
         // Share invoked skills tracker with the executor so the driver
@@ -1139,8 +1187,8 @@ impl AgentLoop {
             self.total_output_tokens += usage.output_tokens as i32;
 
             if let Some(otel) = &self.otel_manager {
-                otel.histogram("cocode.api.input_tokens", usage.input_tokens as i64, &[]);
-                otel.histogram("cocode.api.output_tokens", usage.output_tokens as i64, &[]);
+                otel.histogram("cocode.api.input_tokens", usage.input_tokens, &[]);
+                otel.histogram("cocode.api.output_tokens", usage.output_tokens, &[]);
                 if let Some(cached) = usage.cache_read_tokens {
                     otel.histogram("cocode.api.cached_tokens", cached, &[]);
                 }
@@ -1230,26 +1278,24 @@ impl AgentLoop {
                 match tc.name.as_str() {
                     "EnterPlanMode" => {
                         // Find the result for this tool call to extract plan file path
-                        if let Some(result) = results.iter().find(|r| r.call_id == tc.id) {
-                            if let Ok(output) = &result.result {
-                                // Extract plan file path from output
-                                // The output is text containing "Plan file: /path/to/file"
-                                if let ToolResultContent::Text(text) = &output.content {
-                                    if let Some(path_line) =
-                                        text.lines().find(|l| l.starts_with("Plan file:"))
-                                    {
-                                        let path_str =
-                                            path_line.trim_start_matches("Plan file:").trim();
-                                        let path = std::path::PathBuf::from(path_str);
-                                        let slug = path
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("plan")
-                                            .to_string();
-                                        self.plan_mode_state.enter(path, slug, self.turn_number);
-                                        info!(turn = self.turn_number, "Entered plan mode");
-                                    }
-                                }
+                        if let Some(result) = results.iter().find(|r| r.call_id == tc.id)
+                            && let Ok(output) = &result.result
+                        {
+                            // Extract plan file path from output
+                            // The output is text containing "Plan file: /path/to/file"
+                            if let ToolResultContent::Text(text) = &output.content
+                                && let Some(path_line) =
+                                    text.lines().find(|l| l.starts_with("Plan file:"))
+                            {
+                                let path_str = path_line.trim_start_matches("Plan file:").trim();
+                                let path = std::path::PathBuf::from(path_str);
+                                let slug = path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("plan")
+                                    .to_string();
+                                self.plan_mode_state.enter(path, slug, self.turn_number);
+                                info!(turn = self.turn_number, "Entered plan mode");
                             }
                         }
                     }
@@ -1299,7 +1345,7 @@ impl AgentLoop {
                 let messages = self.message_history.messages_for_api();
                 let conversation_text: String = messages
                     .iter()
-                    .map(|m| format!("{:?}", m))
+                    .map(|m| format!("{m:?}"))
                     .collect::<Vec<_>>()
                     .join("\n");
 
@@ -1349,15 +1395,15 @@ impl AgentLoop {
         // Deferred to future sessions.
 
         // ── STEP 17: Check max turns limit ──
-        if let Some(max) = self.config.max_turns {
-            if self.turn_number >= max {
-                self.emit(LoopEvent::MaxTurnsReached).await;
-                return Ok(LoopResult::max_turns_reached(
-                    self.turn_number,
-                    self.total_input_tokens,
-                    self.total_output_tokens,
-                ));
-            }
+        if let Some(max) = self.config.max_turns
+            && self.turn_number >= max
+        {
+            self.emit(LoopEvent::MaxTurnsReached).await;
+            return Ok(LoopResult::max_turns_reached(
+                self.turn_number,
+                self.total_input_tokens,
+                self.total_output_tokens,
+            ));
         }
 
         // Emit turn completed
@@ -1522,35 +1568,34 @@ impl AgentLoop {
                         match self.config.stall_detection.recovery {
                             cocode_protocol::StallRecovery::Abort => {
                                 return Err(anyhow::anyhow!(
-                                    "Stream stalled for {:?}, aborting", stall_timeout
+                                    "Stream stalled for {stall_timeout:?}, aborting"
                                 ));
                             }
                             cocode_protocol::StallRecovery::Retry => {
                                 warn!(turn_id, timeout = ?stall_timeout, "Stream stalled, retrying");
                                 return Err(anyhow::anyhow!(
-                                    "Stream stalled for {:?}, retry requested", stall_timeout
+                                    "Stream stalled for {stall_timeout:?}, retry requested"
                                 ));
                             }
                             cocode_protocol::StallRecovery::Fallback => {
                                 // Attempt model fallback
-                                if self.fallback_state.should_fallback(&self.fallback_config) {
-                                    if let Some(fallback_model) = self.fallback_state.next_model(&self.fallback_config) {
+                                if self.fallback_state.should_fallback(&self.fallback_config)
+                                    && let Some(fallback_model) = self.fallback_state.next_model(&self.fallback_config) {
                                         self.emit(LoopEvent::ModelFallbackStarted {
                                             from: self.fallback_state.current_model.clone(),
                                             to: fallback_model.clone(),
-                                            reason: format!("Stream stalled for {:?}", stall_timeout),
+                                            reason: format!("Stream stalled for {stall_timeout:?}"),
                                         }).await;
                                         self.fallback_state.record_fallback(
                                             fallback_model,
-                                            format!("Stream stalled for {:?}", stall_timeout),
+                                            format!("Stream stalled for {stall_timeout:?}"),
                                         );
                                         if let Some(otel) = &self.otel_manager {
                                             otel.counter("cocode.model.fallback", 1, &[]);
                                         }
                                     }
-                                }
                                 return Err(anyhow::anyhow!(
-                                    "Stream stalled for {:?}, fallback triggered", stall_timeout
+                                    "Stream stalled for {stall_timeout:?}, fallback triggered"
                                 ));
                             }
                         }
@@ -1574,18 +1619,16 @@ impl AgentLoop {
             let result = result.map_err(|e| {
                 // Check if this is an overload error for fallback handling
                 let err_str = e.to_string();
-                if err_str.contains("overload") || err_str.contains("rate_limit") {
-                    if self.fallback_state.should_fallback(&self.fallback_config) {
-                        if let Some(fallback_model) =
-                            self.fallback_state.next_model(&self.fallback_config)
-                        {
-                            // Note: We can't emit async events here, but we record the fallback
-                            self.fallback_state
-                                .record_fallback(fallback_model, format!("API error: {}", err_str));
-                            if let Some(otel) = &self.otel_manager {
-                                otel.counter("cocode.model.fallback", 1, &[]);
-                            }
-                        }
+                if (err_str.contains("overload") || err_str.contains("rate_limit"))
+                    && self.fallback_state.should_fallback(&self.fallback_config)
+                    && let Some(fallback_model) =
+                        self.fallback_state.next_model(&self.fallback_config)
+                {
+                    // Note: We can't emit async events here, but we record the fallback
+                    self.fallback_state
+                        .record_fallback(fallback_model, format!("API error: {err_str}"));
+                    if let Some(otel) = &self.otel_manager {
+                        otel.counter("cocode.model.fallback", 1, &[]);
                     }
                 }
                 anyhow::anyhow!("Stream error: {e}")
@@ -1645,23 +1688,21 @@ impl AgentLoop {
                     let msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
 
                     // Check for overload errors and handle fallback
-                    if msg.contains("overload") || msg.contains("rate_limit") {
-                        if self.fallback_state.should_fallback(&self.fallback_config) {
-                            if let Some(fallback_model) =
-                                self.fallback_state.next_model(&self.fallback_config)
-                            {
-                                self.emit(LoopEvent::ModelFallbackStarted {
-                                    from: self.fallback_state.current_model.clone(),
-                                    to: fallback_model.clone(),
-                                    reason: msg.clone(),
-                                })
-                                .await;
-                                self.fallback_state
-                                    .record_fallback(fallback_model, msg.clone());
-                                if let Some(otel) = &self.otel_manager {
-                                    otel.counter("cocode.model.fallback", 1, &[]);
-                                }
-                            }
+                    if (msg.contains("overload") || msg.contains("rate_limit"))
+                        && self.fallback_state.should_fallback(&self.fallback_config)
+                        && let Some(fallback_model) =
+                            self.fallback_state.next_model(&self.fallback_config)
+                    {
+                        self.emit(LoopEvent::ModelFallbackStarted {
+                            from: self.fallback_state.current_model.clone(),
+                            to: fallback_model.clone(),
+                            reason: msg.clone(),
+                        })
+                        .await;
+                        self.fallback_state
+                            .record_fallback(fallback_model, msg.clone());
+                        if let Some(otel) = &self.otel_manager {
+                            otel.counter("cocode.model.fallback", 1, &[]);
                         }
                     }
 
@@ -1871,7 +1912,7 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
         let conversation_text: String = messages
             .iter()
-            .map(|m| format!("{:?}", m))
+            .map(|m| format!("{m:?}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2105,30 +2146,30 @@ impl AgentLoop {
             .await;
 
         // Save to session memory for future Tier 1 compaction
-        if self.compaction_config.session_memory.enabled {
-            if let Some(ref path) = self.compaction_config.session_memory.summary_path {
-                let summary_content = final_summary;
-                let turn_id_owned = turn_id.to_string();
-                let path_owned = path.clone();
+        if self.compaction_config.session_memory.enabled
+            && let Some(ref path) = self.compaction_config.session_memory.summary_path
+        {
+            let summary_content = final_summary;
+            let turn_id_owned = turn_id.to_string();
+            let path_owned = path.clone();
 
-                // Spawn background task to write session memory
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        write_session_memory(&path_owned, &summary_content, &turn_id_owned).await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            path = ?path_owned,
-                            "Failed to write session memory"
-                        );
-                    } else {
-                        tracing::debug!(
-                            path = ?path_owned,
-                            "Session memory saved for future Tier 1 compaction"
-                        );
-                    }
-                });
-            }
+            // Spawn background task to write session memory
+            tokio::spawn(async move {
+                if let Err(e) =
+                    write_session_memory(&path_owned, &summary_content, &turn_id_owned).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        path = ?path_owned,
+                        "Failed to write session memory"
+                    );
+                } else {
+                    tracing::debug!(
+                        path = ?path_owned,
+                        "Session memory saved for future Tier 1 compaction"
+                    );
+                }
+            });
         }
 
         // Execute SessionStart hooks after compaction (with source: 'compact')
@@ -2148,7 +2189,7 @@ impl AgentLoop {
             turn_id.to_string(),
             self.context.environment.cwd.clone(),
         )
-        .with_metadata("source", "compact");
+        .with_source("compact");
 
         let outcomes = self.hooks.execute(&hook_ctx).await;
 
@@ -2168,17 +2209,15 @@ impl AgentLoop {
             // Check for additional context from hooks
             if let cocode_hooks::HookResult::ContinueWithContext { additional_context } =
                 &outcome.result
+                && let Some(ctx) = additional_context
+                && !ctx.is_empty()
             {
-                if let Some(ctx) = additional_context {
-                    if !ctx.is_empty() {
-                        additional_context_count += 1;
-                        debug!(
-                            hook_name = %outcome.hook_name,
-                            context_len = ctx.len(),
-                            "Hook provided additional context"
-                        );
-                    }
-                }
+                additional_context_count += 1;
+                debug!(
+                    hook_name = %outcome.hook_name,
+                    context_len = ctx.len(),
+                    "Hook provided additional context"
+                );
             }
         }
 
@@ -2196,13 +2235,12 @@ impl AgentLoop {
     /// Used for SessionStart, UserPromptSubmit, Stop, SessionEnd, etc.
     /// Returns `true` if any hook rejected (for events that support rejection).
     async fn execute_lifecycle_hooks(&self, ctx: cocode_hooks::HookContext) -> bool {
-        let protocol_event: HookEventType = ctx.event_type.clone().into();
         let outcomes = self.hooks.execute(&ctx).await;
         let mut rejected = false;
 
         for outcome in &outcomes {
             self.emit(LoopEvent::HookExecuted {
-                hook_type: protocol_event.clone(),
+                hook_type: ctx.event_type.clone(),
                 hook_name: outcome.hook_name.clone(),
             })
             .await;
@@ -2563,7 +2601,7 @@ impl AgentLoop {
                 ContextModifier::TodosUpdated { todos } => {
                     self.current_todos = Some(todos.clone());
                     debug!(
-                        count = todos.as_array().map_or(0, |a| a.len()),
+                        count = todos.as_array().map_or(0, std::vec::Vec::len),
                         "Applied TodosUpdated modifier"
                     );
                 }
@@ -2705,17 +2743,17 @@ fn select_tools_for_model(
     }
 
     // 3. Handle excluded_tools (blacklist filter)
-    if let Some(ref excluded) = model_info.excluded_tools {
-        if !excluded.is_empty() {
-            defs.retain(|d| !excluded.contains(&d.name));
-        }
+    if let Some(ref excluded) = model_info.excluded_tools
+        && !excluded.is_empty()
+    {
+        defs.retain(|d| !excluded.contains(&d.name));
     }
 
     // 4. Handle experimental_supported_tools (whitelist filter)
-    if let Some(ref supported) = model_info.experimental_supported_tools {
-        if !supported.is_empty() {
-            defs.retain(|d| supported.contains(&d.name));
-        }
+    if let Some(ref supported) = model_info.experimental_supported_tools
+        && !supported.is_empty()
+    {
+        defs.retain(|d| supported.contains(&d.name));
     }
 
     defs

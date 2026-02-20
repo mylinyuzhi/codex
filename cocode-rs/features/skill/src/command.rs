@@ -36,8 +36,7 @@ impl fmt::Display for SkillContext {
 /// A skill that injects a prompt into the conversation.
 ///
 /// This is the primary representation of a loaded skill. The prompt text
-/// is either read from a file (referenced in `SKILL.toml`) or specified
-/// inline in the TOML metadata.
+/// comes from the markdown body of `SKILL.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillPromptCommand {
     /// Unique skill name (used as the slash command identifier).
@@ -106,7 +105,7 @@ pub struct SkillPromptCommand {
     pub aliases: Vec<String>,
 
     /// Optional interface with hook definitions.
-    /// Populated from SKILL.toml when hooks are defined.
+    /// Populated from SKILL.md frontmatter when hooks are defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<crate::interface::SkillInterface>,
 
@@ -186,7 +185,7 @@ impl fmt::Display for SlashCommand {
 /// The type of a slash command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommandType {
-    /// A prompt-based skill loaded from SKILL.toml.
+    /// A prompt-based skill loaded from SKILL.md.
     Prompt,
 
     /// A built-in local command (e.g., /help, /clear).

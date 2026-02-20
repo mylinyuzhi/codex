@@ -406,10 +406,10 @@ impl JsonRpcConnection {
                     break;
                 }
 
-                if let Some(len_str) = header.strip_prefix("Content-Length:") {
-                    if let Ok(len) = len_str.trim().parse::<usize>() {
-                        content_length = Some(len);
-                    }
+                if let Some(len_str) = header.strip_prefix("Content-Length:")
+                    && let Ok(len) = len_str.trim().parse::<usize>()
+                {
+                    content_length = Some(len);
                 }
             }
 
@@ -455,21 +455,21 @@ impl JsonRpcConnection {
             // Check if response or notification
             if value.get("id").is_some() {
                 // Response
-                if let Ok(response) = serde_json::from_value::<JsonRpcResponse>(value) {
-                    if let Some(id) = response.id {
-                        let mut pending_guard = pending.lock().await;
-                        if let Some(req) = pending_guard.remove(&id) {
-                            let result = if let Some(err) = response.error {
-                                Err(LspErr::JsonRpc {
-                                    method: req.method.clone(),
-                                    message: err.message,
-                                    code: Some(err.code),
-                                })
-                            } else {
-                                Ok(response.result.unwrap_or(serde_json::Value::Null))
-                            };
-                            let _ = req.tx.send(result);
-                        }
+                if let Ok(response) = serde_json::from_value::<JsonRpcResponse>(value)
+                    && let Some(id) = response.id
+                {
+                    let mut pending_guard = pending.lock().await;
+                    if let Some(req) = pending_guard.remove(&id) {
+                        let result = if let Some(err) = response.error {
+                            Err(LspErr::JsonRpc {
+                                method: req.method.clone(),
+                                message: err.message,
+                                code: Some(err.code),
+                            })
+                        } else {
+                            Ok(response.result.unwrap_or(serde_json::Value::Null))
+                        };
+                        let _ = req.tx.send(result);
                     }
                 }
             } else if let Some(method) = value.get("method").and_then(|m| m.as_str()) {

@@ -158,10 +158,10 @@ impl App {
         }
 
         // Debounce: prevent rapid-fire searches
-        if let Some(last_time) = self.last_search_time {
-            if last_time.elapsed() < Duration::from_millis(SEARCH_DEBOUNCE_MS) {
-                return;
-            }
+        if let Some(last_time) = self.last_search_time
+            && last_time.elapsed() < Duration::from_millis(SEARCH_DEBOUNCE_MS)
+        {
+            return;
         }
         self.last_search_time = Some(Instant::now());
 

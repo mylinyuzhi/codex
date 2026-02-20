@@ -359,11 +359,9 @@ impl EmbeddingCache {
             let mut hits = Vec::new();
             let mut found_keys: HashSet<(String, String)> = HashSet::new();
 
-            for row_result in rows {
-                if let Ok((filepath, hash, embedding)) = row_result {
-                    found_keys.insert((filepath.clone(), hash.clone()));
-                    hits.push((filepath, hash, embedding));
-                }
+            for (filepath, hash, embedding) in rows.flatten() {
+                found_keys.insert((filepath.clone(), hash.clone()));
+                hits.push((filepath, hash, embedding));
             }
 
             let misses: Vec<(String, String)> = entries_clone

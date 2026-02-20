@@ -252,9 +252,9 @@ impl HookRegistry {
 /// Dispatches execution to the appropriate handler.
 async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult {
     match handler {
-        HookHandler::Command { command, args } => {
+        HookHandler::Command { command } => {
             // Pass full HookContext to command handler for env vars and stdin JSON
-            handlers::command::CommandHandler::execute(command, args, ctx).await
+            handlers::command::CommandHandler::execute(command, ctx).await
         }
         // NOTE: `model` field is ignored — LLM verification mode is not yet implemented.
         // When `model` is set, this should call an LLM via a callback instead of

@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use cocode_protocol::LoopEvent;
 use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::background::BackgroundAgent;
@@ -38,6 +40,9 @@ pub struct SpawnResult {
     /// Callers should register this in the shared `agent_cancel_tokens`
     /// map so TaskStop can cancel the agent by ID.
     pub cancel_token: Option<CancellationToken>,
+
+    /// Display color from the agent definition (for TUI rendering).
+    pub color: Option<String>,
 }
 
 /// A live subagent instance.
@@ -61,25 +66,36 @@ pub struct AgentInstance {
     pub output_file: Option<PathBuf>,
 }
 
-/// Callback type for executing an agent with filtered tools.
+/// Parameters for executing an agent.
 ///
-/// The callback receives:
-/// - `agent_type`: The type of agent being spawned
-/// - `prompt`: The task prompt for the agent
-/// - `identity`: Optional execution identity for model selection
-/// - `max_turns`: Optional turn limit override
-/// - `tools`: Filtered list of available tool names
-/// - `cancel_token`: Token for cancellation
+/// Replaces positional arguments with a named struct for clarity
+/// and extensibility (permission_mode, fork_context, etc.).
+#[derive(Debug, Clone)]
+pub struct AgentExecuteParams {
+    /// The type of agent being spawned.
+    pub agent_type: String,
+    /// The task prompt for the agent.
+    pub prompt: String,
+    /// Optional execution identity for model selection.
+    pub identity: Option<ExecutionIdentity>,
+    /// Optional turn limit override.
+    pub max_turns: Option<i32>,
+    /// Filtered list of available tool names.
+    pub tools: Vec<String>,
+    /// Token for cancellation.
+    pub cancel_token: CancellationToken,
+    /// Override permission mode for the child agent.
+    pub permission_mode: Option<cocode_protocol::PermissionMode>,
+    /// Whether to fork the parent conversation context.
+    pub fork_context: bool,
+}
+
+/// Callback type for executing an agent with filtered tools.
 ///
 /// Returns the agent output as a string on success.
 pub type AgentExecuteFn = Box<
     dyn Fn(
-            String,                    // agent_type
-            String,                    // prompt
-            Option<ExecutionIdentity>, // identity
-            Option<i32>,               // max_turns
-            Vec<String>,               // filtered tools
-            CancellationToken,         // cancel_token
+            AgentExecuteParams,
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
         + Send
@@ -96,6 +112,8 @@ pub struct SubagentManager {
     execute_fn: Option<Arc<AgentExecuteFn>>,
     /// Base directory for background agent output files.
     output_dir: PathBuf,
+    /// Optional event sender for background agent completion notifications.
+    event_tx: Option<mpsc::Sender<LoopEvent>>,
 }
 
 impl SubagentManager {
@@ -107,6 +125,7 @@ impl SubagentManager {
             all_tools: Vec::new(),
             execute_fn: None,
             output_dir: std::env::temp_dir().join("cocode-agents"),
+            event_tx: None,
         }
     }
 
@@ -126,6 +145,30 @@ impl SubagentManager {
     pub fn with_output_dir(mut self, dir: PathBuf) -> Self {
         self.output_dir = dir;
         self
+    }
+
+    /// Set the agent execution callback.
+    ///
+    /// Called per-turn from the session layer so the closure captures
+    /// fresh state (model selections, config, etc.).
+    pub fn set_execute_fn(&mut self, f: AgentExecuteFn) {
+        self.execute_fn = Some(Arc::new(f));
+    }
+
+    /// Set the available tool names for filtering.
+    ///
+    /// Called per-turn alongside `set_execute_fn` so the tool list
+    /// reflects the current registry state.
+    pub fn set_all_tools(&mut self, tools: Vec<String>) {
+        self.all_tools = tools;
+    }
+
+    /// Set the event sender for background completion notifications.
+    ///
+    /// Called per-turn so background agents can emit `SubagentCompleted`
+    /// events when they finish, notifying the main agent.
+    pub fn set_event_tx(&mut self, tx: mpsc::Sender<LoopEvent>) {
+        self.event_tx = Some(tx);
     }
 
     /// Get registered agent type definitions.
@@ -173,37 +216,47 @@ impl SubagentManager {
             .ok_or_else(|| anyhow::anyhow!("Unknown agent type: {}", input.agent_type))?
             .clone();
 
-        // Handle resume: load prior output and prepend to prompt
+        // Handle resume: load full transcript and reconstruct context
         if let Some(ref resume_id) = input.resume_from {
             let output_file = self.output_dir.join(format!("{resume_id}.jsonl"));
             if output_file.exists() {
-                match tokio::fs::read_to_string(&output_file).await {
-                    Ok(content) => {
-                        // Parse the JSONL to extract the prior output
-                        let prior_output = if let Ok(entry) =
-                            serde_json::from_str::<serde_json::Value>(&content)
-                        {
-                            entry["output"].as_str().unwrap_or(&content).to_string()
-                        } else {
-                            content
-                        };
+                match crate::transcript::TranscriptRecorder::read_transcript(&output_file) {
+                    Ok(entries) if !entries.is_empty() => {
+                        // Reconstruct conversation context from all transcript entries
+                        let mut context_parts = Vec::new();
+                        for entry in &entries {
+                            if let Some(prompt) = entry["prompt"].as_str() {
+                                context_parts.push(format!("[Previous prompt]\n{prompt}"));
+                            }
+                            if let Some(output) = entry["output"].as_str() {
+                                context_parts.push(format!("[Previous output]\n{output}"));
+                            }
+                        }
+                        let full_context = context_parts.join("\n\n");
                         input.prompt = format!(
                             "[Resuming from previous agent {resume_id}]\n\
-                             Previous output:\n{prior_output}\n\n\
+                             {full_context}\n\n\
                              Continue with: {}",
                             input.prompt
                         );
                         tracing::info!(
                             resume_id = %resume_id,
-                            prior_len = prior_output.len(),
-                            "Resuming agent with prior context"
+                            entries = entries.len(),
+                            context_len = full_context.len(),
+                            "Resuming agent with full transcript context"
+                        );
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            resume_id = %resume_id,
+                            "Prior agent transcript is empty, starting fresh"
                         );
                     }
                     Err(e) => {
                         tracing::warn!(
                             resume_id = %resume_id,
                             error = %e,
-                            "Failed to read prior agent output, starting fresh"
+                            "Failed to read prior agent transcript, starting fresh"
                         );
                     }
                 }
@@ -234,6 +287,21 @@ impl SubagentManager {
 
         // Resolve max_turns (spawn input > definition)
         let max_turns = input.max_turns.or(definition.max_turns);
+
+        // Inject critical_reminder into prompt (prepend before user prompt)
+        let prompt = if let Some(ref reminder) = definition.critical_reminder {
+            format!("{reminder}\n\n{}", input.prompt)
+        } else {
+            input.prompt.clone()
+        };
+
+        tracing::debug!(
+            agent_id = %agent_id,
+            has_critical_reminder = definition.critical_reminder.is_some(),
+            permission_mode = ?definition.permission_mode,
+            fork_context = definition.fork_context,
+            "Resolved agent definition fields"
+        );
 
         // Apply three-layer tool filtering
         let tools_to_filter = if let Some(ref allowed) = input.allowed_tools {
@@ -277,42 +345,54 @@ impl SubagentManager {
             if let Some(execute_fn) = &self.execute_fn {
                 let execute_fn = execute_fn.clone();
                 let agent_id_clone = agent_id.clone();
-                let prompt = input.prompt.clone();
-                let agent_type = input.agent_type.clone();
                 let output_file_clone = output_file.clone();
-                let task_cancel_token = cancel_token.clone();
 
+                let params = AgentExecuteParams {
+                    agent_type: input.agent_type.clone(),
+                    prompt: prompt.clone(),
+                    identity,
+                    max_turns,
+                    tools: filtered_tools,
+                    cancel_token: cancel_token.clone(),
+                    permission_mode: definition.permission_mode,
+                    fork_context: definition.fork_context,
+                };
+
+                let prompt_for_transcript = prompt.clone();
+                let event_tx = self.event_tx.clone();
                 tokio::spawn(async move {
-                    let result = execute_fn(
-                        agent_type,
-                        prompt,
-                        identity,
-                        max_turns,
-                        filtered_tools,
-                        task_cancel_token,
-                    )
-                    .await;
+                    let result = execute_fn(params).await;
 
-                    // Write result to output file
+                    // Write transcript entry with prompt + output for rich resume
+                    let recorder =
+                        crate::transcript::TranscriptRecorder::new(output_file_clone.clone());
                     let entry = match &result {
                         Ok(output) => serde_json::json!({
                             "status": "completed",
                             "agent_id": agent_id_clone,
+                            "prompt": prompt_for_transcript,
                             "output": output
                         }),
                         Err(e) => serde_json::json!({
                             "status": "failed",
                             "agent_id": agent_id_clone,
+                            "prompt": prompt_for_transcript,
                             "error": e.to_string()
                         }),
                     };
-                    if let Err(e) = tokio::fs::write(
-                        &output_file_clone,
-                        serde_json::to_string_pretty(&entry).unwrap_or_default(),
-                    )
-                    .await
-                    {
-                        tracing::error!(error = %e, "Failed to write agent output");
+                    if let Err(e) = recorder.record(&entry) {
+                        tracing::error!(error = %e, "Failed to write agent transcript");
+                    }
+
+                    // Notify main agent of completion
+                    if let Some(tx) = event_tx {
+                        let output_str = result.as_deref().unwrap_or("[agent failed]").to_string();
+                        let _ = tx
+                            .send(LoopEvent::SubagentCompleted {
+                                agent_id: agent_id_clone.clone(),
+                                result: output_str,
+                            })
+                            .await;
                     }
                 });
             }
@@ -327,6 +407,7 @@ impl SubagentManager {
                 output: None,
                 background: Some(bg_agent),
                 cancel_token: Some(cancel_token),
+                color: definition.color.clone(),
             })
         } else {
             // Foreground execution
@@ -345,15 +426,19 @@ impl SubagentManager {
 
             // Execute the agent if we have an execute function
             let output = if let Some(execute_fn) = &self.execute_fn {
-                // Pin the future so it can be moved into a background task on Ctrl+B
-                let mut execute_future = Box::pin(execute_fn(
-                    input.agent_type.clone(),
-                    input.prompt.clone(),
-                    identity.clone(),
+                let params = AgentExecuteParams {
+                    agent_type: input.agent_type.clone(),
+                    prompt: prompt.clone(),
+                    identity: identity.clone(),
                     max_turns,
-                    filtered_tools.clone(),
-                    cancel_token.clone(),
-                ));
+                    tools: filtered_tools.clone(),
+                    cancel_token: cancel_token.clone(),
+                    permission_mode: definition.permission_mode,
+                    fork_context: definition.fork_context,
+                };
+
+                // Pin the future so it can be moved into a background task on Ctrl+B
+                let mut execute_future = Box::pin(execute_fn(params));
 
                 // Use select! to handle both normal completion and background signal
                 tokio::select! {
@@ -402,32 +487,51 @@ impl SubagentManager {
                         // (continues existing execution instead of restarting)
                         let agent_id_clone = agent_id.clone();
                         let output_file_clone = output_file.clone();
+                        let prompt_for_transcript = prompt.clone();
+                        let event_tx = self.event_tx.clone();
 
                         tokio::spawn(async move {
                             let result = execute_future.await;
 
-                            // Write result to output file
+                            // Write transcript entry with prompt + output for rich resume
+                            let recorder = crate::transcript::TranscriptRecorder::new(
+                                output_file_clone.clone(),
+                            );
                             let entry = match &result {
                                 Ok(output) => serde_json::json!({
                                     "status": "completed",
                                     "agent_id": agent_id_clone,
+                                    "prompt": prompt_for_transcript,
                                     "output": output,
                                     "transitioned_from_foreground": true
                                 }),
                                 Err(e) => serde_json::json!({
                                     "status": "failed",
                                     "agent_id": agent_id_clone,
+                                    "prompt": prompt_for_transcript,
                                     "error": e.to_string(),
                                     "transitioned_from_foreground": true
                                 }),
                             };
-                            if let Err(e) = tokio::fs::write(
-                                &output_file_clone,
-                                serde_json::to_string_pretty(&entry).unwrap_or_default(),
-                            )
-                            .await
-                            {
-                                tracing::error!(error = %e, "Failed to write agent output");
+                            if let Err(e) = recorder.record(&entry) {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to write agent transcript"
+                                );
+                            }
+
+                            // Notify main agent of completion
+                            if let Some(tx) = event_tx {
+                                let output_str = result
+                                    .as_deref()
+                                    .unwrap_or("[agent failed]")
+                                    .to_string();
+                                let _ = tx
+                                    .send(LoopEvent::SubagentCompleted {
+                                        agent_id: agent_id_clone.clone(),
+                                        result: output_str,
+                                    })
+                                    .await;
                             }
                         });
 
@@ -441,6 +545,7 @@ impl SubagentManager {
                             output: None,
                             background: Some(bg_agent),
                             cancel_token: Some(cancel_token),
+                            color: definition.color.clone(),
                         });
                     }
                 }
@@ -468,6 +573,7 @@ impl SubagentManager {
                 background: None,
                 // Foreground agents have completed — no token needed
                 cancel_token: None,
+                color: definition.color.clone(),
             })
         }
     }

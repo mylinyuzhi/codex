@@ -125,7 +125,7 @@ impl SymbolSearchManager {
         // Schedule a new debounced search
         let index = self.index.clone();
         let event_tx = self.event_tx.clone();
-        let query_clone = query.clone();
+        let query_clone = query;
 
         let handle = tokio::spawn(async move {
             // Wait for debounce delay

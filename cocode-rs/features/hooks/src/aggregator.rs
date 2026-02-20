@@ -13,7 +13,7 @@ use crate::settings::HookSettings;
 /// This struct handles:
 /// - Setting the source field on hooks
 /// - Filtering hooks based on `allow_managed_hooks_only` setting
-/// - Ordering hooks by scope priority (Policy > Plugin > Session > Agent > Skill)
+/// - Ordering hooks by scope priority (Policy > Session > Agent > Skill > Plugin)
 #[derive(Debug, Default)]
 pub struct HookAggregator {
     hooks: Vec<HookDefinition>,
@@ -83,7 +83,7 @@ impl HookAggregator {
     /// Builds the aggregated hooks, applying settings and sorting by priority.
     ///
     /// When `settings.allow_managed_hooks_only` is true, only Policy and Plugin hooks
-    /// are included. Hooks are sorted by scope priority (Policy first, Skill last).
+    /// are included. Hooks are sorted by scope priority (Policy first, Plugin last).
     pub fn build(mut self, settings: &HookSettings) -> Vec<HookDefinition> {
         // If all hooks are disabled, return empty
         if settings.disable_all_hooks {

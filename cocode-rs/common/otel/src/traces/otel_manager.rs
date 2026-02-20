@@ -42,7 +42,7 @@ impl OtelManager {
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
-                auth_mode: auth_mode.map(|m| m.to_string()),
+                auth_mode: auth_mode.map(ToString::to_string),
                 account_id,
                 account_email,
                 provider: provider.to_owned(),

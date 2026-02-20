@@ -15,8 +15,10 @@ use std::collections::HashMap;
 /// Provider type enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProviderType {
     /// OpenAI API compatible.
+    #[default]
     Openai,
     /// Anthropic Claude API.
     Anthropic,
@@ -28,12 +30,6 @@ pub enum ProviderType {
     Zai,
     /// Generic OpenAI-compatible API.
     OpenaiCompat,
-}
-
-impl Default for ProviderType {
-    fn default() -> Self {
-        Self::Openai
-    }
 }
 
 impl std::fmt::Display for ProviderType {
@@ -261,7 +257,7 @@ impl ProviderInfo {
 
     /// Get the API model name for a slug (alias if set and non-empty, otherwise slug).
     pub fn api_model_name(&self, slug: &str) -> Option<&str> {
-        self.models.get(slug).map(|m| m.api_model_name())
+        self.models.get(slug).map(ProviderModel::api_model_name)
     }
 
     /// List all model slugs.

@@ -28,6 +28,9 @@ cocode-skill.workspace = true
 cocode-subagent.workspace = true
 cocode-system-reminder.workspace = true
 
+# Internal - standalone
+cocode-lsp.workspace = true
+
 # Internal - common (OTel)
 cocode-otel.workspace = true
 

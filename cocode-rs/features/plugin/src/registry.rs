@@ -9,6 +9,7 @@ use crate::error::PluginError;
 use crate::error::Result;
 use crate::error::plugin_error::AlreadyRegisteredSnafu;
 use crate::loader::LoadedPlugin;
+use crate::lsp_loader::LspServerConfig;
 use crate::mcp::McpServerConfig;
 use crate::scope::PluginScope;
 
@@ -200,18 +201,70 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Get all LSP server contributions.
+    pub fn lsp_server_contributions(&self) -> Vec<(&LspServerConfig, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::LspServer {
+                        config,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((config, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Apply all skill contributions to a skill manager.
+    ///
+    /// Skills are registered with a namespaced name (`plugin_name:skill_name`).
+    /// If the original skill name is unambiguous (no other plugin provides a
+    /// skill with the same name), it's also registered as an alias.
     pub fn apply_skills_to(&self, manager: &mut SkillManager) {
         let skills = self.skill_contributions();
         let count = skills.len();
 
-        for (skill, plugin_name) in skills {
+        // Count how many plugins provide each skill name for ambiguity detection
+        let mut name_counts: std::collections::HashMap<String, i32> =
+            std::collections::HashMap::new();
+        for &(skill, _) in &skills {
+            *name_counts.entry(skill.name.clone()).or_insert(0) += 1;
+        }
+
+        for &(skill, plugin_name) in &skills {
+            // Register with namespaced name
+            let namespaced_name = format!("{plugin_name}:{}", skill.name);
+            let mut namespaced_skill = skill.clone();
+            namespaced_skill.name = namespaced_name.clone();
             debug!(
-                skill = %skill.name,
+                skill = %namespaced_name,
                 plugin = %plugin_name,
-                "Applying skill from plugin"
+                "Applying namespaced skill from plugin"
             );
-            manager.register(skill.clone());
+            manager.register(namespaced_skill);
+
+            // Also register with original name if unambiguous
+            let is_ambiguous = name_counts.get(&skill.name).copied().unwrap_or(0) > 1;
+            if !is_ambiguous {
+                debug!(
+                    skill = %skill.name,
+                    plugin = %plugin_name,
+                    "Registering unambiguous skill alias"
+                );
+                manager.register(skill.clone());
+            } else {
+                debug!(
+                    skill = %skill.name,
+                    plugin = %plugin_name,
+                    "Skipping ambiguous skill alias (multiple plugins provide this name)"
+                );
+            }
         }
 
         if count > 0 {
@@ -308,6 +361,10 @@ impl PluginRegistry {
                             identity: None,
                             max_turns: None,
                             permission_mode: None,
+                            fork_context: false,
+                            color: None,
+                            critical_reminder: None,
+                            source: cocode_subagent::AgentSource::Plugin,
                         };
                         manager.register_agent_type(definition);
                         agents_added += 1;

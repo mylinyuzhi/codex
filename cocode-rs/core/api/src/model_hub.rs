@@ -306,10 +306,10 @@ impl ModelHub {
         );
 
         // Carry model's request_options into the inference context
-        if let Some(opts) = model_info.options {
-            if !opts.is_empty() {
-                ctx = ctx.with_request_options(opts);
-            }
+        if let Some(opts) = model_info.options
+            && !opts.is_empty()
+        {
+            ctx = ctx.with_request_options(opts);
         }
 
         // Apply thinking level if provided
@@ -564,7 +564,7 @@ impl ModelHub {
         );
 
         let model = provider
-            .model(&api_model_name)
+            .model(api_model_name)
             .map_err(|e| HubError::ModelCreation {
                 provider: spec.provider.clone(),
                 model: spec.model.clone(),
@@ -622,7 +622,7 @@ impl ModelHub {
                 .provider(provider_name)
                 .ok_or_else(|| HubError::ProviderResolution {
                     provider: provider_name.to_string(),
-                    source: anyhow::anyhow!("Provider '{}' not found in config", provider_name),
+                    source: anyhow::anyhow!("Provider '{provider_name}' not found in config"),
                 })?;
 
         info!(provider = %provider_name, "Creating provider");

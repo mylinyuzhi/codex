@@ -110,10 +110,10 @@ impl FileWalker {
             }
 
             // Skip files that are too large
-            if let Ok(metadata) = resolved_path.metadata() {
-                if metadata.len() > self.max_file_size {
-                    continue;
-                }
+            if let Ok(metadata) = resolved_path.metadata()
+                && metadata.len() > self.max_file_size
+            {
+                continue;
             }
 
             // Skip files that don't match filter criteria

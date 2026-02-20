@@ -53,17 +53,13 @@ impl LoggingConfig {
 /// Timezone configuration for log timestamps
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum TimezoneConfig {
     /// Use local timezone
+    #[default]
     Local,
     /// Use UTC timezone
     Utc,
-}
-
-impl Default for TimezoneConfig {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 /// Timezone-aware time formatter for tracing subscribers.

@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn test_ssh_to_https_conversion() {
     let ssh_url = "git@github.com:owner/repo.git";

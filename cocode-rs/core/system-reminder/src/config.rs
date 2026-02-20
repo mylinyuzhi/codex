@@ -210,6 +210,7 @@ impl Default for AtMentionedFilesConfig {
 /// Custom instruction takes precedence over style_name if both are set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct OutputStyleConfig {
     /// Enable output style instructions.
     pub enabled: bool,
@@ -224,17 +225,6 @@ pub struct OutputStyleConfig {
     pub keep_coding_instructions: Option<bool>,
 }
 
-impl Default for OutputStyleConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            style_name: None,
-            instruction: None,
-            keep_coding_instructions: None,
-        }
-    }
-}
-
 impl OutputStyleConfig {
     /// Resolve the output style instruction content.
     ///
@@ -245,17 +235,17 @@ impl OutputStyleConfig {
     /// Returns `None` if neither custom instruction nor valid style_name is set.
     pub fn resolve_instruction(&self) -> Option<String> {
         // Custom instruction takes precedence
-        if let Some(instruction) = &self.instruction {
-            if !instruction.is_empty() {
-                return Some(instruction.clone());
-            }
+        if let Some(instruction) = &self.instruction
+            && !instruction.is_empty()
+        {
+            return Some(instruction.clone());
         }
 
         // Look up by name from builtin
-        if let Some(name) = &self.style_name {
-            if let Some(content) = cocode_config::builtin::get_output_style(name) {
-                return Some(content.to_string());
-            }
+        if let Some(name) = &self.style_name
+            && let Some(content) = cocode_config::builtin::get_output_style(name)
+        {
+            return Some(content.to_string());
         }
 
         None
@@ -273,29 +263,29 @@ impl OutputStyleConfig {
         }
 
         // Try to find by style_name first (gives us full OutputStyleInfo with keep_coding_instructions)
-        if let Some(name) = &self.style_name {
-            if let Some(info) = cocode_config::builtin::find_output_style(name, cocode_home) {
-                let keep_coding = self
-                    .keep_coding_instructions
-                    .unwrap_or(info.keep_coding_instructions);
-                return Some(cocode_context::OutputStylePromptConfig {
-                    name: info.name,
-                    content: info.content,
-                    keep_coding_instructions: keep_coding,
-                });
-            }
+        if let Some(name) = &self.style_name
+            && let Some(info) = cocode_config::builtin::find_output_style(name, cocode_home)
+        {
+            let keep_coding = self
+                .keep_coding_instructions
+                .unwrap_or(info.keep_coding_instructions);
+            return Some(cocode_context::OutputStylePromptConfig {
+                name: info.name,
+                content: info.content,
+                keep_coding_instructions: keep_coding,
+            });
         }
 
         // Fall back to custom instruction
-        if let Some(instruction) = &self.instruction {
-            if !instruction.is_empty() {
-                let keep_coding = self.keep_coding_instructions.unwrap_or(false);
-                return Some(cocode_context::OutputStylePromptConfig {
-                    name: "custom".to_string(),
-                    content: instruction.clone(),
-                    keep_coding_instructions: keep_coding,
-                });
-            }
+        if let Some(instruction) = &self.instruction
+            && !instruction.is_empty()
+        {
+            let keep_coding = self.keep_coding_instructions.unwrap_or(false);
+            return Some(cocode_context::OutputStylePromptConfig {
+                name: "custom".to_string(),
+                content: instruction.clone(),
+                keep_coding_instructions: keep_coding,
+            });
         }
 
         None

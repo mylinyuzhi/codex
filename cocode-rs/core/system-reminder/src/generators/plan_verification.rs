@@ -80,10 +80,9 @@ impl AttachmentGenerator for PlanVerificationGenerator {
 
         let content = format!(
             "You have completed implementing the plan. \
-             Please call the \"{}\" tool directly \
-             (NOT the {} tool or an agent) to verify \
+             Please call the \"{VERIFY_TOOL_NAME}\" tool directly \
+             (NOT the {SUB_AGENT_TOOL_NAME} tool or an agent) to verify \
              that all plan items were completed correctly.",
-            VERIFY_TOOL_NAME, SUB_AGENT_TOOL_NAME,
         );
 
         Ok(Some(SystemReminder::new(

@@ -198,10 +198,8 @@ impl SessionMemoryExtractionAgent {
 
         // Build summarization prompt
         let system_prompt = self.build_extraction_prompt();
-        let user_prompt = format!(
-            "Please summarize the following conversation:\n\n{}",
-            conversation_text
-        );
+        let user_prompt =
+            format!("Please summarize the following conversation:\n\n{conversation_text}");
 
         // Call LLM for summary
         let messages = vec![Message::system(&system_prompt), Message::user(&user_prompt)];

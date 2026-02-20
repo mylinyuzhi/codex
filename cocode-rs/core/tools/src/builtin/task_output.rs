@@ -191,10 +191,10 @@ impl Tool for TaskOutputTool {
                     )));
                 }
                 for path in &candidate_paths {
-                    if path.exists() {
-                        if let Ok(content) = tokio::fs::read_to_string(path).await {
-                            return Ok(format_agent_output(task_id, &content));
-                        }
+                    if path.exists()
+                        && let Ok(content) = tokio::fs::read_to_string(path).await
+                    {
+                        return Ok(format_agent_output(task_id, &content));
                     }
                 }
                 if start.elapsed() >= timeout_duration {
@@ -207,10 +207,10 @@ impl Tool for TaskOutputTool {
         } else {
             // Non-blocking: check once
             for path in &candidate_paths {
-                if path.exists() {
-                    if let Ok(content) = tokio::fs::read_to_string(path).await {
-                        return Ok(format_agent_output(task_id, &content));
-                    }
+                if path.exists()
+                    && let Ok(content) = tokio::fs::read_to_string(path).await
+                {
+                    return Ok(format_agent_output(task_id, &content));
                 }
             }
         }

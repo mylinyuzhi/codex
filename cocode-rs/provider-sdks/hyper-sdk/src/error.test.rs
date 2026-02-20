@@ -137,7 +137,7 @@ fn test_all_error_variants_display() {
 
     for err in errors {
         let display = err.to_string();
-        assert!(!display.is_empty(), "Error should have display: {:?}", err);
+        assert!(!display.is_empty(), "Error should have display: {err:?}");
     }
 }
 
@@ -157,7 +157,7 @@ fn test_retryable_classification_exhaustive() {
         HyperError::NetworkError("net".into()),
     ];
     for err in retryable {
-        assert!(err.is_retryable(), "Should be retryable: {:?}", err);
+        assert!(err.is_retryable(), "Should be retryable: {err:?}");
     }
 
     // Non-retryable errors
@@ -181,7 +181,7 @@ fn test_retryable_classification_exhaustive() {
         HyperError::StreamIdleTimeout(Duration::from_secs(60)),
     ];
     for err in non_retryable {
-        assert!(!err.is_retryable(), "Should NOT be retryable: {:?}", err);
+        assert!(!err.is_retryable(), "Should NOT be retryable: {err:?}");
     }
 }
 
@@ -210,8 +210,7 @@ fn test_retry_delay_only_from_retryable() {
         assert_eq!(
             err.retry_delay(),
             None,
-            "Non-Retryable should return None: {:?}",
-            err
+            "Non-Retryable should return None: {err:?}"
         );
     }
 }

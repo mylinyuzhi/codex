@@ -56,7 +56,7 @@ fn test_temperature_checked() {
     assert!(params.clone().temperature_checked(0.0).is_ok());
     assert!(params.clone().temperature_checked(2.0).is_ok());
     assert!(params.clone().temperature_checked(-0.1).is_err());
-    assert!(params.clone().temperature_checked(2.1).is_err());
+    assert!(params.temperature_checked(2.1).is_err());
 }
 
 #[test]

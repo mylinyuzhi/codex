@@ -100,7 +100,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         let config_text = server
             .config_level
             .as_ref()
-            .map(|l| l.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_else(|| "-".to_string());
         let config_style = if server.config_level.is_some() {
             Style::default().cyan()
@@ -155,12 +155,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         lines.push(
             Line::from(vec![
                 Span::styled(prefix, row_style),
-                Span::styled(format!("{:<COL_SERVER$}", id_display), id_style),
-                Span::styled(format!("{:<COL_EXT$}", ext_display), row_style),
-                Span::styled(format!("{:<COL_BINARY$}", binary_text), binary_style),
-                Span::styled(format!("{:<COL_CONFIG$}", config_text), config_style),
-                Span::styled(format!("{:<COL_DISABLED$}", disabled_text), disabled_style),
-                Span::styled(format!("{:<COL_STATUS$}", status_text), status_style),
+                Span::styled(format!("{id_display:<COL_SERVER$}"), id_style),
+                Span::styled(format!("{ext_display:<COL_EXT$}"), row_style),
+                Span::styled(format!("{binary_text:<COL_BINARY$}"), binary_style),
+                Span::styled(format!("{config_text:<COL_CONFIG$}"), config_style),
+                Span::styled(format!("{disabled_text:<COL_DISABLED$}"), disabled_style),
+                Span::styled(format!("{status_text:<COL_STATUS$}"), status_style),
             ])
             .style(row_style),
         );

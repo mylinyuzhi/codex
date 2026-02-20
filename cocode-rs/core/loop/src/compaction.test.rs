@@ -378,25 +378,25 @@ fn test_execute_micro_compact_success() {
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-1",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-2",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-3",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-4",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
@@ -438,27 +438,27 @@ fn test_execute_micro_compact_tracks_file_paths() {
             "name": "Read",
             "tool_use_id": "tool-1",
             "file_path": "/src/main.rs",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-2",
             "input": {"file_path": "/src/lib.rs"},
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Bash",
             "tool_use_id": "tool-3",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",
             "name": "Read",
             "tool_use_id": "tool-4",
             "file_path": "/src/test.rs",
-            "content": large_content.clone()
+            "content": large_content
         }),
         serde_json::json!({
             "role": "tool",

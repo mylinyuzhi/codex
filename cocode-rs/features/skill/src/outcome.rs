@@ -1,7 +1,7 @@
 //! Skill loading outcome types.
 //!
 //! Loading skills uses a fail-open strategy: if one skill fails to load
-//! (e.g., malformed TOML, missing prompt file), it is reported as a
+//! (e.g., malformed YAML frontmatter, empty markdown body), it is reported as a
 //! [`SkillLoadOutcome::Failed`] but does not prevent other skills from
 //! being loaded successfully.
 

@@ -4,190 +4,116 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
-use ratatui::widgets::Block;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
+use crate::state::SkillSuggestionItem;
 use crate::state::SkillSuggestionState;
 use crate::theme::Theme;
+use crate::widgets::suggestion_popup::SuggestionPopup;
+use crate::widgets::suggestion_popup::SuggestionRenderer;
 
-/// Maximum number of visible suggestions in the popup.
-const MAX_VISIBLE: i32 = 8;
+/// Skill-specific suggestion renderer.
+struct SkillRenderer;
+
+impl SuggestionRenderer for SkillRenderer {
+    type Item = SkillSuggestionItem;
+
+    fn border_color(&self, theme: &Theme) -> Color {
+        theme.accent
+    }
+
+    fn title_prefix(&self) -> &str {
+        "/"
+    }
+
+    fn popup_width(&self) -> u16 {
+        60
+    }
+
+    fn render_item(
+        &self,
+        buf: &mut Buffer,
+        item: &SkillSuggestionItem,
+        is_selected: bool,
+        x: u16,
+        y: u16,
+        width: u16,
+        style: Style,
+        theme: &Theme,
+    ) {
+        // Render skill name with highlighting
+        if is_selected {
+            buf.set_string(x, y, format!("/{}", item.name), style);
+        } else {
+            buf.set_string(x, y, "/", style);
+            let mut cx = x + 1;
+            for (char_idx, c) in item.name.chars().enumerate() {
+                let is_match = item.match_indices.contains(&char_idx);
+                let char_style = if is_match {
+                    style.bold().fg(theme.accent)
+                } else {
+                    style
+                };
+                buf.set_string(cx, y, c.to_string(), char_style);
+                cx += 1;
+            }
+        }
+
+        // Render description (truncated if needed)
+        let name_width = item.name.len().min(20);
+        let desc_start = name_width + 4; // "  /name - "
+        let desc_x = x + desc_start as u16;
+        let right_edge = x + width;
+        if desc_x < right_edge.saturating_sub(3) {
+            let available_width = (right_edge - desc_x - 1) as usize;
+            let desc = if item.description.len() > available_width {
+                format!(
+                    " - {}...",
+                    &item.description[..available_width.saturating_sub(4)]
+                )
+            } else {
+                format!(" - {}", item.description)
+            };
+            buf.set_string(desc_x, y, desc, style.dim());
+        }
+    }
+
+    fn hint_loading(&self) -> &str {
+        "Loading..."
+    }
+
+    fn hint_empty(&self) -> &str {
+        "No matching skills"
+    }
+}
 
 /// Skill suggestion popup widget.
 ///
 /// Renders a dropdown list of skill suggestions above the input area.
 pub struct SkillSuggestionPopup<'a> {
-    state: &'a SkillSuggestionState,
-    theme: &'a Theme,
+    inner: SuggestionPopup<'a, SkillRenderer>,
 }
 
 impl<'a> SkillSuggestionPopup<'a> {
     /// Create a new skill suggestion popup.
     pub fn new(state: &'a SkillSuggestionState, theme: &'a Theme) -> Self {
-        Self { state, theme }
+        Self {
+            inner: SuggestionPopup::new(state, theme, SkillRenderer),
+        }
     }
 
     /// Calculate the area for the popup based on input position.
-    ///
-    /// The popup appears above the input widget, anchored to the left,
-    /// with enough width to show skill names and descriptions.
     pub fn calculate_area(&self, input_area: Rect, terminal_height: u16) -> Rect {
-        let suggestion_count = self.state.suggestions.len() as i32;
-        let visible_count = suggestion_count.min(MAX_VISIBLE);
-
-        // Height: suggestions + 2 for border + 1 for hint line
-        let height = (visible_count as u16 + 3).min(terminal_height / 3);
-
-        // Width: Use most of the input area width
-        let width = input_area.width.min(60).max(30);
-
-        // Position: above input area
-        let x = input_area.x;
-        let y = input_area.y.saturating_sub(height);
-
-        // Ensure we don't go off-screen
-        let y = if y + height > terminal_height {
-            terminal_height.saturating_sub(height)
-        } else {
-            y
-        };
-
-        Rect::new(x, y, width, height)
+        self.inner.calculate_area(input_area, terminal_height)
     }
 }
 
 impl Widget for SkillSuggestionPopup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 3 || area.width < 10 {
-            return;
-        }
-
-        // Clear the popup area
-        Clear.render(area, buf);
-
-        // Create border with query in title
-        let title = format!(" /{} ", self.state.query);
-        let block = Block::default()
-            .title(title.bold())
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.accent));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if inner.height < 1 {
-            return;
-        }
-
-        // Calculate visible range (scrolling)
-        let total = self.state.suggestions.len() as i32;
-        let selected = self.state.selected;
-        let visible = (inner.height as i32 - 1).max(1); // -1 for hint line
-
-        // Calculate scroll offset to keep selected item visible
-        let scroll_offset = if selected < visible / 2 {
-            0
-        } else if selected > total - (visible + 1) / 2 {
-            (total - visible).max(0)
-        } else {
-            selected - visible / 2
-        };
-
-        // Render suggestions
-        let mut y = inner.y;
-        for (i, suggestion) in self
-            .state
-            .suggestions
-            .iter()
-            .skip(scroll_offset as usize)
-            .take(visible as usize)
-            .enumerate()
-        {
-            if y >= inner.y + inner.height - 1 {
-                break;
-            }
-
-            let global_idx = scroll_offset + i as i32;
-            let is_selected = global_idx == selected;
-
-            // Calculate display area for this item
-            let item_area = Rect::new(inner.x, y, inner.width, 1);
-
-            // Style based on selection
-            let style = if is_selected {
-                Style::default()
-                    .bg(self.theme.bg_selected)
-                    .fg(self.theme.text)
-            } else {
-                Style::default()
-            };
-
-            // Clear line with background
-            buf.set_style(item_area, style);
-
-            // Build the display text: "/name - description"
-            let prefix = if is_selected { "▸ " } else { "  " };
-            let name_width = suggestion.name.len().min(20);
-            let desc_start = name_width + 4; // "  /name - "
-
-            // Render prefix
-            buf.set_string(inner.x, y, prefix, style);
-
-            // Render skill name with highlighting
-            let name_x = inner.x + 2;
-            if is_selected {
-                // When selected, just render without highlight (selection bg is enough)
-                buf.set_string(name_x, y, format!("/{}", suggestion.name), style);
-            } else {
-                // Apply match highlighting
-                buf.set_string(name_x, y, "/", style);
-                let mut x = name_x + 1;
-                for (char_idx, c) in suggestion.name.chars().enumerate() {
-                    let is_match = suggestion.match_indices.contains(&char_idx);
-                    let char_style = if is_match {
-                        style.bold().fg(self.theme.accent)
-                    } else {
-                        style
-                    };
-                    buf.set_string(x, y, c.to_string(), char_style);
-                    x += 1;
-                }
-            }
-
-            // Render description (truncated if needed)
-            let desc_x = inner.x + desc_start as u16;
-            if desc_x < inner.x + inner.width - 3 {
-                let available_width = (inner.x + inner.width - desc_x - 1) as usize;
-                let desc = if suggestion.description.len() > available_width {
-                    format!(
-                        " - {}...",
-                        &suggestion.description[..available_width.saturating_sub(4)]
-                    )
-                } else {
-                    format!(" - {}", suggestion.description)
-                };
-                buf.set_string(desc_x, y, desc, style.dim());
-            }
-
-            y += 1;
-        }
-
-        // Render hint line at bottom
-        if inner.height > 1 {
-            let hint_y = inner.y + inner.height - 1;
-            let hint = if self.state.loading {
-                "Loading..."
-            } else if self.state.suggestions.is_empty() {
-                "No matching skills"
-            } else {
-                "Tab/Enter: Select  Esc: Dismiss"
-            };
-            buf.set_string(inner.x, hint_y, hint, Style::default().dim());
-        }
+        self.inner.render(area, buf);
     }
 }
 

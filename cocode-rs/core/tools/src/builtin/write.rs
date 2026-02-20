@@ -115,17 +115,16 @@ impl Tool for WriteTool {
             }
 
             // Plan mode: only plan file allowed
-            if ctx.is_plan_mode {
-                if let Some(ref plan_file) = ctx.plan_file_path {
-                    if path != *plan_file {
-                        return PermissionResult::Denied {
-                            reason: format!(
-                                "Plan mode: cannot write to '{}'. Only the plan file can be modified.",
-                                path.display()
-                            ),
-                        };
-                    }
-                }
+            if ctx.is_plan_mode
+                && let Some(ref plan_file) = ctx.plan_file_path
+                && path != *plan_file
+            {
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Plan mode: cannot write to '{}'. Only the plan file can be modified.",
+                        path.display()
+                    ),
+                };
             }
 
             // Sensitive file → NeedsApproval (high severity)
@@ -213,16 +212,14 @@ impl Tool for WriteTool {
         let path = ctx.resolve_path(file_path);
 
         // Plan mode check: only allow writes to the plan file
-        if ctx.is_plan_mode {
-            if !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
-                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+        if ctx.is_plan_mode && !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
                         "Plan mode: cannot write to '{}'. Only the plan file can be modified during plan mode.",
                         path.display()
                     ),
                 }
                 .build());
-            }
         }
 
         // Detect original encoding, line ending, and trailing newline for existing files
@@ -256,21 +253,19 @@ impl Tool for WriteTool {
             let line_ending = detect_line_ending(&original_content);
 
             // SHA256-based staleness check: detect external modifications
-            if let Some(read_state) = ctx.file_read_state(&path).await {
-                if let Some(ref stored_hash) = read_state.content_hash {
-                    let normalized_check =
-                        normalize_line_endings(&original_content, LineEnding::Lf);
-                    let current_hash =
-                        crate::context::FileReadState::compute_hash(&normalized_check);
-                    if *stored_hash != current_hash {
-                        return Err(crate::error::tool_error::ExecutionFailedSnafu {
+            if let Some(read_state) = ctx.file_read_state(&path).await
+                && let Some(ref stored_hash) = read_state.content_hash
+            {
+                let normalized_check = normalize_line_endings(&original_content, LineEnding::Lf);
+                let current_hash = crate::context::FileReadState::compute_hash(&normalized_check);
+                if *stored_hash != current_hash {
+                    return Err(crate::error::tool_error::ExecutionFailedSnafu {
                                 message: format!(
                                     "File has been modified externally since last read: {}. Read the file again before writing.",
                                     path.display()
                                 ),
                             }
                             .build());
-                    }
                 }
             }
 
@@ -281,15 +276,15 @@ impl Tool for WriteTool {
         };
 
         // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|e| {
-                    crate::error::tool_error::ExecutionFailedSnafu {
-                        message: format!("Failed to create directory: {e}"),
-                    }
-                    .build()
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to create directory: {e}"),
+                }
+                .build()
+            })?;
         }
 
         // Preserve trailing newline state from original file

@@ -462,12 +462,11 @@ impl RepoMapGenerator {
             }
 
             // Check if it looks like a file path
-            if word.contains('/') || word.contains('.') {
-                if let Some(fname) = word.split('/').last() {
-                    if fname.contains('.') {
-                        fnames.insert(fname.to_string());
-                    }
-                }
+            if (word.contains('/') || word.contains('.'))
+                && let Some(fname) = word.split('/').next_back()
+                && fname.contains('.')
+            {
+                fnames.insert(fname.to_string());
             }
 
             // Check if it's a valid identifier

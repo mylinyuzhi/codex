@@ -1200,13 +1200,14 @@ impl RetrievalConfig {
         let mut warnings = self.validate();
 
         // Check for dimension mismatch with existing index
-        if let (Some(embedding), Some(indexed)) = (&self.embedding, indexed_dimension) {
-            if embedding.dimension != indexed && indexed > 0 {
-                warnings.push(ConfigWarning::DimensionMismatch {
-                    configured: embedding.dimension,
-                    indexed,
-                });
-            }
+        if let (Some(embedding), Some(indexed)) = (&self.embedding, indexed_dimension)
+            && embedding.dimension != indexed
+            && indexed > 0
+        {
+            warnings.push(ConfigWarning::DimensionMismatch {
+                configured: embedding.dimension,
+                indexed,
+            });
         }
 
         warnings

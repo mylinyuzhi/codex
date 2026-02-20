@@ -1,51 +1,49 @@
-//! Skill interface definition (`SKILL.toml` schema).
+//! Skill interface definition (`SKILL.md` frontmatter schema).
 //!
-//! Each skill directory contains a `SKILL.toml` file that describes the
-//! skill's metadata and prompt content. This module defines the
-//! deserialization target for that file.
+//! Each skill directory contains a `SKILL.md` file with YAML frontmatter
+//! that describes the skill's metadata. The markdown body of the file
+//! serves as the prompt content. This module defines the deserialization
+//! target for the frontmatter.
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Metadata and content of a skill, as defined in `SKILL.toml`.
+/// Metadata of a skill, as defined in `SKILL.md` YAML frontmatter.
 ///
-/// A skill must have a `name` and `description`. The prompt content can be
-/// provided either inline (`prompt_inline`) or by referencing an external
-/// file (`prompt_file`). If both are specified, `prompt_file` takes
-/// precedence.
+/// A skill must have a `name` and `description`. The prompt content comes
+/// from the markdown body of the `SKILL.md` file (not from the frontmatter).
 ///
-/// # Example SKILL.toml
+/// # Example SKILL.md
 ///
-/// ```toml
-/// name = "commit"
-/// description = "Generate a commit message from staged changes"
-/// prompt_file = "prompt.md"
-/// allowed_tools = ["Bash", "Read"]
+/// ```markdown
+/// ---
+/// name: commit
+/// description: Generate a commit message from staged changes
+/// allowed-tools:
+///   - Bash
+///   - Read
+/// model: sonnet
+/// hooks:
+///   PreToolUse:
+///     - matcher: "Write|Edit"
+///       command: npm run lint
+///       once: true
+/// ---
 ///
-/// # Optional hooks that run when this skill is active
-/// [hooks.PreToolUse]
-/// matcher = { type = "or", matchers = [{ type = "exact", value = "Write" }, { type = "exact", value = "Edit" }] }
-/// command = "npm run lint"
-/// once = true
+/// Look at staged changes and generate a commit message.
+///
+/// $ARGUMENTS
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct SkillInterface {
     /// Unique skill name (used as slash-command identifier).
     pub name: String,
 
     /// Human-readable description.
     pub description: String,
-
-    /// Path to an external file containing the prompt text.
-    /// Relative to the skill directory.
-    #[serde(default)]
-    pub prompt_file: Option<String>,
-
-    /// Inline prompt text (used when `prompt_file` is not set).
-    #[serde(default)]
-    pub prompt_inline: Option<String>,
 
     /// Tools the skill is allowed to invoke.
     #[serde(default)]
@@ -96,15 +94,20 @@ pub struct SkillInterface {
     pub hooks: Option<HashMap<String, Vec<SkillHookConfig>>>,
 }
 
-/// Hook configuration within a skill's SKILL.toml.
+/// Hook configuration within a skill's `SKILL.md` frontmatter.
 ///
 /// This is a simplified hook definition that maps to [`HookDefinition`]
 /// when the skill is loaded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillHookConfig {
-    /// Optional matcher to filter which tool calls trigger this hook.
+    /// Optional matcher pattern to filter which tool calls trigger this hook.
+    ///
+    /// Supports three formats:
+    /// - Pipe-separated exact values: `"Write|Edit"` → matches Write or Edit
+    /// - Wildcard patterns: `"Bash*"` → glob-style matching
+    /// - Plain string: `"Write"` → exact match
     #[serde(default)]
-    pub matcher: Option<SkillHookMatcher>,
+    pub matcher: Option<String>,
 
     /// Command to execute. The command receives hook context as JSON on stdin.
     #[serde(default)]
@@ -125,24 +128,6 @@ pub struct SkillHookConfig {
 
 fn default_timeout() -> i32 {
     30
-}
-
-/// Matcher configuration for skill hooks.
-///
-/// Simplified version of HookMatcher for SKILL.toml.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SkillHookMatcher {
-    /// Exact string match.
-    Exact { value: String },
-    /// Wildcard pattern with `*` and `?`.
-    Wildcard { pattern: String },
-    /// Regular expression.
-    Regex { pattern: String },
-    /// Match any of the given matchers.
-    Or { matchers: Vec<SkillHookMatcher> },
-    /// Match all values.
-    All,
 }
 
 #[cfg(test)]

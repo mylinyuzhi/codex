@@ -693,7 +693,9 @@ pub fn generate_slug() -> String {
 ///
 /// The cached slug if one exists for this session, otherwise a new unique slug.
 pub fn get_unique_slug(session_id: &str, existing_slugs: Option<&[String]>) -> String {
-    let mut cache = SLUG_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = SLUG_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // Check cache first
     if let Some(slug) = cache.get(session_id) {
@@ -719,7 +721,9 @@ pub fn get_unique_slug(session_id: &str, existing_slugs: Option<&[String]>) -> S
 /// Clear the slug cache for testing purposes.
 #[doc(hidden)]
 pub fn clear_slug_cache() {
-    let mut cache = SLUG_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = SLUG_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     cache.clear();
 }
 

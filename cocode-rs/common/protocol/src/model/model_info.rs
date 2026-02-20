@@ -299,7 +299,8 @@ impl ModelInfo {
                 .iter()
                 .find(|l| l.effort == requested.effort)
                 .cloned()
-                .unwrap_or_else(|| self.nearest_supported_level(requested).unwrap()),
+                .or_else(|| self.nearest_supported_level(requested))
+                .unwrap_or_else(|| requested.clone()),
             _ => requested.clone(),
         }
     }

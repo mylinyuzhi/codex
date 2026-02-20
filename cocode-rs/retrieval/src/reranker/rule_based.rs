@@ -144,10 +144,10 @@ impl Reranker for RuleBasedReranker {
             }
 
             // 3. Recency boost - recently modified files
-            if let Some(age_days) = self.age_in_days(result.chunk.modified_time) {
-                if age_days < self.config.recency_days_threshold as i64 {
-                    boost *= self.config.recency_boost;
-                }
+            if let Some(age_days) = self.age_in_days(result.chunk.modified_time)
+                && age_days < self.config.recency_days_threshold as i64
+            {
+                boost *= self.config.recency_boost;
             }
 
             result.score *= boost;

@@ -114,10 +114,7 @@ impl InstalledPluginsRegistry {
 
     /// Add or update a plugin entry.
     pub fn add(&mut self, plugin_id: &str, entry: InstalledPluginEntry) {
-        let entries = self
-            .plugins
-            .entry(plugin_id.to_string())
-            .or_insert_with(Vec::new);
+        let entries = self.plugins.entry(plugin_id.to_string()).or_default();
 
         // Replace existing entry with same scope, or append
         if let Some(pos) = entries.iter().position(|e| e.scope == entry.scope) {

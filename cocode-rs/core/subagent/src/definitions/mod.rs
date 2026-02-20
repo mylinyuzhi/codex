@@ -1,4 +1,5 @@
 mod bash;
+mod code_simplifier;
 mod explore;
 mod general;
 mod guide;
@@ -24,6 +25,7 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
         plan::plan_agent(),
         guide::guide_agent(),
         statusline::statusline_agent(),
+        code_simplifier::code_simplifier_agent(),
     ]
 }
 
@@ -43,6 +45,23 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
 pub fn builtin_agents_with_overrides(cocode_home: &std::path::Path) -> Vec<AgentDefinition> {
     let config = cocode_config::load_builtin_agents_config(cocode_home);
     builtin_agents_with_config(&config)
+}
+
+/// Returns all agents: builtins (with config overrides) + custom agents.
+///
+/// Custom agents are loaded from:
+/// - `{cocode_home}/agents/` (user-level, lower priority)
+/// - `{project_root}/.cocode/agents/` (project-level, higher priority)
+///
+/// Custom agents with the same `agent_type` as a builtin will override it.
+pub fn all_agents(
+    cocode_home: &std::path::Path,
+    project_root: Option<&std::path::Path>,
+) -> Vec<AgentDefinition> {
+    let mut agents = builtin_agents_with_overrides(cocode_home);
+    let custom = crate::loader::load_custom_agents(cocode_home, project_root);
+    crate::loader::merge_custom_agents(&mut agents, custom);
+    agents
 }
 
 /// Returns builtin agents with the given config overrides applied.
@@ -74,6 +93,15 @@ fn apply_override(def: &mut AgentDefinition, cfg: &BuiltinAgentOverride) {
     }
     if let Some(ref disallowed) = cfg.disallowed_tools {
         def.disallowed_tools = disallowed.clone();
+    }
+    if let Some(fork_context) = cfg.fork_context {
+        def.fork_context = fork_context;
+    }
+    if let Some(ref color) = cfg.color {
+        def.color = Some(color.clone());
+    }
+    if let Some(ref reminder) = cfg.critical_reminder {
+        def.critical_reminder = Some(reminder.clone());
     }
 }
 

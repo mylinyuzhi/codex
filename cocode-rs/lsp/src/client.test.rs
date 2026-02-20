@@ -39,8 +39,7 @@ fn test_language_id_from_extension() {
         };
         assert_eq!(
             language_id, expected,
-            "Extension '{}' should map to '{}'",
-            ext, expected
+            "Extension '{ext}' should map to '{expected}'"
         );
     }
 }

@@ -208,6 +208,7 @@ impl PermissionRuleEvaluator {
     /// - `"Bash:git *"` → matches Bash tool + commands starting with "git "
     /// - `"Bash(npm run *)"` → parenthesized form, same as colon
     /// - `"*"` → matches all tools
+    #[allow(clippy::unwrap_used)]
     fn matches_tool_with_input(
         pattern: &str,
         tool_name: &str,
@@ -252,11 +253,9 @@ impl PermissionRuleEvaluator {
         if pattern == "*" {
             return true;
         }
-        if pattern.ends_with(" *") {
-            let prefix = &pattern[..pattern.len() - 2];
+        if let Some(prefix) = pattern.strip_suffix(" *") {
             command == prefix || command.starts_with(&format!("{prefix} "))
-        } else if pattern.ends_with('*') {
-            let prefix = &pattern[..pattern.len() - 1];
+        } else if let Some(prefix) = pattern.strip_suffix('*') {
             command.starts_with(prefix)
         } else {
             command == pattern
@@ -304,6 +303,7 @@ impl PermissionRuleEvaluator {
     }
 
     /// Lower number = higher priority (more restrictive).
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn action_priority(action: &RuleAction) -> i32 {
         match action {
             RuleAction::Deny => 0,

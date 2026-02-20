@@ -110,14 +110,17 @@ impl Toast {
 
 /// Widget to render a stack of toast notifications.
 pub struct ToastWidget<'a> {
-    toasts: &'a [Toast],
+    toasts: &'a std::collections::VecDeque<Toast>,
     theme: &'a crate::theme::Theme,
     max_display: i32,
 }
 
 impl<'a> ToastWidget<'a> {
     /// Create a new toast widget.
-    pub fn new(toasts: &'a [Toast], theme: &'a crate::theme::Theme) -> Self {
+    pub fn new(
+        toasts: &'a std::collections::VecDeque<Toast>,
+        theme: &'a crate::theme::Theme,
+    ) -> Self {
         Self {
             toasts,
             theme,

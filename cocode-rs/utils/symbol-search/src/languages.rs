@@ -35,6 +35,7 @@ impl SymbolLanguage {
     }
 
     /// Get tree-sitter language.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn tree_sitter_language(&self) -> tree_sitter::Language {
         match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
@@ -53,6 +54,7 @@ impl SymbolLanguage {
             .map_err(|e| anyhow::anyhow!("Failed to create tags config for {self:?}: {e}"))
     }
 
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn tags_query(&self) -> &'static str {
         match self {
             Self::Rust => RUST_TAGS_QUERY,

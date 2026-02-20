@@ -17,20 +17,20 @@ fn test_scan_finds_skill_directories() {
     let skill1 = root.join("skill1");
     fs::create_dir_all(&skill1).expect("mkdir skill1");
     fs::write(
-        skill1.join("SKILL.toml"),
-        "name = \"s1\"\ndescription = \"d\"\nprompt_inline = \"p\"",
+        skill1.join("SKILL.md"),
+        "---\nname: s1\ndescription: d\n---\np\n",
     )
-    .expect("write SKILL.toml");
+    .expect("write SKILL.md");
 
     let skill2 = root.join("nested").join("skill2");
     fs::create_dir_all(&skill2).expect("mkdir skill2");
     fs::write(
-        skill2.join("SKILL.toml"),
-        "name = \"s2\"\ndescription = \"d\"\nprompt_inline = \"p\"",
+        skill2.join("SKILL.md"),
+        "---\nname: s2\ndescription: d\n---\np\n",
     )
-    .expect("write SKILL.toml");
+    .expect("write SKILL.md");
 
-    // Create a directory without SKILL.toml
+    // Create a directory without SKILL.md
     let no_skill = root.join("no-skill");
     fs::create_dir_all(&no_skill).expect("mkdir no-skill");
     fs::write(no_skill.join("README.md"), "not a skill").expect("write README");
@@ -48,14 +48,14 @@ fn test_scan_respects_depth_limit() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let root = tmp.path();
 
-    // Create skill at depth 3 (root/a/b/c/SKILL.toml)
+    // Create skill at depth 3 (root/a/b/c/SKILL.md)
     let deep = root.join("a").join("b").join("c");
     fs::create_dir_all(&deep).expect("mkdir deep");
     fs::write(
-        deep.join("SKILL.toml"),
-        "name = \"deep\"\ndescription = \"d\"\nprompt_inline = \"p\"",
+        deep.join("SKILL.md"),
+        "---\nname: deep\ndescription: d\n---\np\n",
     )
-    .expect("write SKILL.toml");
+    .expect("write SKILL.md");
 
     // Scanner with depth 2 should not find it
     let scanner = SkillScanner {
@@ -84,8 +84,8 @@ fn test_scan_respects_max_dirs_limit() {
         let skill = root.join(format!("skill{i}"));
         fs::create_dir_all(&skill).expect("mkdir");
         fs::write(
-            skill.join("SKILL.toml"),
-            format!("name = \"s{i}\"\ndescription = \"d\"\nprompt_inline = \"p\""),
+            skill.join("SKILL.md"),
+            format!("---\nname: s{i}\ndescription: d\n---\np\n"),
         )
         .expect("write");
     }
@@ -113,8 +113,8 @@ fn test_scan_roots_skips_missing() {
     let skill = root.join("skill");
     fs::create_dir_all(&skill).expect("mkdir");
     fs::write(
-        skill.join("SKILL.toml"),
-        "name = \"s\"\ndescription = \"d\"\nprompt_inline = \"p\"",
+        skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\np\n",
     )
     .expect("write");
 

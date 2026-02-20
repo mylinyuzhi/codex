@@ -50,7 +50,7 @@ impl QueryTracking {
 }
 
 /// Tracking information for auto-compaction and session memory extraction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AutoCompactTracking {
     /// Whether compaction has been performed.
     #[serde(default)]
@@ -87,23 +87,6 @@ pub struct AutoCompactTracking {
     /// Timestamp of last extraction (not serialized, runtime-only).
     #[serde(skip)]
     last_extraction_time: Option<Instant>,
-}
-
-impl Default for AutoCompactTracking {
-    fn default() -> Self {
-        Self {
-            compacted: false,
-            turn_id: None,
-            turn_counter: 0,
-            extraction_count: 0,
-            last_extraction_tokens: 0,
-            last_extraction_tool_calls: 0,
-            last_extraction_id: None,
-            extraction_in_progress: false,
-            tool_call_count: 0,
-            last_extraction_time: None,
-        }
-    }
 }
 
 impl PartialEq for AutoCompactTracking {

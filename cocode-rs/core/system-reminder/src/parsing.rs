@@ -14,18 +14,22 @@ use regex_lite::Regex;
 // Regex Patterns (compiled lazily)
 // ============================================
 
+#[allow(clippy::expect_used)]
 fn quoted_file_regex() -> Regex {
     Regex::new(r#"(?:^|\s)@"([^"]+)""#).expect("valid quoted file regex")
 }
 
+#[allow(clippy::expect_used)]
 fn unquoted_file_regex() -> Regex {
     Regex::new(r#"(?:^|\s)@([^\s"@]+)"#).expect("valid unquoted file regex")
 }
 
+#[allow(clippy::expect_used)]
 fn agent_mention_regex() -> Regex {
     Regex::new(r"(?:^|\s)@(agent-[\w:.@-]+)").expect("valid agent mention regex")
 }
 
+#[allow(clippy::expect_used)]
 fn line_range_regex() -> Regex {
     Regex::new(r"^([^:]+)(?::(\d+)(?:-(\d+))?)?$").expect("valid line range regex")
 }

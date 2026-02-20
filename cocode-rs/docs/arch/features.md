@@ -373,137 +373,82 @@ impl SkillCache {
 }
 ```
 
-### Interface Metadata (SKILL.toml)
+### Skill Format (SKILL.md)
 
-Skills can optionally include a `SKILL.toml` file for rich UI metadata. This is separate from the SKILL.md frontmatter and is intended for visual presentation.
+Skills are defined as `SKILL.md` files with YAML frontmatter. The markdown body serves as the prompt content.
 
 #### Directory Structure
 
 ```
 .claude/skills/my-skill/
-├── SKILL.md          # Required: skill content and frontmatter
-├── SKILL.toml        # Optional: interface metadata
+├── SKILL.md          # Required: YAML frontmatter + markdown prompt
 └── assets/           # Optional: static assets
     ├── icon-small.png
     └── icon-large.png
 ```
 
-#### SKILL.toml Format
+#### SKILL.md Format
 
-```toml
-[interface]
-# Display name (defaults to skill name from SKILL.md)
-display_name = "Git Commit Helper"
+```markdown
+---
+name: commit
+description: Generate a commit message from staged changes
+allowed-tools:
+  - Bash
+  - Read
+model: sonnet
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      command: npm run lint
+      once: true
+---
 
-# Short description for UI display
-short_description = "Create commits with auto-generated messages"
+Look at staged changes and generate a commit message.
 
-# Icon paths (must be under assets/ directory)
-icon_small = "icon-small.png"   # Relative to assets/
-icon_large = "icon-large.png"   # Relative to assets/
-
-# Brand color for UI theming (#RRGGBB format)
-brand_color = "#4A90D9"
-
-# Suggested prompt shown in UI input field
-default_prompt = "Commit my recent changes"
+$ARGUMENTS
 ```
 
 #### SkillInterface Type
 
 ```rust
-/// Rich UI metadata for skill presentation
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Skill metadata from SKILL.md YAML frontmatter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct SkillInterface {
-    /// Display name (defaults to skill name)
-    pub display_name: Option<String>,
-    /// Short description for UI
-    pub short_description: Option<String>,
-    /// Small icon path (relative to skill assets/)
-    pub icon_small: Option<PathBuf>,
-    /// Large icon/logo path (relative to skill assets/)
-    pub icon_large: Option<PathBuf>,
-    /// Brand color (#RRGGBB format)
-    pub brand_color: Option<String>,
-    /// Suggested prompt for UI input
-    pub default_prompt: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub allowed_tools: Option<Vec<String>>,
+    pub when_to_use: Option<String>,
+    pub user_invocable: Option<bool>,
+    pub disable_model_invocation: Option<bool>,
+    pub model: Option<String>,
+    pub context: Option<String>,
+    pub agent: Option<String>,
+    pub argument_hint: Option<String>,
+    pub aliases: Option<Vec<String>>,
+    pub hooks: Option<HashMap<String, Vec<SkillHookConfig>>>,
 }
 
-/// Extended SkillPromptCommand with interface metadata
+/// SkillPromptCommand with optional interface for hooks
 pub struct SkillPromptCommand {
     // ... existing fields ...
 
-    /// Optional UI presentation metadata
+    /// Optional interface (kept when hooks are defined)
     pub interface: Option<SkillInterface>,
 }
 ```
 
-#### Loading Interface Metadata
+#### Loading Skills
 
 ```rust
-/// SKILL.toml configuration structure
-#[derive(Debug, Deserialize)]
-struct SkillTomlConfig {
-    interface: Option<SkillInterface>,
-}
-
-/// Load optional interface metadata from SKILL.toml
-fn load_skill_interface(skill_dir: &Path) -> Option<SkillInterface> {
-    let toml_path = skill_dir.join("SKILL.toml");
-    if !toml_path.exists() {
-        return None;
-    }
-
-    let content = std::fs::read_to_string(&toml_path).ok()?;
-    let config: SkillTomlConfig = toml::from_str(&content).ok()?;
-
-    let mut interface = config.interface?;
-
-    // Validate and resolve asset paths
-    if let Some(ref icon) = interface.icon_small {
-        interface.icon_small = validate_asset_path(skill_dir, icon);
-    }
-    if let Some(ref icon) = interface.icon_large {
-        interface.icon_large = validate_asset_path(skill_dir, icon);
-    }
-
-    // Validate color format
-    if let Some(ref color) = interface.brand_color {
-        if !is_valid_hex_color(color) {
-            interface.brand_color = None;
-        }
-    }
-
-    Some(interface)
-}
-
-/// Validate asset path is safe (under assets/, no .., no absolute)
-fn validate_asset_path(skill_dir: &Path, path: &Path) -> Option<PathBuf> {
-    // Reject absolute paths
-    if path.is_absolute() {
-        return None;
-    }
-
-    // Reject parent directory traversal
-    if path.components().any(|c| c == std::path::Component::ParentDir) {
-        return None;
-    }
-
-    // Must be under assets/ directory
-    let full_path = skill_dir.join("assets").join(path);
-    if full_path.exists() && full_path.starts_with(skill_dir.join("assets")) {
-        Some(full_path)
-    } else {
-        None
-    }
-}
-
-/// Validate hex color format (#RRGGBB)
-fn is_valid_hex_color(color: &str) -> bool {
-    if !color.starts_with('#') || color.len() != 7 {
-        return false;
-    }
-    color[1..].chars().all(|c| c.is_ascii_hexdigit())
+/// Parse SKILL.md: frontmatter + body
+fn load_skill(skill_dir: &Path) -> SkillLoadOutcome {
+    let content = fs::read_to_string(skill_dir.join("SKILL.md"))?;
+    let (yaml_str, body) = frontmatter::parse_frontmatter(&content)?;
+    let interface: SkillInterface = serde_yml::from_str(yaml_str)?;
+    let prompt = body.trim().to_string();
+    // Validate, build SkillPromptCommand, return outcome
 }
 ```
 

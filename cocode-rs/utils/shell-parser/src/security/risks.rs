@@ -230,7 +230,7 @@ impl SecurityAnalysis {
     /// Add a risk to the analysis.
     pub fn add_risk(&mut self, risk: SecurityRisk) {
         // Update max level
-        if self.max_level.is_none() || risk.level > self.max_level.unwrap() {
+        if self.max_level.is_none_or(|l| risk.level > l) {
             self.max_level = Some(risk.level);
         }
         self.risks.push(risk);

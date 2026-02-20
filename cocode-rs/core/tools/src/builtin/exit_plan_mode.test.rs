@@ -53,5 +53,5 @@ async fn test_exit_plan_mode_as_agent() {
 fn test_tool_properties() {
     let tool = ExitPlanModeTool::new();
     assert_eq!(tool.name(), "ExitPlanMode");
-    assert!(!tool.is_concurrent_safe());
+    assert!(tool.is_concurrent_safe());
 }

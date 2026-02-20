@@ -53,8 +53,7 @@ fn test_serialize_config() {
         BuiltinAgentOverride {
             max_turns: Some(50),
             identity: Some("fast".to_string()),
-            tools: None,
-            disallowed_tools: None,
+            ..Default::default()
         },
     );
 

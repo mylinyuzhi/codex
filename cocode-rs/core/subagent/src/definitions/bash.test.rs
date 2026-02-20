@@ -10,4 +10,7 @@ fn test_bash_agent() {
     assert!(agent.disallowed_tools.is_empty());
     assert_eq!(agent.max_turns, Some(10));
     assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
+    assert!(!agent.fork_context);
+    assert!(agent.color.is_none());
+    assert!(agent.critical_reminder.is_none());
 }

@@ -168,7 +168,7 @@ fn test_provider_model_new() {
         timeout_secs: Some(120),
         ..Default::default()
     };
-    let pm = ProviderModel::new(model_info.clone());
+    let pm = ProviderModel::new(model_info);
 
     assert_eq!(pm.slug(), "gpt-4");
     assert_eq!(pm.api_model_name(), "gpt-4"); // No alias, returns slug

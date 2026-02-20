@@ -10,6 +10,10 @@ fn test_agent_definition_defaults() {
     assert!(def.disallowed_tools.is_empty());
     assert!(def.identity.is_none());
     assert!(def.max_turns.is_none());
+    assert!(!def.fork_context);
+    assert!(def.color.is_none());
+    assert!(def.critical_reminder.is_none());
+    assert_eq!(def.source, AgentSource::BuiltIn);
 }
 
 #[test]
@@ -23,6 +27,10 @@ fn test_agent_definition_full() {
         identity: Some(ExecutionIdentity::Role(ModelRole::Main)),
         max_turns: Some(10),
         permission_mode: None,
+        fork_context: true,
+        color: Some("cyan".to_string()),
+        critical_reminder: Some("Do not modify files.".to_string()),
+        source: AgentSource::BuiltIn,
     };
     let json = serde_json::to_string(&def).expect("serialize");
     let back: AgentDefinition = serde_json::from_str(&json).expect("deserialize");
@@ -34,6 +42,13 @@ fn test_agent_definition_full() {
         Some(ExecutionIdentity::Role(ModelRole::Main))
     ));
     assert_eq!(back.max_turns, Some(10));
+    assert!(back.fork_context);
+    assert_eq!(back.color.as_deref(), Some("cyan"));
+    assert_eq!(
+        back.critical_reminder.as_deref(),
+        Some("Do not modify files.")
+    );
+    assert_eq!(back.source, AgentSource::BuiltIn);
 }
 
 #[test]
@@ -47,9 +62,20 @@ fn test_agent_definition_with_identity() {
         identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
         max_turns: None,
         permission_mode: None,
+        fork_context: false,
+        color: None,
+        critical_reminder: None,
+        source: AgentSource::BuiltIn,
     };
     assert!(matches!(
         def.identity,
         Some(ExecutionIdentity::Role(ModelRole::Explore))
     ));
+}
+
+#[test]
+fn test_agent_source_serde() {
+    let json = serde_json::to_string(&AgentSource::Plugin).expect("serialize");
+    let back: AgentSource = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, AgentSource::Plugin);
 }

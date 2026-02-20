@@ -111,7 +111,7 @@ fn test_tool_properties() {
     let tool = WebSearchTool::new();
     assert_eq!(tool.name(), "WebSearch");
     assert!(tool.is_concurrent_safe());
-    assert!(!tool.is_read_only()); // Network access requires approval
+    assert!(tool.is_read_only());
 }
 
 #[test]

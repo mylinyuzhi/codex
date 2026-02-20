@@ -223,11 +223,8 @@ fn test_bundled_skills_not_llm_invocable() {
     // appear in llm_invocable_skills because it is LocalJsx type.
     let manager = SkillManager::with_bundled();
     let invocable = manager.llm_invocable_skills();
-    let names: Vec<&str> = invocable.iter().map(|s| s.name.as_str()).collect();
-    assert!(
-        !names.contains(&"plugin"),
-        "plugin should not be LLM invocable"
-    );
+    let has_plugin = invocable.iter().any(|s| s.name == "plugin");
+    assert!(!has_plugin, "plugin should not be LLM invocable");
 }
 
 #[test]

@@ -8,6 +8,7 @@ fn test_contributions_default() {
     assert!(contrib.agents.is_empty());
     assert!(contrib.commands.is_empty());
     assert!(contrib.mcp_servers.is_empty());
+    assert!(contrib.lsp_servers.is_empty());
 }
 
 #[test]
@@ -58,6 +59,10 @@ fn test_contribution_agent() {
         identity: None,
         max_turns: None,
         permission_mode: None,
+        fork_context: false,
+        color: None,
+        critical_reminder: None,
+        source: cocode_subagent::AgentSource::Plugin,
     };
 
     let contrib = PluginContribution::Agent {
@@ -74,16 +79,32 @@ fn test_contribution_agent() {
 #[test]
 fn test_contributions_serialize() {
     let contrib = PluginContributions {
-        skills: vec!["skills/".to_string()],
-        hooks: vec!["hooks.toml".to_string()],
-        agents: vec!["agents/".to_string()],
-        commands: vec!["commands/".to_string()],
-        mcp_servers: vec![],
+        skills: vec!["skills/".to_string()].into(),
+        hooks: vec!["hooks.json".to_string()].into(),
+        agents: vec!["agents/".to_string()].into(),
+        commands: vec!["commands/".to_string()].into(),
+        mcp_servers: Vec::<String>::new().into(),
+        lsp_servers: Vec::<String>::new().into(),
     };
 
-    let toml_str = toml::to_string(&contrib).expect("serialize");
-    assert!(toml_str.contains("skills"));
-    assert!(toml_str.contains("hooks"));
-    assert!(toml_str.contains("agents"));
-    assert!(toml_str.contains("commands"));
+    let json_str = serde_json::to_string(&contrib).expect("serialize");
+    assert!(json_str.contains("skills"));
+    assert!(json_str.contains("hooks"));
+    assert!(json_str.contains("agents"));
+    assert!(json_str.contains("commands"));
+}
+
+#[test]
+fn test_string_or_vec_single_string() {
+    let json = r#"{"skills": "skills/", "hooks": "hooks.json"}"#;
+    let contrib: PluginContributions = serde_json::from_str(json).expect("parse");
+    assert_eq!(contrib.skills, vec!["skills/"]);
+    assert_eq!(contrib.hooks, vec!["hooks.json"]);
+}
+
+#[test]
+fn test_string_or_vec_array() {
+    let json = r#"{"skills": ["skills/", "more/"]}"#;
+    let contrib: PluginContributions = serde_json::from_str(json).expect("parse");
+    assert_eq!(contrib.skills, vec!["skills/", "more/"]);
 }

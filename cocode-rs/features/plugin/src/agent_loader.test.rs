@@ -21,15 +21,15 @@ fn test_load_agent_from_dir() {
     fs::create_dir_all(&agent_dir).expect("mkdir");
 
     fs::write(
-        agent_dir.join("AGENT.toml"),
-        r#"
-name = "my-agent"
-description = "A test agent"
-agent_type = "my-agent"
-tools = ["Read", "Glob"]
-disallowed_tools = ["Write"]
-max_turns = 10
-"#,
+        agent_dir.join("agent.json"),
+        r#"{
+  "name": "my-agent",
+  "description": "A test agent",
+  "agent_type": "my-agent",
+  "tools": ["Read", "Glob"],
+  "disallowed_tools": ["Write"],
+  "max_turns": 10
+}"#,
     )
     .expect("write");
 
@@ -60,12 +60,12 @@ fn test_load_agent_minimal() {
     fs::create_dir_all(&agent_dir).expect("mkdir");
 
     fs::write(
-        agent_dir.join("AGENT.toml"),
-        r#"
-name = "minimal"
-description = "Minimal agent"
-agent_type = "minimal"
-"#,
+        agent_dir.join("agent.json"),
+        r#"{
+  "name": "minimal",
+  "description": "Minimal agent",
+  "agent_type": "minimal"
+}"#,
     )
     .expect("write");
 
@@ -83,15 +83,15 @@ agent_type = "minimal"
 }
 
 #[test]
-fn test_load_agent_invalid_toml() {
+fn test_load_agent_invalid_json() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let agent_dir = tmp.path().join("invalid");
     fs::create_dir_all(&agent_dir).expect("mkdir");
 
-    fs::write(agent_dir.join("AGENT.toml"), "invalid { toml").expect("write");
+    fs::write(agent_dir.join("agent.json"), "invalid { json").expect("write");
 
     let results = load_agents_from_dir(tmp.path(), "test-plugin");
-    assert!(results.is_empty()); // Invalid TOML should be skipped
+    assert!(results.is_empty()); // Invalid JSON should be skipped
 }
 
 #[test]
@@ -102,12 +102,12 @@ fn test_load_multiple_agents() {
     let agent1 = tmp.path().join("agent1");
     fs::create_dir_all(&agent1).expect("mkdir");
     fs::write(
-        agent1.join("AGENT.toml"),
-        r#"
-name = "agent1"
-description = "First agent"
-agent_type = "agent1"
-"#,
+        agent1.join("agent.json"),
+        r#"{
+  "name": "agent1",
+  "description": "First agent",
+  "agent_type": "agent1"
+}"#,
     )
     .expect("write");
 
@@ -115,12 +115,12 @@ agent_type = "agent1"
     let agent2 = tmp.path().join("agent2");
     fs::create_dir_all(&agent2).expect("mkdir");
     fs::write(
-        agent2.join("AGENT.toml"),
-        r#"
-name = "agent2"
-description = "Second agent"
-agent_type = "agent2"
-"#,
+        agent2.join("agent.json"),
+        r#"{
+  "name": "agent2",
+  "description": "Second agent",
+  "agent_type": "agent2"
+}"#,
     )
     .expect("write");
 

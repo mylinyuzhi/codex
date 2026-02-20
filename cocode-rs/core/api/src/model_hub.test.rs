@@ -28,7 +28,7 @@ fn test_hub_new() {
 fn test_hub_debug() {
     let config = Config::default();
     let hub = ModelHub::new(Arc::new(config));
-    let debug_str = format!("{:?}", hub);
+    let debug_str = format!("{hub:?}");
     assert!(debug_str.contains("ModelHub"));
     assert!(debug_str.contains("provider_cache_size"));
     assert!(debug_str.contains("model_cache_size"));

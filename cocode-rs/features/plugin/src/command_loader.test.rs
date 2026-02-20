@@ -22,16 +22,16 @@ fn test_load_command_shell() {
     fs::create_dir_all(&cmd_dir).expect("mkdir");
 
     fs::write(
-        cmd_dir.join("COMMAND.toml"),
-        r#"
-name = "build"
-description = "Build the project"
-
-[handler]
-type = "shell"
-command = "cargo build"
-timeout_sec = 300
-"#,
+        cmd_dir.join("command.json"),
+        r#"{
+  "name": "build",
+  "description": "Build the project",
+  "handler": {
+    "type": "shell",
+    "command": "cargo build",
+    "timeout_sec": 300
+  }
+}"#,
     )
     .expect("write");
 
@@ -70,15 +70,15 @@ fn test_load_command_skill() {
     fs::create_dir_all(&cmd_dir).expect("mkdir");
 
     fs::write(
-        cmd_dir.join("COMMAND.toml"),
-        r#"
-name = "review"
-description = "Review code changes"
-
-[handler]
-type = "skill"
-skill_name = "code-review"
-"#,
+        cmd_dir.join("command.json"),
+        r#"{
+  "name": "review",
+  "description": "Review code changes",
+  "handler": {
+    "type": "skill",
+    "skill_name": "code-review"
+  }
+}"#,
     )
     .expect("write");
 
@@ -103,15 +103,15 @@ fn test_load_command_agent() {
     fs::create_dir_all(&cmd_dir).expect("mkdir");
 
     fs::write(
-        cmd_dir.join("COMMAND.toml"),
-        r#"
-name = "explore"
-description = "Explore codebase"
-
-[handler]
-type = "agent"
-agent_type = "explore"
-"#,
+        cmd_dir.join("command.json"),
+        r#"{
+  "name": "explore",
+  "description": "Explore codebase",
+  "handler": {
+    "type": "agent",
+    "agent_type": "explore"
+  }
+}"#,
     )
     .expect("write");
 
@@ -130,15 +130,15 @@ agent_type = "explore"
 }
 
 #[test]
-fn test_load_command_invalid_toml() {
+fn test_load_command_invalid_json() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let cmd_dir = tmp.path().join("invalid");
     fs::create_dir_all(&cmd_dir).expect("mkdir");
 
-    fs::write(cmd_dir.join("COMMAND.toml"), "invalid { toml").expect("write");
+    fs::write(cmd_dir.join("command.json"), "invalid { json").expect("write");
 
     let results = load_commands_from_dir(tmp.path(), "test-plugin");
-    assert!(results.is_empty()); // Invalid TOML should be skipped
+    assert!(results.is_empty()); // Invalid JSON should be skipped
 }
 
 #[test]
@@ -149,15 +149,15 @@ fn test_load_multiple_commands() {
     let cmd1 = tmp.path().join("cmd1");
     fs::create_dir_all(&cmd1).expect("mkdir");
     fs::write(
-        cmd1.join("COMMAND.toml"),
-        r#"
-name = "cmd1"
-description = "First command"
-
-[handler]
-type = "shell"
-command = "echo 1"
-"#,
+        cmd1.join("command.json"),
+        r#"{
+  "name": "cmd1",
+  "description": "First command",
+  "handler": {
+    "type": "shell",
+    "command": "echo 1"
+  }
+}"#,
     )
     .expect("write");
 
@@ -165,15 +165,15 @@ command = "echo 1"
     let cmd2 = tmp.path().join("cmd2");
     fs::create_dir_all(&cmd2).expect("mkdir");
     fs::write(
-        cmd2.join("COMMAND.toml"),
-        r#"
-name = "cmd2"
-description = "Second command"
-
-[handler]
-type = "shell"
-command = "echo 2"
-"#,
+        cmd2.join("command.json"),
+        r#"{
+  "name": "cmd2",
+  "description": "Second command",
+  "handler": {
+    "type": "shell",
+    "command": "echo 2"
+  }
+}"#,
     )
     .expect("write");
 

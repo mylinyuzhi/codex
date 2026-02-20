@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::PermissionMode;
 use cocode_protocol::execution::ExecutionIdentity;
 use cocode_protocol::model::ModelRole;
 
@@ -7,11 +8,24 @@ fn test_explore_agent() {
     let agent = explore_agent();
     assert_eq!(agent.name, "explore");
     assert_eq!(agent.agent_type, "explore");
-    assert_eq!(agent.tools, vec!["Read", "Glob", "Grep"]);
-    assert!(agent.disallowed_tools.is_empty());
+    assert!(
+        agent.tools.is_empty(),
+        "explore agent uses deny-list, not allow-list"
+    );
+    assert_eq!(
+        agent.disallowed_tools,
+        vec!["Edit", "Write", "NotebookEdit"]
+    );
     assert_eq!(agent.max_turns, Some(20));
     assert!(matches!(
         agent.identity,
         Some(ExecutionIdentity::Role(ModelRole::Explore))
     ));
+    assert!(matches!(
+        agent.permission_mode,
+        Some(PermissionMode::Bypass)
+    ));
+    assert!(!agent.fork_context);
+    assert_eq!(agent.color.as_deref(), Some("cyan"));
+    assert!(agent.critical_reminder.is_some());
 }

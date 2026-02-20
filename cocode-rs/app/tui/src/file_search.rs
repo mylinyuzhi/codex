@@ -53,17 +53,12 @@ pub struct FileSearchManager {
 
 /// A pending search waiting for debounce timeout.
 struct PendingSearch {
-    /// The query to search for.
-    query: String,
-    /// Start position of the @mention.
-    start_pos: i32,
-    /// When the search was scheduled.
-    scheduled_at: Instant,
     /// Handle to cancel the search task.
     handle: JoinHandle<()>,
 }
 
 /// Cached file index with TTL.
+#[derive(Default)]
 struct FileIndexCache {
     /// List of files (relative paths).
     files: Vec<String>,
@@ -73,17 +68,6 @@ struct FileIndexCache {
     last_refresh: Option<Instant>,
     /// Whether a refresh is in progress.
     refreshing: bool,
-}
-
-impl Default for FileIndexCache {
-    fn default() -> Self {
-        Self {
-            files: Vec::new(),
-            directories: Vec::new(),
-            last_refresh: None,
-            refreshing: false,
-        }
-    }
 }
 
 impl FileIndexCache {
@@ -129,31 +113,24 @@ impl FileSearchManager {
         let file_index = self.file_index.clone();
         let cwd = self.cwd.clone();
         let event_tx = self.event_tx.clone();
-        let query_clone = query.clone();
-
         let handle = tokio::spawn(async move {
             // Wait for debounce delay
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
 
             // Perform the search
-            let suggestions = search_files(&file_index, &cwd, &query_clone).await;
+            let suggestions = search_files(&file_index, &cwd, &query).await;
 
             // Send results
             let _ = event_tx
                 .send(FileSearchEvent::SearchResult {
-                    query: query_clone,
+                    query,
                     start_pos,
                     suggestions,
                 })
                 .await;
         });
 
-        self.pending_search = Some(PendingSearch {
-            query,
-            start_pos,
-            scheduled_at: Instant::now(),
-            handle,
-        });
+        self.pending_search = Some(PendingSearch { handle });
     }
 
     /// Cancel any pending search.
@@ -227,6 +204,7 @@ async fn search_directories(
 }
 
 /// Fuzzy search files using nucleo matcher.
+#[allow(clippy::expect_used)]
 async fn search_files_fuzzy(
     _file_index: &Arc<RwLock<FileIndexCache>>,
     cwd: &PathBuf,

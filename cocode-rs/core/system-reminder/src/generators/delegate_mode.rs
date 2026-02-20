@@ -63,9 +63,9 @@ impl AttachmentGenerator for DelegateModeGenerator {
 
         // Different message if exiting delegate mode
         let content = if ctx.delegate_mode_exiting {
-            format!("{}\n\n{}", DELEGATE_MODE_EXIT_INSTRUCTIONS, agent_status)
+            format!("{DELEGATE_MODE_EXIT_INSTRUCTIONS}\n\n{agent_status}")
         } else {
-            format!("{}\n\n{}", DELEGATE_MODE_INSTRUCTIONS, agent_status)
+            format!("{DELEGATE_MODE_INSTRUCTIONS}\n\n{agent_status}")
         };
 
         Ok(Some(SystemReminder::new(

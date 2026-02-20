@@ -315,22 +315,22 @@ impl IterativeExecutor {
             }
 
             // Check count condition.
-            if let IterationCondition::Count { max } = &self.condition {
-                if i + 1 >= *max {
-                    break;
-                }
+            if let IterationCondition::Count { max } = &self.condition
+                && i + 1 >= *max
+            {
+                break;
             }
 
             // Check "Until" condition if configured
-            if let IterationCondition::Until { check } = &self.condition {
-                if result.contains(check) {
-                    tracing::info!(
-                        iteration = i,
-                        check = %check,
-                        "Until condition satisfied"
-                    );
-                    break;
-                }
+            if let IterationCondition::Until { check } = &self.condition
+                && result.contains(check)
+            {
+                tracing::info!(
+                    iteration = i,
+                    check = %check,
+                    "Until condition satisfied"
+                );
+                break;
             }
         }
 

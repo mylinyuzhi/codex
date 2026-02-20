@@ -37,8 +37,7 @@ pub async fn run(model: &Arc<dyn Model>) -> Result<()> {
     assert!(has_response_done, "Expected ResponseDone event");
     assert!(
         collected_text.to_lowercase().contains("hello"),
-        "Expected 'hello' in streamed text, got: {}",
-        collected_text
+        "Expected 'hello' in streamed text, got: {collected_text}"
     );
 
     Ok(())
@@ -61,12 +60,9 @@ pub async fn run_with_tools(model: &Arc<dyn Model>) -> Result<()> {
     let mut tool_name = String::new();
 
     while let Some(event) = stream.next_event().await {
-        match event? {
-            StreamEvent::ToolCallStart { name, .. } => {
-                has_tool_call_start = true;
-                tool_name = name;
-            }
-            _ => {}
+        if let StreamEvent::ToolCallStart { name, .. } = event? {
+            has_tool_call_start = true;
+            tool_name = name;
         }
     }
 
@@ -76,8 +72,7 @@ pub async fn run_with_tools(model: &Arc<dyn Model>) -> Result<()> {
     );
     assert_eq!(
         tool_name, "get_weather",
-        "Expected get_weather tool call, got: {}",
-        tool_name
+        "Expected get_weather tool call, got: {tool_name}"
     );
 
     Ok(())

@@ -4,17 +4,18 @@ use std::fs;
 fn setup_test_plugin(dir: &std::path::Path) {
     fs::create_dir_all(dir).expect("mkdir");
     fs::write(
-        dir.join("PLUGIN.toml"),
-        r#"
-[plugin]
-name = "test-plugin"
-version = "1.0.0"
-description = "A test plugin"
-
-[contributions]
-skills = ["skills/"]
-agents = ["agents/"]
-"#,
+        dir.join("plugin.json"),
+        r#"{
+  "plugin": {
+    "name": "test-plugin",
+    "version": "1.0.0",
+    "description": "A test plugin"
+  },
+  "contributions": {
+    "skills": ["skills/"],
+    "agents": ["agents/"]
+  }
+}"#,
     )
     .expect("write");
 
@@ -22,12 +23,8 @@ agents = ["agents/"]
     let skills_dir = dir.join("skills").join("test-skill");
     fs::create_dir_all(&skills_dir).expect("mkdir");
     fs::write(
-        skills_dir.join("SKILL.toml"),
-        r#"
-name = "test-skill"
-description = "A test skill"
-prompt_inline = "Do something"
-"#,
+        skills_dir.join("SKILL.md"),
+        "---\nname: test-skill\ndescription: A test skill\n---\nDo something\n",
     )
     .expect("write");
 
@@ -35,13 +32,13 @@ prompt_inline = "Do something"
     let agents_dir = dir.join("agents").join("test-agent");
     fs::create_dir_all(&agents_dir).expect("mkdir");
     fs::write(
-        agents_dir.join("AGENT.toml"),
-        r#"
-name = "test-agent"
-description = "A test agent"
-agent_type = "test-agent"
-tools = ["Read"]
-"#,
+        agents_dir.join("agent.json"),
+        r#"{
+  "name": "test-agent",
+  "description": "A test agent",
+  "agent_type": "test-agent",
+  "tools": ["Read"]
+}"#,
     )
     .expect("write");
 }
@@ -174,7 +171,7 @@ fn test_installed_plugins_loaded() {
     let hook_registry = HookRegistry::default();
 
     let plugin_registry = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
-    // The test-plugin name is inside the PLUGIN.toml
+    // The test-plugin name is inside the plugin.json
     assert_eq!(plugin_registry.len(), 1);
     assert!(plugin_registry.has("test-plugin"));
 }

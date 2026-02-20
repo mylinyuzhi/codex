@@ -10,4 +10,10 @@ fn test_general_agent() {
     assert!(agent.disallowed_tools.is_empty());
     assert!(agent.max_turns.is_none());
     assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
+    assert!(
+        agent.fork_context,
+        "general agent forks conversation context"
+    );
+    assert!(agent.color.is_none());
+    assert!(agent.critical_reminder.is_none());
 }

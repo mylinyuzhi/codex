@@ -13,6 +13,7 @@ fn all_tools() -> Vec<String> {
         "ExitPlanMode".to_string(),
         "TaskStop".to_string(),
         "AskUserQuestion".to_string(),
+        "EnterWorktree".to_string(),
     ]
 }
 
@@ -26,6 +27,10 @@ fn make_def(tools: Vec<&str>, disallowed: Vec<&str>) -> AgentDefinition {
         identity: None,
         max_turns: None,
         permission_mode: None,
+        fork_context: false,
+        color: None,
+        critical_reminder: None,
+        source: crate::definition::AgentSource::BuiltIn,
     }
 }
 
@@ -38,6 +43,7 @@ fn test_system_blocked_always_removed() {
     assert!(!filtered.contains(&"ExitPlanMode".to_string()));
     assert!(!filtered.contains(&"TaskStop".to_string()));
     assert!(!filtered.contains(&"AskUserQuestion".to_string()));
+    assert!(!filtered.contains(&"EnterWorktree".to_string()));
 }
 
 #[test]
@@ -65,11 +71,41 @@ fn test_combined_allow_deny() {
 }
 
 #[test]
-fn test_background_blocks_interactive() {
+fn test_background_limits_to_async_safe() {
+    let def = make_def(vec![], vec![]);
+    let all = vec![
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "NotebookEdit",
+        "TaskOutput",
+        "SomeInteractiveTool",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+    let filtered = filter_tools_for_agent(&all, &def, true);
+    assert!(!filtered.contains(&"SomeInteractiveTool".to_string()));
+    assert!(filtered.contains(&"Bash".to_string()));
+    assert!(filtered.contains(&"Read".to_string()));
+    assert!(filtered.contains(&"Edit".to_string()));
+    assert!(filtered.contains(&"WebFetch".to_string()));
+    assert!(filtered.contains(&"TaskOutput".to_string()));
+}
+
+#[test]
+fn test_background_also_applies_system_blocked() {
     let def = make_def(vec![], vec![]);
     let filtered = filter_tools_for_agent(&all_tools(), &def, true);
     // AskUserQuestion is system-blocked for ALL subagents (foreground + background)
     assert!(!filtered.contains(&"AskUserQuestion".to_string()));
+    // Task is system-blocked
+    assert!(!filtered.contains(&"Task".to_string()));
 }
 
 #[test]

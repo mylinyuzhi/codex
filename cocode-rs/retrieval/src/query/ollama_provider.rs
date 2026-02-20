@@ -117,7 +117,7 @@ impl LlmProvider for OllamaLlmProvider {
         for attempt in 0..=self.config.max_retries {
             let response = self
                 .client
-                .post(&self.endpoint())
+                .post(self.endpoint())
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()

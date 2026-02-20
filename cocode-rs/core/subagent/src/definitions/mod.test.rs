@@ -7,7 +7,7 @@ use cocode_protocol::model::ModelRole;
 #[test]
 fn test_builtin_agents_count() {
     let agents = builtin_agents();
-    assert_eq!(agents.len(), 6);
+    assert_eq!(agents.len(), 7);
 }
 
 #[test]
@@ -16,7 +16,7 @@ fn test_builtin_agents_unique_names() {
     let mut names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 6, "All agent names should be unique");
+    assert_eq!(names.len(), 7, "All agent names should be unique");
 }
 
 #[test]
@@ -29,13 +29,14 @@ fn test_builtin_agent_types() {
     assert!(types.contains(&"plan"));
     assert!(types.contains(&"guide"));
     assert!(types.contains(&"statusline"));
+    assert!(types.contains(&"code-simplifier"));
 }
 
 #[test]
 fn test_builtin_agents_with_empty_config() {
     let config = BuiltinAgentsConfig::new();
     let agents = builtin_agents_with_config(&config);
-    assert_eq!(agents.len(), 6);
+    assert_eq!(agents.len(), 7);
 
     // Should be unchanged from defaults
     let explore = agents.iter().find(|a| a.agent_type == "explore").unwrap();
@@ -49,9 +50,7 @@ fn test_builtin_agents_with_max_turns_override() {
         "explore".to_string(),
         BuiltinAgentOverride {
             max_turns: Some(50),
-            identity: None,
-            tools: None,
-            disallowed_tools: None,
+            ..Default::default()
         },
     );
 
@@ -66,10 +65,8 @@ fn test_builtin_agents_with_identity_override() {
     config.insert(
         "explore".to_string(),
         BuiltinAgentOverride {
-            max_turns: None,
             identity: Some("fast".to_string()),
-            tools: None,
-            disallowed_tools: None,
+            ..Default::default()
         },
     );
 
@@ -87,10 +84,8 @@ fn test_builtin_agents_with_tools_override() {
     config.insert(
         "explore".to_string(),
         BuiltinAgentOverride {
-            max_turns: None,
-            identity: None,
             tools: Some(vec!["Read".to_string(), "Bash".to_string()]),
-            disallowed_tools: None,
+            ..Default::default()
         },
     );
 
@@ -106,15 +101,13 @@ fn test_builtin_agents_unknown_agent_ignored() {
         "unknown_agent".to_string(),
         BuiltinAgentOverride {
             max_turns: Some(999),
-            identity: None,
-            tools: None,
-            disallowed_tools: None,
+            ..Default::default()
         },
     );
 
     let agents = builtin_agents_with_config(&config);
     // Should still have 6 agents, unknown config is ignored
-    assert_eq!(agents.len(), 6);
+    assert_eq!(agents.len(), 7);
 }
 
 #[test]

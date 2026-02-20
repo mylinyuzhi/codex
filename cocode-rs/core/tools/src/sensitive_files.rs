@@ -128,9 +128,9 @@ fn matches_pattern(pattern: &str, full_path: &str, filename: &str) -> bool {
         return full_path.ends_with(pattern) || full_path.contains(&format!("/{pattern}"));
     }
 
-    if pattern.starts_with('*') {
+    if let Some(suffix) = pattern.strip_prefix('*') {
         // Extension pattern: "*.pem", "*.key"
-        return filename.ends_with(&pattern[1..]);
+        return filename.ends_with(suffix);
     }
 
     // Exact filename match

@@ -9,12 +9,19 @@ fn test_plan_agent() {
     assert_eq!(agent.agent_type, "plan");
     assert!(
         agent.tools.is_empty(),
-        "plan agent can use all non-denied tools"
+        "plan agent uses deny-list, not allow-list"
     );
-    assert_eq!(agent.disallowed_tools, vec!["Task", "Edit", "Write"]);
+    assert_eq!(
+        agent.disallowed_tools,
+        vec!["Edit", "Write", "NotebookEdit"]
+    );
     assert!(agent.max_turns.is_none());
     assert!(matches!(
         agent.identity,
         Some(ExecutionIdentity::Role(ModelRole::Plan))
     ));
+    assert!(agent.permission_mode.is_none());
+    assert!(!agent.fork_context);
+    assert_eq!(agent.color.as_deref(), Some("blue"));
+    assert!(agent.critical_reminder.is_some());
 }

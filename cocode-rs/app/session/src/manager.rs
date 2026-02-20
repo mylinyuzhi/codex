@@ -145,7 +145,7 @@ impl SessionManager {
         // Resolve provider type from Config snapshot
         let provider_type = config
             .provider_type(provider)
-            .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found in config", provider))?;
+            .ok_or_else(|| anyhow::anyhow!("Provider '{provider}' not found in config"))?;
 
         // Create ModelSpec with explicit provider type
         let spec = ModelSpec::with_type(provider, provider_type, model);

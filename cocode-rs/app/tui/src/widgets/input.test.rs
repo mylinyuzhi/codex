@@ -25,7 +25,11 @@ fn test_input_widget_with_text() {
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Hello"));
 }
 
@@ -39,7 +43,11 @@ fn test_input_widget_placeholder() {
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Type a message"));
 }
 
@@ -68,8 +76,7 @@ fn test_get_lines_with_cursor() {
 
     assert!(!lines.is_empty());
     // Should have cursor in the middle
-    let spans: Vec<_> = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(spans.contains(&"He"));
+    assert!(lines[0].spans.iter().any(|s| s.content.as_ref() == "He"));
 }
 
 #[test]

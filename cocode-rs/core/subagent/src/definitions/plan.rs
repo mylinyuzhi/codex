@@ -1,19 +1,34 @@
 use crate::definition::AgentDefinition;
+use crate::definition::AgentSource;
 use cocode_protocol::execution::ExecutionIdentity;
 use cocode_protocol::model::ModelRole;
 
-/// Plan agent - creates plans without executing modifications.
-/// Uses the Plan model role if configured, otherwise inherits from parent.
+/// Plan agent - creates plans without executing modifications (read-only).
+///
+/// Has access to all tools except write-oriented ones (Edit, Write, NotebookEdit).
+/// Uses the Plan model role.
 pub fn plan_agent() -> AgentDefinition {
     AgentDefinition {
         name: "plan".to_string(),
-        description: "Planning agent that reasons about tasks without making changes".to_string(),
+        description: "Software architect agent for designing implementation plans. Returns \
+                      step-by-step plans and identifies critical files."
+            .to_string(),
         agent_type: "plan".to_string(),
         tools: vec![],
-        disallowed_tools: vec!["Task".to_string(), "Edit".to_string(), "Write".to_string()],
+        disallowed_tools: vec![
+            "Edit".to_string(),
+            "Write".to_string(),
+            "NotebookEdit".to_string(),
+        ],
         identity: Some(ExecutionIdentity::Role(ModelRole::Plan)),
         max_turns: None,
         permission_mode: None,
+        fork_context: false,
+        color: Some("blue".to_string()),
+        critical_reminder: Some(
+            "CRITICAL: This is a READ-ONLY planning task. Do not modify files.".to_string(),
+        ),
+        source: AgentSource::BuiltIn,
     }
 }
 

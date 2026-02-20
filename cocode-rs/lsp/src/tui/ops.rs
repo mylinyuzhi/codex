@@ -21,7 +21,7 @@ fn make_error(
     LspResult::Error(LspErrorContext {
         operation: operation.to_string(),
         file: file.map(|p| p.display().to_string()),
-        symbol: symbol.map(|s| s.to_string()),
+        symbol: symbol.map(std::string::ToString::to_string),
         error: error.to_string(),
     })
 }

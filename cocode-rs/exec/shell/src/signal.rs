@@ -28,6 +28,7 @@ static BASH_BACKGROUND_SIGNALS: LazyLock<RwLock<HashMap<String, oneshot::Sender<
 ///
 /// The returned receiver will fire when [`trigger_bash_background`] is
 /// called for this signal ID.
+#[allow(clippy::expect_used)]
 pub fn register_backgroundable_bash(id: String) -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
 
@@ -41,6 +42,7 @@ pub fn register_backgroundable_bash(id: String) -> oneshot::Receiver<()> {
 ///
 /// If the command is registered and the signal channel is still open, this will
 /// send the background signal and return `true`. Otherwise returns `false`.
+#[allow(clippy::expect_used)]
 pub fn trigger_bash_background(id: &str) -> bool {
     let mut map = BASH_BACKGROUND_SIGNALS.write().expect("lock poisoned");
 
@@ -55,6 +57,7 @@ pub fn trigger_bash_background(id: &str) -> bool {
 ///
 /// This should be called when a command completes (either normally or via
 /// background transition) to clean up the signal sender.
+#[allow(clippy::expect_used)]
 pub fn unregister_backgroundable_bash(id: &str) {
     let mut map = BASH_BACKGROUND_SIGNALS.write().expect("lock poisoned");
     map.remove(id);
@@ -64,6 +67,7 @@ pub fn unregister_backgroundable_bash(id: &str) {
 ///
 /// This is useful for the TUI to know which bash commands can be
 /// sent to background via Ctrl+B.
+#[allow(clippy::expect_used)]
 pub fn backgroundable_bash_ids() -> Vec<String> {
     let map = BASH_BACKGROUND_SIGNALS.read().expect("lock poisoned");
     map.keys().cloned().collect()

@@ -20,8 +20,8 @@
 //!    ```
 //!
 //! Environment variables set for the command:
-//! - `CLAUDE_PROJECT_DIR` - Project root (working directory)
-//! - `CLAUDE_SESSION_ID` - Current session ID
+//! - `COCODE_PROJECT_DIR` - Project root (working directory)
+//! - `COCODE_SESSION_ID` - Current session ID
 //! - `HOOK_EVENT` - Event type name (e.g., "pre_tool_use")
 //! - `HOOK_TOOL_NAME` - Tool name (if applicable, otherwise empty)
 //!
@@ -110,6 +110,32 @@ impl HookOutput {
             };
         }
 
+        // Parse hookSpecificOutput fields
+        if let Some(ref specific) = self.hook_specific_output {
+            // PreToolUse: permissionDecision / permissionDecisionReason
+            if let Some(pd) = specific.get("permissionDecision").and_then(|v| v.as_str()) {
+                return HookResult::PermissionOverride {
+                    decision: pd.to_string(),
+                    reason: specific
+                        .get("permissionDecisionReason")
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string),
+                };
+            }
+            // updatedInput
+            if let Some(updated) = specific.get("updatedInput") {
+                return HookResult::ModifyInput {
+                    new_input: updated.clone(),
+                };
+            }
+            // additionalContext
+            if let Some(ctx) = specific.get("additionalContext").and_then(|v| v.as_str()) {
+                return HookResult::ContinueWithContext {
+                    additional_context: Some(ctx.to_string()),
+                };
+            }
+        }
+
         // Check decision field (PostToolUse/Stop events use "block")
         if let Some(ref decision) = self.decision
             && decision == "block"
@@ -157,14 +183,14 @@ impl CommandHandler {
     /// Runs the specified command, passing the full `HookContext` as JSON on stdin.
     ///
     /// Environment variables are set to provide context:
-    /// - `CLAUDE_PROJECT_DIR` - Working directory / project root
-    /// - `CLAUDE_SESSION_ID` - Current session ID
+    /// - `COCODE_PROJECT_DIR` - Working directory / project root
+    /// - `COCODE_SESSION_ID` - Current session ID
     /// - `HOOK_EVENT` - Event type (e.g., "pre_tool_use")
     /// - `HOOK_TOOL_NAME` - Tool name if applicable
     ///
     /// The process stdout is parsed as either `HookResult` (legacy) or `HookOutput`
     /// (Claude Code v2.1.7 format). On any error the handler falls back to `Continue`.
-    pub async fn execute(command: &str, args: &[String], ctx: &HookContext) -> HookResult {
+    pub async fn execute(command: &str, ctx: &HookContext) -> HookResult {
         let ctx_json = match serde_json::to_string(ctx) {
             Ok(j) => j,
             Err(e) => {
@@ -173,23 +199,35 @@ impl CommandHandler {
             }
         };
 
-        debug!(command, ?args, event_type = %ctx.event_type, "Executing command hook");
+        debug!(command, event_type = %ctx.event_type, "Executing command hook");
 
-        let result = tokio::process::Command::new(command)
-            .args(args)
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
             .current_dir(&ctx.working_dir)
             // Set environment variables for the command
             .env(
-                "CLAUDE_PROJECT_DIR",
+                "COCODE_PROJECT_DIR",
                 ctx.working_dir.to_string_lossy().as_ref(),
             )
-            .env("CLAUDE_SESSION_ID", &ctx.session_id)
+            .env("COCODE_SESSION_ID", &ctx.session_id)
             .env("HOOK_EVENT", ctx.event_type.as_str())
-            .env("HOOK_TOOL_NAME", ctx.tool_name.as_deref().unwrap_or(""))
-            .stdin(std::process::Stdio::piped())
+            .env("HOOK_TOOL_NAME", ctx.tool_name.as_deref().unwrap_or(""));
+
+        // For SessionStart hooks, set COCODE_ENV_FILE for env var injection
+        let env_file_path = if ctx.event_type == crate::event::HookEventType::SessionStart {
+            let env_file = std::env::temp_dir().join(format!("cocode-env-{}", ctx.session_id));
+            cmd.env("COCODE_ENV_FILE", &env_file);
+            Some(env_file)
+        } else {
+            None
+        };
+
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
+            .stderr(std::process::Stdio::piped());
+
+        let result = cmd.spawn();
 
         let mut child = match result {
             Ok(c) => c,
@@ -215,6 +253,40 @@ impl CommandHandler {
                 return HookResult::Continue;
             }
         };
+
+        // For SessionStart hooks, read back COCODE_ENV_FILE and inject env vars
+        if let Some(ref env_file) = env_file_path
+            && env_file.is_file()
+        {
+            match std::fs::read_to_string(env_file) {
+                Ok(contents) => {
+                    for line in contents.lines() {
+                        let line = line.trim();
+                        // Support "export KEY=VALUE" and "KEY=VALUE"
+                        let kv = line.strip_prefix("export ").unwrap_or(line);
+                        if let Some((key, value)) = kv.split_once('=') {
+                            let key = key.trim();
+                            // Strip surrounding quotes from value
+                            let value = value.trim().trim_matches('"').trim_matches('\'');
+                            if !key.is_empty() {
+                                debug!(key, value, "Injecting env var from COCODE_ENV_FILE");
+                                // SAFETY: SessionStart hooks run once at startup before
+                                // concurrent tool execution begins.
+                                unsafe { std::env::set_var(key, value) };
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to read COCODE_ENV_FILE '{}': {e}",
+                        env_file.display()
+                    );
+                }
+            }
+            // Clean up the temp file
+            let _ = std::fs::remove_file(env_file);
+        }
 
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);

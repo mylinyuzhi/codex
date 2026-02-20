@@ -179,8 +179,14 @@ pub struct Config {
     // ============================================================
     // 15. Hooks
     // ============================================================
-    /// Hook definitions from config.json.
-    pub hooks: Vec<crate::json_config::HookConfig>,
+    /// Hook definitions from config.json ([`HookEventType`](cocode_protocol::HookEventType) → matcher groups).
+    pub hooks: HashMap<cocode_protocol::HookEventType, Vec<crate::json_config::HookMatcherGroup>>,
+
+    /// Disable all hooks globally.
+    pub disable_all_hooks: bool,
+
+    /// Only allow hooks from managed (policy/plugin) sources.
+    pub allow_managed_hooks_only: bool,
 
     // ============================================================
     // 16. OpenTelemetry
@@ -367,7 +373,9 @@ impl Default for Config {
             web_search_config: WebSearchConfig::default(),
             web_fetch_config: WebFetchConfig::default(),
             permissions: None,
-            hooks: Vec::new(),
+            hooks: HashMap::new(),
+            disable_all_hooks: false,
+            allow_managed_hooks_only: false,
             otel: None,
             output_style: None,
         }

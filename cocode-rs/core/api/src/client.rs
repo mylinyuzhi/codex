@@ -353,19 +353,18 @@ impl ApiClient {
                     if api_error.is_context_overflow()
                         && self.config.fallback.enable_overflow_recovery
                         && overflow_attempts < self.config.fallback.max_overflow_attempts
+                        && let Some(new_max) = self.try_overflow_recovery(&current_request)
                     {
-                        if let Some(new_max) = self.try_overflow_recovery(&current_request) {
-                            info!(
-                                old = ?current_request.max_tokens,
-                                new = new_max,
-                                attempt = overflow_attempts + 1,
-                                max_attempts = self.config.fallback.max_overflow_attempts,
-                                "Recovering from context overflow by reducing max_tokens"
-                            );
-                            current_request = current_request.max_tokens(new_max);
-                            overflow_attempts += 1;
-                            continue;
-                        }
+                        info!(
+                            old = ?current_request.max_tokens,
+                            new = new_max,
+                            attempt = overflow_attempts + 1,
+                            max_attempts = self.config.fallback.max_overflow_attempts,
+                            "Recovering from context overflow by reducing max_tokens"
+                        );
+                        current_request = current_request.max_tokens(new_max);
+                        overflow_attempts += 1;
+                        continue;
                     }
 
                     // 2. Stream fallback

@@ -19,7 +19,6 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::interface::SkillHookConfig;
-use crate::interface::SkillHookMatcher;
 use crate::interface::SkillInterface;
 
 /// Converts a [`SkillInterface`] hook configuration into [`HookDefinition`]s.
@@ -34,9 +33,9 @@ pub fn convert_skill_hooks(interface: &SkillInterface) -> Vec<HookDefinition> {
 
     for (event_type_str, configs) in hooks_map {
         // Parse the event type
-        let event_type = match parse_event_type(event_type_str) {
-            Some(et) => et,
-            None => {
+        let event_type = match event_type_str.parse::<HookEventType>() {
+            Ok(et) => et,
+            Err(_) => {
                 warn!(
                     skill = %interface.name,
                     event_type = %event_type_str,
@@ -90,26 +89,6 @@ pub fn cleanup_skill_hooks(registry: &HookRegistry, skill_name: &str) {
     debug!(skill = skill_name, "Cleaned up skill hooks");
 }
 
-/// Parse an event type string into a [`HookEventType`].
-fn parse_event_type(s: &str) -> Option<HookEventType> {
-    // Support both PascalCase (from TOML keys) and snake_case
-    match s {
-        "PreToolUse" | "pre_tool_use" => Some(HookEventType::PreToolUse),
-        "PostToolUse" | "post_tool_use" => Some(HookEventType::PostToolUse),
-        "PostToolUseFailure" | "post_tool_use_failure" => Some(HookEventType::PostToolUseFailure),
-        "UserPromptSubmit" | "user_prompt_submit" => Some(HookEventType::UserPromptSubmit),
-        "SessionStart" | "session_start" => Some(HookEventType::SessionStart),
-        "SessionEnd" | "session_end" => Some(HookEventType::SessionEnd),
-        "Stop" | "stop" => Some(HookEventType::Stop),
-        "SubagentStart" | "subagent_start" => Some(HookEventType::SubagentStart),
-        "SubagentStop" | "subagent_stop" => Some(HookEventType::SubagentStop),
-        "PreCompact" | "pre_compact" => Some(HookEventType::PreCompact),
-        "Notification" | "notification" => Some(HookEventType::Notification),
-        "PermissionRequest" | "permission_request" => Some(HookEventType::PermissionRequest),
-        _ => None,
-    }
-}
-
 /// Convert a single skill hook config to a hook definition.
 fn convert_single_hook(
     skill_name: &str,
@@ -119,9 +98,14 @@ fn convert_single_hook(
 ) -> Option<HookDefinition> {
     // Determine the handler type
     let handler = if let Some(ref command) = config.command {
+        // Append args to command string since shell execution uses `sh -c`
+        let full_command = if let Some(ref args) = config.args {
+            format!("{} {}", command, args.join(" "))
+        } else {
+            command.clone()
+        };
         HookHandler::Command {
-            command: command.clone(),
-            args: config.args.clone().unwrap_or_default(),
+            command: full_command,
         }
     } else {
         warn!(
@@ -132,10 +116,10 @@ fn convert_single_hook(
         return None;
     };
 
-    // Convert the matcher
-    let matcher = config.matcher.as_ref().map(convert_matcher);
+    // Convert the string-based matcher
+    let matcher = config.matcher.as_ref().map(|s| convert_string_matcher(s));
 
-    let hook_name = format!("{}:hook:{}", skill_name, index);
+    let hook_name = format!("{skill_name}:hook:{index}");
 
     Some(HookDefinition {
         name: hook_name,
@@ -151,22 +135,30 @@ fn convert_single_hook(
     })
 }
 
-/// Convert a skill hook matcher to a hook matcher.
-fn convert_matcher(matcher: &SkillHookMatcher) -> HookMatcher {
-    match matcher {
-        SkillHookMatcher::Exact { value } => HookMatcher::Exact {
-            value: value.clone(),
-        },
-        SkillHookMatcher::Wildcard { pattern } => HookMatcher::Wildcard {
-            pattern: pattern.clone(),
-        },
-        SkillHookMatcher::Regex { pattern } => HookMatcher::Regex {
-            pattern: pattern.clone(),
-        },
-        SkillHookMatcher::Or { matchers } => HookMatcher::Or {
-            matchers: matchers.iter().map(convert_matcher).collect(),
-        },
-        SkillHookMatcher::All => HookMatcher::All,
+/// Convert a string-based matcher pattern to a [`HookMatcher`].
+///
+/// Supports three formats:
+/// - Pipe-separated: `"Write|Edit"` → `Or([Exact("Write"), Exact("Edit")])`
+/// - Wildcard: `"Bash*"` → `Wildcard { pattern: "Bash*" }`
+/// - Plain string: `"Write"` → `Exact { value: "Write" }`
+fn convert_string_matcher(pattern: &str) -> HookMatcher {
+    if pattern.contains('|') {
+        HookMatcher::Or {
+            matchers: pattern
+                .split('|')
+                .map(|s| HookMatcher::Exact {
+                    value: s.trim().to_string(),
+                })
+                .collect(),
+        }
+    } else if pattern.contains('*') || pattern.contains('?') {
+        HookMatcher::Wildcard {
+            pattern: pattern.to_string(),
+        }
+    } else {
+        HookMatcher::Exact {
+            value: pattern.to_string(),
+        }
     }
 }
 

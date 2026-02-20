@@ -6,6 +6,7 @@
 //! - Agents (specialized subagents)
 //! - Commands (plugin-provided commands)
 //! - MCP servers (Model Context Protocol servers)
+//! - LSP servers (Language Server Protocol servers)
 
 use cocode_hooks::HookDefinition;
 use cocode_skill::SkillPromptCommand;
@@ -14,33 +15,132 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::command::PluginCommand;
+use crate::lsp_loader::LspServerConfig;
 use crate::mcp::McpServerConfig;
+
+/// A flexible type that accepts either a single string or an array of strings
+/// in JSON manifests.
+///
+/// This allows plugin authors to write either:
+/// ```json
+/// { "skills": "skills/" }
+/// ```
+/// or:
+/// ```json
+/// { "skills": ["skills/", "more-skills/"] }
+/// ```
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct StringOrVec(pub Vec<String>);
+
+impl<'de> Deserialize<'de> for StringOrVec {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StringOrVecVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for StringOrVecVisitor {
+            type Value = StringOrVec;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or an array of strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<StringOrVec, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringOrVec(vec![value.to_string()]))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<StringOrVec, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut vec = Vec::new();
+                while let Some(s) = seq.next_element::<String>()? {
+                    vec.push(s);
+                }
+                Ok(StringOrVec(vec))
+            }
+        }
+
+        deserializer.deserialize_any(StringOrVecVisitor)
+    }
+}
+
+impl std::ops::Deref for StringOrVec {
+    type Target = Vec<String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq for StringOrVec {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq<Vec<String>> for StringOrVec {
+    fn eq(&self, other: &Vec<String>) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Vec<&str>> for StringOrVec {
+    fn eq(&self, other: &Vec<&str>) -> bool {
+        if self.0.len() != other.len() {
+            return false;
+        }
+        self.0.iter().zip(other.iter()).all(|(a, b)| a == b)
+    }
+}
+
+impl From<Vec<String>> for StringOrVec {
+    fn from(v: Vec<String>) -> Self {
+        Self(v)
+    }
+}
+
+impl<'a> IntoIterator for &'a StringOrVec {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 
 /// Contributions declared in a plugin manifest.
 ///
 /// Each field is a list of paths (relative to the plugin directory) that
-/// contain contribution definitions.
+/// contain contribution definitions. Fields accept either a single string
+/// or an array of strings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginContributions {
-    /// Paths to skill directories (containing SKILL.toml files).
+    /// Paths to skill directories (containing SKILL.md files).
     #[serde(default)]
-    pub skills: Vec<String>,
+    pub skills: StringOrVec,
 
-    /// Paths to hook configuration files (TOML).
+    /// Paths to hook configuration files (JSON).
     #[serde(default)]
-    pub hooks: Vec<String>,
+    pub hooks: StringOrVec,
 
-    /// Paths to agent directories (containing AGENT.toml files).
+    /// Paths to agent directories (containing agent.json files).
     #[serde(default)]
-    pub agents: Vec<String>,
+    pub agents: StringOrVec,
 
-    /// Paths to command directories (containing COMMAND.toml files).
+    /// Paths to command directories (containing command.json files).
     #[serde(default)]
-    pub commands: Vec<String>,
+    pub commands: StringOrVec,
 
     /// Paths to MCP server configuration files.
     #[serde(default)]
-    pub mcp_servers: Vec<String>,
+    pub mcp_servers: StringOrVec,
+
+    /// Paths to LSP server configuration files.
+    #[serde(default)]
+    pub lsp_servers: StringOrVec,
 }
 
 /// A contribution from a plugin.
@@ -87,6 +187,14 @@ pub enum PluginContribution {
         /// The plugin that contributed this server.
         plugin_name: String,
     },
+
+    /// An LSP server contribution.
+    LspServer {
+        /// The LSP server configuration.
+        config: LspServerConfig,
+        /// The plugin that contributed this server.
+        plugin_name: String,
+    },
 }
 
 impl PluginContribution {
@@ -98,6 +206,7 @@ impl PluginContribution {
             Self::Agent { definition, .. } => &definition.name,
             Self::Command { command, .. } => &command.name,
             Self::McpServer { config, .. } => &config.name,
+            Self::LspServer { config, .. } => &config.name,
         }
     }
 
@@ -108,7 +217,8 @@ impl PluginContribution {
             | Self::Hook { plugin_name, .. }
             | Self::Agent { plugin_name, .. }
             | Self::Command { plugin_name, .. }
-            | Self::McpServer { plugin_name, .. } => plugin_name,
+            | Self::McpServer { plugin_name, .. }
+            | Self::LspServer { plugin_name, .. } => plugin_name,
         }
     }
 
@@ -135,6 +245,11 @@ impl PluginContribution {
     /// Check if this is an MCP server contribution.
     pub fn is_mcp_server(&self) -> bool {
         matches!(self, Self::McpServer { .. })
+    }
+
+    /// Check if this is an LSP server contribution.
+    pub fn is_lsp_server(&self) -> bool {
+        matches!(self, Self::LspServer { .. })
     }
 }
 

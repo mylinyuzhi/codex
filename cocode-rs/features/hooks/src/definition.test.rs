@@ -5,7 +5,7 @@ fn test_hook_definition_defaults() {
     let json = r#"{
         "name": "test-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": ["hello"] }
+        "handler": { "type": "command", "command": "echo hello" }
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
     assert_eq!(def.name, "test-hook");
@@ -21,7 +21,7 @@ fn test_hook_definition_with_source() {
     let json = r#"{
         "name": "policy-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": [] },
+        "handler": { "type": "command", "command": "echo" },
         "source": { "type": "policy" }
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
@@ -30,7 +30,7 @@ fn test_hook_definition_with_source() {
     let json = r#"{
         "name": "plugin-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": [] },
+        "handler": { "type": "command", "command": "echo" },
         "source": { "type": "plugin", "name": "my-plugin" }
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
@@ -48,7 +48,7 @@ fn test_hook_definition_once_flag() {
     let json = r#"{
         "name": "regular-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": [] }
+        "handler": { "type": "command", "command": "echo" }
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
     assert!(!def.once);
@@ -57,7 +57,7 @@ fn test_hook_definition_once_flag() {
     let json = r#"{
         "name": "one-shot-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": [] },
+        "handler": { "type": "command", "command": "echo" },
         "once": true
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
@@ -67,16 +67,14 @@ fn test_hook_definition_once_flag() {
 #[test]
 fn test_handler_command_serde() {
     let handler = HookHandler::Command {
-        command: "lint".to_string(),
-        args: vec!["--fix".to_string()],
+        command: "lint --fix".to_string(),
     };
     let json = serde_json::to_string(&handler).expect("serialize");
     assert!(json.contains("\"type\":\"command\""));
 
     let parsed: HookHandler = serde_json::from_str(&json).expect("deserialize");
-    if let HookHandler::Command { command, args } = parsed {
-        assert_eq!(command, "lint");
-        assert_eq!(args, vec!["--fix"]);
+    if let HookHandler::Command { command } = parsed {
+        assert_eq!(command, "lint --fix");
     } else {
         panic!("Expected Command handler");
     }
@@ -151,7 +149,7 @@ fn test_effective_timeout_clamped() {
     let json = r#"{
         "name": "slow-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "sleep", "args": [] },
+        "handler": { "type": "command", "command": "sleep" },
         "timeout_secs": 9999
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");
@@ -164,7 +162,7 @@ fn test_effective_timeout_normal() {
     let json = r#"{
         "name": "normal-hook",
         "event_type": "pre_tool_use",
-        "handler": { "type": "command", "command": "echo", "args": [] },
+        "handler": { "type": "command", "command": "echo" },
         "timeout_secs": 60
     }"#;
     let def: HookDefinition = serde_json::from_str(json).expect("parse");

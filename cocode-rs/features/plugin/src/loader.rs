@@ -1,6 +1,6 @@
 //! Plugin discovery and loading.
 //!
-//! Scans directories for plugins (containing PLUGIN.toml) and loads their
+//! Scans directories for plugins (containing plugin.json) and loads their
 //! contributions.
 
 use crate::agent_loader::load_agents_from_dir;
@@ -11,7 +11,10 @@ use crate::error::Result;
 use crate::error::plugin_error::InvalidManifestSnafu;
 use crate::error::plugin_error::IoSnafu;
 use crate::error::plugin_error::PathTraversalSnafu;
-use crate::manifest::PLUGIN_TOML;
+use crate::lsp_loader::load_lsp_servers_from_dir;
+use crate::lsp_loader::load_lsp_servers_from_file;
+use crate::manifest::PLUGIN_DIR;
+use crate::manifest::PLUGIN_JSON;
 use crate::manifest::PluginManifest;
 use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
@@ -84,7 +87,7 @@ impl PluginLoader {
 
     /// Scan a directory for plugins.
     ///
-    /// Returns a list of paths to plugin directories (containing PLUGIN.toml).
+    /// Returns a list of paths to plugin directories (containing plugin.json).
     pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
         if !root.is_dir() {
             return Vec::new();
@@ -100,10 +103,16 @@ impl PluginLoader {
             .follow_links(false)
             .into_iter();
 
-        for entry in walker.filter_map(|e| e.ok()) {
+        for entry in walker.filter_map(std::result::Result::ok) {
             if entry.file_type().is_dir() {
-                let manifest_path = entry.path().join(PLUGIN_TOML);
-                if manifest_path.is_file() {
+                // Skip .cocode-plugin/ directories — they are metadata dirs, not plugin roots
+                if entry.file_name().to_str() == Some(PLUGIN_DIR) {
+                    continue;
+                }
+                // Check .cocode-plugin/plugin.json first, then plugin.json at root
+                let hidden_path = entry.path().join(PLUGIN_DIR).join(PLUGIN_JSON);
+                let root_path = entry.path().join(PLUGIN_JSON);
+                if hidden_path.is_file() || root_path.is_file() {
                     results.push(entry.path().to_path_buf());
                 }
             }
@@ -192,6 +201,9 @@ impl PluginLoader {
     }
 
     /// Load contributions from a plugin.
+    ///
+    /// Loads declared contributions first, then auto-discovers standard
+    /// directories if the corresponding contribution list is empty.
     fn load_contributions(
         &self,
         plugin_dir: &Path,
@@ -200,8 +212,13 @@ impl PluginLoader {
     ) -> Result<Vec<PluginContribution>> {
         let mut result = Vec::new();
 
-        // Load skills
-        for skill_path in &contributions.skills {
+        // Load skills (declared or auto-discover skills/)
+        let skill_paths = if contributions.skills.is_empty() {
+            self.auto_discover_dir(plugin_dir, "skills")
+        } else {
+            contributions.skills.iter().cloned().collect()
+        };
+        for skill_path in &skill_paths {
             let full_path = match self.validate_path(plugin_dir, skill_path) {
                 Ok(p) => p,
                 Err(e) => {
@@ -243,8 +260,13 @@ impl PluginLoader {
             }
         }
 
-        // Load hooks
-        for hook_path in &contributions.hooks {
+        // Load hooks (declared or auto-discover hooks/hooks.json)
+        let hook_paths = if contributions.hooks.is_empty() {
+            self.auto_discover_file(plugin_dir, "hooks/hooks.json")
+        } else {
+            contributions.hooks.iter().cloned().collect()
+        };
+        for hook_path in &hook_paths {
             let full_path = match self.validate_path(plugin_dir, hook_path) {
                 Ok(p) => p,
                 Err(e) => {
@@ -278,8 +300,13 @@ impl PluginLoader {
             }
         }
 
-        // Load agents
-        for agent_path in &contributions.agents {
+        // Load agents (declared or auto-discover agents/)
+        let agent_paths = if contributions.agents.is_empty() {
+            self.auto_discover_dir(plugin_dir, "agents")
+        } else {
+            contributions.agents.iter().cloned().collect()
+        };
+        for agent_path in &agent_paths {
             let full_path = match self.validate_path(plugin_dir, agent_path) {
                 Ok(p) => p,
                 Err(e) => {
@@ -304,8 +331,13 @@ impl PluginLoader {
             }
         }
 
-        // Load commands
-        for command_path in &contributions.commands {
+        // Load commands (declared or auto-discover commands/)
+        let command_paths = if contributions.commands.is_empty() {
+            self.auto_discover_dir(plugin_dir, "commands")
+        } else {
+            contributions.commands.iter().cloned().collect()
+        };
+        for command_path in &command_paths {
             let full_path = match self.validate_path(plugin_dir, command_path) {
                 Ok(p) => p,
                 Err(e) => {
@@ -330,8 +362,18 @@ impl PluginLoader {
             }
         }
 
-        // Load MCP servers
-        for mcp_path in &contributions.mcp_servers {
+        // Load MCP servers (declared or auto-discover mcp/ and .mcp.json)
+        let mcp_paths = if contributions.mcp_servers.is_empty() {
+            let mut paths = self.auto_discover_dir(plugin_dir, "mcp");
+            let mcp_json = plugin_dir.join(".mcp.json");
+            if mcp_json.is_file() {
+                paths.push(".mcp.json".to_string());
+            }
+            paths
+        } else {
+            contributions.mcp_servers.iter().cloned().collect()
+        };
+        for mcp_path in &mcp_paths {
             let full_path = match self.validate_path(plugin_dir, mcp_path) {
                 Ok(p) => p,
                 Err(e) => {
@@ -356,17 +398,73 @@ impl PluginLoader {
             }
         }
 
+        // Load LSP servers (declared or auto-discover .lsp.json)
+        let lsp_paths = if contributions.lsp_servers.is_empty() {
+            self.auto_discover_file(plugin_dir, ".lsp.json")
+        } else {
+            contributions.lsp_servers.iter().cloned().collect()
+        };
+        for lsp_path in &lsp_paths {
+            let full_path = match self.validate_path(plugin_dir, lsp_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %lsp_path,
+                        error = %e,
+                        "Invalid LSP server path in plugin"
+                    );
+                    continue;
+                }
+            };
+            if full_path.is_file() {
+                let servers = load_lsp_servers_from_file(&full_path, plugin_name);
+                result.extend(servers);
+            } else if full_path.is_dir() {
+                let servers = load_lsp_servers_from_dir(&full_path, plugin_name);
+                result.extend(servers);
+            } else {
+                debug!(
+                    plugin = %plugin_name,
+                    path = %full_path.display(),
+                    "LSP server path not found"
+                );
+            }
+        }
+
         Ok(result)
     }
 
-    /// Load hooks from a TOML file.
+    /// Auto-discover a standard directory if it exists in the plugin dir.
+    fn auto_discover_dir(&self, plugin_dir: &Path, dir_name: &str) -> Vec<String> {
+        let path = plugin_dir.join(dir_name);
+        if path.is_dir() {
+            debug!(dir = dir_name, "Auto-discovered standard directory");
+            vec![format!("{dir_name}/")]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Auto-discover a standard file if it exists in the plugin dir.
+    fn auto_discover_file(&self, plugin_dir: &Path, file_name: &str) -> Vec<String> {
+        let path = plugin_dir.join(file_name);
+        if path.is_file() {
+            debug!(file = file_name, "Auto-discovered standard file");
+            vec![file_name.to_string()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Load hooks from a JSON file.
     fn load_hooks_from_file(
         &self,
         path: &Path,
         plugin_name: &str,
     ) -> Result<Vec<PluginContribution>> {
-        // load_hooks_from_toml takes a path and handles reading internally
-        match cocode_hooks::load_hooks_from_toml(path) {
+        // load_hooks_from_json takes a path and handles reading internally
+        match cocode_hooks::load_hooks_from_json(path) {
             Ok(definitions) => Ok(definitions
                 .into_iter()
                 .map(|hook| PluginContribution::Hook {

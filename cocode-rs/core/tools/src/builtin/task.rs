@@ -145,7 +145,7 @@ impl Tool for TaskTool {
             let hook_ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::SubagentStart,
                 ctx.session_id.clone(),
-                ctx.cwd.clone().into(),
+                ctx.cwd.clone(),
             )
             .with_metadata("agent_type", subagent_type)
             .with_metadata("description", description);
@@ -171,7 +171,24 @@ impl Tool for TaskTool {
                         .insert(result.agent_id.clone(), token);
                 }
 
+                // Emit SubagentSpawned event for TUI visibility
+                ctx.emit_event(cocode_protocol::LoopEvent::SubagentSpawned {
+                    agent_id: result.agent_id.clone(),
+                    agent_type: subagent_type.to_string(),
+                    description: description.to_string(),
+                    color: result.color.clone(),
+                })
+                .await;
+
                 if run_in_background {
+                    // Emit SubagentBackgrounded event
+                    let output_file = result.output_file.clone().unwrap_or_default();
+                    ctx.emit_event(cocode_protocol::LoopEvent::SubagentBackgrounded {
+                        agent_id: result.agent_id.clone(),
+                        output_file,
+                    })
+                    .await;
+
                     // Background agent - return ID and output file path
                     let output_path = result
                         .output_file
@@ -184,12 +201,19 @@ impl Tool for TaskTool {
                         result.agent_id
                     )))
                 } else {
+                    // Emit SubagentCompleted event for foreground agents
+                    ctx.emit_event(cocode_protocol::LoopEvent::SubagentCompleted {
+                        agent_id: result.agent_id.clone(),
+                        result: result.output.clone().unwrap_or_default(),
+                    })
+                    .await;
+
                     // Execute SubagentStop hooks after foreground completion
                     if let Some(hooks) = &ctx.hook_registry {
                         let hook_ctx = cocode_hooks::HookContext::new(
                             cocode_hooks::HookEventType::SubagentStop,
                             ctx.session_id.clone(),
-                            ctx.cwd.clone().into(),
+                            ctx.cwd.clone(),
                         )
                         .with_metadata("agent_type", subagent_type)
                         .with_metadata("agent_id", result.agent_id.clone());

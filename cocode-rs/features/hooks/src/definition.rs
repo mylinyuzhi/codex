@@ -72,13 +72,10 @@ fn default_timeout_secs() -> i32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookHandler {
-    /// Run an external command.
+    /// Run an external command via `sh -c`.
     Command {
-        /// The command to execute.
+        /// The command string (executed via `sh -c`).
         command: String,
-        /// Arguments for the command.
-        #[serde(default)]
-        args: Vec<String>,
     },
 
     /// Inject a prompt template or perform LLM verification.

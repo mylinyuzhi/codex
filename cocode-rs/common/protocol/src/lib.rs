@@ -112,6 +112,7 @@ pub use loop_event::McpServerInfo;
 pub use loop_event::McpStartupStatus;
 pub use loop_event::MemoryAttachment;
 pub use loop_event::PersistedToolResult;
+pub use loop_event::PluginAgentInfo;
 pub use loop_event::RawStreamEvent;
 pub use loop_event::RetryInfo;
 pub use loop_event::TaskProgress;

@@ -127,7 +127,7 @@ fn test_insert_selected_path() {
 
 #[test]
 fn test_file_suggestion_state() {
-    let mut state = FileSuggestionState::new("src/".to_string(), 5);
+    let mut state = FileSuggestionState::new("src/".to_string(), 5, true);
 
     assert!(state.loading);
     assert!(state.suggestions.is_empty());
@@ -321,7 +321,7 @@ fn test_insert_selected_skill() {
 
 #[test]
 fn test_skill_suggestion_state() {
-    let mut state = SkillSuggestionState::new("com".to_string(), 0);
+    let mut state = SkillSuggestionState::new("com".to_string(), 0, false);
 
     assert!(!state.loading);
     assert!(state.suggestions.is_empty());
@@ -419,7 +419,7 @@ fn test_insert_selected_agent_start_of_line() {
 
 #[test]
 fn test_agent_suggestion_state_navigation() {
-    let mut state = AgentSuggestionState::new("exp".to_string(), 0);
+    let mut state = AgentSuggestionState::new("exp".to_string(), 0, false);
 
     state.update_suggestions(vec![
         AgentSuggestionItem {

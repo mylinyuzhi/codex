@@ -406,14 +406,13 @@ mod message_content {
         S: Serializer,
     {
         // If single text block without cache_control, serialize as string for convenience
-        if content.len() == 1 {
-            if let ContentBlockParam::Text {
+        if content.len() == 1
+            && let ContentBlockParam::Text {
                 text,
                 cache_control: None,
             } = &content[0]
-            {
-                return text.serialize(serializer);
-            }
+        {
+            return text.serialize(serializer);
         }
         content.serialize(serializer)
     }

@@ -4,6 +4,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::widgets::Block;
@@ -75,6 +76,13 @@ impl Widget for SubagentPanel<'_> {
                 SubagentStatus::Backgrounded => ("◐", Style::default().fg(self.theme.secondary)),
             };
 
+            // Use agent color from definition if available
+            let type_color = subagent
+                .color
+                .as_deref()
+                .and_then(parse_agent_color)
+                .unwrap_or(self.theme.text_dim);
+
             // Agent type icon based on type name
             let type_icon = match subagent.agent_type.to_lowercase().as_str() {
                 "explore" => "~ ",
@@ -91,14 +99,9 @@ impl Widget for SubagentPanel<'_> {
             // Render status icon
             buf.set_string(inner.x, y, icon, style);
 
-            // Render agent type icon
+            // Render agent type icon (uses definition color if available)
             let icon_x = inner.x + 2;
-            buf.set_string(
-                icon_x,
-                y,
-                type_icon,
-                Style::default().fg(self.theme.text_dim),
-            );
+            buf.set_string(icon_x, y, type_icon, Style::default().fg(type_color));
 
             // Render agent type
             let type_x = icon_x + type_icon.len() as u16;
@@ -126,43 +129,55 @@ impl Widget for SubagentPanel<'_> {
             y += 1;
 
             // Render progress on next line if available
-            if let Some(ref progress) = subagent.progress {
-                if y < inner.y + inner.height {
-                    let progress_str = if let (Some(current), Some(total)) =
-                        (progress.current_step, progress.total_steps)
-                    {
-                        format!(
-                            "  {}",
-                            t!("subagent.step_progress", current = current, total = total)
-                        )
-                    } else if let Some(ref msg) = progress.message {
-                        format!("  {}", msg)
-                    } else {
-                        String::new()
-                    };
+            if let Some(ref progress) = subagent.progress
+                && y < inner.y + inner.height
+            {
+                let progress_str = if let (Some(current), Some(total)) =
+                    (progress.current_step, progress.total_steps)
+                {
+                    format!(
+                        "  {}",
+                        t!("subagent.step_progress", current = current, total = total)
+                    )
+                } else if let Some(ref msg) = progress.message {
+                    format!("  {msg}")
+                } else {
+                    String::new()
+                };
 
-                    if !progress_str.is_empty() {
-                        let available = inner.width as usize;
-                        let text = if progress_str.len() > available {
-                            format!("{}...", &progress_str[..available.saturating_sub(3)])
-                        } else {
-                            progress_str
-                        };
-                        buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
-                        y += 1;
-                    }
+                if !progress_str.is_empty() {
+                    let available = inner.width as usize;
+                    let text = if progress_str.len() > available {
+                        format!("{}...", &progress_str[..available.saturating_sub(3)])
+                    } else {
+                        progress_str
+                    };
+                    buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
+                    y += 1;
                 }
             }
         }
 
         // Show count if more items exist
-        if self.subagents.len() > self.max_display as usize {
-            if y < inner.y + inner.height {
-                let remaining = self.subagents.len() - self.max_display as usize;
-                let text = format!("  {}", t!("subagent.more", count = remaining));
-                buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
-            }
+        if self.subagents.len() > self.max_display as usize && y < inner.y + inner.height {
+            let remaining = self.subagents.len() - self.max_display as usize;
+            let text = format!("  {}", t!("subagent.more", count = remaining));
+            buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
         }
+    }
+}
+
+/// Parse an agent color name to a ratatui Color.
+fn parse_agent_color(name: &str) -> Option<Color> {
+    match name {
+        "cyan" => Some(Color::Cyan),
+        "blue" => Some(Color::Blue),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "magenta" => Some(Color::Magenta),
+        "red" => Some(Color::Red),
+        "orange" => Some(Color::Rgb(255, 165, 0)),
+        _ => None,
     }
 }
 

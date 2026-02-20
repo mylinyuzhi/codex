@@ -75,35 +75,35 @@ fn test_command_serialize_deserialize() {
         visible: true,
     };
 
-    let toml_str = toml::to_string(&cmd).expect("serialize");
-    let back: PluginCommand = toml::from_str(&toml_str).expect("deserialize");
+    let json_str = serde_json::to_string(&cmd).expect("serialize");
+    let back: PluginCommand = serde_json::from_str(&json_str).expect("deserialize");
     assert_eq!(back.name, "test");
     assert!(back.visible);
 }
 
 #[test]
 fn test_command_default_visible() {
-    let toml_str = r#"
-name = "hidden"
-description = "A command"
-visible = false
-
-[handler]
-type = "shell"
-command = "echo hi"
-"#;
-    let cmd: PluginCommand = toml::from_str(toml_str).expect("deserialize");
+    let json_str = r#"{
+  "name": "hidden",
+  "description": "A command",
+  "visible": false,
+  "handler": {
+    "type": "shell",
+    "command": "echo hi"
+  }
+}"#;
+    let cmd: PluginCommand = serde_json::from_str(json_str).expect("deserialize");
     assert!(!cmd.visible);
 
     // Without explicit visible, should default to true
-    let toml_str2 = r#"
-name = "visible"
-description = "Another command"
-
-[handler]
-type = "shell"
-command = "echo hi"
-"#;
-    let cmd2: PluginCommand = toml::from_str(toml_str2).expect("deserialize");
+    let json_str2 = r#"{
+  "name": "visible",
+  "description": "Another command",
+  "handler": {
+    "type": "shell",
+    "command": "echo hi"
+  }
+}"#;
+    let cmd2: PluginCommand = serde_json::from_str(json_str2).expect("deserialize");
     assert!(cmd2.visible);
 }

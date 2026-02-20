@@ -142,14 +142,14 @@ impl RequestBuilder {
             };
 
         // Step 2: Merge request_options into provider_options
-        if let Some(req_opts) = &self.context.request_options {
-            if !req_opts.is_empty() {
-                provider_options = Some(request_options_merge::merge_into_provider_options(
-                    provider_options,
-                    req_opts,
-                    self.context.model_spec.provider_type,
-                ));
-            }
+        if let Some(req_opts) = &self.context.request_options
+            && !req_opts.is_empty()
+        {
+            provider_options = Some(request_options_merge::merge_into_provider_options(
+                provider_options,
+                req_opts,
+                self.context.model_spec.provider_type,
+            ));
         }
 
         request.provider_options = provider_options;

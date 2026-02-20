@@ -2,7 +2,7 @@ use super::*;
 use crate::state::FileSuggestionItem;
 
 fn create_test_state() -> FileSuggestionState {
-    let mut state = FileSuggestionState::new("src/".to_string(), 0);
+    let mut state = FileSuggestionState::new("src/".to_string(), 0, true);
     state.update_suggestions(vec![
         FileSuggestionItem {
             path: "src/main.rs".to_string(),
@@ -54,24 +54,17 @@ fn test_popup_render() {
     popup.render(area, &mut buf);
 
     // Should contain the query
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("src/"));
 }
 
 #[test]
-fn test_highlight_path() {
-    let path = "src/main.rs";
-    let indices = vec![0, 4, 5];
-
-    let line = FileSuggestionPopup::highlight_path(path, &indices);
-
-    // Should have multiple spans (highlighted and non-highlighted)
-    assert!(!line.spans.is_empty());
-}
-
-#[test]
 fn test_empty_suggestions() {
-    let mut state = FileSuggestionState::new("xyz".to_string(), 0);
+    let mut state = FileSuggestionState::new("xyz".to_string(), 0, true);
     // Update with empty suggestions to mark loading as false
     state.update_suggestions(vec![]);
     let theme = Theme::default();
@@ -82,13 +75,17 @@ fn test_empty_suggestions() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("No matches"));
 }
 
 #[test]
 fn test_loading_state() {
-    let state = FileSuggestionState::new("src".to_string(), 0);
+    let state = FileSuggestionState::new("src".to_string(), 0, true);
     // loading is true by default
     let theme = Theme::default();
     let popup = FileSuggestionPopup::new(&state, &theme);
@@ -98,6 +95,10 @@ fn test_loading_state() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Searching"));
 }

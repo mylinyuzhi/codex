@@ -15,14 +15,14 @@ fn test_detect_encoding_utf8_with_bom() {
 #[test]
 fn test_detect_encoding_utf16le() {
     let mut bytes = vec![0xFF, 0xFE];
-    bytes.extend("Hello".encode_utf16().flat_map(|u| u.to_le_bytes()));
+    bytes.extend("Hello".encode_utf16().flat_map(u16::to_le_bytes));
     assert_eq!(detect_encoding(&bytes), Encoding::Utf16Le);
 }
 
 #[test]
 fn test_detect_encoding_utf16be() {
     let mut bytes = vec![0xFE, 0xFF];
-    bytes.extend("Hello".encode_utf16().flat_map(|u| u.to_be_bytes()));
+    bytes.extend("Hello".encode_utf16().flat_map(u16::to_be_bytes));
     assert_eq!(detect_encoding(&bytes), Encoding::Utf16Be);
 }
 
@@ -43,7 +43,7 @@ fn test_decode_utf8_with_bom() {
 #[test]
 fn test_decode_utf16le() {
     let mut bytes = vec![0xFF, 0xFE];
-    bytes.extend("Hi".encode_utf16().flat_map(|u| u.to_le_bytes()));
+    bytes.extend("Hi".encode_utf16().flat_map(u16::to_le_bytes));
     let content = Encoding::Utf16Le.decode(&bytes).unwrap();
     assert_eq!(content, "Hi");
 }
@@ -51,7 +51,7 @@ fn test_decode_utf16le() {
 #[test]
 fn test_decode_utf16be() {
     let mut bytes = vec![0xFE, 0xFF];
-    bytes.extend("Hi".encode_utf16().flat_map(|u| u.to_be_bytes()));
+    bytes.extend("Hi".encode_utf16().flat_map(u16::to_be_bytes));
     let content = Encoding::Utf16Be.decode(&bytes).unwrap();
     assert_eq!(content, "Hi");
 }

@@ -457,39 +457,39 @@ impl SessionMemoryExtractionConfig {
     /// - `COCODE_EXTRACTION_MAX_TOKENS`: Override max_summary_tokens
     pub fn with_env_overrides(mut self) -> Self {
         // COCODE_ENABLE_SESSION_MEMORY - master toggle
-        if let Ok(val) = std::env::var("COCODE_ENABLE_SESSION_MEMORY") {
-            if let Ok(enabled) = val.parse::<bool>() {
-                self.enabled = enabled;
-            }
+        if let Ok(val) = std::env::var("COCODE_ENABLE_SESSION_MEMORY")
+            && let Ok(enabled) = val.parse::<bool>()
+        {
+            self.enabled = enabled;
         }
 
         // COCODE_EXTRACTION_MIN_TOKENS - trigger threshold
-        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MIN_TOKENS") {
-            if let Ok(tokens) = val.parse::<i32>() {
-                self.min_tokens_to_init = tokens;
-                self.min_tokens_between = tokens;
-            }
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MIN_TOKENS")
+            && let Ok(tokens) = val.parse::<i32>()
+        {
+            self.min_tokens_to_init = tokens;
+            self.min_tokens_between = tokens;
         }
 
         // COCODE_EXTRACTION_TOOL_CALLS - tool call threshold
-        if let Ok(val) = std::env::var("COCODE_EXTRACTION_TOOL_CALLS") {
-            if let Ok(calls) = val.parse::<i32>() {
-                self.tool_calls_between = calls;
-            }
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_TOOL_CALLS")
+            && let Ok(calls) = val.parse::<i32>()
+        {
+            self.tool_calls_between = calls;
         }
 
         // COCODE_EXTRACTION_COOLDOWN - cooldown seconds
-        if let Ok(val) = std::env::var("COCODE_EXTRACTION_COOLDOWN") {
-            if let Ok(secs) = val.parse::<i32>() {
-                self.cooldown_secs = secs;
-            }
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_COOLDOWN")
+            && let Ok(secs) = val.parse::<i32>()
+        {
+            self.cooldown_secs = secs;
         }
 
         // COCODE_EXTRACTION_MAX_TOKENS - max summary tokens
-        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MAX_TOKENS") {
-            if let Ok(tokens) = val.parse::<i32>() {
-                self.max_summary_tokens = tokens;
-            }
+        if let Ok(val) = std::env::var("COCODE_EXTRACTION_MAX_TOKENS")
+            && let Ok(tokens) = val.parse::<i32>()
+        {
+            self.max_summary_tokens = tokens;
         }
 
         self
@@ -642,7 +642,7 @@ impl FileRestorationConfig {
         }
 
         // Exact match
-        path == pattern || path.ends_with(&format!("/{}", pattern))
+        path == pattern || path.ends_with(&format!("/{pattern}"))
     }
 
     /// Match a suffix pattern that may contain wildcards against a path.
@@ -664,7 +664,7 @@ impl FileRestorationConfig {
         }
 
         // No wildcard - exact filename match
-        filename == suffix_pattern || path.ends_with(&format!("/{}", suffix_pattern))
+        filename == suffix_pattern || path.ends_with(&format!("/{suffix_pattern}"))
     }
 
     /// Validate configuration values.
@@ -813,10 +813,10 @@ impl CompactConfig {
     /// Returns an error message if any values are invalid.
     pub fn validate(&self) -> Result<(), String> {
         // Validate auto_compact_pct
-        if let Some(pct) = self.auto_compact_pct {
-            if !(0..=100).contains(&pct) {
-                return Err(format!("auto_compact_pct must be 0-100, got {pct}"));
-            }
+        if let Some(pct) = self.auto_compact_pct
+            && !(0..=100).contains(&pct)
+        {
+            return Err(format!("auto_compact_pct must be 0-100, got {pct}"));
         }
 
         // Validate session memory tokens
@@ -909,10 +909,10 @@ impl CompactConfig {
     /// If the model specifies `auto_compact_pct` and this config
     /// doesn't already have one set (by env or JSON), use the model's value.
     pub fn apply_model_overrides(&mut self, model_info: &crate::ModelInfo) {
-        if let Some(pct) = model_info.auto_compact_pct {
-            if self.auto_compact_pct.is_none() {
-                self.auto_compact_pct = Some(pct);
-            }
+        if let Some(pct) = model_info.auto_compact_pct
+            && self.auto_compact_pct.is_none()
+        {
+            self.auto_compact_pct = Some(pct);
         }
     }
 }

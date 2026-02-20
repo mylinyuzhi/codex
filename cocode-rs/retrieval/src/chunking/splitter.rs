@@ -144,38 +144,38 @@ impl CodeChunkerService {
         //   1. Functions/classes are self-contained semantic units
         //   2. Token overlap creates AST fragments (e.g., `}`, `else`)
         //   3. Duplicate content distorts BM25/embedding search scores
-        if let Some(ts_lang) = get_tree_sitter_language(language) {
-            if let Ok(splitter) = CodeSplitter::new(ts_lang, chunk_config) {
-                let raw_chunks: Vec<(usize, &str)> =
-                    splitter.chunk_indices(&remaining_content).collect();
-                tracing::trace!(
-                    language = %language,
-                    chunks = raw_chunks.len(),
-                    import_chunk = import_chunk.is_some(),
-                    max_tokens = self.max_tokens,
-                    overlap = "disabled for code (AST boundaries sufficient)",
-                    "CodeSplitter: AST-aware chunking"
-                );
+        if let Some(ts_lang) = get_tree_sitter_language(language)
+            && let Ok(splitter) = CodeSplitter::new(ts_lang, chunk_config)
+        {
+            let raw_chunks: Vec<(usize, &str)> =
+                splitter.chunk_indices(&remaining_content).collect();
+            tracing::trace!(
+                language = %language,
+                chunks = raw_chunks.len(),
+                import_chunk = import_chunk.is_some(),
+                max_tokens = self.max_tokens,
+                overlap = "disabled for code (AST boundaries sufficient)",
+                "CodeSplitter: AST-aware chunking"
+            );
 
-                let mut chunks: Vec<ChunkSpan> = raw_chunks
-                    .into_iter()
-                    .map(|(offset, chunk)| {
-                        let mut span = Self::to_chunk_span(&remaining_content, offset, chunk);
-                        // Adjust line numbers to account for extracted import block
-                        span.start_line += line_offset;
-                        span.end_line += line_offset;
-                        span
-                    })
-                    .collect();
+            let mut chunks: Vec<ChunkSpan> = raw_chunks
+                .into_iter()
+                .map(|(offset, chunk)| {
+                    let mut span = Self::to_chunk_span(&remaining_content, offset, chunk);
+                    // Adjust line numbers to account for extracted import block
+                    span.start_line += line_offset;
+                    span.end_line += line_offset;
+                    span
+                })
+                .collect();
 
-                // Prepend import chunk if present
-                if let Some(import) = import_chunk {
-                    chunks.insert(0, import);
-                }
-
-                // No overlap for code - AST boundaries provide natural semantic separation
-                return Ok(chunks);
+            // Prepend import chunk if present
+            if let Some(import) = import_chunk {
+                chunks.insert(0, import);
             }
+
+            // No overlap for code - AST boundaries provide natural semantic separation
+            return Ok(chunks);
         }
 
         // Fallback: TextSplitter with token-aware config
@@ -207,7 +207,7 @@ impl CodeChunkerService {
 
         // Apply overlap for text files
         if self.overlap_tokens > 0 && chunks.len() > 1 {
-            Self::apply_overlap(&mut chunks, self.overlap_tokens, &*TOKENIZER);
+            Self::apply_overlap(&mut chunks, self.overlap_tokens, &TOKENIZER);
         }
 
         Ok(chunks)

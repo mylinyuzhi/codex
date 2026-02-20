@@ -48,6 +48,34 @@ pub struct AgentDefinition {
     /// operations, while a "bash" agent uses `Default`.
     #[serde(default)]
     pub permission_mode: Option<PermissionMode>,
+
+    /// Whether to fork the parent conversation context to this agent.
+    /// Only `general` uses this (gets conversation history).
+    #[serde(default)]
+    pub fork_context: bool,
+
+    /// Display color for TUI (e.g., "cyan", "blue", "green", "orange").
+    #[serde(default)]
+    pub color: Option<String>,
+
+    /// Critical reminder injected at the start of the agent's prompt.
+    /// Used for read-only enforcement in explore/plan/guide agents.
+    #[serde(default)]
+    pub critical_reminder: Option<String>,
+
+    /// Where this definition originates from.
+    #[serde(default)]
+    pub source: AgentSource,
+}
+
+/// Where an agent definition originates from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AgentSource {
+    #[default]
+    BuiltIn,
+    UserSettings,
+    ProjectSettings,
+    Plugin,
 }
 
 #[cfg(test)]

@@ -47,16 +47,10 @@ pub type RatatuiTerminal = Terminal<TerminalBackend>;
 pub fn setup_terminal() -> io::Result<RatatuiTerminal> {
     // Check that stdin/stdout are terminals
     if !io::stdin().is_terminal() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "stdin is not a terminal",
-        ));
+        return Err(io::Error::other("stdin is not a terminal"));
     }
     if !io::stdout().is_terminal() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "stdout is not a terminal",
-        ));
+        return Err(io::Error::other("stdout is not a terminal"));
     }
 
     enable_raw_mode()?;

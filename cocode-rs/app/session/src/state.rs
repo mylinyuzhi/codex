@@ -25,11 +25,14 @@ use cocode_protocol::RoleSelection;
 use cocode_protocol::RoleSelections;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
+use cocode_protocol::execution::ExecutionIdentity;
 use cocode_protocol::model::ModelRole;
+use cocode_protocol::model::ModelSpec;
 use cocode_rmcp_client::RmcpClient;
 use cocode_shell::ShellExecutor;
 use cocode_skill::SkillInterface;
 use cocode_skill::SkillManager;
+use cocode_subagent::AgentExecuteParams;
 use cocode_subagent::SubagentManager;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
@@ -179,10 +182,17 @@ pub struct SessionState {
     system_prompt_suffix: Option<String>,
 
     /// Subagent manager for Task tool agent spawning.
-    subagent_manager: SubagentManager,
+    ///
+    /// Wrapped in `Arc<tokio::sync::Mutex>` so the `SpawnAgentFn` closure
+    /// (which needs `&mut SubagentManager`) can be called concurrently
+    /// with the session state.
+    subagent_manager: Arc<tokio::sync::Mutex<SubagentManager>>,
 
     /// Active MCP clients from plugin servers (kept alive for session lifetime).
     _mcp_clients: Vec<Arc<RmcpClient>>,
+
+    /// LSP server manager for language intelligence tools.
+    lsp_manager: Arc<cocode_lsp::LspServerManager>,
 
     /// Configuration snapshot (immutable for session lifetime).
     config: Arc<Config>,
@@ -256,30 +266,48 @@ impl SessionState {
         let mut tool_registry = ToolRegistry::new();
         cocode_tools::builtin::register_builtin_tools(&mut tool_registry);
 
-        // Create hook registry and load hooks from config
+        // Create hook registry and load hooks via aggregator (respects disable/managed-only)
         let hook_registry = HookRegistry::new();
+        let hook_settings = cocode_hooks::HookSettings {
+            disable_all_hooks: config.disable_all_hooks,
+            allow_managed_hooks_only: config.allow_managed_hooks_only,
+        };
+
+        let mut aggregator = cocode_hooks::HookAggregator::new();
+
+        // Session hooks from config.json
         let config_hooks = convert_config_hooks(&config.hooks);
         if !config_hooks.is_empty() {
             tracing::info!(count = config_hooks.len(), "Loaded hooks from config");
-            hook_registry.register_all(config_hooks);
+            aggregator.add_session_hooks(config_hooks);
         }
 
-        // Load hooks from TOML file if it exists (~/.cocode/hooks.toml)
-        let hooks_toml_path = config.cocode_home.join("hooks.toml");
-        if hooks_toml_path.is_file() {
-            match cocode_hooks::load_hooks_from_toml(&hooks_toml_path) {
-                Ok(toml_hooks) => {
+        // Session hooks from hooks.json
+        let hooks_json_path = config.cocode_home.join("hooks.json");
+        if hooks_json_path.is_file() {
+            match cocode_hooks::load_hooks_from_json(&hooks_json_path) {
+                Ok(json_hooks) => {
                     tracing::info!(
-                        count = toml_hooks.len(),
-                        path = %hooks_toml_path.display(),
-                        "Loaded hooks from TOML"
+                        count = json_hooks.len(),
+                        path = %hooks_json_path.display(),
+                        "Loaded hooks from JSON"
                     );
-                    hook_registry.register_all(toml_hooks);
+                    aggregator.add_session_hooks(json_hooks);
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "Failed to load hooks.toml");
+                    tracing::warn!(error = %e, "Failed to load hooks.json");
                 }
             }
+        }
+
+        // Build with settings (filters disabled/managed-only, sorts by priority)
+        let aggregated = aggregator.build(&hook_settings);
+        if !aggregated.is_empty() {
+            tracing::info!(
+                count = aggregated.len(),
+                "Registering hooks after aggregation"
+            );
+            hook_registry.register_all(aggregated);
         }
 
         // Load skills (empty for now, can be populated later)
@@ -302,8 +330,13 @@ impl SessionState {
             skill_manager.load_from_roots(&skill_roots);
         }
 
-        // Create subagent manager for plugin agent contributions
+        // Create subagent manager and load builtin + custom agents
         let mut subagent_manager = SubagentManager::new();
+        let agent_defs =
+            cocode_subagent::all_agents(&config.cocode_home, Some(session.working_dir.as_path()));
+        for def in agent_defs {
+            subagent_manager.register_agent_type(def);
+        }
 
         // Load plugins from standard directories and installed plugin cache
         let plugin_config = cocode_plugin::PluginIntegrationConfig::with_defaults(
@@ -329,6 +362,15 @@ impl SessionState {
         } else {
             Vec::new()
         };
+
+        // Create LSP server manager and connect plugin-contributed LSP servers
+        let lsp_manager = cocode_lsp::create_manager(
+            Some(&config.cocode_home),
+            Some(session.working_dir.clone()),
+        );
+        if let Some(ref pr) = plugin_registry {
+            cocode_plugin::connect_plugin_lsp_servers(pr, &lsp_manager).await;
+        }
 
         // Build loop config from session
         let loop_config = LoopConfig {
@@ -391,8 +433,9 @@ impl SessionState {
             plugin_registry,
             api_client,
             model_hub,
-            subagent_manager,
+            subagent_manager: Arc::new(tokio::sync::Mutex::new(subagent_manager)),
             _mcp_clients: mcp_clients,
+            lsp_manager,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
@@ -461,6 +504,15 @@ impl SessionState {
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
+        // Set the execute_fn, tool list, and event_tx on the subagent manager (fresh per-turn)
+        {
+            let execute_fn = self.build_execute_fn(event_tx.clone());
+            let mut mgr = self.subagent_manager.lock().await;
+            mgr.set_execute_fn(execute_fn);
+            mgr.set_all_tools(self.tool_registry.tool_names());
+            mgr.set_event_tx(event_tx.clone());
+        }
+
         // Build and run the agent loop
         // Clone selections so the loop has its own copy (isolation)
         let mut loop_instance = AgentLoop::builder()
@@ -483,6 +535,8 @@ impl SessionState {
             .shell_executor(self.shell_executor.clone())
             .skill_manager(self.skill_manager.clone())
             .otel_manager(self.otel_manager.clone())
+            .lsp_manager(self.lsp_manager.clone())
+            .spawn_agent_fn(self.build_spawn_agent_fn())
             .build();
 
         let result = loop_instance.run(user_input).await?;
@@ -521,7 +575,7 @@ impl SessionState {
             let spec = if model_name.contains('/') {
                 model_name
                     .parse::<cocode_protocol::model::ModelSpec>()
-                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{model_name}': {e}"))?
             } else {
                 // Use current provider with the given model name
                 let provider = self.provider().to_string();
@@ -566,7 +620,7 @@ impl SessionState {
             let spec = if model_name.contains('/') {
                 model_name
                     .parse::<cocode_protocol::model::ModelSpec>()
-                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{}': {}", model_name, e))?
+                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{model_name}': {e}"))?
             } else {
                 let provider = self.provider().to_string();
                 cocode_protocol::model::ModelSpec::new(provider, model_name)
@@ -739,14 +793,9 @@ impl SessionState {
         self.plugin_registry.as_ref()
     }
 
-    /// Get the subagent manager.
-    pub fn subagent_manager(&self) -> &SubagentManager {
+    /// Get the subagent manager (shared handle).
+    pub fn subagent_manager(&self) -> &Arc<tokio::sync::Mutex<SubagentManager>> {
         &self.subagent_manager
-    }
-
-    /// Get mutable access to the subagent manager.
-    pub fn subagent_manager_mut(&mut self) -> &mut SubagentManager {
-        &mut self.subagent_manager
     }
 
     /// Update the loop configuration.
@@ -822,7 +871,7 @@ impl SessionState {
                 if e.is_no_model_configured() {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("{}", e))
+                    Err(anyhow::anyhow!("{e}"))
                 }
             }
         }
@@ -835,7 +884,7 @@ impl SessionState {
         self.model_hub
             .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
             .map(|(m, _)| m)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Switch model for a specific role.
@@ -966,6 +1015,7 @@ impl SessionState {
     /// at its next Step 6.5 drain.
     ///
     /// Returns the command ID.
+    #[allow(clippy::unwrap_used)]
     pub fn queue_command(&self, prompt: impl Into<String>) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -982,16 +1032,19 @@ impl SessionState {
     }
 
     /// Get the number of queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn queued_count(&self) -> usize {
         self.queued_commands.lock().unwrap().len()
     }
 
     /// Take all queued commands (for passing to AgentLoop).
+    #[allow(clippy::unwrap_used)]
     pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
         std::mem::take(&mut *self.queued_commands.lock().unwrap())
     }
 
     /// Clear all queued commands.
+    #[allow(clippy::unwrap_used)]
     pub fn clear_queued_commands(&self) {
         self.queued_commands.lock().unwrap().clear();
     }
@@ -1051,6 +1104,190 @@ impl SessionState {
             output.push_str(&format!("{marker} {id}: {title}\n"));
         }
         output
+    }
+
+    // ==========================================================
+    // Subagent Wiring
+    // ==========================================================
+
+    /// Build the `AgentExecuteFn` closure that the `SubagentManager` calls
+    /// to actually run a child `AgentLoop`.
+    ///
+    /// Captures per-turn state snapshots so the child loop is isolated.
+    /// The `parent_event_tx` is forwarded to the child loop so subagent
+    /// progress, text deltas, and tool activity are visible to the TUI.
+    fn build_execute_fn(
+        &self,
+        parent_event_tx: mpsc::Sender<LoopEvent>,
+    ) -> cocode_subagent::AgentExecuteFn {
+        let api_client = self.api_client.clone();
+        let model_hub = self.model_hub.clone();
+        let tool_registry = self.tool_registry.clone();
+        let hook_registry = self.hook_registry.clone();
+        let shell_executor = self.shell_executor.clone();
+        let working_dir = self.session.working_dir.clone();
+        let context_window = self.context_window;
+        let features = self.config.features.clone();
+        let web_search_config = self.config.web_search_config.clone();
+        let web_fetch_config = self.config.web_fetch_config.clone();
+        let permission_rules = self.permission_rules.clone();
+        let skill_manager = self.skill_manager.clone();
+        let lsp_manager = self.lsp_manager.clone();
+        let selections = self.session.selections.clone();
+        let message_history = self.message_history.clone();
+
+        Box::new(move |params: AgentExecuteParams| {
+            let api_client = api_client.clone();
+            let model_hub = model_hub.clone();
+            let tool_registry = tool_registry.clone();
+            let hook_registry = hook_registry.clone();
+            let shell_executor = shell_executor.clone();
+            let working_dir = working_dir.clone();
+            let features = features.clone();
+            let web_search_config = web_search_config.clone();
+            let web_fetch_config = web_fetch_config.clone();
+            let permission_rules = permission_rules.clone();
+            let skill_manager = skill_manager.clone();
+            let lsp_manager = lsp_manager.clone();
+            let selections = selections.clone();
+            let message_history = message_history.clone();
+            let parent_event_tx = parent_event_tx.clone();
+
+            Box::pin(async move {
+                // Fork shell executor for isolated CWD tracking
+                let forked_shell = shell_executor.fork_for_subagent(working_dir.clone());
+
+                // Build environment info for the child
+                let environment = EnvironmentInfo::builder()
+                    .cwd(&working_dir)
+                    .context_window(context_window)
+                    .max_output_tokens(16_384)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build child environment: {e}"))?;
+
+                let context = ConversationContext::builder()
+                    .environment(environment)
+                    .tool_names(tool_registry.tool_names())
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build child context: {e}"))?;
+
+                // Resolve selections: apply identity override if specified
+                let child_selections = if let Some(ref identity) = params.identity {
+                    let mut sel = selections.clone();
+                    match identity {
+                        ExecutionIdentity::Role(role) => {
+                            // Use the model from the specified role
+                            if let Some(role_sel) = sel.get(*role).cloned() {
+                                sel.set(ModelRole::Main, role_sel);
+                            }
+                        }
+                        ExecutionIdentity::Spec(spec) => {
+                            sel.set(ModelRole::Main, RoleSelection::new(spec.clone()));
+                        }
+                        ExecutionIdentity::Inherit => {
+                            // Keep parent selections as-is
+                        }
+                    }
+                    sel
+                } else {
+                    selections.clone()
+                };
+
+                // Child loop config with permission mode from agent definition
+                let child_config = LoopConfig {
+                    max_turns: Some(params.max_turns.unwrap_or(10)),
+                    permission_mode: params.permission_mode.unwrap_or_default(),
+                    ..LoopConfig::default()
+                };
+
+                // Build the child loop — forward parent event_tx so the TUI
+                // sees subagent progress, text deltas, and tool activity.
+                let mut builder = AgentLoop::builder()
+                    .api_client(api_client)
+                    .model_hub(model_hub)
+                    .selections(child_selections)
+                    .tool_registry(tool_registry)
+                    .context(context)
+                    .config(child_config)
+                    .fallback_config(FallbackConfig::default())
+                    .compaction_config(CompactionConfig::default())
+                    .hooks(hook_registry)
+                    .event_tx(parent_event_tx)
+                    .cancel_token(params.cancel_token)
+                    .features(features)
+                    .web_search_config(web_search_config)
+                    .web_fetch_config(web_fetch_config)
+                    .permission_rules(permission_rules)
+                    .shell_executor(forked_shell)
+                    .skill_manager(skill_manager)
+                    .lsp_manager(lsp_manager)
+                    .is_subagent(true);
+                // NO .spawn_agent_fn() — prevents infinite recursion
+
+                // Fork parent context if requested
+                if params.fork_context {
+                    builder = builder.message_history(message_history.clone());
+                }
+
+                let mut loop_instance = builder.build();
+                let result = loop_instance.run(&params.prompt).await?;
+
+                Ok(result.final_text)
+            })
+        })
+    }
+
+    /// Build the `SpawnAgentFn` closure that the Task tool calls.
+    ///
+    /// Bridges `SpawnAgentInput` (tools layer) to `SpawnInput` (subagent layer)
+    /// and delegates to `SubagentManager::spawn_full()`.
+    fn build_spawn_agent_fn(&self) -> cocode_tools::SpawnAgentFn {
+        let subagent_manager = self.subagent_manager.clone();
+
+        Arc::new(move |input: cocode_tools::SpawnAgentInput| {
+            let subagent_manager = subagent_manager.clone();
+
+            Box::pin(async move {
+                // Convert model string → ExecutionIdentity
+                let identity = input.model.as_deref().map(|m| {
+                    if m.contains('/') {
+                        // Full spec: "provider/model"
+                        match m.parse::<ModelSpec>() {
+                            Ok(spec) => ExecutionIdentity::Spec(spec),
+                            Err(_) => ExecutionIdentity::Inherit,
+                        }
+                    } else {
+                        // Short name: map to role
+                        match m.to_lowercase().as_str() {
+                            "haiku" => ExecutionIdentity::Role(ModelRole::Fast),
+                            "sonnet" | "opus" => ExecutionIdentity::Role(ModelRole::Main),
+                            _ => ExecutionIdentity::Inherit,
+                        }
+                    }
+                });
+
+                let spawn_input = cocode_subagent::SpawnInput {
+                    agent_type: input.agent_type,
+                    prompt: input.prompt,
+                    identity,
+                    max_turns: input.max_turns,
+                    run_in_background: input.run_in_background,
+                    allowed_tools: input.allowed_tools,
+                    resume_from: input.resume_from,
+                };
+
+                let mut mgr = subagent_manager.lock().await;
+                let result = mgr.spawn_full(spawn_input).await?;
+
+                Ok(cocode_tools::SpawnAgentResult {
+                    agent_id: result.agent_id,
+                    output: result.output,
+                    output_file: result.background.as_ref().map(|bg| bg.output_file.clone()),
+                    cancel_token: result.cancel_token,
+                    color: result.color,
+                })
+            })
+        })
     }
 
     // ==========================================================
@@ -1116,6 +1353,15 @@ impl SessionState {
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
+        // Set the execute_fn, tool list, and event_tx on the subagent manager (fresh per-turn)
+        {
+            let execute_fn = self.build_execute_fn(event_tx.clone());
+            let mut mgr = self.subagent_manager.lock().await;
+            mgr.set_execute_fn(execute_fn);
+            mgr.set_all_tools(self.tool_registry.tool_names());
+            mgr.set_event_tx(event_tx.clone());
+        }
+
         // Build and run the agent loop with the provided event channel
         // Clone selections so the loop has its own copy (isolation)
         // Pass queued commands for consume-then-remove steering injection
@@ -1136,8 +1382,11 @@ impl SessionState {
             .web_search_config(self.config.web_search_config.clone())
             .web_fetch_config(self.config.web_fetch_config.clone())
             .permission_rules(self.permission_rules.clone())
+            .shell_executor(self.shell_executor.clone())
             .skill_manager(self.skill_manager.clone())
             .otel_manager(self.otel_manager.clone())
+            .lsp_manager(self.lsp_manager.clone())
+            .spawn_agent_fn(self.build_spawn_agent_fn())
             .build();
 
         // Queued commands are consumed as steering in core_message_loop Step 6.5.
@@ -1163,78 +1412,87 @@ impl SessionState {
 
 /// Convert config hook entries to hook definitions.
 ///
-/// Each `HookConfig` can contain multiple handlers; each handler becomes
+/// Each matcher group can contain multiple handlers; each handler becomes
 /// a separate `HookDefinition`.
 fn convert_config_hooks(
-    configs: &[cocode_config::json_config::HookConfig],
+    hooks_map: &std::collections::HashMap<
+        cocode_protocol::HookEventType,
+        Vec<cocode_config::json_config::HookMatcherGroup>,
+    >,
 ) -> Vec<cocode_hooks::HookDefinition> {
     use cocode_config::json_config::HookHandlerConfig;
 
     let mut defs = Vec::new();
-    for (idx, cfg) in configs.iter().enumerate() {
-        // Parse event type
-        let event_type = match cfg.event.as_str() {
-            "pre_tool_use" => cocode_hooks::HookEventType::PreToolUse,
-            "post_tool_use" => cocode_hooks::HookEventType::PostToolUse,
-            "post_tool_use_failure" => cocode_hooks::HookEventType::PostToolUseFailure,
-            "user_prompt_submit" => cocode_hooks::HookEventType::UserPromptSubmit,
-            "session_start" => cocode_hooks::HookEventType::SessionStart,
-            "session_end" => cocode_hooks::HookEventType::SessionEnd,
-            "stop" => cocode_hooks::HookEventType::Stop,
-            "subagent_start" => cocode_hooks::HookEventType::SubagentStart,
-            "subagent_stop" => cocode_hooks::HookEventType::SubagentStop,
-            "pre_compact" => cocode_hooks::HookEventType::PreCompact,
-            "notification" => cocode_hooks::HookEventType::Notification,
-            "permission_request" => cocode_hooks::HookEventType::PermissionRequest,
-            other => {
-                tracing::warn!(event = %other, "Unknown hook event type in config, skipping");
-                continue;
-            }
-        };
+    for (event_key, groups) in hooks_map {
+        let event_type = event_key.clone();
 
-        // Parse matcher: pipe-separated pattern becomes Or matcher
-        let matcher = cfg.matcher.as_deref().map(|m| {
-            if m.contains('|') {
-                let parts: Vec<cocode_hooks::HookMatcher> = m
-                    .split('|')
-                    .map(|p| cocode_hooks::HookMatcher::Exact {
-                        value: p.trim().to_string(),
+        for (g_idx, group) in groups.iter().enumerate() {
+            // Parse matcher: Claude Code matchers are regex patterns
+            let matcher = group.matcher.as_deref().and_then(|m| {
+                if m.is_empty() {
+                    None // empty string = match all
+                } else {
+                    Some(cocode_hooks::HookMatcher::Regex {
+                        pattern: m.to_string(),
                     })
-                    .collect();
-                cocode_hooks::HookMatcher::Or { matchers: parts }
-            } else {
-                cocode_hooks::HookMatcher::Exact {
-                    value: m.to_string(),
                 }
-            }
-        });
-
-        // Each handler becomes a separate HookDefinition
-        for (h_idx, handler_cfg) in cfg.hooks.iter().enumerate() {
-            let (handler, timeout_secs) = match handler_cfg {
-                HookHandlerConfig::Command {
-                    command,
-                    args,
-                    timeout_secs,
-                } => (
-                    cocode_hooks::HookHandler::Command {
-                        command: command.clone(),
-                        args: args.clone(),
-                    },
-                    *timeout_secs,
-                ),
-            };
-
-            defs.push(cocode_hooks::HookDefinition {
-                name: format!("config-hook-{idx}-{h_idx}"),
-                event_type: event_type.clone(),
-                matcher: matcher.clone(),
-                handler,
-                source: cocode_hooks::HookSource::Session,
-                enabled: true,
-                timeout_secs,
-                once: false,
             });
+
+            // Each handler becomes a separate HookDefinition
+            for (h_idx, handler_cfg) in group.hooks.iter().enumerate() {
+                let (handler, timeout_secs, once) = match handler_cfg {
+                    HookHandlerConfig::Command {
+                        command,
+                        timeout,
+                        once,
+                        ..
+                    } => (
+                        cocode_hooks::HookHandler::Command {
+                            command: command.clone(),
+                        },
+                        timeout.unwrap_or(30),
+                        once.unwrap_or(false),
+                    ),
+                    HookHandlerConfig::Prompt {
+                        prompt,
+                        model,
+                        timeout,
+                        once,
+                    } => (
+                        cocode_hooks::HookHandler::Prompt {
+                            template: prompt.clone(),
+                            model: model.clone(),
+                        },
+                        timeout.unwrap_or(30),
+                        once.unwrap_or(false),
+                    ),
+                    HookHandlerConfig::Agent {
+                        prompt,
+                        model: _,
+                        timeout,
+                        once,
+                    } => (
+                        cocode_hooks::HookHandler::Agent {
+                            max_turns: 50,
+                            prompt: Some(prompt.clone()),
+                            timeout: timeout.unwrap_or(60),
+                        },
+                        timeout.unwrap_or(60),
+                        once.unwrap_or(false),
+                    ),
+                };
+
+                defs.push(cocode_hooks::HookDefinition {
+                    name: format!("config-{event_key}-{g_idx}-{h_idx}"),
+                    event_type: event_type.clone(),
+                    matcher: matcher.clone(),
+                    handler,
+                    source: cocode_hooks::HookSource::Session,
+                    enabled: true,
+                    timeout_secs,
+                    once,
+                });
+            }
         }
     }
     defs

@@ -233,18 +233,18 @@ fn get_shell_path(
     fallback_paths: Vec<&str>,
 ) -> Option<PathBuf> {
     // If exact provided path exists, use it
-    if let Some(path) = provided_path {
-        if file_exists(path).is_some() {
-            return Some(path.clone());
-        }
+    if let Some(path) = provided_path
+        && file_exists(path).is_some()
+    {
+        return Some(path.clone());
     }
 
     // Check if the shell we are trying to load is user's default shell
     let default_shell_path = get_user_shell_path();
-    if let Some(ref default_shell_path) = default_shell_path {
-        if detect_shell_type(default_shell_path) == Some(shell_type.clone()) {
-            return Some(default_shell_path.clone());
-        }
+    if let Some(ref default_shell_path) = default_shell_path
+        && detect_shell_type(default_shell_path) == Some(shell_type)
+    {
+        return Some(default_shell_path.clone());
     }
 
     // Try to find via `which`

@@ -176,7 +176,7 @@ fn test_with_selection() {
     use cocode_protocol::model::ModelSpec;
 
     let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
-    let state = AppState::with_selection(selection.clone());
+    let state = AppState::with_selection(selection);
     assert_eq!(
         state
             .session

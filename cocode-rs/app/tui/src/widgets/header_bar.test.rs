@@ -1,5 +1,4 @@
 use super::*;
-use crate::theme::Theme;
 
 #[test]
 fn test_shorten_path_normal() {

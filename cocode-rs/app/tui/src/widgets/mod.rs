@@ -23,6 +23,7 @@ mod queued_list;
 mod skill_suggestion_popup;
 mod status_bar;
 mod subagent_panel;
+pub mod suggestion_popup;
 mod symbol_suggestion_popup;
 mod toast;
 mod tool_panel;

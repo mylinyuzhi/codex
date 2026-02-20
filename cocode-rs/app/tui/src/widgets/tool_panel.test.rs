@@ -38,7 +38,11 @@ fn test_tool_panel_with_tools() {
     let mut buf = Buffer::empty(area);
     panel.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("bash"));
     assert!(content.contains("read"));
 }

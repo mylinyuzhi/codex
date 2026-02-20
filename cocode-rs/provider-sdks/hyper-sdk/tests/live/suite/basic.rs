@@ -21,8 +21,7 @@ pub async fn run(model: &Arc<dyn Model>) -> Result<()> {
     let text = extract_text(&response);
     assert!(
         text.to_lowercase().contains("hello"),
-        "Expected 'hello' in response, got: {}",
-        text
+        "Expected 'hello' in response, got: {text}"
     );
     Ok(())
 }
@@ -36,6 +35,7 @@ pub async fn run_token_usage(model: &Arc<dyn Model>) -> Result<()> {
 
     assert!(response.usage.is_some(), "Expected token usage in response");
 
+    #[allow(clippy::unwrap_used)]
     let usage = response.usage.unwrap();
     assert!(usage.prompt_tokens > 0, "Expected non-zero prompt tokens");
     assert!(
@@ -61,8 +61,7 @@ pub async fn run_multi_turn(model: &Arc<dyn Model>) -> Result<()> {
     let text = extract_text(&response);
     assert!(
         text.to_lowercase().contains("testuser"),
-        "Expected 'testuser' in response (context should be preserved), got: {}",
-        text
+        "Expected 'testuser' in response (context should be preserved), got: {text}"
     );
     Ok(())
 }

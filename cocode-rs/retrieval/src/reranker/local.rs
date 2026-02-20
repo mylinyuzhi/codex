@@ -104,7 +104,7 @@ impl LocalReranker {
         // Update scores from reranking results
         for item in &ranked {
             if item.index < results.len() {
-                results[item.index].score = item.score as f32;
+                results[item.index].score = item.score;
             }
         }
 

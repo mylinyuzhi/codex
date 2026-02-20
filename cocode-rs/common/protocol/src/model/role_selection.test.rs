@@ -57,7 +57,7 @@ fn test_role_selection_supported_thinking_levels() {
         ThinkingLevel::high(),
     ];
     let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"))
-        .with_supported_thinking_levels(levels.clone());
+        .with_supported_thinking_levels(levels);
 
     assert_eq!(
         selection.supported_thinking_levels.as_ref().unwrap().len(),

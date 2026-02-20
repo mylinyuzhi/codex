@@ -137,10 +137,10 @@ impl EventEmitter {
     /// Internal emit implementation.
     fn emit_internal(&self, event: RetrievalEvent) -> i32 {
         // Check if emission is enabled
-        if let Ok(enabled) = self.enabled.read() {
-            if !*enabled {
-                return 0;
-            }
+        if let Ok(enabled) = self.enabled.read()
+            && !*enabled
+        {
+            return 0;
         }
 
         // Send to async receivers

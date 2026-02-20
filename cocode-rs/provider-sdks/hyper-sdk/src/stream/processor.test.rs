@@ -81,7 +81,7 @@ async fn test_processor_for_each() {
         .for_each(|update, snapshot| {
             let updates = updates_clone.clone();
             let update_type = format!("{:?}", std::mem::discriminant(&update));
-            let text = snapshot.text.clone();
+            let text = snapshot.text;
             async move {
                 updates.lock().unwrap().push((update_type, text));
                 Ok(())

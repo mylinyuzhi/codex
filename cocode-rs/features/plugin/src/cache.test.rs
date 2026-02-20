@@ -58,7 +58,7 @@ fn test_copy_to_versioned_cache() {
     let target = tmp.path().join("target");
 
     std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("PLUGIN.toml"), "[plugin]\nname = \"test\"").unwrap();
+    std::fs::write(source.join("plugin.json"), r#"{"plugin":{"name":"test"}}"#).unwrap();
 
     let sub = source.join("skills");
     std::fs::create_dir_all(&sub).unwrap();
@@ -66,7 +66,7 @@ fn test_copy_to_versioned_cache() {
 
     copy_to_versioned_cache(&source, &target).unwrap();
 
-    assert!(target.join("PLUGIN.toml").exists());
+    assert!(target.join("plugin.json").exists());
     assert!(target.join("skills").join("hello.md").exists());
 }
 
@@ -99,7 +99,7 @@ fn test_delete_plugin_cache() {
     let cache_root = tmp.path().join("cache");
     let plugin_dir = cache_root.join("market").join("plugin").join("1.0.0");
     std::fs::create_dir_all(&plugin_dir).unwrap();
-    std::fs::write(plugin_dir.join("PLUGIN.toml"), "test").unwrap();
+    std::fs::write(plugin_dir.join("plugin.json"), "test").unwrap();
 
     delete_plugin_cache(&plugin_dir, &cache_root).unwrap();
 
@@ -116,7 +116,7 @@ fn test_copy_excludes_dot_git() {
     let target = tmp.path().join("target");
 
     std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("PLUGIN.toml"), "[plugin]\nname = \"test\"").unwrap();
+    std::fs::write(source.join("plugin.json"), r#"{"plugin":{"name":"test"}}"#).unwrap();
 
     // Create a .git directory with content
     let git_dir = source.join(".git");
@@ -131,7 +131,7 @@ fn test_copy_excludes_dot_git() {
 
     copy_to_versioned_cache(&source, &target).unwrap();
 
-    assert!(target.join("PLUGIN.toml").exists());
+    assert!(target.join("plugin.json").exists());
     assert!(!target.join(".git").exists());
     assert!(target.join("subdir").join("file.txt").exists());
     assert!(!target.join("subdir").join(".git").exists());

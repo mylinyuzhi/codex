@@ -655,25 +655,25 @@ impl IndexManager {
         // Phase 5: Handle deletions
         for change in changes.iter().filter(|c| c.status == ChangeStatus::Deleted) {
             // Delete from vector store (if enabled)
-            if let Some(vector_store) = vector_store {
-                if let Err(e) = vector_store.delete_by_path(&change.filepath).await {
-                    tracing::warn!(
-                        filepath = %change.filepath,
-                        error = %e,
-                        "Failed to delete chunks from vector store during file deletion"
-                    );
-                }
+            if let Some(vector_store) = vector_store
+                && let Err(e) = vector_store.delete_by_path(&change.filepath).await
+            {
+                tracing::warn!(
+                    filepath = %change.filepath,
+                    error = %e,
+                    "Failed to delete chunks from vector store during file deletion"
+                );
             }
 
             // Delete from embedding cache (if enabled)
-            if let Some(cache) = cache.as_ref() {
-                if let Err(e) = cache.delete_by_filepath(&change.filepath) {
-                    tracing::warn!(
-                        filepath = %change.filepath,
-                        error = %e,
-                        "Failed to delete embeddings from cache during file deletion"
-                    );
-                }
+            if let Some(cache) = cache.as_ref()
+                && let Err(e) = cache.delete_by_filepath(&change.filepath)
+            {
+                tracing::warn!(
+                    filepath = %change.filepath,
+                    error = %e,
+                    "Failed to delete embeddings from cache during file deletion"
+                );
             }
 
             // Delete from BM25 index (if enabled)
@@ -707,10 +707,10 @@ impl IndexManager {
         });
 
         // Save BM25 metadata (if enabled)
-        if let Some(bm25) = bm25_searcher {
-            if let Err(e) = bm25.save_to_storage().await {
-                tracing::warn!(error = %e, "Failed to save BM25 metadata");
-            }
+        if let Some(bm25) = bm25_searcher
+            && let Err(e) = bm25.save_to_storage().await
+        {
+            tracing::warn!(error = %e, "Failed to save BM25 metadata");
         }
 
         let status_msg = if failed_files.is_empty() {
@@ -731,7 +731,7 @@ impl IndexManager {
         event_emitter::emit(RetrievalEvent::IndexBuildCompleted {
             workspace: workspace.to_string(),
             stats: IndexStatsSummary {
-                file_count: processed as i32,
+                file_count: processed,
                 chunk_count: total_chunks as i32,
                 symbol_count: 0,
                 index_size_bytes: 0,
@@ -766,14 +766,14 @@ impl IndexManager {
         let ws = workspace.to_string();
 
         // Delete from vector store (if enabled)
-        if let Some(vector_store) = &self.vector_store {
-            if let Err(e) = vector_store.delete_workspace(workspace).await {
-                tracing::warn!(
-                    workspace = workspace,
-                    error = %e,
-                    "Failed to delete workspace from vector store"
-                );
-            }
+        if let Some(vector_store) = &self.vector_store
+            && let Err(e) = vector_store.delete_workspace(workspace).await
+        {
+            tracing::warn!(
+                workspace = workspace,
+                error = %e,
+                "Failed to delete workspace from vector store"
+            );
         }
 
         // Delete from catalog

@@ -93,31 +93,23 @@ pub fn handle_key_event_full_with_symbols(
     }
 
     // Handle skill suggestion navigation (highest priority)
-    if has_skill_suggestions {
-        if let Some(cmd) = handle_skill_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_skill_suggestions && let Some(cmd) = handle_skill_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle agent suggestion navigation
-    if has_agent_suggestions {
-        if let Some(cmd) = handle_agent_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_agent_suggestions && let Some(cmd) = handle_agent_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle symbol suggestion navigation
-    if has_symbol_suggestions {
-        if let Some(cmd) = handle_symbol_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_symbol_suggestions && let Some(cmd) = handle_symbol_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle file suggestion navigation
-    if has_file_suggestions {
-        if let Some(cmd) = handle_suggestion_key(key) {
-            return Some(cmd);
-        }
+    if has_file_suggestions && let Some(cmd) = handle_suggestion_key(key) {
+        return Some(cmd);
     }
 
     // Handle global shortcuts (with modifiers)
@@ -129,81 +121,50 @@ pub fn handle_key_event_full_with_symbols(
     handle_input_key_with_streaming(key, is_streaming)
 }
 
-/// Handle keys for file suggestion navigation.
-fn handle_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
-    match (key.modifiers, key.code) {
-        // Navigate suggestions
-        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSuggestion),
-        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSuggestion),
-
-        // Accept suggestion
-        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSuggestion),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSuggestion),
-
-        // Dismiss suggestions
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSuggestions),
-
-        // Other keys pass through to normal handling
-        _ => None,
-    }
+/// Generate a suggestion key handler function.
+macro_rules! suggestion_key_handler {
+    ($fn_name:ident, $prev:expr, $next:expr, $accept:expr, $dismiss:expr) => {
+        fn $fn_name(key: KeyEvent) -> Option<TuiCommand> {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Up) => Some($prev),
+                (KeyModifiers::NONE, KeyCode::Down) => Some($next),
+                (KeyModifiers::NONE, KeyCode::Tab) => Some($accept),
+                (KeyModifiers::NONE, KeyCode::Enter) => Some($accept),
+                (KeyModifiers::NONE, KeyCode::Esc) => Some($dismiss),
+                _ => None,
+            }
+        }
+    };
 }
 
-/// Handle keys for skill suggestion navigation.
-fn handle_skill_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
-    match (key.modifiers, key.code) {
-        // Navigate suggestions
-        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSkillSuggestion),
-        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSkillSuggestion),
-
-        // Accept suggestion
-        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSkillSuggestion),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSkillSuggestion),
-
-        // Dismiss suggestions
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSkillSuggestions),
-
-        // Other keys pass through to normal handling
-        _ => None,
-    }
-}
-
-/// Handle keys for symbol suggestion navigation.
-fn handle_symbol_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
-    match (key.modifiers, key.code) {
-        // Navigate suggestions
-        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevSymbolSuggestion),
-        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextSymbolSuggestion),
-
-        // Accept suggestion
-        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptSymbolSuggestion),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptSymbolSuggestion),
-
-        // Dismiss suggestions
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissSymbolSuggestions),
-
-        // Other keys pass through to normal handling
-        _ => None,
-    }
-}
-
-/// Handle keys for agent suggestion navigation.
-fn handle_agent_suggestion_key(key: KeyEvent) -> Option<TuiCommand> {
-    match (key.modifiers, key.code) {
-        // Navigate suggestions
-        (KeyModifiers::NONE, KeyCode::Up) => Some(TuiCommand::SelectPrevAgentSuggestion),
-        (KeyModifiers::NONE, KeyCode::Down) => Some(TuiCommand::SelectNextAgentSuggestion),
-
-        // Accept suggestion
-        (KeyModifiers::NONE, KeyCode::Tab) => Some(TuiCommand::AcceptAgentSuggestion),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(TuiCommand::AcceptAgentSuggestion),
-
-        // Dismiss suggestions
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(TuiCommand::DismissAgentSuggestions),
-
-        // Other keys pass through to normal handling
-        _ => None,
-    }
-}
+suggestion_key_handler!(
+    handle_suggestion_key,
+    TuiCommand::SelectPrevSuggestion,
+    TuiCommand::SelectNextSuggestion,
+    TuiCommand::AcceptSuggestion,
+    TuiCommand::DismissSuggestions
+);
+suggestion_key_handler!(
+    handle_skill_suggestion_key,
+    TuiCommand::SelectPrevSkillSuggestion,
+    TuiCommand::SelectNextSkillSuggestion,
+    TuiCommand::AcceptSkillSuggestion,
+    TuiCommand::DismissSkillSuggestions
+);
+suggestion_key_handler!(
+    handle_symbol_suggestion_key,
+    TuiCommand::SelectPrevSymbolSuggestion,
+    TuiCommand::SelectNextSymbolSuggestion,
+    TuiCommand::AcceptSymbolSuggestion,
+    TuiCommand::DismissSymbolSuggestions
+);
+suggestion_key_handler!(
+    handle_agent_suggestion_key,
+    TuiCommand::SelectPrevAgentSuggestion,
+    TuiCommand::SelectNextAgentSuggestion,
+    TuiCommand::AcceptAgentSuggestion,
+    TuiCommand::DismissAgentSuggestions
+);
 
 /// Handle keys when an overlay (permission prompt, model picker) is active.
 fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {

@@ -2,7 +2,7 @@ use super::*;
 use crate::state::SymbolSuggestionItem;
 
 fn create_test_state() -> SymbolSuggestionState {
-    let mut state = SymbolSuggestionState::new("ModelInfo".to_string(), 0);
+    let mut state = SymbolSuggestionState::new("ModelInfo".to_string(), 0, true);
     state.update_suggestions(vec![
         SymbolSuggestionItem {
             name: "ModelInfo".to_string(),
@@ -49,13 +49,17 @@ fn test_popup_render() {
     popup.render(area, &mut buf);
 
     // Should contain the query
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("ModelInfo"));
 }
 
 #[test]
 fn test_empty_suggestions() {
-    let mut state = SymbolSuggestionState::new("xyz".to_string(), 0);
+    let mut state = SymbolSuggestionState::new("xyz".to_string(), 0, true);
     state.update_suggestions(vec![]);
     let theme = Theme::default();
     let popup = SymbolSuggestionPopup::new(&state, &theme);
@@ -65,13 +69,17 @@ fn test_empty_suggestions() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("No matching"));
 }
 
 #[test]
 fn test_loading_state() {
-    let state = SymbolSuggestionState::new("test".to_string(), 0);
+    let state = SymbolSuggestionState::new("test".to_string(), 0, true);
     // state.loading is true by default
     let theme = Theme::default();
     let popup = SymbolSuggestionPopup::new(&state, &theme);
@@ -81,6 +89,10 @@ fn test_loading_state() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("Indexing"));
 }

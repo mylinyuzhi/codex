@@ -28,8 +28,10 @@ use std::fmt;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[derive(Default)]
 pub enum AgentKind {
     /// Main conversation agent (primary user interaction).
+    #[default]
     Main,
 
     /// Subagent spawned via Task tool.
@@ -116,17 +118,11 @@ impl AgentKind {
     }
 }
 
-impl Default for AgentKind {
-    fn default() -> Self {
-        Self::Main
-    }
-}
-
 impl fmt::Display for AgentKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Main => write!(f, "main"),
-            Self::Subagent { agent_type, .. } => write!(f, "subagent:{}", agent_type),
+            Self::Subagent { agent_type, .. } => write!(f, "subagent:{agent_type}"),
             Self::Extraction => write!(f, "extraction"),
             Self::Compaction => write!(f, "compaction"),
         }

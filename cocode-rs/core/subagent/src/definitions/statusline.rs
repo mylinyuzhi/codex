@@ -1,18 +1,24 @@
 use crate::definition::AgentDefinition;
+use crate::definition::AgentSource;
 use cocode_protocol::execution::ExecutionIdentity;
+use cocode_protocol::model::ModelRole;
 
 /// Statusline agent - makes small targeted edits to status/progress displays.
-/// Inherits model from parent.
+/// Uses the Fast model role for efficiency.
 pub fn statusline_agent() -> AgentDefinition {
     AgentDefinition {
         name: "statusline".to_string(),
-        description: "Lightweight agent for status line and progress display updates".to_string(),
+        description: "Use this agent to configure the user's status line setting.".to_string(),
         agent_type: "statusline".to_string(),
         tools: vec!["Read".to_string(), "Edit".to_string()],
         disallowed_tools: vec![],
-        identity: Some(ExecutionIdentity::Inherit),
+        identity: Some(ExecutionIdentity::Role(ModelRole::Fast)),
         max_turns: Some(5),
         permission_mode: None,
+        fork_context: false,
+        color: Some("orange".to_string()),
+        critical_reminder: None,
+        source: AgentSource::BuiltIn,
     }
 }
 

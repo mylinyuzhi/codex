@@ -128,10 +128,10 @@ impl<'a> ChatWidget<'a> {
         if secs < 1.0 {
             format!("{:.0}ms", secs * 1000.0)
         } else if secs < 60.0 {
-            format!("{:.1}s", secs)
+            format!("{secs:.1}s")
         } else {
             let mins = secs / 60.0;
-            format!("{:.1}m", mins)
+            format!("{mins:.1}m")
         }
     }
 
@@ -196,29 +196,28 @@ impl<'a> ChatWidget<'a> {
         lines.push(Line::from(role_span));
 
         // Thinking content (if any)
-        if let Some(ref thinking) = message.thinking {
-            if !thinking.is_empty() {
-                let word_count = thinking.split_whitespace().count();
-                let tokens = (word_count as f64 * 1.3) as i32;
+        if let Some(ref thinking) = message.thinking
+            && !thinking.is_empty()
+        {
+            let word_count = thinking.split_whitespace().count();
+            let tokens = (word_count as f64 * 1.3) as i32;
 
-                if self.show_thinking {
-                    // Show expanded thinking content with styled header
-                    let header = format!("  💭 {}", t!("chat.thinking_tokens", tokens = tokens));
+            if self.show_thinking {
+                // Show expanded thinking content with styled header
+                let header = format!("  💭 {}", t!("chat.thinking_tokens", tokens = tokens));
+                lines.push(Line::from(
+                    Span::raw(header).italic().fg(self.theme.thinking),
+                ));
+                for line in thinking.lines() {
                     lines.push(Line::from(
-                        Span::raw(header).italic().fg(self.theme.thinking),
+                        Span::raw(format!("    {line}")).fg(self.theme.text_dim),
                     ));
-                    for line in thinking.lines() {
-                        lines.push(Line::from(
-                            Span::raw(format!("    {line}")).fg(self.theme.text_dim),
-                        ));
-                    }
-                    lines.push(Line::from("")); // Separator
-                } else {
-                    // Show collapsed indicator
-                    let indicator =
-                        format!("  ▸ {}", t!("chat.thinking_collapsed", tokens = tokens));
-                    lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
                 }
+                lines.push(Line::from("")); // Separator
+            } else {
+                // Show collapsed indicator
+                let indicator = format!("  ▸ {}", t!("chat.thinking_collapsed", tokens = tokens));
+                lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
             }
         }
 
@@ -280,68 +279,68 @@ impl Widget for ChatWidget<'_> {
             ));
 
             // Show thinking content (collapsed indicator or expanded)
-            if let Some(thinking) = self.streaming_thinking {
-                if !thinking.is_empty() {
-                    // Build duration string
-                    let duration_str = self
-                        .thinking_duration
-                        .map(Self::format_duration)
-                        .unwrap_or_default();
+            if let Some(thinking) = self.streaming_thinking
+                && !thinking.is_empty()
+            {
+                // Build duration string
+                let duration_str = self
+                    .thinking_duration
+                    .map(Self::format_duration)
+                    .unwrap_or_default();
 
-                    if self.show_thinking {
-                        // Show expanded thinking content with animated header
-                        let header = if self.is_thinking {
-                            let spinner = self.thinking_animation_char();
-                            format!(
-                                "  {spinner} {}",
-                                t!("chat.thinking_active", duration = duration_str)
-                            )
-                        } else {
-                            format!(
-                                "  💭 {}",
-                                t!("chat.thinking_active", duration = duration_str)
-                            )
-                        };
-                        all_lines.push(Line::from(
-                            Span::raw(header).italic().fg(self.theme.thinking),
-                        ));
-
-                        for line in thinking.lines() {
-                            all_lines.push(Line::from(
-                                Span::raw(format!("    {line}")).fg(self.theme.text_dim),
-                            ));
-                        }
-                        if self.is_thinking {
-                            all_lines.push(Line::from(
-                                Span::raw("    ▌").fg(self.theme.text_dim).slow_blink(),
-                            ));
-                        }
+                if self.show_thinking {
+                    // Show expanded thinking content with animated header
+                    let header = if self.is_thinking {
+                        let spinner = self.thinking_animation_char();
+                        format!(
+                            "  {spinner} {}",
+                            t!("chat.thinking_active", duration = duration_str)
+                        )
                     } else {
-                        // Show collapsed indicator with word count estimate and animation
-                        let word_count = thinking.split_whitespace().count();
-                        let tokens = (word_count as f64 * 1.3) as i32;
-                        let indicator = if self.is_thinking {
-                            let spinner = self.thinking_animation_char();
-                            format!(
-                                "  {spinner} {}",
-                                t!(
-                                    "chat.thinking_active_collapsed",
-                                    tokens = tokens,
-                                    duration = duration_str
-                                )
-                            )
-                        } else {
-                            format!(
-                                "  ▸ {}",
-                                t!(
-                                    "chat.thinking_active_collapsed",
-                                    tokens = tokens,
-                                    duration = duration_str
-                                )
-                            )
-                        };
-                        all_lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
+                        format!(
+                            "  💭 {}",
+                            t!("chat.thinking_active", duration = duration_str)
+                        )
+                    };
+                    all_lines.push(Line::from(
+                        Span::raw(header).italic().fg(self.theme.thinking),
+                    ));
+
+                    for line in thinking.lines() {
+                        all_lines.push(Line::from(
+                            Span::raw(format!("    {line}")).fg(self.theme.text_dim),
+                        ));
                     }
+                    if self.is_thinking {
+                        all_lines.push(Line::from(
+                            Span::raw("    ▌").fg(self.theme.text_dim).slow_blink(),
+                        ));
+                    }
+                } else {
+                    // Show collapsed indicator with word count estimate and animation
+                    let word_count = thinking.split_whitespace().count();
+                    let tokens = (word_count as f64 * 1.3) as i32;
+                    let indicator = if self.is_thinking {
+                        let spinner = self.thinking_animation_char();
+                        format!(
+                            "  {spinner} {}",
+                            t!(
+                                "chat.thinking_active_collapsed",
+                                tokens = tokens,
+                                duration = duration_str
+                            )
+                        )
+                    } else {
+                        format!(
+                            "  ▸ {}",
+                            t!(
+                                "chat.thinking_active_collapsed",
+                                tokens = tokens,
+                                duration = duration_str
+                            )
+                        )
+                    };
+                    all_lines.push(Line::from(Span::raw(indicator).fg(self.theme.thinking)));
                 }
             }
 

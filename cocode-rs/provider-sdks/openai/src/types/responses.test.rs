@@ -95,7 +95,7 @@ fn test_temperature_checked() {
     assert!(params.clone().temperature_checked(0.0).is_ok());
     assert!(params.clone().temperature_checked(2.0).is_ok());
     assert!(params.clone().temperature_checked(-0.1).is_err());
-    assert!(params.clone().temperature_checked(2.1).is_err());
+    assert!(params.temperature_checked(2.1).is_err());
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn test_top_logprobs_checked() {
     assert!(params.clone().top_logprobs_checked(20).is_ok());
     assert!(params.clone().top_logprobs_checked(10).is_ok());
     assert!(params.clone().top_logprobs_checked(-1).is_err());
-    assert!(params.clone().top_logprobs_checked(21).is_err());
+    assert!(params.top_logprobs_checked(21).is_err());
 }
 
 #[test]

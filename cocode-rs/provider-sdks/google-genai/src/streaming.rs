@@ -431,19 +431,19 @@ impl CandidateBuilder {
         }
 
         // Accumulate content parts
-        if let Some(content) = &candidate.content {
-            if let Some(parts) = &content.parts {
-                for part in parts {
-                    // Accumulate text (excluding thought parts)
-                    if let Some(text) = &part.text {
-                        if part.thought != Some(true) {
-                            self.text.push_str(text);
-                        }
-                    }
-
-                    // Store all parts
-                    self.parts.push(part.clone());
+        if let Some(content) = &candidate.content
+            && let Some(parts) = &content.parts
+        {
+            for part in parts {
+                // Accumulate text (excluding thought parts)
+                if let Some(text) = &part.text
+                    && part.thought != Some(true)
+                {
+                    self.text.push_str(text);
                 }
+
+                // Store all parts
+                self.parts.push(part.clone());
             }
         }
     }
@@ -459,7 +459,7 @@ impl CandidateBuilder {
                     parts: Some(self.parts.clone()),
                 })
             },
-            finish_reason: self.finish_reason.clone(),
+            finish_reason: self.finish_reason,
             safety_ratings: if self.safety_ratings.is_empty() {
                 None
             } else {

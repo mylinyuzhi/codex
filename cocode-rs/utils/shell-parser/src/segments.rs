@@ -48,6 +48,7 @@ impl PipeSegment {
 }
 
 /// Tree-sitter query for extracting pipeline structure.
+#[allow(clippy::expect_used)]
 static PIPELINE_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_bash::LANGUAGE.into();
     Query::new(
@@ -131,10 +132,10 @@ fn extract_command_words_from_node(node: tree_sitter::Node, source: &str) -> Opt
     for child in node.named_children(&mut cursor) {
         match child.kind() {
             "command_name" => {
-                if let Some(name_child) = child.named_child(0) {
-                    if let Ok(text) = name_child.utf8_text(source.as_bytes()) {
-                        words.push(text.to_string());
-                    }
+                if let Some(name_child) = child.named_child(0)
+                    && let Ok(text) = name_child.utf8_text(source.as_bytes())
+                {
+                    words.push(text.to_string());
                 }
             }
             "word" | "number" => {

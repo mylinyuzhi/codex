@@ -114,9 +114,10 @@ impl App {
         // Create skill search manager
         let skill_search = SkillSearchManager::new();
 
-        // Create agent search manager and load builtin agents
+        // Create agent search manager and load all agents (builtin + custom)
         let mut agent_search = AgentSearchManager::new();
-        let agent_defs = cocode_subagent::builtin_agents_with_overrides(&config.cocode_home);
+        let agent_defs =
+            cocode_subagent::all_agents(&config.cocode_home, Some(config.cwd.as_path()));
         agent_search.load_agents(agent_defs.iter().map(AgentInfo::from));
 
         // Create paste manager
@@ -508,6 +509,16 @@ impl App {
 
     /// Handle a loop event from the core agent.
     fn handle_loop_event(&mut self, event: LoopEvent) {
+        // Handle plugin agents loaded event to update TUI autocomplete
+        if let LoopEvent::PluginAgentsLoaded { ref agents } = event {
+            self.agent_search
+                .load_agents(agents.iter().map(|a| AgentInfo {
+                    agent_type: a.agent_type.clone(),
+                    name: a.name.clone(),
+                    description: a.description.clone(),
+                }));
+            return;
+        }
         handle_agent_event(&mut self.state, event);
     }
 

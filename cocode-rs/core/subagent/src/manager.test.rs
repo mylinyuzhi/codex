@@ -10,6 +10,10 @@ fn test_definition(name: &str) -> AgentDefinition {
         identity: None,
         max_turns: None,
         permission_mode: None,
+        fork_context: false,
+        color: None,
+        critical_reminder: None,
+        source: crate::definition::AgentSource::BuiltIn,
     }
 }
 
@@ -119,4 +123,87 @@ async fn test_resume_backgrounded() {
 fn test_get_status_missing() {
     let mgr = SubagentManager::new();
     assert!(mgr.get_status("nonexistent").is_none());
+}
+
+#[tokio::test]
+async fn test_critical_reminder_injected_into_prompt() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let captured_prompt = Arc::new(Mutex::new(String::new()));
+    let captured_prompt_clone = captured_prompt.clone();
+
+    let execute_fn: AgentExecuteFn = Box::new(move |params: AgentExecuteParams| {
+        let captured = captured_prompt_clone.clone();
+        Box::pin(async move {
+            *captured.lock().await = params.prompt;
+            Ok("done".to_string())
+        })
+    });
+
+    let mut def = test_definition("explore");
+    def.critical_reminder = Some("CRITICAL: You are read-only.".to_string());
+
+    let mut mgr = SubagentManager::new().with_execute_fn(execute_fn);
+    mgr.register_agent_type(def);
+
+    let input = SpawnInput {
+        agent_type: "explore".to_string(),
+        prompt: "find the config file".to_string(),
+        identity: None,
+        max_turns: None,
+        run_in_background: false,
+        allowed_tools: None,
+        resume_from: None,
+    };
+
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+    assert!(result.output.is_some());
+
+    let actual_prompt = captured_prompt.lock().await;
+    assert!(
+        actual_prompt.starts_with("CRITICAL: You are read-only."),
+        "Prompt should start with critical_reminder, got: {actual_prompt}"
+    );
+    assert!(
+        actual_prompt.contains("find the config file"),
+        "Prompt should contain original task"
+    );
+}
+
+#[tokio::test]
+async fn test_no_critical_reminder_passes_prompt_unchanged() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let captured_prompt = Arc::new(Mutex::new(String::new()));
+    let captured_prompt_clone = captured_prompt.clone();
+
+    let execute_fn: AgentExecuteFn = Box::new(move |params: AgentExecuteParams| {
+        let captured = captured_prompt_clone.clone();
+        Box::pin(async move {
+            *captured.lock().await = params.prompt;
+            Ok("done".to_string())
+        })
+    });
+
+    let def = test_definition("bash"); // no critical_reminder
+
+    let mut mgr = SubagentManager::new().with_execute_fn(execute_fn);
+    mgr.register_agent_type(def);
+
+    let input = SpawnInput {
+        agent_type: "bash".to_string(),
+        prompt: "run ls -la".to_string(),
+        identity: None,
+        max_turns: None,
+        run_in_background: false,
+        allowed_tools: None,
+        resume_from: None,
+    };
+
+    mgr.spawn_full(input).await.expect("spawn_full");
+
+    let actual_prompt = captured_prompt.lock().await;
+    assert_eq!(*actual_prompt, "run ls -la");
 }

@@ -699,6 +699,7 @@ impl<'a> GeneratorContextBuilder<'a> {
     /// # Panics
     ///
     /// Panics if `config` or `cwd` is not set.
+    #[allow(clippy::expect_used)]
     pub fn build(self) -> GeneratorContext<'a> {
         GeneratorContext {
             config: self.config.expect("config is required"),

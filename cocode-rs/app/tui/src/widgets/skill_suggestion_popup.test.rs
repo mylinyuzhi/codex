@@ -2,7 +2,7 @@ use super::*;
 use crate::state::SkillSuggestionItem;
 
 fn create_test_state() -> SkillSuggestionState {
-    let mut state = SkillSuggestionState::new("com".to_string(), 0);
+    let mut state = SkillSuggestionState::new("com".to_string(), 0, false);
     state.update_suggestions(vec![
         SkillSuggestionItem {
             name: "commit".to_string(),
@@ -45,13 +45,17 @@ fn test_popup_render() {
     popup.render(area, &mut buf);
 
     // Should contain the query
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("com"));
 }
 
 #[test]
 fn test_empty_suggestions() {
-    let mut state = SkillSuggestionState::new("xyz".to_string(), 0);
+    let mut state = SkillSuggestionState::new("xyz".to_string(), 0, false);
     state.update_suggestions(vec![]);
     let theme = Theme::default();
     let popup = SkillSuggestionPopup::new(&state, &theme);
@@ -61,6 +65,10 @@ fn test_empty_suggestions() {
 
     popup.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("No matching"));
 }

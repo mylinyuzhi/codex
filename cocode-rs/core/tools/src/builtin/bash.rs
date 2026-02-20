@@ -305,10 +305,7 @@ impl Tool for BashTool {
                 .spawn_background(command)
                 .await
                 .map_err(|e| {
-                    crate::error::tool_error::ExecutionFailedSnafu {
-                        message: e.to_string(),
-                    }
-                    .build()
+                    crate::error::tool_error::ExecutionFailedSnafu { message: e }.build()
                 })?;
 
             return Ok(ToolOutput::text(format!(
@@ -325,10 +322,10 @@ impl Tool for BashTool {
         {
             ExecuteResult::Completed(result) => {
                 // Sync CWD back to ctx only on success
-                if result.exit_code == 0 {
-                    if let Some(ref new_cwd) = result.new_cwd {
-                        ctx.cwd = new_cwd.clone();
-                    }
+                if result.exit_code == 0
+                    && let Some(ref new_cwd) = result.new_cwd
+                {
+                    ctx.cwd = new_cwd.clone();
                 }
                 format_command_result(&result)
             }

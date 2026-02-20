@@ -13,6 +13,7 @@ use cocode_rmcp_client::RmcpClient;
 use cocode_skill::SkillManager;
 use cocode_subagent::SubagentManager;
 use cocode_tools::ToolRegistry;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -206,6 +207,7 @@ pub fn integrate_plugins(
         agents = registry.agent_contributions().len(),
         commands = registry.command_contributions().len(),
         mcp_servers = registry.mcp_server_contributions().len(),
+        lsp_servers = registry.lsp_server_contributions().len(),
         "Plugin integration complete"
     );
 
@@ -356,6 +358,69 @@ async fn connect_mcp_server(
     );
 
     Ok(client)
+}
+
+/// Register plugin-contributed LSP servers with the LSP server manager.
+///
+/// For each LSP server contribution from plugins, converts the plugin config
+/// to the LSP crate's format and merges it into the manager's configuration.
+/// Servers start on-demand when matching file types are opened.
+///
+/// Call this after [`integrate_plugins`] when an `LspServerManager` is available.
+pub async fn connect_plugin_lsp_servers(
+    registry: &PluginRegistry,
+    lsp_manager: &cocode_lsp::LspServerManager,
+) {
+    let servers = registry.lsp_server_contributions();
+    if servers.is_empty() {
+        return;
+    }
+
+    let mut lsp_config = cocode_lsp::LspServersConfig::default();
+
+    for (config, plugin_name) in &servers {
+        let server_id = format!("{plugin_name}-{}", config.name);
+        // Normalize plugin file_patterns (e.g. "*.rs", "Cargo.toml") to
+        // LSP file_extensions format (e.g. ".rs", ".toml").
+        let file_extensions = normalize_file_patterns(&config.file_patterns);
+        let lsp_server_config = cocode_lsp::LspServerConfig {
+            command: Some(config.command.clone()),
+            args: config.args.clone(),
+            file_extensions,
+            languages: config.languages.clone(),
+            env: config.env.clone(),
+            ..Default::default()
+        };
+        debug!(
+            server = %server_id,
+            plugin = %plugin_name,
+            languages = ?config.languages,
+            "Registering plugin LSP server"
+        );
+        lsp_config.servers.insert(server_id, lsp_server_config);
+    }
+
+    lsp_manager.merge_config(lsp_config).await;
+
+    info!(count = servers.len(), "Connected plugin LSP servers");
+}
+
+/// Normalize plugin file patterns to LSP file extensions.
+///
+/// Converts patterns like `"*.rs"`, `"Cargo.toml"`, `"**/*.py"` to
+/// dot-prefixed extensions like `".rs"`, `".toml"`, `".py"` that the
+/// LSP server manager expects for extension matching.
+fn normalize_file_patterns(patterns: &[String]) -> Vec<String> {
+    let mut extensions = Vec::new();
+    for pattern in patterns {
+        if let Some(dot_pos) = pattern.rfind('.') {
+            let ext = format!(".{}", &pattern[dot_pos + 1..]);
+            if !extensions.contains(&ext) {
+                extensions.push(ext);
+            }
+        }
+    }
+    extensions
 }
 
 #[cfg(test)]

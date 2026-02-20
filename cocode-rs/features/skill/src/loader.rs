@@ -1,11 +1,13 @@
 //! Skill loading from directories.
 //!
-//! Reads `SKILL.toml` files, resolves prompt content (from external files
-//! or inline), validates the result, and produces [`SkillLoadOutcome`] values.
+//! Reads `SKILL.md` files, parses YAML frontmatter and markdown body
+//! (which serves as the prompt), validates the result, and produces
+//! [`SkillLoadOutcome`] values.
 
 use crate::command::CommandType;
 use crate::command::SkillContext;
 use crate::command::SkillPromptCommand;
+use crate::frontmatter;
 use crate::interface::SkillInterface;
 use crate::outcome::SkillLoadOutcome;
 use crate::scanner::SkillScanner;
@@ -17,14 +19,14 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// The expected metadata file name.
-const SKILL_TOML: &str = "SKILL.toml";
+/// The expected skill file name.
+const SKILL_MD: &str = "SKILL.md";
 
 /// Loads all skills from a single directory.
 ///
 /// The directory itself is expected to be a skills root (e.g.,
 /// `.cocode/skills/`). Each immediate subdirectory (or nested directory
-/// found by the scanner) that contains `SKILL.toml` is treated as a
+/// found by the scanner) that contains `SKILL.md` is treated as a
 /// skill directory.
 ///
 /// Returns one [`SkillLoadOutcome`] per discovered skill directory.
@@ -68,48 +70,51 @@ pub fn load_all_skills(roots: &[PathBuf]) -> Vec<SkillLoadOutcome> {
 
 /// Loads a single skill from its directory.
 fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
-    let toml_path = skill_dir.join(SKILL_TOML);
+    let md_path = skill_dir.join(SKILL_MD);
 
-    // Read SKILL.toml
-    let toml_content = match fs::read_to_string(&toml_path) {
+    // Read SKILL.md
+    let content = match fs::read_to_string(&md_path) {
         Ok(content) => content,
         Err(err) => {
             return SkillLoadOutcome::Failed {
                 path: skill_dir.to_path_buf(),
-                error: format!("failed to read {SKILL_TOML}: {err}"),
+                error: format!("failed to read {SKILL_MD}: {err}"),
             };
         }
     };
 
-    // Parse SKILL.toml
-    let interface: SkillInterface = match toml::from_str(&toml_content) {
+    // Parse frontmatter
+    let (yaml_str, body) = match frontmatter::parse_frontmatter(&content) {
+        Ok(result) => result,
+        Err(err) => {
+            return SkillLoadOutcome::Failed {
+                path: skill_dir.to_path_buf(),
+                error: format!("failed to parse {SKILL_MD} frontmatter: {err}"),
+            };
+        }
+    };
+
+    // Parse YAML into SkillInterface
+    let interface: SkillInterface = match serde_yml::from_str(yaml_str) {
         Ok(iface) => iface,
         Err(err) => {
             return SkillLoadOutcome::Failed {
                 path: skill_dir.to_path_buf(),
-                error: format!("failed to parse {SKILL_TOML}: {err}"),
+                error: format!("failed to parse {SKILL_MD} YAML: {err}"),
             };
         }
     };
 
+    // Prompt comes from the markdown body
+    let prompt = body.trim().to_string();
+
     // Validate
-    if let Err(errors) = validator::validate_skill(&interface) {
+    if let Err(errors) = validator::validate_skill(&interface, &prompt) {
         return SkillLoadOutcome::Failed {
             path: skill_dir.to_path_buf(),
             error: format!("validation failed: {}", errors.join("; ")),
         };
     }
-
-    // Resolve prompt content
-    let prompt = match resolve_prompt(skill_dir, &interface) {
-        Ok(p) => p,
-        Err(err) => {
-            return SkillLoadOutcome::Failed {
-                path: skill_dir.to_path_buf(),
-                error: format!("failed to resolve prompt: {err}"),
-            };
-        }
-    };
 
     // Determine source based on relationship to root
     let source = determine_source(skill_dir, root);
@@ -152,33 +157,6 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
         },
         source,
     }
-}
-
-/// Resolves the prompt text for a skill.
-///
-/// If `prompt_file` is set, reads the file relative to the skill directory.
-/// Otherwise, falls back to `prompt_inline`.
-fn resolve_prompt(skill_dir: &Path, interface: &SkillInterface) -> Result<String, String> {
-    // prompt_file takes precedence over prompt_inline
-    if let Some(ref file) = interface.prompt_file {
-        if !file.is_empty() {
-            let prompt_path = skill_dir.join(file);
-            return fs::read_to_string(&prompt_path).map_err(|err| {
-                format!(
-                    "failed to read prompt file '{}': {err}",
-                    prompt_path.display()
-                )
-            });
-        }
-    }
-
-    if let Some(ref inline) = interface.prompt_inline {
-        if !inline.is_empty() {
-            return Ok(inline.clone());
-        }
-    }
-
-    Err("no prompt content available".to_string())
 }
 
 /// Determines the [`SkillSource`] based on the skill directory and its root.

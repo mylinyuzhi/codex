@@ -99,7 +99,7 @@ pub fn builtin_local_commands() -> &'static [LocalCommandDef] {
 pub fn find_local_command(name: &str) -> Option<&'static LocalCommandDef> {
     builtin_local_commands()
         .iter()
-        .find(|cmd| cmd.name == name || cmd.aliases.iter().any(|alias| *alias == name))
+        .find(|cmd| cmd.name == name || cmd.aliases.contains(&name))
 }
 
 #[cfg(test)]

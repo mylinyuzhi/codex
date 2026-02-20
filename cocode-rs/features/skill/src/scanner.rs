@@ -1,7 +1,7 @@
 //! Directory scanner for skill discovery.
 //!
 //! Walks a directory tree to find skill directories (those containing a
-//! `SKILL.toml` file). Supports configurable depth limits and detects
+//! `SKILL.md` file). Supports configurable depth limits and detects
 //! symlink cycles via canonical path tracking.
 
 use std::collections::HashSet;
@@ -9,13 +9,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-/// The expected metadata file name in each skill directory.
-const SKILL_TOML: &str = "SKILL.toml";
+/// The expected skill file name in each skill directory.
+const SKILL_MD: &str = "SKILL.md";
 
 /// Scans directory trees for skill directories.
 ///
 /// Walks each root directory looking for directories that contain a
-/// `SKILL.toml` file. Symlink cycles are detected by tracking canonical
+/// `SKILL.md` file. Symlink cycles are detected by tracking canonical
 /// paths. Errors during scanning (e.g., permission denied) are logged
 /// and skipped.
 pub struct SkillScanner {
@@ -43,7 +43,7 @@ impl SkillScanner {
 
     /// Scans a single root directory for skill directories.
     ///
-    /// Returns a list of absolute paths to directories containing `SKILL.toml`.
+    /// Returns a list of absolute paths to directories containing `SKILL.md`.
     /// Symlink cycles are detected and skipped. Errors are logged but do not
     /// cause the scan to abort.
     pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
@@ -108,9 +108,9 @@ impl SkillScanner {
                 }
             }
 
-            // Check if this directory contains SKILL.toml
-            let skill_toml = dir_path.join(SKILL_TOML);
-            if skill_toml.is_file() {
+            // Check if this directory contains SKILL.md
+            let skill_md = dir_path.join(SKILL_MD);
+            if skill_md.is_file() {
                 results.push(dir_path.to_path_buf());
             }
         }

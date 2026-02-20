@@ -534,22 +534,20 @@ impl LspServersConfig {
     ) -> Option<ConfigLevel> {
         // Check project-level first (higher priority)
         let project_path = project_dir.join(LSP_SERVERS_CONFIG_FILE);
-        if project_path.exists() {
-            if let Ok(config) = Self::from_file(&project_path) {
-                if config.servers.contains_key(server_id) {
-                    return Some(ConfigLevel::Project);
-                }
-            }
+        if project_path.exists()
+            && let Ok(config) = Self::from_file(&project_path)
+            && config.servers.contains_key(server_id)
+        {
+            return Some(ConfigLevel::Project);
         }
 
         // Check user-level
         let user_path = user_dir.join(LSP_SERVERS_CONFIG_FILE);
-        if user_path.exists() {
-            if let Ok(config) = Self::from_file(&user_path) {
-                if config.servers.contains_key(server_id) {
-                    return Some(ConfigLevel::User);
-                }
-            }
+        if user_path.exists()
+            && let Ok(config) = Self::from_file(&user_path)
+            && config.servers.contains_key(server_id)
+        {
+            return Some(ConfigLevel::User);
         }
 
         None

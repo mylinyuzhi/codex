@@ -241,7 +241,7 @@ impl ResultListState {
             return None;
         }
 
-        let total_pages = (self.results.len() + self.visible_height - 1) / self.visible_height;
+        let total_pages = self.results.len().div_ceil(self.visible_height);
         if total_pages <= 1 {
             return None;
         }
@@ -353,7 +353,7 @@ impl StatefulWidget for ResultList<'_> {
 
             // Calculate pagination with current visible height
             let total_pages = if visible_height > 0 {
-                (self.state.results.len() + visible_height - 1) / visible_height
+                self.state.results.len().div_ceil(visible_height)
             } else {
                 1
             };

@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::PermissionMode;
 
 /// Configuration for the core agent loop.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LoopConfig {
     /// Maximum number of turns before stopping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,25 +48,6 @@ pub struct LoopConfig {
     /// Prompt caching configuration.
     #[serde(default)]
     pub prompt_caching: PromptCachingConfig,
-}
-
-impl Default for LoopConfig {
-    fn default() -> Self {
-        Self {
-            max_turns: None,
-            max_tokens: None,
-            permission_mode: PermissionMode::default(),
-            enable_streaming_tools: false,
-            enable_micro_compaction: false,
-            fallback_model: None,
-            agent_id: None,
-            parent_agent_id: None,
-            record_sidechain: false,
-            session_memory: SessionMemoryConfig::default(),
-            stall_detection: StallDetectionConfig::default(),
-            prompt_caching: PromptCachingConfig::default(),
-        }
-    }
 }
 
 /// Configuration for session memory management.

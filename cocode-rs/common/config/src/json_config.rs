@@ -201,23 +201,32 @@ pub struct AppConfig {
 
     /// Hook definitions for event interception.
     ///
+    /// Keys are [`HookEventType`](cocode_protocol::HookEventType) variants (snake_case in JSON).
+    ///
     /// # Example
     ///
     /// ```json
     /// {
-    ///   "hooks": [
-    ///     {
-    ///       "event": "pre_tool_use",
-    ///       "matcher": "Bash",
-    ///       "hooks": [
-    ///         { "type": "command", "command": "my-lint-check" }
-    ///       ]
-    ///     }
-    ///   ]
+    ///   "hooks": {
+    ///     "pre_tool_use": [
+    ///       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "my-lint-check" }] }
+    ///     ],
+    ///     "stop": [
+    ///       { "hooks": [{ "type": "prompt", "prompt": "Check if done." }] }
+    ///     ]
+    ///   }
     /// }
     /// ```
     #[serde(default)]
-    pub hooks: Vec<HookConfig>,
+    pub hooks: HashMap<cocode_protocol::HookEventType, Vec<HookMatcherGroup>>,
+
+    /// Disable all hooks globally.
+    #[serde(default, rename = "disableAllHooks")]
+    pub disable_all_hooks: bool,
+
+    /// Only allow hooks from managed (policy/plugin) sources.
+    #[serde(default, rename = "allowManagedHooksOnly")]
+    pub allow_managed_hooks_only: bool,
 
     /// OpenTelemetry configuration.
     #[serde(default)]
@@ -232,43 +241,69 @@ pub struct AppConfig {
     pub output_style: Option<String>,
 }
 
-/// A single hook configuration entry in config.json.
+/// A matcher group within a hook event configuration.
 ///
-/// Matches Claude Code v2.1.7 hook format.
+/// Groups a matcher pattern with one or more hook handlers. When the matcher
+/// matches the event target (e.g., tool name), all handlers in the group execute.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct HookConfig {
-    /// Event type: "pre_tool_use", "post_tool_use", "session_start", etc.
-    pub event: String,
-
-    /// Tool name pattern to match (exact match or pipe-separated "A|B").
-    /// If empty or absent, matches all tools for tool events.
+pub struct HookMatcherGroup {
+    /// Regex/exact matcher pattern. Empty string or absent = match all.
     #[serde(default)]
     pub matcher: Option<String>,
 
-    /// List of hook handlers to execute for this event.
+    /// Hook handlers for this matcher group.
     #[serde(default)]
     pub hooks: Vec<HookHandlerConfig>,
 }
 
 /// A single hook handler in config.json.
+///
+/// Claude Code v2.1.7 compatible: supports command, prompt, and agent types.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookHandlerConfig {
     /// Execute a shell command.
     Command {
-        /// Command to execute.
+        /// Command string (executed via `sh -c`).
         command: String,
-        /// Optional arguments.
-        #[serde(default)]
-        args: Vec<String>,
         /// Timeout in seconds (default: 30).
-        #[serde(default = "default_hook_timeout")]
-        timeout_secs: i32,
+        #[serde(default)]
+        timeout: Option<i32>,
+        /// If true, this handler runs only once then is removed.
+        #[serde(default)]
+        once: Option<bool>,
+        /// Status message shown in the UI while the hook runs.
+        #[serde(default, rename = "statusMessage")]
+        status_message: Option<String>,
     },
-}
-
-fn default_hook_timeout() -> i32 {
-    30
+    /// Inject a prompt template for LLM verification.
+    Prompt {
+        /// Prompt template string. `$ARGUMENTS` is replaced with hook context JSON.
+        prompt: String,
+        /// Model to use for verification.
+        #[serde(default)]
+        model: Option<String>,
+        /// Timeout in seconds.
+        #[serde(default)]
+        timeout: Option<i32>,
+        /// If true, this handler runs only once then is removed.
+        #[serde(default)]
+        once: Option<bool>,
+    },
+    /// Delegate to a sub-agent for verification.
+    Agent {
+        /// Prompt template for the agent.
+        prompt: String,
+        /// Model to use for the agent.
+        #[serde(default)]
+        model: Option<String>,
+        /// Timeout in seconds.
+        #[serde(default)]
+        timeout: Option<i32>,
+        /// If true, this handler runs only once then is removed.
+        #[serde(default)]
+        once: Option<bool>,
+    },
 }
 
 /// Resolved configuration with profile applied.
@@ -301,8 +336,12 @@ pub struct ResolvedAppConfig {
     pub web_search: Option<WebSearchConfig>,
     /// Effective web fetch configuration.
     pub web_fetch: Option<WebFetchConfig>,
-    /// Effective hook definitions.
-    pub hooks: Vec<HookConfig>,
+    /// Effective hook definitions ([`HookEventType`](cocode_protocol::HookEventType) → matcher groups).
+    pub hooks: HashMap<cocode_protocol::HookEventType, Vec<HookMatcherGroup>>,
+    /// Disable all hooks globally.
+    pub disable_all_hooks: bool,
+    /// Only allow hooks from managed sources.
+    pub allow_managed_hooks_only: bool,
     /// Effective OTel configuration.
     pub otel: Option<OtelJsonConfig>,
     /// Effective output style name.
@@ -333,6 +372,8 @@ impl AppConfig {
             web_search: self.web_search.clone(),
             web_fetch: self.web_fetch.clone(),
             hooks: self.hooks.clone(),
+            disable_all_hooks: self.disable_all_hooks,
+            allow_managed_hooks_only: self.allow_managed_hooks_only,
             otel: self.otel.clone(),
             output_style: self.output_style.clone(),
         }
@@ -384,7 +425,7 @@ impl AppConfig {
     pub fn resolve_features(&self) -> Features {
         self.features
             .clone()
-            .map(|f| f.into_features())
+            .map(FeaturesConfig::into_features)
             .unwrap_or_else(Features::with_defaults)
     }
 

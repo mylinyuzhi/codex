@@ -156,28 +156,26 @@ impl McpAutoSearchConfig {
     /// - `COCODE_MCP_AUTOSEARCH_MIN_CONTEXT`: Override min_context_window
     pub fn with_env_overrides(mut self) -> Self {
         // COCODE_MCP_AUTOSEARCH - master toggle
-        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH") {
-            if let Ok(enabled) = val.parse::<bool>() {
-                self.enabled = enabled;
-            }
+        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH")
+            && let Ok(enabled) = val.parse::<bool>()
+        {
+            self.enabled = enabled;
         }
 
         // COCODE_MCP_AUTOSEARCH_THRESHOLD - context threshold
-        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH_THRESHOLD") {
-            if let Ok(threshold) = val.parse::<f32>() {
-                if (0.0..=1.0).contains(&threshold) {
-                    self.context_threshold = threshold;
-                }
-            }
+        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH_THRESHOLD")
+            && let Ok(threshold) = val.parse::<f32>()
+            && (0.0..=1.0).contains(&threshold)
+        {
+            self.context_threshold = threshold;
         }
 
         // COCODE_MCP_AUTOSEARCH_MIN_CONTEXT - minimum context window
-        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH_MIN_CONTEXT") {
-            if let Ok(min_context) = val.parse::<i32>() {
-                if min_context > 0 {
-                    self.min_context_window = min_context;
-                }
-            }
+        if let Ok(val) = std::env::var("COCODE_MCP_AUTOSEARCH_MIN_CONTEXT")
+            && let Ok(min_context) = val.parse::<i32>()
+            && min_context > 0
+        {
+            self.min_context_window = min_context;
         }
 
         self

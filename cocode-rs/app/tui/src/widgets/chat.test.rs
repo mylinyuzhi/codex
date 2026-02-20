@@ -26,7 +26,11 @@ fn test_chat_widget_with_messages() {
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
 
-    let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
     assert!(content.contains("You"));
     assert!(content.contains("Hello"));
     assert!(content.contains("Assistant"));

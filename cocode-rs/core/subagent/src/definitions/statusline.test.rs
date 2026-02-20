@@ -1,5 +1,6 @@
 use super::*;
 use cocode_protocol::execution::ExecutionIdentity;
+use cocode_protocol::model::ModelRole;
 
 #[test]
 fn test_statusline_agent() {
@@ -9,5 +10,11 @@ fn test_statusline_agent() {
     assert_eq!(agent.tools, vec!["Read", "Edit"]);
     assert!(agent.disallowed_tools.is_empty());
     assert_eq!(agent.max_turns, Some(5));
-    assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
+    assert!(matches!(
+        agent.identity,
+        Some(ExecutionIdentity::Role(ModelRole::Fast))
+    ));
+    assert!(!agent.fork_context);
+    assert_eq!(agent.color.as_deref(), Some("orange"));
+    assert!(agent.critical_reminder.is_none());
 }

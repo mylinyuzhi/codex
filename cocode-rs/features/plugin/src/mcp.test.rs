@@ -61,30 +61,30 @@ fn test_mcp_server_serialize_deserialize() {
         auto_start: true,
     };
 
-    let toml_str = toml::to_string(&config).expect("serialize");
-    let back: McpServerConfig = toml::from_str(&toml_str).expect("deserialize");
+    let json_str = serde_json::to_string(&config).expect("serialize");
+    let back: McpServerConfig = serde_json::from_str(&json_str).expect("deserialize");
 
     assert_eq!(back.name, "test-server");
     assert_eq!(back.env.get("NODE_ENV"), Some(&"production".to_string()));
 }
 
 #[test]
-fn test_mcp_server_from_toml() {
-    let toml_str = r#"
-name = "filesystem"
-description = "Provides file system access"
-auto_start = true
+fn test_mcp_server_from_json() {
+    let json_str = r#"{
+  "name": "filesystem",
+  "description": "Provides file system access",
+  "auto_start": true,
+  "transport": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@anthropic/mcp-server-filesystem"]
+  },
+  "env": {
+    "MCP_DEBUG": "true"
+  }
+}"#;
 
-[transport]
-type = "stdio"
-command = "npx"
-args = ["-y", "@anthropic/mcp-server-filesystem"]
-
-[env]
-MCP_DEBUG = "true"
-"#;
-
-    let config: McpServerConfig = toml::from_str(toml_str).expect("deserialize");
+    let config: McpServerConfig = serde_json::from_str(json_str).expect("deserialize");
     assert_eq!(config.name, "filesystem");
     assert_eq!(
         config.description,
@@ -233,15 +233,15 @@ fn test_resolve_variables_no_patterns() {
 
 #[test]
 fn test_mcp_server_defaults() {
-    let toml_str = r#"
-name = "minimal"
+    let json_str = r#"{
+  "name": "minimal",
+  "transport": {
+    "type": "http",
+    "url": "http://localhost:8080"
+  }
+}"#;
 
-[transport]
-type = "http"
-url = "http://localhost:8080"
-"#;
-
-    let config: McpServerConfig = toml::from_str(toml_str).expect("deserialize");
+    let config: McpServerConfig = serde_json::from_str(json_str).expect("deserialize");
     assert_eq!(config.name, "minimal");
     assert!(config.description.is_none());
     assert!(config.auto_start); // Default is true

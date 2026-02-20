@@ -4,6 +4,7 @@
 //! synchronized with the agent.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -62,7 +63,7 @@ pub struct UiState {
     pub theme: Theme,
 
     /// Active toast notifications.
-    pub toasts: Vec<Toast>,
+    pub toasts: VecDeque<Toast>,
 
     /// Animation frame counter (0-7 cycle) for animated elements.
     pub animation_frame: u8,
@@ -119,7 +120,7 @@ impl UiState {
 
     /// Start showing file suggestions.
     pub fn start_file_suggestions(&mut self, query: String, start_pos: i32) {
-        self.file_suggestions = Some(FileSuggestionState::new(query, start_pos));
+        self.file_suggestions = Some(FileSuggestionState::new(query, start_pos, true));
     }
 
     /// Clear file suggestions.
@@ -150,7 +151,7 @@ impl UiState {
 
     /// Start showing skill suggestions.
     pub fn start_skill_suggestions(&mut self, query: String, start_pos: i32) {
-        self.skill_suggestions = Some(SkillSuggestionState::new(query, start_pos));
+        self.skill_suggestions = Some(SkillSuggestionState::new(query, start_pos, false));
     }
 
     /// Clear skill suggestions.
@@ -172,7 +173,7 @@ impl UiState {
 
     /// Start showing agent suggestions.
     pub fn start_agent_suggestions(&mut self, query: String, start_pos: i32) {
-        self.agent_suggestions = Some(AgentSuggestionState::new(query, start_pos));
+        self.agent_suggestions = Some(AgentSuggestionState::new(query, start_pos, false));
     }
 
     /// Clear agent suggestions.
@@ -194,7 +195,7 @@ impl UiState {
 
     /// Start showing symbol suggestions.
     pub fn start_symbol_suggestions(&mut self, query: String, start_pos: i32) {
-        self.symbol_suggestions = Some(SymbolSuggestionState::new(query, start_pos));
+        self.symbol_suggestions = Some(SymbolSuggestionState::new(query, start_pos, true));
     }
 
     /// Clear symbol suggestions.
@@ -265,9 +266,9 @@ impl UiState {
         // Limit to max 5 toasts
         const MAX_TOASTS: usize = 5;
         if self.toasts.len() >= MAX_TOASTS {
-            self.toasts.remove(0);
+            self.toasts.pop_front();
         }
-        self.toasts.push(toast);
+        self.toasts.push_back(toast);
     }
 
     /// Add an info toast.
@@ -455,21 +456,16 @@ impl InputState {
             return;
         }
 
-        let text = &self.text;
+        let bytes = self.text.as_bytes();
         let mut pos = (self.cursor - 1) as usize;
 
         // Skip any whitespace before cursor
-        while pos > 0 && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos > 0 && bytes[pos].is_ascii_whitespace() {
             pos -= 1;
         }
 
         // Skip to start of current word
-        while pos > 0
-            && text
-                .chars()
-                .nth(pos - 1)
-                .is_some_and(|c| !c.is_whitespace())
-        {
+        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
             pos -= 1;
         }
 
@@ -478,8 +474,8 @@ impl InputState {
 
     /// Move cursor to the start of the next word.
     pub fn move_word_right(&mut self) {
-        let text = &self.text;
-        let len = text.len();
+        let bytes = self.text.as_bytes();
+        let len = bytes.len();
         let mut pos = self.cursor as usize;
 
         if pos >= len {
@@ -487,12 +483,12 @@ impl InputState {
         }
 
         // Skip current word
-        while pos < len && text.chars().nth(pos).is_some_and(|c| !c.is_whitespace()) {
+        while pos < len && !bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
 
         // Skip whitespace
-        while pos < len && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos < len && bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
 
@@ -506,33 +502,29 @@ impl InputState {
         }
 
         let original_cursor = self.cursor as usize;
-        let text = &self.text;
+        let bytes = self.text.as_bytes();
         let mut pos = original_cursor;
 
         // Skip whitespace before cursor
-        while pos > 0 && text.chars().nth(pos - 1).is_some_and(|c| c.is_whitespace()) {
+        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
             pos -= 1;
         }
 
         // Skip to start of word
-        while pos > 0
-            && text
-                .chars()
-                .nth(pos - 1)
-                .is_some_and(|c| !c.is_whitespace())
-        {
+        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
             pos -= 1;
         }
 
         // Remove the text between pos and original cursor
+        let text = &self.text;
         self.text = format!("{}{}", &text[..pos], &text[original_cursor..]);
         self.cursor = pos as i32;
     }
 
     /// Delete the word after the cursor.
     pub fn delete_word_forward(&mut self) {
-        let text = &self.text;
-        let len = text.len();
+        let bytes = self.text.as_bytes();
+        let len = bytes.len();
         let start_pos = self.cursor as usize;
 
         if start_pos >= len {
@@ -542,16 +534,17 @@ impl InputState {
         let mut pos = start_pos;
 
         // Skip current word
-        while pos < len && text.chars().nth(pos).is_some_and(|c| !c.is_whitespace()) {
+        while pos < len && !bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
 
         // Skip whitespace after word
-        while pos < len && text.chars().nth(pos).is_some_and(|c| c.is_whitespace()) {
+        while pos < len && bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
 
         // Remove the text between start_pos and pos
+        let text = &self.text;
         self.text = format!("{}{}", &text[..start_pos], &text[pos..]);
         // Cursor stays at same position
     }
@@ -603,8 +596,11 @@ impl InputState {
         }
 
         // Sort by frecency (highest first)
-        self.history
-            .sort_by(|a, b| b.frecency_score().partial_cmp(&a.frecency_score()).unwrap());
+        self.history.sort_by(|a, b| {
+            b.frecency_score()
+                .partial_cmp(&a.frecency_score())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Limit history size
         const MAX_HISTORY: usize = 100;
@@ -655,7 +651,7 @@ impl InputState {
                     || before_cursor[..i]
                         .chars()
                         .last()
-                        .is_some_and(|c| c.is_whitespace());
+                        .is_some_and(char::is_whitespace);
                 if !is_valid_start {
                     return None;
                 }
@@ -679,7 +675,7 @@ impl InputState {
                 }
 
                 // Normal (unquoted) mode — no whitespace allowed between @ and cursor
-                if after_at.contains(|c: char| c == ' ' || c == '\n' || c == '\t') {
+                if after_at.contains([' ', '\n', '\t']) {
                     return None;
                 }
                 return Some((i as i32, after_at.to_string()));
@@ -694,7 +690,7 @@ impl InputState {
                         || prefix[..at_quote_pos]
                             .chars()
                             .last()
-                            .is_some_and(|ch| ch.is_whitespace());
+                            .is_some_and(char::is_whitespace);
                     let after_open = &prefix[at_quote_pos + 2..];
                     if valid_start && !after_open.contains('"') {
                         continue;
@@ -741,7 +737,7 @@ impl InputState {
                     slash_pos = Some(i);
                 } else {
                     let prev_char = before_cursor[..i].chars().last();
-                    if prev_char.is_some_and(|c| c.is_whitespace()) {
+                    if prev_char.is_some_and(char::is_whitespace) {
                         slash_pos = Some(i);
                     }
                 }
@@ -1213,30 +1209,34 @@ impl StreamingState {
     }
 }
 
-/// State for file autocomplete suggestions.
+/// Generic suggestion state for all autocomplete types.
+///
+/// Provides shared navigation logic (move_up, move_down, selected_suggestion,
+/// update_suggestions) so that each autocomplete system only needs to define
+/// its item type.
 #[derive(Debug, Clone)]
-pub struct FileSuggestionState {
-    /// The query extracted from @mention (without the @).
+pub struct SuggestionState<T> {
+    /// The query text (without trigger prefix like @, /, @#).
     pub query: String,
-    /// Start position of the @mention in the input text.
+    /// Start position of the trigger in the input text.
     pub start_pos: i32,
     /// Current suggestions.
-    pub suggestions: Vec<FileSuggestionItem>,
+    pub suggestions: Vec<T>,
     /// Currently selected index in the dropdown.
     pub selected: i32,
     /// Whether a search is currently in progress.
     pub loading: bool,
 }
 
-impl FileSuggestionState {
-    /// Create a new file suggestion state.
-    pub fn new(query: String, start_pos: i32) -> Self {
+impl<T> SuggestionState<T> {
+    /// Create a new suggestion state.
+    pub fn new(query: String, start_pos: i32, loading: bool) -> Self {
         Self {
             query,
             start_pos,
             suggestions: Vec::new(),
             selected: 0,
-            loading: true,
+            loading,
         }
     }
 
@@ -1256,12 +1256,12 @@ impl FileSuggestionState {
     }
 
     /// Get the currently selected suggestion.
-    pub fn selected_suggestion(&self) -> Option<&FileSuggestionItem> {
+    pub fn selected_suggestion(&self) -> Option<&T> {
         self.suggestions.get(self.selected as usize)
     }
 
     /// Update suggestions from search results.
-    pub fn update_suggestions(&mut self, suggestions: Vec<FileSuggestionItem>) {
+    pub fn update_suggestions(&mut self, suggestions: Vec<T>) {
         self.suggestions = suggestions;
         self.loading = false;
         // Reset selection if out of bounds
@@ -1270,6 +1270,15 @@ impl FileSuggestionState {
         }
     }
 }
+
+/// File suggestion state (autocomplete for `@path` mentions).
+pub type FileSuggestionState = SuggestionState<FileSuggestionItem>;
+/// Skill suggestion state (autocomplete for `/command` slash commands).
+pub type SkillSuggestionState = SuggestionState<SkillSuggestionItem>;
+/// Agent suggestion state (autocomplete for `@agent-*` mentions).
+pub type AgentSuggestionState = SuggestionState<AgentSuggestionItem>;
+/// Symbol suggestion state (autocomplete for `@#symbol` mentions).
+pub type SymbolSuggestionState = SuggestionState<SymbolSuggestionItem>;
 
 /// A single file suggestion item for display.
 #[derive(Debug, Clone)]
@@ -1286,64 +1295,6 @@ pub struct FileSuggestionItem {
     pub is_directory: bool,
 }
 
-/// State for skill autocomplete suggestions.
-#[derive(Debug, Clone)]
-pub struct SkillSuggestionState {
-    /// The query extracted from /command (without the /).
-    pub query: String,
-    /// Start position of the /command in the input text.
-    pub start_pos: i32,
-    /// Current suggestions.
-    pub suggestions: Vec<SkillSuggestionItem>,
-    /// Currently selected index in the dropdown.
-    pub selected: i32,
-    /// Whether a search is currently in progress.
-    pub loading: bool,
-}
-
-impl SkillSuggestionState {
-    /// Create a new skill suggestion state.
-    pub fn new(query: String, start_pos: i32) -> Self {
-        Self {
-            query,
-            start_pos,
-            suggestions: Vec::new(),
-            selected: 0,
-            loading: false,
-        }
-    }
-
-    /// Move selection up.
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move selection down.
-    pub fn move_down(&mut self) {
-        let max = (self.suggestions.len() as i32).saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
-        }
-    }
-
-    /// Get the currently selected suggestion.
-    pub fn selected_suggestion(&self) -> Option<&SkillSuggestionItem> {
-        self.suggestions.get(self.selected as usize)
-    }
-
-    /// Update suggestions from search results.
-    pub fn update_suggestions(&mut self, suggestions: Vec<SkillSuggestionItem>) {
-        self.suggestions = suggestions;
-        self.loading = false;
-        // Reset selection if out of bounds
-        if self.selected >= self.suggestions.len() as i32 {
-            self.selected = 0;
-        }
-    }
-}
-
 /// A single skill suggestion item for display.
 #[derive(Debug, Clone)]
 pub struct SkillSuggestionItem {
@@ -1355,60 +1306,6 @@ pub struct SkillSuggestionItem {
     pub score: i32,
     /// Character indices that matched the query (for highlighting).
     pub match_indices: Vec<usize>,
-}
-
-/// State for agent autocomplete suggestions.
-#[derive(Debug, Clone)]
-pub struct AgentSuggestionState {
-    /// The query extracted from @mention (without the @).
-    pub query: String,
-    /// Start position of the @mention in the input text.
-    pub start_pos: i32,
-    /// Current suggestions.
-    pub suggestions: Vec<AgentSuggestionItem>,
-    /// Currently selected index in the dropdown.
-    pub selected: i32,
-}
-
-impl AgentSuggestionState {
-    /// Create a new agent suggestion state.
-    pub fn new(query: String, start_pos: i32) -> Self {
-        Self {
-            query,
-            start_pos,
-            suggestions: Vec::new(),
-            selected: 0,
-        }
-    }
-
-    /// Move selection up.
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move selection down.
-    pub fn move_down(&mut self) {
-        let max = (self.suggestions.len() as i32).saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
-        }
-    }
-
-    /// Get the currently selected suggestion.
-    pub fn selected_suggestion(&self) -> Option<&AgentSuggestionItem> {
-        self.suggestions.get(self.selected as usize)
-    }
-
-    /// Update suggestions from search results.
-    pub fn update_suggestions(&mut self, suggestions: Vec<AgentSuggestionItem>) {
-        self.suggestions = suggestions;
-        // Reset selection if out of bounds
-        if self.selected >= self.suggestions.len() as i32 {
-            self.selected = 0;
-        }
-    }
 }
 
 /// A single agent suggestion item for display.
@@ -1424,64 +1321,6 @@ pub struct AgentSuggestionItem {
     pub score: i32,
     /// Character indices that matched the query (for highlighting).
     pub match_indices: Vec<usize>,
-}
-
-/// State for symbol autocomplete suggestions.
-#[derive(Debug, Clone)]
-pub struct SymbolSuggestionState {
-    /// The query extracted from @#mention (without the @#).
-    pub query: String,
-    /// Start position of the @mention in the input text.
-    pub start_pos: i32,
-    /// Current suggestions.
-    pub suggestions: Vec<SymbolSuggestionItem>,
-    /// Currently selected index in the dropdown.
-    pub selected: i32,
-    /// Whether a search is currently in progress.
-    pub loading: bool,
-}
-
-impl SymbolSuggestionState {
-    /// Create a new symbol suggestion state.
-    pub fn new(query: String, start_pos: i32) -> Self {
-        Self {
-            query,
-            start_pos,
-            suggestions: Vec::new(),
-            selected: 0,
-            loading: true,
-        }
-    }
-
-    /// Move selection up.
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move selection down.
-    pub fn move_down(&mut self) {
-        let max = (self.suggestions.len() as i32).saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
-        }
-    }
-
-    /// Get the currently selected suggestion.
-    pub fn selected_suggestion(&self) -> Option<&SymbolSuggestionItem> {
-        self.suggestions.get(self.selected as usize)
-    }
-
-    /// Update suggestions from search results.
-    pub fn update_suggestions(&mut self, suggestions: Vec<SymbolSuggestionItem>) {
-        self.suggestions = suggestions;
-        self.loading = false;
-        // Reset selection if out of bounds
-        if self.selected >= self.suggestions.len() as i32 {
-            self.selected = 0;
-        }
-    }
 }
 
 /// A single symbol suggestion item for display.

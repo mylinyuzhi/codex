@@ -282,11 +282,13 @@ impl UsageTrackingHook {
     }
 
     /// Get the current accumulated usage.
+    #[allow(clippy::unwrap_used)]
     pub fn get_usage(&self) -> TokenUsage {
         self.usage.lock().unwrap().clone()
     }
 
     /// Reset the usage counter.
+    #[allow(clippy::unwrap_used)]
     pub fn reset(&self) {
         let mut usage = self.usage.lock().unwrap();
         *usage = TokenUsage::default();
@@ -312,6 +314,7 @@ impl ResponseHook for UsageTrackingHook {
         _context: &HookContext,
     ) -> Result<(), HyperError> {
         if let Some(ref response_usage) = response.usage {
+            #[allow(clippy::unwrap_used)]
             let mut total = self.usage.lock().unwrap();
             total.prompt_tokens += response_usage.prompt_tokens;
             total.completion_tokens += response_usage.completion_tokens;

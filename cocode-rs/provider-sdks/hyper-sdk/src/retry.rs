@@ -178,10 +178,10 @@ impl RetryExecutor {
 
     fn calculate_delay(&self, attempt: i32, error: &HyperError) -> Duration {
         // Honor retry-after if available
-        if self.config.respect_retry_after {
-            if let Some(delay) = error.retry_delay() {
-                return delay.min(self.config.max_backoff);
-            }
+        if self.config.respect_retry_after
+            && let Some(delay) = error.retry_delay()
+        {
+            return delay.min(self.config.max_backoff);
         }
 
         // Exponential backoff

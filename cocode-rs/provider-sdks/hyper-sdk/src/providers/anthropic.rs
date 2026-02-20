@@ -271,24 +271,24 @@ impl Model for AnthropicModel {
         }
 
         // Handle provider-specific options
-        if let Some(ref options) = request.provider_options {
-            if let Some(ant_opts) = downcast_options::<AnthropicOptions>(options) {
-                if let Some(budget) = ant_opts.thinking_budget_tokens {
-                    params = params.thinking(ant::ThinkingConfig::enabled(budget));
-                }
-                if let Some(ref metadata) = ant_opts.metadata {
-                    if let Some(ref user_id) = metadata.user_id {
-                        params = params.metadata(ant::Metadata {
-                            user_id: Some(user_id.clone()),
-                        });
-                    }
-                }
-                // Apply catchall extra params
-                if !ant_opts.extra.is_empty() {
-                    params
-                        .extra
-                        .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
+        if let Some(ref options) = request.provider_options
+            && let Some(ant_opts) = downcast_options::<AnthropicOptions>(options)
+        {
+            if let Some(budget) = ant_opts.thinking_budget_tokens {
+                params = params.thinking(ant::ThinkingConfig::enabled(budget));
+            }
+            if let Some(ref metadata) = ant_opts.metadata
+                && let Some(ref user_id) = metadata.user_id
+            {
+                params = params.metadata(ant::Metadata {
+                    user_id: Some(user_id.clone()),
+                });
+            }
+            // Apply catchall extra params
+            if !ant_opts.extra.is_empty() {
+                params
+                    .extra
+                    .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
             }
         }
 
@@ -383,17 +383,17 @@ impl Model for AnthropicModel {
             params = params.tool_choice(convert_tool_choice_to_ant(choice));
         }
 
-        if let Some(ref options) = request.provider_options {
-            if let Some(ant_opts) = downcast_options::<AnthropicOptions>(options) {
-                if let Some(budget) = ant_opts.thinking_budget_tokens {
-                    params = params.thinking(ant::ThinkingConfig::enabled(budget));
-                }
-                // Apply catchall extra params
-                if !ant_opts.extra.is_empty() {
-                    params
-                        .extra
-                        .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
+        if let Some(ref options) = request.provider_options
+            && let Some(ant_opts) = downcast_options::<AnthropicOptions>(options)
+        {
+            if let Some(budget) = ant_opts.thinking_budget_tokens {
+                params = params.thinking(ant::ThinkingConfig::enabled(budget));
+            }
+            // Apply catchall extra params
+            if !ant_opts.extra.is_empty() {
+                params
+                    .extra
+                    .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
             }
         }
 

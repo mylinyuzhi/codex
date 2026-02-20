@@ -136,7 +136,7 @@ fn test_tool_properties() {
     let tool = WebFetchTool::new();
     assert_eq!(tool.name(), "WebFetch");
     assert!(tool.is_concurrent_safe());
-    assert!(!tool.is_read_only()); // Network access requires approval
+    assert!(tool.is_read_only());
     assert_eq!(tool.max_result_size_chars(), 100_000);
 }
 

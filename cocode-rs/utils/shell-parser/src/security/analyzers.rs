@@ -28,6 +28,7 @@ pub struct JqDangerAnalyzer;
 
 impl Analyzer for JqDangerAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
         static JQ_SYSTEM_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r#"\bsystem\s*\("#).expect("valid regex"));
 
@@ -90,6 +91,7 @@ pub struct ShellMetacharactersAnalyzer;
 
 impl Analyzer for ShellMetacharactersAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
         static DANGEROUS_METACHAR_RE: Lazy<Regex> = Lazy::new(|| {
             // Look for semicolons, pipes, or ampersands that might be injection
             Regex::new(r#"[;|&]"#).expect("valid regex")
@@ -131,6 +133,7 @@ pub struct DangerousVariablesAnalyzer;
 impl Analyzer for DangerousVariablesAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
         // Look for patterns like $VAR | or ${VAR} | that could inject commands
+        #[allow(clippy::expect_used)]
         static VAR_PIPE_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r#"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s*\|"#).expect("valid regex")
         });
@@ -151,6 +154,7 @@ pub struct NewlineInjectionAnalyzer;
 impl Analyzer for NewlineInjectionAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
         // Check for literal \n followed by what looks like a command
+        #[allow(clippy::expect_used)]
         static NEWLINE_CMD_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r#"\\n\s*[a-zA-Z]+"#).expect("valid regex"));
 
@@ -197,6 +201,7 @@ pub struct ProcEnvironAnalyzer;
 
 impl Analyzer for ProcEnvironAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
         static PROC_ENVIRON_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r#"/proc/[^/]+/environ"#).expect("valid regex"));
 
@@ -491,16 +496,16 @@ impl Analyzer for FileSystemTamperingAnalyzer {
 
                     // Check for dangerous paths
                     for arg in args.iter().skip(1) {
-                        if !arg.starts_with('-') {
-                            if arg == "/" || arg == "/*" || arg == "~" || arg == "~/*" {
-                                analysis.add_risk(
-                                    SecurityRisk::new(
-                                        RiskKind::FileSystemTampering,
-                                        format!("rm targeting dangerous path: {arg}"),
-                                    )
-                                    .with_level(RiskLevel::Critical),
-                                );
-                            }
+                        if !arg.starts_with('-')
+                            && (arg == "/" || arg == "/*" || arg == "~" || arg == "~/*")
+                        {
+                            analysis.add_risk(
+                                SecurityRisk::new(
+                                    RiskKind::FileSystemTampering,
+                                    format!("rm targeting dangerous path: {arg}"),
+                                )
+                                .with_level(RiskLevel::Critical),
+                            );
                         }
                     }
                 }
@@ -547,23 +552,23 @@ impl Analyzer for CodeExecutionAnalyzer {
             }
 
             // Shell invocations with -c flag
-            if matches!(cmd_name, "bash" | "sh" | "zsh") {
-                if args.iter().any(|a| a == "-c" || a == "-lc") {
-                    analysis.add_risk(SecurityRisk::new(
-                        RiskKind::CodeExecution,
-                        format!("{cmd_name} -c executes shell code"),
-                    ));
-                }
+            if matches!(cmd_name, "bash" | "sh" | "zsh")
+                && args.iter().any(|a| a == "-c" || a == "-lc")
+            {
+                analysis.add_risk(SecurityRisk::new(
+                    RiskKind::CodeExecution,
+                    format!("{cmd_name} -c executes shell code"),
+                ));
             }
 
             // Interpreter invocations with -c flag or code arguments
-            if matches!(cmd_name, "python" | "python3" | "perl" | "ruby" | "php") {
-                if args.iter().any(|a| a == "-c" || a == "-e") {
-                    analysis.add_risk(SecurityRisk::new(
-                        RiskKind::CodeExecution,
-                        format!("{cmd_name} executes inline code"),
-                    ));
-                }
+            if matches!(cmd_name, "python" | "python3" | "perl" | "ruby" | "php")
+                && args.iter().any(|a| a == "-c" || a == "-e")
+            {
+                analysis.add_risk(SecurityRisk::new(
+                    RiskKind::CodeExecution,
+                    format!("{cmd_name} executes inline code"),
+                ));
             }
 
             // Node with -e flag

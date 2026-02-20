@@ -14,8 +14,7 @@ fn make_ctx() -> HookContext {
 async fn test_execute_echo_command() {
     // Use `echo` which ignores stdin and writes to stdout
     let ctx = make_ctx();
-    let result =
-        CommandHandler::execute("echo", &[r#"{"action":"continue"}"#.to_string()], &ctx).await;
+    let result = CommandHandler::execute(r#"echo '{"action":"continue"}'"#, &ctx).await;
     // echo output includes a newline, should parse as Continue
     assert!(matches!(result, HookResult::Continue));
 }
@@ -24,14 +23,14 @@ async fn test_execute_echo_command() {
 async fn test_execute_nonexistent_command() {
     let ctx = make_ctx();
     let result =
-        CommandHandler::execute("this-command-definitely-does-not-exist-12345", &[], &ctx).await;
+        CommandHandler::execute("this-command-definitely-does-not-exist-12345", &ctx).await;
     assert!(matches!(result, HookResult::Continue));
 }
 
 #[tokio::test]
 async fn test_execute_failing_command() {
     let ctx = make_ctx();
-    let result = CommandHandler::execute("false", &[], &ctx).await;
+    let result = CommandHandler::execute("false", &ctx).await;
     assert!(matches!(result, HookResult::Continue));
 }
 
@@ -230,15 +229,7 @@ fn test_parse_hook_response_async() {
 async fn test_execute_exit_code_2_blocks() {
     let ctx = make_ctx();
     // `exit 2` on unix should produce exit code 2
-    let result = CommandHandler::execute(
-        "sh",
-        &[
-            "-c".to_string(),
-            "echo 'blocked reason' >&2; exit 2".to_string(),
-        ],
-        &ctx,
-    )
-    .await;
+    let result = CommandHandler::execute("echo 'blocked reason' >&2; exit 2", &ctx).await;
     if let HookResult::Reject { reason } = result {
         assert!(reason.contains("blocked reason"));
     } else {
@@ -250,8 +241,7 @@ async fn test_execute_exit_code_2_blocks() {
 async fn test_execute_exit_code_2_default_reason() {
     let ctx = make_ctx();
     // exit 2 with no stderr should give a default reason
-    let result =
-        CommandHandler::execute("sh", &["-c".to_string(), "exit 2".to_string()], &ctx).await;
+    let result = CommandHandler::execute("exit 2", &ctx).await;
     if let HookResult::Reject { reason } = result {
         assert!(reason.contains("exit code 2"));
     } else {
@@ -263,8 +253,7 @@ async fn test_execute_exit_code_2_default_reason() {
 async fn test_execute_exit_code_1_continues() {
     let ctx = make_ctx();
     // exit 1 should not block (only exit code 2 blocks)
-    let result =
-        CommandHandler::execute("sh", &["-c".to_string(), "exit 1".to_string()], &ctx).await;
+    let result = CommandHandler::execute("exit 1", &ctx).await;
     assert!(matches!(result, HookResult::Continue));
 }
 

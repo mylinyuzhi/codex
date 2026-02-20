@@ -34,6 +34,101 @@ fn test_hook_event_type() {
 }
 
 #[test]
+fn test_hook_event_type_from_str_snake_case() {
+    assert_eq!(
+        "pre_tool_use".parse::<HookEventType>().unwrap(),
+        HookEventType::PreToolUse
+    );
+    assert_eq!(
+        "post_tool_use".parse::<HookEventType>().unwrap(),
+        HookEventType::PostToolUse
+    );
+    assert_eq!(
+        "post_tool_use_failure".parse::<HookEventType>().unwrap(),
+        HookEventType::PostToolUseFailure
+    );
+    assert_eq!(
+        "user_prompt_submit".parse::<HookEventType>().unwrap(),
+        HookEventType::UserPromptSubmit
+    );
+    assert_eq!(
+        "session_start".parse::<HookEventType>().unwrap(),
+        HookEventType::SessionStart
+    );
+    assert_eq!(
+        "session_end".parse::<HookEventType>().unwrap(),
+        HookEventType::SessionEnd
+    );
+    assert_eq!(
+        "stop".parse::<HookEventType>().unwrap(),
+        HookEventType::Stop
+    );
+    assert_eq!(
+        "subagent_start".parse::<HookEventType>().unwrap(),
+        HookEventType::SubagentStart
+    );
+    assert_eq!(
+        "subagent_stop".parse::<HookEventType>().unwrap(),
+        HookEventType::SubagentStop
+    );
+    assert_eq!(
+        "pre_compact".parse::<HookEventType>().unwrap(),
+        HookEventType::PreCompact
+    );
+    assert_eq!(
+        "notification".parse::<HookEventType>().unwrap(),
+        HookEventType::Notification
+    );
+    assert_eq!(
+        "permission_request".parse::<HookEventType>().unwrap(),
+        HookEventType::PermissionRequest
+    );
+    assert_eq!(
+        "teammate_idle".parse::<HookEventType>().unwrap(),
+        HookEventType::TeammateIdle
+    );
+    assert_eq!(
+        "task_completed".parse::<HookEventType>().unwrap(),
+        HookEventType::TaskCompleted
+    );
+}
+
+#[test]
+fn test_hook_event_type_from_str_pascal_case() {
+    assert_eq!(
+        "PreToolUse".parse::<HookEventType>().unwrap(),
+        HookEventType::PreToolUse
+    );
+    assert_eq!(
+        "PostToolUse".parse::<HookEventType>().unwrap(),
+        HookEventType::PostToolUse
+    );
+    assert_eq!(
+        "SessionStart".parse::<HookEventType>().unwrap(),
+        HookEventType::SessionStart
+    );
+    assert_eq!(
+        "Stop".parse::<HookEventType>().unwrap(),
+        HookEventType::Stop
+    );
+    assert_eq!(
+        "TeammateIdle".parse::<HookEventType>().unwrap(),
+        HookEventType::TeammateIdle
+    );
+    assert_eq!(
+        "TaskCompleted".parse::<HookEventType>().unwrap(),
+        HookEventType::TaskCompleted
+    );
+}
+
+#[test]
+fn test_hook_event_type_from_str_unknown() {
+    assert!("unknown_event".parse::<HookEventType>().is_err());
+    let err = "bogus".parse::<HookEventType>().unwrap_err();
+    assert!(err.contains("unknown hook event type"));
+}
+
+#[test]
 fn test_compaction_skipped_by_hook_event() {
     let event = LoopEvent::CompactionSkippedByHook {
         hook_name: "save-work-first".to_string(),
