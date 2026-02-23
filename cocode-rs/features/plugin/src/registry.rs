@@ -27,7 +27,7 @@ use tracing::info;
 ///
 /// The registry tracks plugins and provides access to their contributions.
 /// It can also integrate with the skill manager and hook registry.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct PluginRegistry {
     /// Loaded plugins indexed by name.
     plugins: HashMap<String, LoadedPlugin>,
@@ -221,6 +221,24 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Get all output style contributions.
+    pub fn output_style_contributions(
+        &self,
+    ) -> Vec<(&crate::contribution::OutputStyleDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::OutputStyle { style, plugin_name } = c {
+                        Some((style, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Apply all skill contributions to a skill manager.
     ///
     /// Skills are registered with a namespaced name (`plugin_name:skill_name`).
@@ -365,6 +383,13 @@ impl PluginRegistry {
                             color: None,
                             critical_reminder: None,
                             source: cocode_subagent::AgentSource::Plugin,
+                            skills: Vec::new(),
+                            background: false,
+                            memory: None,
+                            hooks: None,
+                            mcp_servers: None,
+                            isolation: None,
+                            use_custom_prompt: false,
                         };
                         manager.register_agent_type(definition);
                         agents_added += 1;

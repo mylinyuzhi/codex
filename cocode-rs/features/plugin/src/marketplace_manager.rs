@@ -41,6 +41,48 @@ impl MarketplaceManager {
         Self { plugins_dir }
     }
 
+    /// Register extra marketplace sources (from project settings).
+    ///
+    /// Adds each entry to the known marketplaces config if not already
+    /// present. Does NOT fetch the source — that happens on the next
+    /// `refresh()` or `auto_refresh_stale()` call.
+    pub fn register_extra(
+        &self,
+        extras: &[crate::integration::ExtraMarketplaceEntry],
+    ) -> Result<i32> {
+        if extras.is_empty() {
+            return Ok(0);
+        }
+
+        let mut config = self.load_config();
+        let mut added: i32 = 0;
+
+        for entry in extras {
+            if config.contains_key(&entry.name) {
+                debug!(name = %entry.name, "Extra marketplace already registered, skipping");
+                continue;
+            }
+
+            let install_location = self.marketplaces_dir().join(&entry.name);
+            config.insert(
+                entry.name.clone(),
+                KnownMarketplace {
+                    source: entry.source.clone(),
+                    install_location,
+                    last_updated: None,
+                    auto_update: entry.auto_update,
+                },
+            );
+            added += 1;
+        }
+
+        if added > 0 {
+            self.save_config(&config)?;
+            info!(added, "Registered extra marketplaces from config");
+        }
+        Ok(added)
+    }
+
     fn config_path(&self) -> PathBuf {
         self.plugins_dir.join("known_marketplaces.json")
     }

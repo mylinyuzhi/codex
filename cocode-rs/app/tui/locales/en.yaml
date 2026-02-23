@@ -84,6 +84,11 @@ command.show_session_browser: "Show Session Browser"
 command.load_session: "Load Session %{id}"
 command.delete_session: "Delete Session %{id}"
 
+# Plugin manager
+command.show_plugin_manager: "Show Plugin Manager"
+command.plugin_manager_next_tab: "Next Plugin Tab"
+command.plugin_manager_prev_tab: "Previous Plugin Tab"
+
 # Thinking toggle
 command.toggle_thinking: "Toggle Thinking"
 
@@ -98,6 +103,10 @@ command.background_all_tasks: "Background All Tasks"
 
 # Tool collapse
 command.toggle_tool_collapse: "Toggle Tool Collapse"
+
+# Rewind
+command.show_rewind_selector: "Rewind / Checkpoint"
+command.rewind: "Rewind"
 
 # Quit
 command.quit: "Quit"
@@ -119,6 +128,9 @@ status.think_label: "Think:%{level}"
 
 # Plan mode
 status.plan: "PLAN"
+
+# Output style
+status.output_style: "Style:%{name}"
 
 # MCP status
 status.mcp: "MCP:%{count}"
@@ -169,9 +181,63 @@ dialog.no_saved_sessions: "No saved sessions"
 dialog.session_message_count: "(%{count} msgs)"
 dialog.session_browser_hints: "↑/↓: Navigate  Enter: Load  Del: Delete  Esc: Cancel"
 
+# Plugin manager overlay
+dialog.plugin_manager: "Plugin Manager"
+dialog.plugin_manager_filter: "Plugin Manager [%{filter}]"
+dialog.plugin_tab_discover: "Discover"
+dialog.plugin_tab_installed: "Installed"
+dialog.plugin_tab_marketplaces: "Marketplaces"
+dialog.plugin_tab_errors: "Errors"
+dialog.plugin_no_discover: "No plugins available. Add a marketplace first."
+dialog.plugin_no_installed: "No plugins installed"
+dialog.plugin_no_marketplaces: "No marketplaces configured"
+dialog.plugin_no_errors: "No errors"
+dialog.plugin_manager_hints: "Tab/Shift+Tab: Switch tab  ↑/↓: Navigate  Enter: Select  Esc: Cancel  Type to filter"
+
+# Output style picker
+dialog.select_output_style: "Select Output Style"
+dialog.select_output_style_filter: "Select Output Style [%{filter}]"
+dialog.no_styles_match: "No styles match filter"
+dialog.output_style_picker_hints: "↑/↓: Navigate  Enter: Select  Esc: Cancel  Type to filter"
+
 # Error overlay
+# Rewind selector
+dialog.rewind_select_checkpoint: "Rewind to Checkpoint"
+dialog.rewind_select_mode: "Rewind Mode"
+dialog.rewind_files: "files"
+dialog.rewind_target: "Target"
+dialog.rewind_checkpoint_hints: "↑/↓: Navigate  Enter: Select  Esc: Cancel"
+dialog.rewind_mode_hints: "↑/↓: Navigate  Enter: Confirm  Esc: Back"
+dialog.rewind_mode_code_and_conversation: "Rewind code + conversation"
+dialog.rewind_mode_conversation_only: "Rewind conversation only (keep file changes)"
+dialog.rewind_mode_code_only: "Rewind code only (keep conversation)"
+dialog.rewind_mode_summarize: "Summarize from here"
+dialog.rewind_warning_bash: "Note: Rewinding does not affect files edited manually or via bash"
+dialog.rewind_more_files: "...and %{count} more"
+dialog.rewind_summarize_context: "Summarize Context"
+dialog.rewind_summarize_context_prompt: "What should the summary focus on? (optional)"
+dialog.rewind_summarize_context_placeholder: "(press Enter to skip)"
+dialog.rewind_summarize_context_hints: "Enter: Confirm  Esc: Back  Type to add context"
+dialog.rewind_loading_restore: "Restoring..."
+dialog.rewind_loading_summarize: "Summarizing..."
+
 dialog.error: "Error"
 dialog.press_esc_enter_dismiss: "Press Esc or Enter to dismiss"
+
+# Plan exit approval
+dialog.plan_exit_title: "Exit Plan Mode"
+dialog.plan_exit_clear_accept: "Yes, clear context and auto-accept edits"
+dialog.plan_exit_clear_bypass: "Yes, clear context and bypass permissions"
+dialog.plan_exit_keep_elevate: "Yes, keep context and elevate permissions"
+dialog.plan_exit_keep_default: "Yes, keep context and manually approve"
+dialog.plan_exit_keep_planning: "No, keep planning"
+dialog.plan_exit_hints: "↑/↓: Navigate  Enter: Select  Esc: Keep planning"
+
+# Question overlay (AskUserQuestion)
+dialog.question_title: "Question"
+dialog.question_other: "Other (type custom answer)"
+dialog.question_hints: "↑/↓: Navigate  Enter: Select  Space: Toggle  Esc: Cancel"
+dialog.plan_exit_plan_preview: "Plan Preview"
 
 # ============================================================
 # Help overlay shortcuts
@@ -197,6 +263,7 @@ help.pgup_pgdn: "Page scroll"
 help.ctrl_left_right: "Word movement"
 help.ctrl_bksp: "Delete word backward"
 help.ctrl_shift_e: "Toggle tool results"
+help.esc_esc: "Rewind / Checkpoint selector"
 
 # ============================================================
 # Toast notifications
@@ -251,6 +318,13 @@ toast.tasks_backgrounded: "Backgrounded %{count} task(s)"
 toast.command_queued: "Queued (%{count} waiting)"
 toast.steering_added: "Steering added"
 
+# Rewind
+toast.rewind_success: "Rewound turn %{turn} (%{files} files restored)"
+toast.rewind_failed: "Rewind failed: %{error}"
+toast.rewind_no_checkpoints: "No checkpoints available to rewind"
+toast.summarize_success: "Conversation summarized from turn %{turn}"
+toast.summarize_failed: "Summarize failed: %{error}"
+
 # ============================================================
 # Command palette items
 # ============================================================
@@ -265,6 +339,8 @@ palette.show_help: "Show Help"
 palette.show_help_desc: "Display keyboard shortcuts"
 palette.session_browser: "Session Browser"
 palette.session_browser_desc: "Browse saved sessions"
+palette.plugin_manager: "Plugin Manager"
+palette.plugin_manager_desc: "Manage plugins and marketplaces"
 palette.clear_screen: "Clear Screen"
 palette.clear_screen_desc: "Clear chat history"
 palette.interrupt: "Interrupt"

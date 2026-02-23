@@ -77,7 +77,7 @@ fn default_true() -> bool {
 /// Model within a provider with deployment-specific info.
 ///
 /// This wraps `ModelInfo` with provider-specific deployment information
-/// like `model_alias` (e.g., endpoint IDs for Volcengine).
+/// like `api_model_name` (e.g., endpoint IDs for Volcengine).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderModel {
     /// Resolved model info with all layers merged.
@@ -86,7 +86,7 @@ pub struct ProviderModel {
 
     /// API model name if different from slug (e.g., endpoint ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_alias: Option<String>,
+    pub api_model_name: Option<String>,
 }
 
 impl ProviderModel {
@@ -94,21 +94,21 @@ impl ProviderModel {
     pub fn new(info: ModelInfo) -> Self {
         Self {
             info,
-            model_alias: None,
+            api_model_name: None,
         }
     }
 
     /// Create with an alias.
-    pub fn with_alias(info: ModelInfo, alias: impl Into<String>) -> Self {
+    pub fn with_api_model_name(info: ModelInfo, api_model_name: impl Into<String>) -> Self {
         Self {
             info,
-            model_alias: Some(alias.into()),
+            api_model_name: Some(api_model_name.into()),
         }
     }
 
     /// Get the API model name (alias if set and non-empty, otherwise slug).
     pub fn api_model_name(&self) -> &str {
-        self.model_alias
+        self.api_model_name
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.info.slug)
@@ -228,7 +228,7 @@ impl ProviderInfo {
         alias: impl Into<String>,
     ) -> Self {
         self.models
-            .insert(slug.into(), ProviderModel::with_alias(model, alias));
+            .insert(slug.into(), ProviderModel::with_api_model_name(model, alias));
         self
     }
 

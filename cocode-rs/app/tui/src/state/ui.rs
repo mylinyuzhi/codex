@@ -76,6 +76,9 @@ pub struct UiState {
 
     /// Scroll offset for help overlay.
     pub help_scroll: i32,
+
+    /// Timestamp of the last Esc keypress (for double-Esc detection).
+    pub last_esc_time: Option<Instant>,
 }
 
 impl UiState {
@@ -307,6 +310,24 @@ impl UiState {
     /// Check if there are any active toasts.
     pub fn has_toasts(&self) -> bool {
         !self.toasts.is_empty()
+    }
+
+    // ========== Double-Esc Detection ==========
+
+    /// Record an Esc keypress for double-Esc detection.
+    pub fn record_esc(&mut self) {
+        self.last_esc_time = Some(Instant::now());
+    }
+
+    /// Check if the last Esc was within the double-Esc window (800ms).
+    pub fn is_double_esc(&self) -> bool {
+        self.last_esc_time
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(800))
+    }
+
+    /// Reset the double-Esc timer.
+    pub fn reset_esc_time(&mut self) {
+        self.last_esc_time = None;
     }
 
     // ========== Animation ==========
@@ -874,12 +895,22 @@ pub enum FocusTarget {
 pub enum Overlay {
     /// Permission approval prompt.
     Permission(PermissionOverlay),
+    /// Plan mode exit approval with 5 options.
+    PlanExitApproval(PlanExitOverlay),
+    /// Question overlay for AskUserQuestion tool.
+    Question(QuestionOverlay),
     /// Model picker.
     ModelPicker(ModelPickerOverlay),
+    /// Output style picker.
+    OutputStylePicker(OutputStylePickerOverlay),
     /// Command palette.
     CommandPalette(CommandPaletteOverlay),
     /// Session browser.
     SessionBrowser(SessionBrowserOverlay),
+    /// Plugin manager (4-tab interface).
+    PluginManager(PluginManagerOverlay),
+    /// Rewind selector (checkpoint browser + mode picker).
+    RewindSelector(RewindSelectorOverlay),
     /// Help screen.
     Help,
     /// Error message.
@@ -919,6 +950,266 @@ impl PermissionOverlay {
     }
 }
 
+/// Plan mode exit approval overlay.
+///
+/// Provides 5 options matching Claude Code:
+/// 0 = Clear context + accept edits (Shift+Tab)
+/// 1 = Clear context + bypass
+/// 2 = Keep context + elevate to accept-edits
+/// 3 = Keep context + manual approve (restore pre-plan mode)
+/// 4 = Keep planning (deny) — supports feedback text input
+#[derive(Debug, Clone)]
+pub struct PlanExitOverlay {
+    /// The approval request from ExitPlanMode.
+    pub request: ApprovalRequest,
+    /// Selected option index (0-4).
+    pub selected: i32,
+    /// Plan preview text (first ~2000 chars of plan).
+    pub plan_preview: String,
+    /// Whether the feedback text input is active (option 4 selected + Enter pressed).
+    pub feedback_active: bool,
+    /// Feedback text for "keep planning" option.
+    pub feedback_text: String,
+}
+
+impl PlanExitOverlay {
+    /// Create a new plan exit overlay.
+    pub fn new(request: ApprovalRequest) -> Self {
+        // Extract plan preview from the request description
+        let plan_preview = request
+            .description
+            .strip_prefix("Exit plan mode?\n\n## Implementation Plan\n\n")
+            .unwrap_or(&request.description)
+            .to_string();
+        Self {
+            request,
+            selected: 0,
+            plan_preview,
+            feedback_active: false,
+            feedback_text: String::new(),
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        if self.selected < 4 {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the `PlanExitOption` for the current selection.
+    pub fn selected_option(&self) -> cocode_protocol::PlanExitOption {
+        match self.selected {
+            0 => cocode_protocol::PlanExitOption::ClearAndAcceptEdits,
+            1 => cocode_protocol::PlanExitOption::ClearAndBypass,
+            2 => cocode_protocol::PlanExitOption::KeepAndElevate,
+            3 => cocode_protocol::PlanExitOption::KeepAndDefault,
+            _ => cocode_protocol::PlanExitOption::KeepPlanning,
+        }
+    }
+}
+
+/// Question overlay for AskUserQuestion tool.
+///
+/// Displays 1-4 questions with selectable options. Each question can be
+/// single-select or multi-select. The user navigates with Up/Down and
+/// confirms with Enter.
+#[derive(Debug, Clone)]
+pub struct QuestionOverlay {
+    /// Unique request ID (for correlating the response).
+    pub request_id: String,
+    /// The questions to display.
+    pub questions: Vec<QuestionItem>,
+    /// Index of the currently focused question.
+    pub current_question: i32,
+    /// Whether we're in the "Other" text input mode for the current question.
+    pub other_input_active: bool,
+    /// Text buffer for "Other" input.
+    pub other_text: String,
+}
+
+/// A single question in the question overlay.
+#[derive(Debug, Clone)]
+pub struct QuestionItem {
+    /// The full question text.
+    pub question: String,
+    /// Short header label.
+    pub header: String,
+    /// Available options.
+    pub options: Vec<QuestionOption>,
+    /// Whether multiple options can be selected.
+    pub multi_select: bool,
+    /// Currently highlighted option index (includes "Other" at the end).
+    pub selected: i32,
+    /// For multi-select: which options are checked.
+    pub checked: Vec<bool>,
+    /// User's confirmed answer (set when moving to next question).
+    pub answer: Option<String>,
+}
+
+/// A single option for a question.
+#[derive(Debug, Clone)]
+pub struct QuestionOption {
+    /// Display label.
+    pub label: String,
+    /// Description.
+    pub description: String,
+}
+
+impl QuestionOverlay {
+    /// Create from JSON questions array.
+    pub fn new(request_id: String, questions: &serde_json::Value) -> Self {
+        let items = questions
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|q| {
+                        let options: Vec<QuestionOption> = q["options"]
+                            .as_array()
+                            .map(|opts| {
+                                opts.iter()
+                                    .map(|o| QuestionOption {
+                                        label: o["label"].as_str().unwrap_or("").to_string(),
+                                        description: o["description"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let option_count = options.len();
+                        QuestionItem {
+                            question: q["question"].as_str().unwrap_or("").to_string(),
+                            header: q["header"].as_str().unwrap_or("").to_string(),
+                            multi_select: q["multiSelect"].as_bool().unwrap_or(false),
+                            options,
+                            selected: 0,
+                            checked: vec![false; option_count],
+                            answer: None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Self {
+            request_id,
+            questions: items,
+            current_question: 0,
+            other_input_active: false,
+            other_text: String::new(),
+        }
+    }
+
+    /// Get the current question.
+    pub fn current(&self) -> Option<&QuestionItem> {
+        self.questions.get(self.current_question as usize)
+    }
+
+    /// Get the current question mutably.
+    pub fn current_mut(&mut self) -> Option<&mut QuestionItem> {
+        self.questions.get_mut(self.current_question as usize)
+    }
+
+    /// Move selection up within the current question.
+    pub fn move_up(&mut self) {
+        if let Some(q) = self.current_mut() {
+            if q.selected > 0 {
+                q.selected -= 1;
+            }
+            // If we moved off "Other", deactivate text input
+            self.other_input_active = false;
+        }
+    }
+
+    /// Move selection down within the current question.
+    pub fn move_down(&mut self) {
+        if let Some(q) = self.current_mut() {
+            // +1 for "Other" option at the end
+            let max = q.options.len() as i32;
+            if q.selected < max {
+                q.selected += 1;
+            }
+        }
+    }
+
+    /// Toggle the currently selected option (for multi-select).
+    pub fn toggle_selected(&mut self) {
+        if let Some(q) = self.current_mut() {
+            let idx = q.selected as usize;
+            if idx < q.checked.len() {
+                q.checked[idx] = !q.checked[idx];
+            }
+        }
+    }
+
+    /// Check if the current selection is "Other".
+    pub fn is_other_selected(&self) -> bool {
+        self.current()
+            .is_some_and(|q| q.selected as usize == q.options.len())
+    }
+
+    /// Confirm the current question and advance to the next.
+    ///
+    /// Returns `true` when all questions are answered (ready to submit).
+    pub fn confirm_current(&mut self) -> bool {
+        if self.other_input_active && self.is_other_selected() {
+            // "Other" text confirmed
+            let text = self.other_text.clone();
+            if let Some(q) = self.current_mut() {
+                q.answer = Some(text);
+            }
+            self.other_input_active = false;
+            self.other_text.clear();
+        } else if self.is_other_selected() {
+            // Activate "Other" text input
+            self.other_input_active = true;
+            self.other_text.clear();
+            return false;
+        } else if let Some(q) = self.current_mut() {
+            if q.multi_select {
+                // For multi-select, collect all checked labels
+                let selected: Vec<String> = q
+                    .options
+                    .iter()
+                    .zip(q.checked.iter())
+                    .filter(|&(_, &checked)| checked)
+                    .map(|(opt, _)| opt.label.clone())
+                    .collect();
+                q.answer = Some(selected.join(", "));
+            } else {
+                // For single-select, use the highlighted option
+                let idx = q.selected as usize;
+                if let Some(opt) = q.options.get(idx) {
+                    q.answer = Some(opt.label.clone());
+                }
+            }
+        }
+
+        // Advance to next unanswered question
+        self.current_question += 1;
+        self.current_question as usize >= self.questions.len()
+    }
+
+    /// Collect all answers as a JSON object keyed by question text.
+    pub fn collect_answers(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        for q in &self.questions {
+            let answer = q.answer.clone().unwrap_or_else(|| "No answer".to_string());
+            map.insert(q.question.clone(), serde_json::Value::String(answer));
+        }
+        serde_json::Value::Object(map)
+    }
+}
+
 /// Model picker overlay state.
 #[derive(Debug, Clone)]
 pub struct ModelPickerOverlay {
@@ -949,6 +1240,67 @@ impl ModelPickerOverlay {
             self.items
                 .iter()
                 .filter(|s| s.model.to_string().to_lowercase().contains(&filter))
+                .collect()
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = self.filtered_items().len() as i32 - 1;
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+}
+
+/// Output style picker overlay state.
+#[derive(Debug, Clone)]
+pub struct OutputStylePickerOverlay {
+    /// Available style entries: (name, source_label, description).
+    pub items: Vec<OutputStylePickerItem>,
+    /// Currently selected index.
+    pub selected: i32,
+    /// Search filter.
+    pub filter: String,
+}
+
+/// A single item in the output style picker.
+#[derive(Debug, Clone)]
+pub struct OutputStylePickerItem {
+    /// Style name.
+    pub name: String,
+    /// Source label (e.g. "built-in", "custom", "project", "plugin").
+    pub source: String,
+    /// Optional description.
+    pub description: Option<String>,
+}
+
+impl OutputStylePickerOverlay {
+    /// Create a new output style picker.
+    pub fn new(items: Vec<OutputStylePickerItem>) -> Self {
+        Self {
+            items,
+            selected: 0,
+            filter: String::new(),
+        }
+    }
+
+    /// Get filtered items.
+    pub fn filtered_items(&self) -> Vec<&OutputStylePickerItem> {
+        if self.filter.is_empty() {
+            self.items.iter().collect()
+        } else {
+            let filter = self.filter.to_lowercase();
+            self.items
+                .iter()
+                .filter(|s| s.name.to_lowercase().contains(&filter))
                 .collect()
         }
     }
@@ -1086,6 +1438,8 @@ pub enum CommandAction {
     ShowHelp,
     /// Show session browser.
     ShowSessionBrowser,
+    /// Show plugin manager.
+    ShowPluginManager,
     /// Clear screen.
     ClearScreen,
     /// Interrupt.
@@ -1176,6 +1530,209 @@ pub struct SessionSummary {
     pub updated_at: i64,
     /// Number of messages in the session.
     pub message_count: i32,
+}
+
+/// Active tab in the plugin manager overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PluginManagerTab {
+    /// Discover plugins from marketplaces.
+    #[default]
+    Discover,
+    /// View/manage installed plugins.
+    Installed,
+    /// Manage marketplace sources.
+    Marketplaces,
+    /// View plugin loading errors.
+    Errors,
+}
+
+impl PluginManagerTab {
+    /// Advance to the next tab.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Discover => Self::Installed,
+            Self::Installed => Self::Marketplaces,
+            Self::Marketplaces => Self::Errors,
+            Self::Errors => Self::Discover,
+        }
+    }
+
+    /// Go to the previous tab.
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Discover => Self::Errors,
+            Self::Installed => Self::Discover,
+            Self::Marketplaces => Self::Installed,
+            Self::Errors => Self::Marketplaces,
+        }
+    }
+}
+
+/// Summary of a plugin for display in the plugin manager.
+#[derive(Debug, Clone)]
+pub struct PluginSummary {
+    /// Plugin name (kebab-case identifier).
+    pub name: String,
+    /// Short description.
+    pub description: String,
+    /// Version string.
+    pub version: String,
+    /// Whether the plugin is currently enabled.
+    pub enabled: bool,
+    /// Installation scope (user/project/managed).
+    pub scope: String,
+    /// Number of skills contributed.
+    pub skills_count: i32,
+    /// Number of hooks contributed.
+    pub hooks_count: i32,
+    /// Number of agents contributed.
+    pub agents_count: i32,
+}
+
+/// Summary of a marketplace source.
+#[derive(Debug, Clone)]
+pub struct MarketplaceSummary {
+    /// Marketplace name.
+    pub name: String,
+    /// Source type (GitHub, Git, URL, etc.).
+    pub source_type: String,
+    /// Source URL or path.
+    pub source: String,
+    /// Whether auto-update is enabled.
+    pub auto_update: bool,
+    /// Number of plugins in this marketplace.
+    pub plugin_count: i32,
+}
+
+/// A plugin loading error entry.
+#[derive(Debug, Clone)]
+pub struct PluginErrorEntry {
+    /// Plugin name or path that failed.
+    pub source: String,
+    /// Error message.
+    pub error: String,
+}
+
+/// Plugin manager overlay state.
+#[derive(Debug, Clone)]
+pub struct PluginManagerOverlay {
+    /// Current active tab.
+    pub tab: PluginManagerTab,
+    /// Selected index in the current tab's list.
+    pub selected: i32,
+    /// Search/filter text.
+    pub filter: String,
+    /// Discovered plugins from marketplaces.
+    pub discover_items: Vec<PluginSummary>,
+    /// Installed plugins.
+    pub installed_items: Vec<PluginSummary>,
+    /// Known marketplaces.
+    pub marketplace_items: Vec<MarketplaceSummary>,
+    /// Plugin loading errors.
+    pub error_items: Vec<PluginErrorEntry>,
+}
+
+impl PluginManagerOverlay {
+    /// Create a new plugin manager overlay.
+    pub fn new(
+        installed: Vec<PluginSummary>,
+        marketplaces: Vec<MarketplaceSummary>,
+        errors: Vec<PluginErrorEntry>,
+    ) -> Self {
+        Self {
+            tab: PluginManagerTab::default(),
+            selected: 0,
+            filter: String::new(),
+            discover_items: Vec::new(),
+            installed_items: installed,
+            marketplace_items: marketplaces,
+            error_items: errors,
+        }
+    }
+
+    /// Get the count of items in the current tab.
+    fn current_item_count(&self) -> i32 {
+        match self.tab {
+            PluginManagerTab::Discover => self.filtered_discover().len() as i32,
+            PluginManagerTab::Installed => self.filtered_installed().len() as i32,
+            PluginManagerTab::Marketplaces => self.marketplace_items.len() as i32,
+            PluginManagerTab::Errors => self.error_items.len() as i32,
+        }
+    }
+
+    /// Get filtered discover items.
+    pub fn filtered_discover(&self) -> Vec<&PluginSummary> {
+        if self.filter.is_empty() {
+            self.discover_items.iter().collect()
+        } else {
+            let filter = self.filter.to_lowercase();
+            self.discover_items
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&filter)
+                        || p.description.to_lowercase().contains(&filter)
+                })
+                .collect()
+        }
+    }
+
+    /// Get filtered installed items.
+    pub fn filtered_installed(&self) -> Vec<&PluginSummary> {
+        if self.filter.is_empty() {
+            self.installed_items.iter().collect()
+        } else {
+            let filter = self.filter.to_lowercase();
+            self.installed_items
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&filter)
+                        || p.description.to_lowercase().contains(&filter)
+                })
+                .collect()
+        }
+    }
+
+    /// Switch to the next tab, resetting selection.
+    pub fn next_tab(&mut self) {
+        self.tab = self.tab.next();
+        self.selected = 0;
+        self.filter.clear();
+    }
+
+    /// Switch to the previous tab, resetting selection.
+    pub fn prev_tab(&mut self) {
+        self.tab = self.tab.prev();
+        self.selected = 0;
+        self.filter.clear();
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        let max = self.current_item_count().saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Add a character to the filter.
+    pub fn insert_char(&mut self, c: char) {
+        self.filter.push(c);
+        // Reset selection when filter changes
+        self.selected = 0;
+    }
+
+    /// Delete a character from the filter.
+    pub fn delete_char(&mut self) {
+        self.filter.pop();
+        self.selected = 0;
+    }
 }
 
 /// State for streaming content.
@@ -1338,6 +1895,215 @@ pub struct SymbolSuggestionItem {
     pub score: i32,
     /// Character indices that matched the query (for highlighting).
     pub match_indices: Vec<usize>,
+}
+
+/// Action resulting from the rewind selector overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindAction {
+    /// Rewind to a specific turn with a given mode.
+    Rewind {
+        /// The turn number to rewind to.
+        turn_number: i32,
+        /// The rewind mode.
+        mode: cocode_protocol::RewindMode,
+    },
+    /// Summarize (partial compact) from a specific turn.
+    Summarize {
+        /// The turn number from which to summarize.
+        turn_number: i32,
+        /// Optional user-provided context to guide the summary focus.
+        context: Option<String>,
+    },
+}
+
+/// Phase of the rewind selector overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewindSelectorPhase {
+    /// Selecting which checkpoint to rewind to.
+    SelectCheckpoint,
+    /// Selecting the rewind mode (code+conversation, code-only, conversation-only).
+    SelectMode,
+    /// Inputting optional context for the "Summarize from here" action.
+    InputSummarizeContext,
+}
+
+/// Rewind selector overlay state.
+#[derive(Debug, Clone)]
+pub struct RewindSelectorOverlay {
+    /// Available checkpoints (oldest first).
+    pub checkpoints: Vec<cocode_protocol::RewindCheckpointItem>,
+    /// Currently selected checkpoint index.
+    pub selected: i32,
+    /// Current phase.
+    pub phase: RewindSelectorPhase,
+    /// Selected mode index (in mode selection phase).
+    pub mode_selected: i32,
+    /// User-provided context for summarization.
+    pub summarize_context: String,
+    /// Turn number selected for summarization (saved when transitioning to context input).
+    pub summarize_turn: Option<i32>,
+    /// Whether a rewind/summarize operation is in progress.
+    pub loading: bool,
+    /// Description of the loading action (for display).
+    pub loading_action: Option<String>,
+}
+
+impl RewindSelectorOverlay {
+    /// Create a new rewind selector. Items are displayed newest-first (reversed).
+    pub fn new(checkpoints: Vec<cocode_protocol::RewindCheckpointItem>) -> Self {
+        // Display order is newest-first, so index 0 = most recent checkpoint
+        Self {
+            checkpoints,
+            selected: 0,
+            phase: RewindSelectorPhase::SelectCheckpoint,
+            mode_selected: 0,
+            summarize_context: String::new(),
+            summarize_turn: None,
+            loading: false,
+            loading_action: None,
+        }
+    }
+
+    /// Get checkpoints in display order (newest first).
+    pub fn display_items(&self) -> Vec<&cocode_protocol::RewindCheckpointItem> {
+        self.checkpoints.iter().rev().collect()
+    }
+
+    /// Get the actual index into `checkpoints` for a display-order index.
+    fn display_to_actual(&self, display_idx: i32) -> i32 {
+        (self.checkpoints.len() as i32) - 1 - display_idx
+    }
+
+    /// Get the currently selected checkpoint.
+    pub fn selected_checkpoint(&self) -> Option<&cocode_protocol::RewindCheckpointItem> {
+        let actual = self.display_to_actual(self.selected);
+        self.checkpoints.get(actual as usize)
+    }
+
+    /// Move selection up (toward newer checkpoints).
+    pub fn move_up(&mut self) {
+        match self.phase {
+            RewindSelectorPhase::SelectCheckpoint => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+            }
+            RewindSelectorPhase::SelectMode => {
+                if self.mode_selected > 0 {
+                    self.mode_selected -= 1;
+                }
+            }
+            RewindSelectorPhase::InputSummarizeContext => {
+                // No navigation in text input phase
+            }
+        }
+    }
+
+    /// Move selection down (toward older checkpoints).
+    pub fn move_down(&mut self) {
+        match self.phase {
+            RewindSelectorPhase::SelectCheckpoint => {
+                let max = (self.checkpoints.len() as i32).saturating_sub(1);
+                if self.selected < max {
+                    self.selected += 1;
+                }
+            }
+            RewindSelectorPhase::SelectMode => {
+                if self.mode_selected < 3 {
+                    // 4 options: 0=CodeAndConversation, 1=ConversationOnly, 2=CodeOnly, 3=Summarize
+                    self.mode_selected += 1;
+                }
+            }
+            RewindSelectorPhase::InputSummarizeContext => {
+                // No navigation in text input phase
+            }
+        }
+    }
+
+    /// Confirm selection and advance to next phase, or return the final choice.
+    ///
+    /// Returns `Some(RewindAction)` when ready to execute.
+    pub fn confirm(&mut self) -> Option<RewindAction> {
+        if self.loading {
+            return None;
+        }
+        match self.phase {
+            RewindSelectorPhase::SelectCheckpoint => {
+                // Advance to mode selection
+                self.phase = RewindSelectorPhase::SelectMode;
+                self.mode_selected = 0;
+                None
+            }
+            RewindSelectorPhase::SelectMode => {
+                if self.mode_selected == 3 {
+                    // Transition to context input phase for summarize
+                    let turn = self.selected_checkpoint().map(|cp| cp.turn_number);
+                    if let Some(t) = turn {
+                        self.summarize_turn = Some(t);
+                        self.summarize_context.clear();
+                        self.phase = RewindSelectorPhase::InputSummarizeContext;
+                    }
+                    None
+                } else {
+                    let mode = match self.mode_selected {
+                        0 => cocode_protocol::RewindMode::CodeAndConversation,
+                        1 => cocode_protocol::RewindMode::ConversationOnly,
+                        2 => cocode_protocol::RewindMode::CodeOnly,
+                        _ => cocode_protocol::RewindMode::CodeAndConversation,
+                    };
+                    self.selected_checkpoint().map(|cp| RewindAction::Rewind {
+                        turn_number: cp.turn_number,
+                        mode,
+                    })
+                }
+            }
+            RewindSelectorPhase::InputSummarizeContext => {
+                // Confirm summarize with the provided context
+                self.summarize_turn.map(|turn_number| {
+                    let ctx = self.summarize_context.trim().to_string();
+                    RewindAction::Summarize {
+                        turn_number,
+                        context: if ctx.is_empty() { None } else { Some(ctx) },
+                    }
+                })
+            }
+        }
+    }
+
+    /// Go back to the previous phase.
+    pub fn go_back(&mut self) -> bool {
+        if self.loading {
+            return false;
+        }
+        match self.phase {
+            RewindSelectorPhase::SelectMode => {
+                self.phase = RewindSelectorPhase::SelectCheckpoint;
+                true
+            }
+            RewindSelectorPhase::InputSummarizeContext => {
+                self.phase = RewindSelectorPhase::SelectMode;
+                self.summarize_context.clear();
+                true
+            }
+            RewindSelectorPhase::SelectCheckpoint => false,
+        }
+    }
+
+    /// Insert a character into the summarize context input.
+    pub fn insert_context_char(&mut self, c: char) {
+        self.summarize_context.push(c);
+    }
+
+    /// Delete the last character from the summarize context input.
+    pub fn delete_context_char(&mut self) {
+        self.summarize_context.pop();
+    }
+
+    /// Set the loading state with an action description.
+    pub fn set_loading(&mut self, action: String) {
+        self.loading = true;
+        self.loading_action = Some(action);
+    }
 }
 
 #[cfg(test)]

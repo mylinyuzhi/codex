@@ -19,6 +19,13 @@ pub fn statusline_agent() -> AgentDefinition {
         color: Some("orange".to_string()),
         critical_reminder: None,
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }
 }
 

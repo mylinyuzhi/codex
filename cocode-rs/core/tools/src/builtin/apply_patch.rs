@@ -165,13 +165,22 @@ impl Tool for ApplyPatchTool {
                     }
                 }
 
-                // 4. Execute the patch
+                // 4. Backup files before modification (Tier 1 rewind)
+                if let Some(ref backup_store) = ctx.file_backup_store {
+                    for path in action.changes().keys() {
+                        if let Err(e) = backup_store.backup_before_modify(path).await {
+                            tracing::warn!("File backup failed for {}: {e}", path.display());
+                        }
+                    }
+                }
+
+                // 5. Execute the patch
                 let mut stdout = Vec::new();
                 let mut stderr = Vec::new();
 
                 match execute_patch(&patch_input, &mut stdout, &mut stderr) {
                     Ok(()) => {
-                        // 5. Track modifications and update read state
+                        // 6. Track modifications and update read state
                         let mut result_modifiers = Vec::new();
 
                         for (path, change) in action.changes() {

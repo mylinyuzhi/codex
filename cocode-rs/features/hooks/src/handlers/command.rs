@@ -88,6 +88,22 @@ pub struct HookOutput {
         rename = "hookSpecificOutput"
     )]
     pub hook_specific_output: Option<Value>,
+
+    /// A message to display to the user (informational, non-blocking).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "systemMessage"
+    )]
+    pub system_message: Option<String>,
+
+    /// Replacement tool output for PostToolUse hooks.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "updatedToolOutput"
+    )]
+    pub updated_tool_output: Option<Value>,
 }
 
 impl HookOutput {
@@ -164,6 +180,16 @@ impl HookOutput {
             return HookResult::ContinueWithContext {
                 additional_context: self.additional_context,
             };
+        }
+
+        // updated_tool_output → ModifyOutput (PostToolUse hooks)
+        if let Some(new_output) = self.updated_tool_output {
+            return HookResult::ModifyOutput { new_output };
+        }
+
+        // system_message → SystemMessage (informational)
+        if let Some(message) = self.system_message {
+            return HookResult::SystemMessage { message };
         }
 
         HookResult::Continue

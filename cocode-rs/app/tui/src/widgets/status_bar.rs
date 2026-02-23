@@ -54,6 +54,8 @@ pub struct StatusBar<'a> {
     estimated_cost_cents: i32,
     /// Working directory.
     working_dir: Option<&'a str>,
+    /// Active output style name.
+    output_style: Option<&'a str>,
 }
 
 impl<'a> StatusBar<'a> {
@@ -81,6 +83,7 @@ impl<'a> StatusBar<'a> {
             context_window_total: 0,
             estimated_cost_cents: 0,
             working_dir: None,
+            output_style: None,
         }
     }
 
@@ -136,6 +139,12 @@ impl<'a> StatusBar<'a> {
     /// Set the working directory.
     pub fn working_dir(mut self, dir: Option<&'a str>) -> Self {
         self.working_dir = dir;
+        self
+    }
+
+    /// Set the active output style name.
+    pub fn output_style(mut self, style: Option<&'a str>) -> Self {
+        self.output_style = style;
         self
     }
 
@@ -300,6 +309,14 @@ impl<'a> StatusBar<'a> {
         })
     }
 
+    /// Format the output style indicator.
+    fn format_output_style(&self) -> Option<Span<'static>> {
+        self.output_style.map(|name| {
+            Span::raw(format!(" {} ", t!("status.output_style", name = name)))
+                .fg(self.theme.success)
+        })
+    }
+
     /// Format keyboard hints.
     fn format_hints(&self) -> Span<'static> {
         Span::raw(format!(" {} ", t!("status.hints"))).fg(self.theme.text_dim)
@@ -368,6 +385,12 @@ impl Widget for StatusBar<'_> {
         // Plan mode (if active)
         if let Some(plan_span) = self.format_plan_mode() {
             spans.push(plan_span);
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
+        }
+
+        // Output style (if active)
+        if let Some(style_span) = self.format_output_style() {
+            spans.push(style_span);
             spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 

@@ -200,22 +200,25 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
 
     // Suggestion popups are mutually exclusive — only render one at a time.
     // Priority: skill > agent > symbol > file (matches key event handling order).
-    if let Some(ref suggestions) = state.ui.skill_suggestions {
-        let popup = SkillSuggestionPopup::new(suggestions, theme);
-        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
-        frame.render_widget(popup, popup_area);
-    } else if let Some(ref suggestions) = state.ui.agent_suggestions {
-        let popup = AgentSuggestionPopup::new(suggestions, theme);
-        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
-        frame.render_widget(popup, popup_area);
-    } else if let Some(ref suggestions) = state.ui.symbol_suggestions {
-        let popup = SymbolSuggestionPopup::new(suggestions, theme);
-        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
-        frame.render_widget(popup, popup_area);
-    } else if let Some(ref suggestions) = state.ui.file_suggestions {
-        let popup = FileSuggestionPopup::new(suggestions, theme);
-        let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
-        frame.render_widget(popup, popup_area);
+    // Don't render suggestions when an overlay is active or in plan mode.
+    if state.ui.overlay.is_none() && !state.session.plan_mode {
+        if let Some(ref suggestions) = state.ui.skill_suggestions {
+            let popup = SkillSuggestionPopup::new(suggestions, theme);
+            let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+            frame.render_widget(popup, popup_area);
+        } else if let Some(ref suggestions) = state.ui.agent_suggestions {
+            let popup = AgentSuggestionPopup::new(suggestions, theme);
+            let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+            frame.render_widget(popup, popup_area);
+        } else if let Some(ref suggestions) = state.ui.symbol_suggestions {
+            let popup = SymbolSuggestionPopup::new(suggestions, theme);
+            let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+            frame.render_widget(popup, popup_area);
+        } else if let Some(ref suggestions) = state.ui.file_suggestions {
+            let popup = FileSuggestionPopup::new(suggestions, theme);
+            let popup_area = popup.calculate_area(chunks[input_chunk_index], area.height);
+            frame.render_widget(popup, popup_area);
+        }
     }
 }
 
@@ -293,7 +296,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         state.session.context_window_total,
     )
     .estimated_cost(state.session.estimated_cost_cents)
-    .working_dir(state.session.working_dir.as_deref());
+    .working_dir(state.session.working_dir.as_deref())
+    .output_style(state.session.output_style.as_deref());
     frame.render_widget(status_bar, area);
 }
 
@@ -306,12 +310,44 @@ fn render_overlay(
     help_scroll: i32,
 ) {
     // Calculate centered area
-    let overlay_width = (area.width * 60 / 100).clamp(40, 80);
+    let overlay_width = match overlay {
+        Overlay::PluginManager(_) => (area.width * 80 / 100).clamp(50, 100),
+        _ => (area.width * 60 / 100).clamp(40, 80),
+    };
     let overlay_height = match overlay {
         Overlay::Permission(_) => 12,
         Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),
+        Overlay::OutputStylePicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),
         Overlay::CommandPalette(palette) => (palette.filtered_commands().len() as u16 + 4).min(20),
         Overlay::SessionBrowser(browser) => (browser.filtered_sessions().len() as u16 + 4).min(20),
+        Overlay::RewindSelector(rw) => {
+            let item_count = match rw.phase {
+                crate::state::RewindSelectorPhase::SelectCheckpoint => {
+                    // Each checkpoint takes 1 line; only the selected one shows file names
+                    let mut lines = rw.checkpoints.len();
+                    if let Some(cp) = rw.selected_checkpoint() {
+                        if !cp.modified_files.is_empty() {
+                            lines += cp.modified_files.len().min(3);
+                            if cp.modified_files.len() > 3 {
+                                lines += 1; // "...and N more"
+                            }
+                        }
+                    }
+                    lines
+                }
+                crate::state::RewindSelectorPhase::SelectMode => 4, // 3 rewind modes + summarize
+                crate::state::RewindSelectorPhase::InputSummarizeContext => 5, // header + input + hints
+            };
+            // +6 for header, spacing, warning line, and hints
+            (item_count as u16 + 7).min(22)
+        }
+        Overlay::PlanExitApproval(_) => 17,
+        Overlay::Question(q) => {
+            // Height: title + question text + options + "Other" + hints + spacing
+            let option_count = q.current().map_or(4, |qi| qi.options.len() as u16 + 1);
+            (option_count + 8).min(22)
+        }
+        Overlay::PluginManager(_) => (area.height * 70 / 100).clamp(20, 40),
         Overlay::Help => 30,
         Overlay::Error(_) => 8,
     };
@@ -325,14 +361,29 @@ fn render_overlay(
 
     match overlay {
         Overlay::Permission(perm) => render_permission_overlay(frame, overlay_area, perm, theme),
+        Overlay::PlanExitApproval(plan_exit) => {
+            render_plan_exit_overlay(frame, overlay_area, plan_exit, theme)
+        }
         Overlay::ModelPicker(picker) => {
             render_model_picker_overlay(frame, overlay_area, picker, theme)
+        }
+        Overlay::OutputStylePicker(picker) => {
+            render_output_style_picker_overlay(frame, overlay_area, picker, theme)
         }
         Overlay::CommandPalette(palette) => {
             render_command_palette_overlay(frame, overlay_area, palette, theme)
         }
         Overlay::SessionBrowser(browser) => {
             render_session_browser_overlay(frame, overlay_area, browser, theme)
+        }
+        Overlay::RewindSelector(rw) => {
+            render_rewind_selector_overlay(frame, overlay_area, rw, theme)
+        }
+        Overlay::PluginManager(manager) => {
+            render_plugin_manager_overlay(frame, overlay_area, manager, theme)
+        }
+        Overlay::Question(question) => {
+            render_question_overlay(frame, overlay_area, question, theme)
         }
         Overlay::Help => render_help_overlay(frame, overlay_area, theme, help_scroll),
         Overlay::Error(message) => render_error_overlay(frame, overlay_area, message, theme),
@@ -392,6 +443,166 @@ fn render_permission_overlay(
     frame.render_widget(paragraph, inner);
 }
 
+/// Render the plan exit approval overlay with 4 options.
+fn render_plan_exit_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    plan_exit: &crate::state::PlanExitOverlay,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(
+            format!(" {} ", t!("dialog.plan_exit_title"))
+                .bold()
+                .fg(theme.primary),
+        )
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.primary));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![];
+
+    // Plan preview (truncated)
+    if !plan_exit.plan_preview.is_empty() {
+        let preview: String = plan_exit
+            .plan_preview
+            .lines()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let truncated = if preview.len() > 60 {
+            format!("{}...", &preview[..57])
+        } else {
+            preview
+        };
+        lines.push(Line::from(Span::raw(truncated).fg(theme.text_dim).italic()));
+        lines.push(Line::from(""));
+    }
+
+    // 5 options
+    let options = [
+        t!("dialog.plan_exit_clear_accept").to_string(),
+        t!("dialog.plan_exit_clear_bypass").to_string(),
+        t!("dialog.plan_exit_keep_elevate").to_string(),
+        t!("dialog.plan_exit_keep_default").to_string(),
+        t!("dialog.plan_exit_keep_planning").to_string(),
+    ];
+    for (i, opt) in options.iter().enumerate() {
+        let is_selected = plan_exit.selected == i as i32;
+        let line = if is_selected {
+            Line::from(Span::raw(format!("▸ {opt}")).bold().fg(theme.primary))
+        } else {
+            Line::from(Span::raw(format!("  {opt}")).fg(theme.text_dim))
+        };
+        lines.push(line);
+    }
+
+    lines.push(Line::from(""));
+
+    // Hints
+    lines.push(Line::from(
+        Span::raw(t!("dialog.plan_exit_hints").to_string()).fg(theme.text_dim),
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the question overlay (AskUserQuestion tool).
+fn render_question_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    question_overlay: &crate::state::QuestionOverlay,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(format!(" {} ", t!("dialog.question_title")))
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.primary));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+
+    if let Some(q) = question_overlay.current() {
+        // Question number indicator
+        let total = question_overlay.questions.len();
+        let current = question_overlay.current_question + 1;
+        lines.push(Line::from(
+            Span::raw(format!("[{}/{}] [{}]", current, total, q.header)).fg(theme.text_dim),
+        ));
+        lines.push(Line::from(""));
+
+        // Question text
+        lines.push(Line::from(Span::raw(&q.question).bold().fg(theme.text)));
+        lines.push(Line::from(""));
+
+        // Options
+        for (i, opt) in q.options.iter().enumerate() {
+            let is_selected = q.selected == i as i32;
+            let prefix = if q.multi_select {
+                if q.checked.get(i).copied().unwrap_or(false) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if is_selected {
+                " ▸ "
+            } else {
+                "   "
+            };
+
+            let label_text = format!("{prefix} {} — {}", opt.label, opt.description);
+            let line = if is_selected {
+                Line::from(Span::raw(label_text).bold().fg(theme.primary))
+            } else {
+                Line::from(Span::raw(label_text).fg(theme.text_dim))
+            };
+            lines.push(line);
+        }
+
+        // "Other" option
+        let is_other_selected = q.selected as usize == q.options.len();
+        if question_overlay.other_input_active {
+            lines.push(Line::from(
+                Span::raw(format!(
+                    " ▸ {}: {}_",
+                    t!("dialog.question_other"),
+                    question_overlay.other_text
+                ))
+                .bold()
+                .fg(theme.primary),
+            ));
+        } else if is_other_selected {
+            lines.push(Line::from(
+                Span::raw(format!(" ▸ {}", t!("dialog.question_other")))
+                    .bold()
+                    .fg(theme.primary),
+            ));
+        } else {
+            lines.push(Line::from(
+                Span::raw(format!("   {}", t!("dialog.question_other"))).fg(theme.text_dim),
+            ));
+        }
+    } else {
+        lines.push(Line::from(
+            Span::raw("No questions to display").fg(theme.text_dim),
+        ));
+    }
+
+    lines.push(Line::from(""));
+
+    // Hints
+    lines.push(Line::from(
+        Span::raw(t!("dialog.question_hints").to_string()).fg(theme.text_dim),
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
 /// Render the model picker overlay.
 fn render_model_picker_overlay(
     frame: &mut Frame,
@@ -443,6 +654,67 @@ fn render_model_picker_overlay(
     lines.push(Line::from(""));
     lines.push(Line::from(
         Span::raw(t!("dialog.model_picker_hints").to_string()).fg(theme.text_dim),
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the output style picker overlay.
+fn render_output_style_picker_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    picker: &crate::state::OutputStylePickerOverlay,
+    theme: &Theme,
+) {
+    let title = if picker.filter.is_empty() {
+        format!(" {} ", t!("dialog.select_output_style"))
+    } else {
+        format!(
+            " {} ",
+            t!("dialog.select_output_style_filter", filter = &picker.filter)
+        )
+    };
+
+    let block = Block::default()
+        .title(title.bold())
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.border_focused));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let items = picker.filtered_items();
+    let mut lines: Vec<Line> = vec![];
+
+    for (i, item) in items.iter().enumerate() {
+        let desc = item
+            .description
+            .as_deref()
+            .map(|d| format!(" - {d}"))
+            .unwrap_or_default();
+        let display = format!("{} [{}]{desc}", item.name, item.source);
+        let is_selected = picker.selected == i as i32;
+        let line = if is_selected {
+            Line::from(Span::raw(format!("▸ {display}")).bold().fg(theme.primary))
+        } else {
+            Line::from(Span::raw(format!("  {display}")))
+        };
+        lines.push(line);
+    }
+
+    if items.is_empty() {
+        lines.push(Line::from(
+            Span::raw(t!("dialog.no_styles_match").to_string())
+                .fg(theme.text_dim)
+                .italic(),
+        ));
+    }
+
+    // Add hints at bottom
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        Span::raw(t!("dialog.output_style_picker_hints").to_string()).fg(theme.text_dim),
     ));
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -507,6 +779,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme, scroll_offs
         shortcut("Ctrl+L", t!("help.ctrl_l").to_string()),
         shortcut("Ctrl+Q", t!("help.ctrl_q").to_string()),
         shortcut("Esc", t!("help.esc").to_string()),
+        shortcut("Esc Esc", t!("help.esc_esc").to_string()),
         Line::from(""),
         Line::from(Span::raw(t!("dialog.press_esc_close").to_string()).fg(theme.text_dim)),
     ];
@@ -657,6 +930,427 @@ fn render_session_browser_overlay(
     lines.push(Line::from(
         Span::raw(t!("dialog.session_browser_hints").to_string()).fg(theme.text_dim),
     ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the plugin manager overlay with 4 tabs.
+fn render_plugin_manager_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    manager: &crate::state::PluginManagerOverlay,
+    theme: &Theme,
+) {
+    use crate::state::PluginManagerTab;
+
+    // Build tab bar
+    let tabs = [
+        (
+            PluginManagerTab::Discover,
+            t!("dialog.plugin_tab_discover").to_string(),
+        ),
+        (
+            PluginManagerTab::Installed,
+            t!("dialog.plugin_tab_installed").to_string(),
+        ),
+        (
+            PluginManagerTab::Marketplaces,
+            t!("dialog.plugin_tab_marketplaces").to_string(),
+        ),
+        (
+            PluginManagerTab::Errors,
+            t!("dialog.plugin_tab_errors").to_string(),
+        ),
+    ];
+
+    let tab_title: String = tabs
+        .iter()
+        .map(|(tab, label)| {
+            if *tab == manager.tab {
+                format!("[{label}]")
+            } else {
+                format!(" {label} ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let title = if manager.filter.is_empty() {
+        format!(" {} ", t!("dialog.plugin_manager"))
+    } else {
+        format!(
+            " {} ",
+            t!("dialog.plugin_manager_filter", filter = &manager.filter)
+        )
+    };
+
+    let block = Block::default()
+        .title(title.bold())
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.border_focused));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![];
+
+    // Tab bar
+    let tab_spans: Vec<Span> = tabs
+        .iter()
+        .map(|(tab, label)| {
+            if *tab == manager.tab {
+                Span::raw(format!(" {label} ")).bold().fg(theme.primary)
+            } else {
+                Span::raw(format!(" {label} ")).fg(theme.text_dim)
+            }
+        })
+        .collect();
+    lines.push(Line::from(tab_spans));
+    lines.push(Line::from(""));
+
+    // Tab content
+    match manager.tab {
+        PluginManagerTab::Discover => {
+            let items = manager.filtered_discover();
+            if items.is_empty() {
+                lines.push(Line::from(
+                    Span::raw(t!("dialog.plugin_no_discover").to_string())
+                        .fg(theme.text_dim)
+                        .italic(),
+                ));
+            } else {
+                for (i, plugin) in items.iter().enumerate() {
+                    let is_selected = manager.selected == i as i32;
+                    let line = if is_selected {
+                        Line::from(vec![
+                            Span::raw("▸ ").bold().fg(theme.primary),
+                            Span::raw(&plugin.name).bold().fg(theme.primary),
+                            Span::raw(format!(" v{}", plugin.version)).fg(theme.text_dim),
+                            Span::raw(format!(" - {}", plugin.description)).fg(theme.text_dim),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::raw(&plugin.name),
+                            Span::raw(format!(" v{}", plugin.version)).fg(theme.text_dim),
+                            Span::raw(format!(" - {}", plugin.description)).fg(theme.text_dim),
+                        ])
+                    };
+                    lines.push(line);
+                }
+            }
+        }
+        PluginManagerTab::Installed => {
+            let items = manager.filtered_installed();
+            if items.is_empty() {
+                lines.push(Line::from(
+                    Span::raw(t!("dialog.plugin_no_installed").to_string())
+                        .fg(theme.text_dim)
+                        .italic(),
+                ));
+            } else {
+                for (i, plugin) in items.iter().enumerate() {
+                    let is_selected = manager.selected == i as i32;
+                    let status = if plugin.enabled {
+                        Span::raw(" ●").fg(theme.success)
+                    } else {
+                        Span::raw(" ○").fg(theme.text_dim)
+                    };
+                    let line = if is_selected {
+                        Line::from(vec![
+                            Span::raw("▸ ").bold().fg(theme.primary),
+                            Span::raw(&plugin.name).bold().fg(theme.primary),
+                            status,
+                            Span::raw(format!(" [{}]", plugin.scope)).fg(theme.text_dim),
+                            Span::raw(format!(
+                                " ({}s/{}h/{}a)",
+                                plugin.skills_count, plugin.hooks_count, plugin.agents_count
+                            ))
+                            .fg(theme.text_dim),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::raw(&plugin.name),
+                            status,
+                            Span::raw(format!(" [{}]", plugin.scope)).fg(theme.text_dim),
+                            Span::raw(format!(
+                                " ({}s/{}h/{}a)",
+                                plugin.skills_count, plugin.hooks_count, plugin.agents_count
+                            ))
+                            .fg(theme.text_dim),
+                        ])
+                    };
+                    lines.push(line);
+                }
+            }
+        }
+        PluginManagerTab::Marketplaces => {
+            if manager.marketplace_items.is_empty() {
+                lines.push(Line::from(
+                    Span::raw(t!("dialog.plugin_no_marketplaces").to_string())
+                        .fg(theme.text_dim)
+                        .italic(),
+                ));
+            } else {
+                for (i, market) in manager.marketplace_items.iter().enumerate() {
+                    let is_selected = manager.selected == i as i32;
+                    let auto = if market.auto_update { " ↻" } else { "" };
+                    let line = if is_selected {
+                        Line::from(vec![
+                            Span::raw("▸ ").bold().fg(theme.primary),
+                            Span::raw(&market.name).bold().fg(theme.primary),
+                            Span::raw(format!(" ({})  {}", market.source_type, market.source))
+                                .fg(theme.text_dim),
+                            Span::raw(format!(" [{} plugins]{auto}", market.plugin_count))
+                                .fg(theme.text_dim),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::raw(&market.name),
+                            Span::raw(format!(" ({})  {}", market.source_type, market.source))
+                                .fg(theme.text_dim),
+                            Span::raw(format!(" [{} plugins]{auto}", market.plugin_count))
+                                .fg(theme.text_dim),
+                        ])
+                    };
+                    lines.push(line);
+                }
+            }
+        }
+        PluginManagerTab::Errors => {
+            if manager.error_items.is_empty() {
+                lines.push(Line::from(
+                    Span::raw(t!("dialog.plugin_no_errors").to_string())
+                        .fg(theme.success)
+                        .italic(),
+                ));
+            } else {
+                for (i, err) in manager.error_items.iter().enumerate() {
+                    let is_selected = manager.selected == i as i32;
+                    let line = if is_selected {
+                        Line::from(vec![
+                            Span::raw("▸ ").bold().fg(theme.error),
+                            Span::raw(&err.source).bold().fg(theme.error),
+                            Span::raw(format!(": {}", err.error)).fg(theme.text_dim),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::raw(&err.source).fg(theme.error),
+                            Span::raw(format!(": {}", err.error)).fg(theme.text_dim),
+                        ])
+                    };
+                    lines.push(line);
+                }
+            }
+        }
+    }
+
+    // Hints at bottom
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        Span::raw(t!("dialog.plugin_manager_hints").to_string()).fg(theme.text_dim),
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+
+    // Suppress unused variable warning
+    let _ = tab_title;
+}
+
+/// Render the rewind selector overlay.
+fn render_rewind_selector_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    rw: &crate::state::RewindSelectorOverlay,
+    theme: &Theme,
+) {
+    use crate::state::RewindSelectorPhase;
+
+    // Show loading state if an operation is in progress
+    if rw.loading {
+        let action = rw.loading_action.as_deref().unwrap_or("Processing...");
+        let block = Block::default()
+            .title(format!(" {action} ").bold().fg(theme.primary))
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(theme.primary));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let spinner_chars = ['|', '/', '-', '\\'];
+        let idx = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_millis()
+            / 250) as usize
+            % spinner_chars.len();
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::raw(format!("  {} {action}", spinner_chars[idx])).fg(theme.primary)),
+        ];
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, inner);
+        return;
+    }
+
+    let title = match rw.phase {
+        RewindSelectorPhase::SelectCheckpoint => t!("dialog.rewind_select_checkpoint"),
+        RewindSelectorPhase::SelectMode => t!("dialog.rewind_select_mode"),
+        RewindSelectorPhase::InputSummarizeContext => t!("dialog.rewind_summarize_context"),
+    };
+
+    let block = Block::default()
+        .title(format!(" {title} ").bold().fg(theme.primary))
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.primary));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    match rw.phase {
+        RewindSelectorPhase::SelectCheckpoint => {
+            // Show checkpoints newest-first with file names
+            let display_items = rw.display_items();
+            for (i, cp) in display_items.iter().enumerate() {
+                let is_selected = i as i32 == rw.selected;
+                let prefix = if is_selected { "▸ " } else { "  " };
+                let file_info = if cp.file_count > 0 {
+                    format!(" ({} {})", cp.file_count, t!("dialog.rewind_files"))
+                } else {
+                    String::new()
+                };
+                let label = format!(
+                    "{prefix}{}{file_info}",
+                    if cp.user_message_preview.is_empty() {
+                        format!("Turn {}", cp.turn_number)
+                    } else {
+                        cp.user_message_preview.clone()
+                    }
+                );
+                let line = if is_selected {
+                    Line::from(Span::raw(label).bold().fg(theme.primary))
+                } else {
+                    Line::from(Span::raw(label).fg(theme.text))
+                };
+                lines.push(line);
+
+                // Show modified file names for selected checkpoint
+                if is_selected && !cp.modified_files.is_empty() {
+                    let max_files = 3;
+                    for file in cp.modified_files.iter().take(max_files) {
+                        // Show just the file name, not full path
+                        let display_name = std::path::Path::new(file)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(file);
+                        lines.push(Line::from(
+                            Span::raw(format!("    {display_name}")).fg(theme.text_dim),
+                        ));
+                    }
+                    if cp.modified_files.len() > max_files {
+                        let remaining = cp.modified_files.len() - max_files;
+                        lines.push(Line::from(
+                            Span::raw(format!(
+                                "    {}",
+                                t!("dialog.rewind_more_files", count = remaining)
+                            ))
+                            .fg(theme.text_dim),
+                        ));
+                    }
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                Span::raw(t!("dialog.rewind_checkpoint_hints").to_string()).fg(theme.text_dim),
+            ));
+        }
+        RewindSelectorPhase::SelectMode => {
+            // Show the selected checkpoint info
+            if let Some(cp) = rw.selected_checkpoint() {
+                let header = format!(
+                    "{}: Turn {} ({})",
+                    t!("dialog.rewind_target"),
+                    cp.turn_number,
+                    if cp.user_message_preview.is_empty() {
+                        "...".to_string()
+                    } else if cp.user_message_preview.chars().count() > 40 {
+                        let truncated: String = cp.user_message_preview.chars().take(40).collect();
+                        format!("{truncated}...")
+                    } else {
+                        cp.user_message_preview.clone()
+                    }
+                );
+                lines.push(Line::from(Span::raw(header).fg(theme.text_dim)));
+                lines.push(Line::from(""));
+            }
+
+            let modes = [
+                t!("dialog.rewind_mode_code_and_conversation").to_string(),
+                t!("dialog.rewind_mode_conversation_only").to_string(),
+                t!("dialog.rewind_mode_code_only").to_string(),
+                t!("dialog.rewind_mode_summarize").to_string(),
+            ];
+            for (i, label) in modes.iter().enumerate() {
+                let is_selected = i as i32 == rw.mode_selected;
+                let prefix = if is_selected { "▸ " } else { "  " };
+                let line = if is_selected {
+                    Line::from(
+                        Span::raw(format!("{prefix}{label}"))
+                            .bold()
+                            .fg(theme.primary),
+                    )
+                } else {
+                    Line::from(Span::raw(format!("{prefix}{label}")).fg(theme.text))
+                };
+                lines.push(line);
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                Span::raw(t!("dialog.rewind_warning_bash").to_string()).fg(theme.text_dim),
+            ));
+            lines.push(Line::from(
+                Span::raw(t!("dialog.rewind_mode_hints").to_string()).fg(theme.text_dim),
+            ));
+        }
+        RewindSelectorPhase::InputSummarizeContext => {
+            // Show context input for summarize
+            if let Some(turn) = rw.summarize_turn {
+                let header = format!("{}: Turn {}", t!("dialog.rewind_target"), turn,);
+                lines.push(Line::from(Span::raw(header).fg(theme.text_dim)));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(
+                Span::raw(t!("dialog.rewind_summarize_context_prompt").to_string()).fg(theme.text),
+            ));
+            lines.push(Line::from(""));
+
+            // Show the text input with cursor
+            let input_text = if rw.summarize_context.is_empty() {
+                t!("dialog.rewind_summarize_context_placeholder").to_string()
+            } else {
+                rw.summarize_context.clone()
+            };
+            let input_style = if rw.summarize_context.is_empty() {
+                ratatui::style::Style::default().fg(theme.text_dim)
+            } else {
+                ratatui::style::Style::default().fg(theme.text)
+            };
+            lines.push(Line::from(
+                Span::raw(format!("  > {input_text}")).style(input_style),
+            ));
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                Span::raw(t!("dialog.rewind_summarize_context_hints").to_string())
+                    .fg(theme.text_dim),
+            ));
+        }
+    }
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);

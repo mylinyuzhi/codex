@@ -29,6 +29,8 @@ fn test_user_command_display() {
     let cmd = UserCommand::ApprovalResponse {
         request_id: "req-1".to_string(),
         decision: ApprovalDecision::Approved,
+        plan_exit_option: None,
+        feedback: None,
     };
     assert!(cmd.to_string().contains("Approved"));
 

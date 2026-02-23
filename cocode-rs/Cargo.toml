@@ -50,6 +50,7 @@ members = [
     "core/loop",
     "core/subagent",
     "core/executor",
+    "core/file-backup",
     "app/session",
     "app/cli",
     "app/tui",
@@ -82,6 +83,7 @@ cocode-loop = { path = "core/loop" }
 cocode-subagent = { path = "core/subagent" }
 cocode-system-reminder = { path = "core/system-reminder" }
 cocode-executor = { path = "core/executor" }
+cocode-file-backup = { path = "core/file-backup" }
 
 # Internal - provider SDKs (keep original names)
 anthropic-sdk = { path = "provider-sdks/anthropic" }

@@ -34,6 +34,12 @@ pub enum UserCommand {
         active: bool,
     },
 
+    /// Set permission mode (cycles: Default → AcceptEdits → Plan → Default).
+    SetPermissionMode {
+        /// The new permission mode.
+        mode: cocode_protocol::PermissionMode,
+    },
+
     /// Set the thinking level.
     SetThinkingLevel {
         /// The new thinking level.
@@ -52,6 +58,18 @@ pub enum UserCommand {
         request_id: String,
         /// The user's three-way decision.
         decision: ApprovalDecision,
+        /// Optional plan exit option (only set for ExitPlanMode approvals).
+        plan_exit_option: Option<cocode_protocol::PlanExitOption>,
+        /// Optional feedback text (only set when KeepPlanning with user feedback).
+        feedback: Option<String>,
+    },
+
+    /// Respond to a question from the model (AskUserQuestion tool).
+    QuestionResponse {
+        /// The request ID from the QuestionAsked event.
+        request_id: String,
+        /// User's answers keyed by question text.
+        answers: serde_json::Value,
     },
 
     /// Execute a skill command.
@@ -83,6 +101,34 @@ pub enum UserCommand {
     SetOutputStyle {
         /// Style name to activate, or `None` to disable.
         style: Option<String>,
+    },
+
+    /// Request the list of available output styles for the picker overlay.
+    RequestOutputStyles,
+
+    /// Request plugin data for the Plugin Manager overlay.
+    RequestPluginData,
+
+    /// Rewind the last turn (undo file changes + message history).
+    Rewind,
+
+    /// Request the list of available rewind checkpoints for the selector overlay.
+    RequestRewindCheckpoints,
+
+    /// Rewind to a specific turn with a given mode.
+    RewindToTurn {
+        /// The turn number to rewind to.
+        turn_number: i32,
+        /// The rewind mode.
+        mode: cocode_protocol::RewindMode,
+    },
+
+    /// Summarize (partial compact) from a specific turn.
+    SummarizeFromTurn {
+        /// The turn number from which to summarize.
+        turn_number: i32,
+        /// Optional user-provided context to guide the summary focus.
+        context: Option<String>,
     },
 
     /// Request graceful shutdown.
@@ -138,6 +184,9 @@ impl std::fmt::Display for UserCommand {
             }
             UserCommand::Interrupt => write!(f, "Interrupt"),
             UserCommand::SetPlanMode { active } => write!(f, "SetPlanMode({active})"),
+            UserCommand::SetPermissionMode { mode } => {
+                write!(f, "SetPermissionMode({mode})")
+            }
             UserCommand::SetThinkingLevel { level } => {
                 write!(f, "SetThinkingLevel({:?})", level.effort)
             }
@@ -147,8 +196,12 @@ impl std::fmt::Display for UserCommand {
             UserCommand::ApprovalResponse {
                 request_id,
                 decision,
+                ..
             } => {
                 write!(f, "ApprovalResponse({request_id}, {decision:?})")
+            }
+            UserCommand::QuestionResponse { request_id, .. } => {
+                write!(f, "QuestionResponse({request_id})")
             }
             UserCommand::ExecuteSkill { name, args } => {
                 if args.is_empty() {
@@ -171,6 +224,16 @@ impl std::fmt::Display for UserCommand {
                 Some(s) => write!(f, "SetOutputStyle({s})"),
                 None => write!(f, "SetOutputStyle(off)"),
             },
+            UserCommand::RequestOutputStyles => write!(f, "RequestOutputStyles"),
+            UserCommand::RequestPluginData => write!(f, "RequestPluginData"),
+            UserCommand::Rewind => write!(f, "Rewind"),
+            UserCommand::RequestRewindCheckpoints => write!(f, "RequestRewindCheckpoints"),
+            UserCommand::RewindToTurn { turn_number, mode } => {
+                write!(f, "RewindToTurn({turn_number}, {mode:?})")
+            }
+            UserCommand::SummarizeFromTurn { turn_number, .. } => {
+                write!(f, "SummarizeFromTurn({turn_number})")
+            }
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }
     }

@@ -84,6 +84,11 @@ command.show_session_browser: "显示会话浏览器"
 command.load_session: "加载会话 %{id}"
 command.delete_session: "删除会话 %{id}"
 
+# 插件管理器
+command.show_plugin_manager: "显示插件管理器"
+command.plugin_manager_next_tab: "下一个插件选项卡"
+command.plugin_manager_prev_tab: "上一个插件选项卡"
+
 # 思考切换
 command.toggle_thinking: "切换思考显示"
 
@@ -98,6 +103,10 @@ command.background_all_tasks: "后台运行所有任务"
 
 # 工具折叠
 command.toggle_tool_collapse: "切换工具结果折叠"
+
+# 回退
+command.show_rewind_selector: "回退 / 检查点"
+command.rewind: "回退"
 
 # 退出
 command.quit: "退出"
@@ -119,6 +128,9 @@ status.think_label: "思考:%{level}"
 
 # 计划模式
 status.plan: "计划"
+
+# 输出风格
+status.output_style: "风格:%{name}"
 
 # MCP 状态
 status.mcp: "MCP:%{count}"
@@ -169,9 +181,63 @@ dialog.no_saved_sessions: "没有保存的会话"
 dialog.session_message_count: "(%{count} 条消息)"
 dialog.session_browser_hints: "↑/↓: 导航  Enter: 加载  Del: 删除  Esc: 取消"
 
+# 插件管理器覆盖层
+dialog.plugin_manager: "插件管理器"
+dialog.plugin_manager_filter: "插件管理器 [%{filter}]"
+dialog.plugin_tab_discover: "发现"
+dialog.plugin_tab_installed: "已安装"
+dialog.plugin_tab_marketplaces: "市场"
+dialog.plugin_tab_errors: "错误"
+dialog.plugin_no_discover: "没有可用插件。请先添加市场。"
+dialog.plugin_no_installed: "没有已安装的插件"
+dialog.plugin_no_marketplaces: "没有配置的市场"
+dialog.plugin_no_errors: "没有错误"
+dialog.plugin_manager_hints: "Tab/Shift+Tab: 切换选项卡  ↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 输出风格选择器
+dialog.select_output_style: "选择输出风格"
+dialog.select_output_style_filter: "选择输出风格 [%{filter}]"
+dialog.no_styles_match: "没有匹配的风格"
+dialog.output_style_picker_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 回退选择器
+dialog.rewind_select_checkpoint: "回退到检查点"
+dialog.rewind_select_mode: "回退模式"
+dialog.rewind_files: "个文件"
+dialog.rewind_target: "目标"
+dialog.rewind_checkpoint_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消"
+dialog.rewind_mode_hints: "↑/↓: 导航  Enter: 确认  Esc: 返回"
+dialog.rewind_mode_code_and_conversation: "回退代码 + 对话"
+dialog.rewind_mode_conversation_only: "仅回退对话（保留文件更改）"
+dialog.rewind_mode_code_only: "仅回退代码（保留对话）"
+dialog.rewind_mode_summarize: "从此处总结"
+dialog.rewind_warning_bash: "注意：回退不会影响手动或通过 bash 编辑的文件"
+dialog.rewind_more_files: "...以及 %{count} 个更多文件"
+dialog.rewind_summarize_context: "总结上下文"
+dialog.rewind_summarize_context_prompt: "总结应该关注什么？（可选）"
+dialog.rewind_summarize_context_placeholder: "(按 Enter 跳过)"
+dialog.rewind_summarize_context_hints: "Enter: 确认  Esc: 返回  输入以添加上下文"
+dialog.rewind_loading_restore: "正在恢复..."
+dialog.rewind_loading_summarize: "正在总结..."
+
 # 错误覆盖层
 dialog.error: "错误"
 dialog.press_esc_enter_dismiss: "按 Esc 或 Enter 关闭"
+
+# 计划退出审批
+dialog.plan_exit_title: "退出计划模式"
+dialog.plan_exit_clear_accept: "是，清除上下文并自动接受编辑"
+dialog.plan_exit_clear_bypass: "是，清除上下文并跳过权限"
+dialog.plan_exit_keep_elevate: "是，保留上下文并提升权限"
+dialog.plan_exit_keep_default: "是，保留上下文并手动审批"
+dialog.plan_exit_keep_planning: "否，继续计划"
+dialog.plan_exit_hints: "↑/↓: 导航  Enter: 选择  Esc: 继续计划"
+
+# Question overlay (AskUserQuestion)
+dialog.question_title: "提问"
+dialog.question_other: "其他（输入自定义答案）"
+dialog.question_hints: "↑/↓: 导航  Enter: 选择  Space: 切换  Esc: 取消"
+dialog.plan_exit_plan_preview: "计划预览"
 
 # ============================================================
 # 帮助覆盖层快捷键
@@ -197,6 +263,7 @@ help.pgup_pgdn: "翻页"
 help.ctrl_left_right: "单词移动"
 help.ctrl_bksp: "删除前一个单词"
 help.ctrl_shift_e: "切换工具结果显示"
+help.esc_esc: "回退 / 检查点选择器"
 
 # ============================================================
 # 提示通知
@@ -251,6 +318,13 @@ toast.tasks_backgrounded: "已后台运行 %{count} 个任务"
 toast.command_queued: "已排队 (%{count} 等待中)"
 toast.steering_added: "引导已添加"
 
+# 回退
+toast.rewind_success: "已回退第 %{turn} 轮（恢复了 %{files} 个文件）"
+toast.rewind_failed: "回退失败：%{error}"
+toast.rewind_no_checkpoints: "没有可用的回退检查点"
+toast.summarize_success: "已从第 %{turn} 轮总结对话"
+toast.summarize_failed: "总结失败：%{error}"
+
 # ============================================================
 # 命令面板项目
 # ============================================================
@@ -265,6 +339,8 @@ palette.show_help: "显示帮助"
 palette.show_help_desc: "显示键盘快捷键"
 palette.session_browser: "会话浏览器"
 palette.session_browser_desc: "浏览保存的会话"
+palette.plugin_manager: "插件管理器"
+palette.plugin_manager_desc: "管理插件和市场"
 palette.clear_screen: "清屏"
 palette.clear_screen_desc: "清除聊天历史"
 palette.interrupt: "中断"

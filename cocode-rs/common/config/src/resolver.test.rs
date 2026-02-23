@@ -88,15 +88,15 @@ fn test_resolve_model_info_basic() {
 }
 
 #[test]
-fn test_resolve_model_alias() {
+fn test_resolve_api_model_name() {
     let resolver = create_test_resolver();
 
-    // Direct alias resolution
-    let canonical = resolver.resolve_model_alias("test-provider", "ep-12345");
+    // Direct api_model_name resolution
+    let canonical = resolver.resolve_api_model_name("test-provider", "ep-12345");
     assert_eq!(canonical, "deepseek-r1");
 
     // Non-aliased model returns itself
-    let canonical = resolver.resolve_model_alias("test-provider", "test-model");
+    let canonical = resolver.resolve_api_model_name("test-provider", "test-model");
     assert_eq!(canonical, "test-model");
 }
 
@@ -387,12 +387,12 @@ fn test_resolve_provider_with_models() {
     assert_eq!(test_model.slug(), "test-model");
     assert_eq!(test_model.info.display_name, Some("Test Model".to_string()));
     assert_eq!(test_model.info.max_output_tokens, Some(4096)); // Override applied
-    assert!(test_model.model_alias.is_none()); // No alias for this model
+    assert!(test_model.api_model_name.is_none()); // No alias for this model
 
-    // Check ep-12345 has model_alias
+    // Check ep-12345 has api_model_name
     let ep_model = provider_info.get_model("ep-12345").unwrap();
     assert_eq!(ep_model.slug(), "ep-12345");
-    assert_eq!(ep_model.model_alias, Some("deepseek-r1".to_string()));
+    assert_eq!(ep_model.api_model_name, Some("deepseek-r1".to_string()));
     assert_eq!(ep_model.api_model_name(), "deepseek-r1"); // Returns alias
 
     // Check api_model_name helper on ProviderInfo

@@ -239,6 +239,77 @@ pub struct AppConfig {
         rename = "outputStyle"
     )]
     pub output_style: Option<String>,
+
+    /// Plugin enable/disable state.
+    ///
+    /// Keys are `"pluginName"` or `"pluginName@marketplaceName"`.
+    /// Values are `true` (enabled) or `false` (disabled).
+    ///
+    /// Can be set at user, project, or local scope for team plugin management.
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        rename = "enabledPlugins"
+    )]
+    pub enabled_plugins: HashMap<String, bool>,
+
+    /// Extra marketplace sources for automatic registration.
+    ///
+    /// Typically set in project `.cocode/settings.json` so team members
+    /// automatically discover shared marketplaces on trust.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        rename = "extraKnownMarketplaces"
+    )]
+    pub extra_known_marketplaces: Vec<ExtraMarketplaceConfig>,
+}
+
+/// A marketplace source declared in project settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ExtraMarketplaceConfig {
+    /// Display name for the marketplace.
+    pub name: String,
+
+    /// Source type and location.
+    #[serde(flatten)]
+    pub source: MarketplaceSourceConfig,
+
+    /// Whether to automatically update this marketplace.
+    #[serde(default, rename = "autoUpdate")]
+    pub auto_update: bool,
+}
+
+/// Configuration for a marketplace source (used in settings JSON).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MarketplaceSourceConfig {
+    /// GitHub repository (owner/repo format).
+    Github {
+        /// Repository in "owner/repo" format.
+        repo: String,
+        /// Optional branch/tag/commit reference.
+        #[serde(default, rename = "ref")]
+        git_ref: Option<String>,
+    },
+    /// Git URL (HTTPS or SSH).
+    Git {
+        /// Full git URL.
+        url: String,
+        /// Optional branch/tag/commit reference.
+        #[serde(default, rename = "ref")]
+        git_ref: Option<String>,
+    },
+    /// Local directory path.
+    Directory {
+        /// Path to the marketplace directory.
+        path: String,
+    },
+    /// Remote URL pointing to a marketplace.json file.
+    Url {
+        /// URL to the marketplace.json file.
+        url: String,
+    },
 }
 
 /// A matcher group within a hook event configuration.
@@ -346,6 +417,10 @@ pub struct ResolvedAppConfig {
     pub otel: Option<OtelJsonConfig>,
     /// Effective output style name.
     pub output_style: Option<String>,
+    /// Effective plugin enable/disable state.
+    pub enabled_plugins: HashMap<String, bool>,
+    /// Effective extra known marketplaces.
+    pub extra_known_marketplaces: Vec<ExtraMarketplaceConfig>,
 }
 
 impl AppConfig {
@@ -376,6 +451,8 @@ impl AppConfig {
             allow_managed_hooks_only: self.allow_managed_hooks_only,
             otel: self.otel.clone(),
             output_style: self.output_style.clone(),
+            enabled_plugins: self.enabled_plugins.clone(),
+            extra_known_marketplaces: self.extra_known_marketplaces.clone(),
         }
     }
 

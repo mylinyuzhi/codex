@@ -71,7 +71,9 @@
       "Bash(cocode-rs/target/release/cocode-tui:*)",
       "Bash(cocode-rs/target/debug/cocode:*)",
       "Skill(update-claude-md)",
-      "Skill(wt-del)"
+      "Skill(wt-del)",
+      "WebFetch(domain:)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

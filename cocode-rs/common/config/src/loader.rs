@@ -31,6 +31,12 @@ pub const DEFAULT_CONFIG_DIR: &str = ".cocode";
 /// Application configuration file name (JSON).
 pub const CONFIG_FILE: &str = "config.json";
 
+/// Local settings override file name (JSON).
+///
+/// Written by the TUI for settings persistence (e.g. output style,
+/// permission rules) and merged on top of `config.json` at load time.
+pub const SETTINGS_LOCAL_FILE: &str = "settings.local.json";
+
 /// Instruction file names.
 pub const AGENTS_MD_FILE: &str = "AGENTS.md";
 
@@ -230,38 +236,48 @@ impl ConfigLoader {
         Ok(merged)
     }
 
-    /// Load the application configuration file (config.json).
+    /// Load the application configuration file (config.json) with local overrides.
+    ///
+    /// Loads `config.json` as the base, then merges `settings.local.json` on top.
+    /// Local settings override base settings at the top-level key granularity.
     pub fn load_config(&self) -> Result<AppConfig, ConfigError> {
-        let path = self.config_dir.join(CONFIG_FILE);
-        self.load_json_file(&path)
+        let base_path = self.config_dir.join(CONFIG_FILE);
+        let local_path = self.config_dir.join(SETTINGS_LOCAL_FILE);
+
+        let mut base = self.load_json_value(&base_path)?;
+        let local = self.load_json_value(&local_path)?;
+
+        // Merge local overrides on top of base config
+        if let (Some(base_obj), Some(local_obj)) = (base.as_object_mut(), local.as_object()) {
+            for (key, value) in local_obj {
+                debug!(key = %key, "Merging local setting override");
+                base_obj.insert(key.clone(), value.clone());
+            }
+        }
+
+        serde_json::from_value(base).context(JsonParseSnafu {
+            file: base_path.display().to_string(),
+        })
     }
 
-    /// Load a JSON/JSONC file, returning default if it doesn't exist.
+    /// Load a JSON/JSONC file as a `serde_json::Value`.
     ///
-    /// Supports JSONC extensions:
-    /// - Comments (`//` and `/* */`)
-    /// - Trailing commas (`[1, 2, 3,]`)
-    /// - Unquoted keys (`{key: "value"}`) - only simple alphanumeric names
-    fn load_json_file<T: serde::de::DeserializeOwned + Default>(
-        &self,
-        path: &Path,
-    ) -> Result<T, ConfigError> {
+    /// Returns `Value::Object({})` if the file doesn't exist or is empty.
+    fn load_json_value(&self, path: &Path) -> Result<serde_json::Value, ConfigError> {
         if !path.exists() {
             debug!(path = %path.display(), "Config file not found, using defaults");
-            return Ok(T::default());
+            return Ok(serde_json::Value::Object(serde_json::Map::new()));
         }
 
         let content = std::fs::read_to_string(path).context(IoSnafu {
             message: format!("Failed to read {}", path.display()),
         })?;
 
-        // Handle empty files
         if content.trim().is_empty() {
             debug!(path = %path.display(), "Config file is empty, using defaults");
-            return Ok(T::default());
+            return Ok(serde_json::Value::Object(serde_json::Map::new()));
         }
 
-        // Parse with JSONC extensions enabled
         let parse_opts = ParseOptions {
             allow_comments: true,
             allow_trailing_commas: true,
@@ -277,10 +293,24 @@ impl ConfigLoader {
                 .build()
             })?;
 
-        // parse_to_serde_value returns Option<Value>, None means empty/whitespace-only
-        let json_value = json_value.unwrap_or(serde_json::Value::Null);
+        Ok(json_value.unwrap_or(serde_json::Value::Object(serde_json::Map::new())))
+    }
 
-        serde_json::from_value(json_value).context(JsonParseSnafu {
+    /// Load a JSON/JSONC file, returning default if it doesn't exist.
+    ///
+    /// Supports JSONC extensions:
+    /// - Comments (`//` and `/* */`)
+    /// - Trailing commas (`[1, 2, 3,]`)
+    /// - Unquoted keys (`{key: "value"}`) - only simple alphanumeric names
+    fn load_json_file<T: serde::de::DeserializeOwned + Default>(
+        &self,
+        path: &Path,
+    ) -> Result<T, ConfigError> {
+        let value = self.load_json_value(path)?;
+        if value.is_null() || value.as_object().is_some_and(serde_json::Map::is_empty) {
+            return Ok(T::default());
+        }
+        serde_json::from_value(value).context(JsonParseSnafu {
             file: path.display().to_string(),
         })
     }

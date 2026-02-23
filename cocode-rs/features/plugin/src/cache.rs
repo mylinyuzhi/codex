@@ -172,6 +172,148 @@ fn is_dir_empty(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Clean up orphaned cache entries that are no longer referenced by any
+/// installed plugin.
+///
+/// Uses a mark-and-sweep approach:
+/// 1. Collect all "live" install paths from the installed plugins registry.
+/// 2. Walk the cache directory tree.
+/// 3. Remove version directories that are not in the live set and are older
+///    than `grace_period`.
+/// 4. Remove empty parent directories up to the cache root.
+///
+/// Returns the number of directories removed.
+pub fn cleanup_orphaned_cache(
+    plugins_dir: &Path,
+    grace_period: std::time::Duration,
+) -> Result<i32> {
+    use std::collections::HashSet;
+
+    let cache_root = cache_dir(plugins_dir);
+    if !cache_root.exists() {
+        return Ok(0);
+    }
+
+    // Build the "live" set from the installed plugins registry
+    let registry_path = plugins_dir.join("installed_plugins.json");
+    let registry = crate::installed_registry::InstalledPluginsRegistry::load(&registry_path);
+
+    let live_paths: HashSet<PathBuf> = registry
+        .plugins
+        .values()
+        .flatten()
+        .filter_map(|entry| entry.install_path.canonicalize().ok())
+        .collect();
+
+    let mut removed = 0;
+    let now = std::time::SystemTime::now();
+
+    // Walk marketplace directories
+    let marketplace_entries = match std::fs::read_dir(&cache_root) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return Err(CacheSnafu {
+                path: cache_root,
+                message: format!("Failed to read cache directory: {e}"),
+            }
+            .build());
+        }
+    };
+
+    for market_entry in marketplace_entries.flatten() {
+        if !market_entry
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let market_dir = market_entry.path();
+
+        // Walk plugin directories within marketplace
+        let plugin_entries = match std::fs::read_dir(&market_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for plugin_entry in plugin_entries.flatten() {
+            if !plugin_entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let plugin_dir = plugin_entry.path();
+
+            // Walk version directories within plugin
+            let version_entries = match std::fs::read_dir(&plugin_dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            for version_entry in version_entries.flatten() {
+                if !version_entry
+                    .file_type()
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let version_dir = version_entry.path();
+
+                // Check if this version directory is in the live set
+                let canonical = version_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| version_dir.clone());
+                if live_paths.contains(&canonical) {
+                    continue;
+                }
+
+                // Check grace period using directory modification time
+                let is_expired = version_dir
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|modified| {
+                        now.duration_since(modified).unwrap_or_default() >= grace_period
+                    })
+                    .unwrap_or(true);
+
+                if is_expired {
+                    debug!(
+                        path = %version_dir.display(),
+                        "Removing orphaned cache entry"
+                    );
+                    if std::fs::remove_dir_all(&version_dir).is_ok() {
+                        removed += 1;
+                    }
+                }
+            }
+
+            // Clean up empty plugin directory
+            if is_dir_empty(&plugin_dir) {
+                let _ = std::fs::remove_dir(&plugin_dir);
+            }
+        }
+
+        // Clean up empty marketplace directory
+        if is_dir_empty(&market_dir) {
+            let _ = std::fs::remove_dir(&market_dir);
+        }
+    }
+
+    if removed > 0 {
+        debug!(removed, "Cleaned up orphaned cache entries");
+    }
+
+    Ok(removed)
+}
+
+/// Default grace period for orphaned cache entries (7 days).
+pub const DEFAULT_CACHE_GRACE_PERIOD: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
 #[cfg(test)]
 #[path = "cache.test.rs"]
 mod tests;

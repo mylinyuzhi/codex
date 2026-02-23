@@ -34,8 +34,9 @@
 //! use std::sync::Arc;
 //!
 //! // Create and populate registry
+//! let features = cocode_protocol::Features::with_defaults();
 //! let mut registry = ToolRegistry::new();
-//! register_builtin_tools(&mut registry);
+//! register_builtin_tools(&mut registry, &features);
 //!
 //! // Create executor
 //! let config = ExecutorConfig::default();
@@ -113,6 +114,7 @@ pub use context::ModelCallFn;
 pub use context::ModelCallInput;
 pub use context::ModelCallResult;
 pub use context::PermissionRequester;
+pub use context::QuestionResponder;
 pub use context::SpawnAgentFn;
 pub use context::SpawnAgentInput;
 pub use context::SpawnAgentResult;

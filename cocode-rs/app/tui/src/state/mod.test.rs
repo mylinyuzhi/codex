@@ -9,18 +9,6 @@ fn test_app_state_new() {
 }
 
 #[test]
-fn test_toggle_plan_mode() {
-    let mut state = AppState::new();
-    assert!(!state.session.plan_mode);
-
-    state.toggle_plan_mode();
-    assert!(state.session.plan_mode);
-
-    state.toggle_plan_mode();
-    assert!(!state.session.plan_mode);
-}
-
-#[test]
 fn test_cycle_thinking_level_with_supported_levels() {
     use cocode_protocol::model::ModelSpec;
 

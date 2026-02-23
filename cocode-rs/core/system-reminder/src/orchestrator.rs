@@ -26,13 +26,15 @@ use crate::generators::DelegateModeGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
 use crate::generators::OutputStyleGenerator;
-use crate::generators::PlanModeApprovedGenerator;
+use crate::generators::PlanFileReferenceGenerator;
 use crate::generators::PlanModeEnterGenerator;
 use crate::generators::PlanModeExitGenerator;
 use crate::generators::PlanToolReminderGenerator;
 use crate::generators::PlanVerificationGenerator;
 use crate::generators::QueuedCommandsGenerator;
+use crate::generators::RewindReminderGenerator;
 use crate::generators::SecurityGuidelinesGenerator;
+use crate::generators::SubagentPlanReminderGenerator;
 use crate::generators::TodoRemindersGenerator;
 use crate::generators::TokenUsageGenerator;
 use crate::generators::UnifiedTasksGenerator;
@@ -93,9 +95,10 @@ impl SystemReminderOrchestrator {
             Arc::new(SecurityGuidelinesGenerator),
             Arc::new(ChangedFilesGenerator),
             Arc::new(PlanModeEnterGenerator),
-            Arc::new(PlanModeApprovedGenerator),
             Arc::new(PlanModeExitGenerator),
             Arc::new(PlanToolReminderGenerator),
+            Arc::new(PlanFileReferenceGenerator),
+            Arc::new(SubagentPlanReminderGenerator),
             Arc::new(NestedMemoryGenerator),
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator),
@@ -112,6 +115,7 @@ impl SystemReminderOrchestrator {
             Arc::new(AlreadyReadFilesGenerator),
             Arc::new(BudgetUsdGenerator),
             Arc::new(CompactFileReferenceGenerator),
+            Arc::new(RewindReminderGenerator),
             // UserPrompt tier
             Arc::new(AtMentionedFilesGenerator),
             Arc::new(AgentMentionsGenerator),

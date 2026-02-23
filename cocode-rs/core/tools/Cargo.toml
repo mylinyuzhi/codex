@@ -21,6 +21,7 @@ cocode-plan-mode.workspace = true
 cocode-lsp.workspace = true
 cocode-skill.workspace = true
 cocode-otel.workspace = true
+cocode-file-backup.workspace = true
 hyper-sdk.workspace = true
 async-trait.workspace = true
 schemars.workspace = true

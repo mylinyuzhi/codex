@@ -922,9 +922,11 @@ dependencies = [
  "cocode-config",
  "cocode-loop",
  "cocode-otel",
+ "cocode-plugin",
  "cocode-protocol",
  "cocode-session",
  "cocode-skill",
+ "cocode-subagent",
  "cocode-system-reminder",
  "cocode-tui",
  "cocode-utils-common",
@@ -1011,6 +1013,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "cocode-file-backup"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cocode-git",
+ "cocode-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1109,6 +1127,7 @@ dependencies = [
  "anyhow",
  "cocode-api",
  "cocode-context",
+ "cocode-file-backup",
  "cocode-hooks",
  "cocode-lsp",
  "cocode-message",
@@ -1397,11 +1416,13 @@ dependencies = [
  "cocode-config",
  "cocode-context",
  "cocode-executor",
+ "cocode-file-backup",
  "cocode-hooks",
  "cocode-loop",
  "cocode-lsp",
  "cocode-message",
  "cocode-otel",
+ "cocode-plan-mode",
  "cocode-plugin",
  "cocode-protocol",
  "cocode-rmcp-client",
@@ -1557,6 +1578,7 @@ dependencies = [
  "cocode-apply-patch",
  "cocode-config",
  "cocode-error",
+ "cocode-file-backup",
  "cocode-file-encoding",
  "cocode-file-ignore",
  "cocode-hooks",
@@ -1618,6 +1640,7 @@ dependencies = [
  "ratatui",
  "regex",
  "rust-i18n",
+ "serde_json",
  "sha1",
  "tempfile",
  "textwrap",

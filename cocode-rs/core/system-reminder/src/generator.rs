@@ -362,6 +362,8 @@ pub struct GeneratorContext<'a> {
     pub is_plan_mode: bool,
     /// Whether this is a re-entry into plan mode.
     pub is_plan_reentry: bool,
+    /// Whether interview-style plan mode is active.
+    pub is_plan_interview_phase: bool,
     /// Approved plan (one-time, after ExitPlanMode).
     pub approved_plan: Option<ApprovedPlanInfo>,
     /// Restored plan (after compaction).
@@ -425,7 +427,36 @@ pub struct GeneratorContext<'a> {
     // === Global state flags ===
     /// Whether plan mode exit is pending (triggers one-time exit instructions).
     pub plan_mode_exit_pending: bool,
+
+    // === Rewind state ===
+    /// Information about a rewind that just occurred (consumed once).
+    pub rewind_info: Option<RewindContextInfo>,
 }
+
+/// Lightweight rewind info for system reminder generation.
+///
+/// Avoids a dependency on `cocode-file-backup` by carrying only the
+/// data needed for the reminder text.
+#[derive(Debug, Clone)]
+pub struct RewindContextInfo {
+    /// The turn number that was rewound.
+    pub rewound_turn_number: i32,
+    /// Number of files restored.
+    pub restored_file_count: i32,
+    /// Whether git restore was used (vs file-only backup).
+    pub used_git_restore: bool,
+    /// The rewind mode used. Determines whether a reminder is emitted.
+    ///
+    /// - `CodeOnly` → emit reminder (model needs to know files were reverted
+    ///   while conversation continues).
+    /// - `CodeAndConversation` / `ConversationOnly` → skip (conversation is
+    ///   truncated so the model has no memory of the rewound turns).
+    pub rewind_mode: RewindMode,
+}
+
+/// Re-export for convenience; avoids downstream crates needing protocol dep
+/// just for the mode enum.
+pub use cocode_protocol::RewindMode;
 
 impl<'a> GeneratorContext<'a> {
     /// Create a builder for constructing generator context.
@@ -516,6 +547,7 @@ pub struct GeneratorContextBuilder<'a> {
     plan_file_path: Option<PathBuf>,
     is_plan_mode: bool,
     is_plan_reentry: bool,
+    is_plan_interview_phase: bool,
     approved_plan: Option<ApprovedPlanInfo>,
     restored_plan: Option<RestoredPlanInfo>,
     background_tasks: Vec<BackgroundTaskInfo>,
@@ -536,6 +568,7 @@ pub struct GeneratorContextBuilder<'a> {
     collab_notifications: Vec<CollabNotification>,
     queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
+    rewind_info: Option<RewindContextInfo>,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -601,6 +634,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn is_plan_reentry(mut self, is_reentry: bool) -> Self {
         self.is_plan_reentry = is_reentry;
+        self
+    }
+
+    pub fn is_plan_interview_phase(mut self, is_interview: bool) -> Self {
+        self.is_plan_interview_phase = is_interview;
         self
     }
 
@@ -694,6 +732,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn rewind_info(mut self, info: RewindContextInfo) -> Self {
+        self.rewind_info = Some(info);
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -715,6 +758,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             plan_file_path: self.plan_file_path,
             is_plan_mode: self.is_plan_mode,
             is_plan_reentry: self.is_plan_reentry,
+            is_plan_interview_phase: self.is_plan_interview_phase,
             approved_plan: self.approved_plan,
             restored_plan: self.restored_plan,
             background_tasks: self.background_tasks,
@@ -735,6 +779,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             collab_notifications: self.collab_notifications,
             queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
+            rewind_info: self.rewind_info,
         }
     }
 }

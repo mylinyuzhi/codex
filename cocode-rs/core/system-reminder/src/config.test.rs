@@ -128,7 +128,7 @@ fn test_resolve_prompt_config_disabled() {
         keep_coding_instructions: None,
     };
     let tmp = std::env::temp_dir();
-    assert!(config.resolve_prompt_config(&tmp).is_none());
+    assert!(config.resolve_prompt_config(&tmp, None).is_none());
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn test_resolve_prompt_config_with_builtin_style() {
         keep_coding_instructions: None,
     };
     let tmp = std::env::temp_dir();
-    let result = config.resolve_prompt_config(&tmp).unwrap();
+    let result = config.resolve_prompt_config(&tmp, None).unwrap();
     assert_eq!(result.name, "explanatory");
     assert!(result.content.contains("Explanatory Style Active"));
     // Built-in styles default keep_coding_instructions to true
@@ -156,7 +156,7 @@ fn test_resolve_prompt_config_with_custom_instruction() {
         keep_coding_instructions: Some(true),
     };
     let tmp = std::env::temp_dir();
-    let result = config.resolve_prompt_config(&tmp).unwrap();
+    let result = config.resolve_prompt_config(&tmp, None).unwrap();
     assert_eq!(result.name, "custom");
     assert_eq!(result.content, "My custom output style");
     assert!(result.keep_coding_instructions);
@@ -171,7 +171,7 @@ fn test_resolve_prompt_config_keep_coding_override() {
         keep_coding_instructions: Some(false), // Override built-in default
     };
     let tmp = std::env::temp_dir();
-    let result = config.resolve_prompt_config(&tmp).unwrap();
+    let result = config.resolve_prompt_config(&tmp, None).unwrap();
     // The override should take effect over the built-in default
     assert!(!result.keep_coding_instructions);
 }

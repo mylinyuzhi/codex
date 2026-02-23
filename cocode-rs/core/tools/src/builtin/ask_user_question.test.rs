@@ -57,7 +57,9 @@ async fn test_ask_user_question_with_answers() {
         cocode_protocol::ToolResultContent::Text(t) => t,
         _ => panic!("Expected text content"),
     };
-    assert!(text.contains("React"));
+    assert!(text.contains("User has answered your questions:"));
+    assert!(text.contains("\"Library\"=\"React\""));
+    assert!(text.contains("You can now continue"));
 }
 
 #[tokio::test]
@@ -83,6 +85,6 @@ async fn test_ask_user_question_validation() {
 fn test_tool_properties() {
     let tool = AskUserQuestionTool::new();
     assert_eq!(tool.name(), "AskUserQuestion");
-    assert!(!tool.is_concurrent_safe());
-    assert!(!tool.is_read_only());
+    assert!(tool.is_concurrent_safe());
+    assert!(tool.is_read_only());
 }

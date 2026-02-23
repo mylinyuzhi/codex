@@ -34,6 +34,7 @@ impl Tool for TestTool {
             content: cocode_protocol::ToolResultContent::Text("ok".to_string()),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         })
     }
 }
@@ -73,6 +74,7 @@ impl Tool for GatedTool {
             content: cocode_protocol::ToolResultContent::Text("ok".to_string()),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         })
     }
 }

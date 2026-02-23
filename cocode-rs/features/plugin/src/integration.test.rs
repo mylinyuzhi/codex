@@ -94,11 +94,11 @@ fn test_integrate_plugins() {
     let mut skill_manager = SkillManager::new();
     let hook_registry = HookRegistry::default();
 
-    let registry = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
+    let result = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
 
-    assert_eq!(registry.len(), 1);
-    assert_eq!(registry.skill_contributions().len(), 1);
-    assert_eq!(registry.agent_contributions().len(), 1);
+    assert_eq!(result.registry.len(), 1);
+    assert_eq!(result.registry.skill_contributions().len(), 1);
+    assert_eq!(result.registry.agent_contributions().len(), 1);
 
     // Verify skill was applied
     assert!(skill_manager.get("test-skill").is_some());
@@ -111,9 +111,9 @@ fn test_integrate_empty_config() {
     let mut skill_manager = SkillManager::new();
     let hook_registry = HookRegistry::default();
 
-    let registry = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
+    let result = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
 
-    assert!(registry.is_empty());
+    assert!(result.registry.is_empty());
 }
 
 #[test]
@@ -170,10 +170,10 @@ fn test_installed_plugins_loaded() {
     let mut skill_manager = SkillManager::new();
     let hook_registry = HookRegistry::default();
 
-    let plugin_registry = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
+    let result = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
     // The test-plugin name is inside the plugin.json
-    assert_eq!(plugin_registry.len(), 1);
-    assert!(plugin_registry.has("test-plugin"));
+    assert_eq!(result.registry.len(), 1);
+    assert!(result.registry.has("test-plugin"));
 }
 
 #[test]
@@ -214,8 +214,8 @@ fn test_disabled_installed_plugins_not_loaded() {
     let mut skill_manager = SkillManager::new();
     let hook_registry = HookRegistry::default();
 
-    let plugin_registry = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
-    assert!(plugin_registry.is_empty());
+    let result = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
+    assert!(result.registry.is_empty());
 }
 
 #[test]
@@ -231,19 +231,128 @@ fn test_integrate_plugins_with_agents() {
     let hook_registry = HookRegistry::default();
     let mut subagent_manager = cocode_subagent::SubagentManager::new();
 
-    let registry = integrate_plugins(
+    let result = integrate_plugins(
         &config,
         &mut skill_manager,
         &hook_registry,
         Some(&mut subagent_manager),
     );
 
-    assert_eq!(registry.len(), 1);
-    assert_eq!(registry.agent_contributions().len(), 1);
+    assert_eq!(result.registry.len(), 1);
+    assert_eq!(result.registry.agent_contributions().len(), 1);
 
     // Verify agent was registered in the subagent manager
     let definitions = subagent_manager.definitions();
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions[0].name, "test-agent");
     assert_eq!(definitions[0].agent_type, "test-agent");
+}
+
+#[test]
+fn test_register_extra_marketplaces() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let plugins_dir = tmp.path().join("plugins-home");
+    fs::create_dir_all(&plugins_dir).expect("mkdir");
+
+    let mm = MarketplaceManager::new(plugins_dir);
+
+    let extras = vec![
+        ExtraMarketplaceEntry {
+            name: "test-market".to_string(),
+            source: MarketplaceSource::Github {
+                repo: "owner/repo".to_string(),
+                git_ref: None,
+            },
+            auto_update: true,
+        },
+        ExtraMarketplaceEntry {
+            name: "local-market".to_string(),
+            source: MarketplaceSource::Directory {
+                path: tmp.path().to_path_buf(),
+            },
+            auto_update: false,
+        },
+    ];
+
+    let added = mm.register_extra(&extras).expect("register_extra");
+    assert_eq!(added, 2);
+
+    // Verify they were persisted
+    let list = mm.list();
+    assert_eq!(list.len(), 2);
+    assert!(list.contains_key("test-market"));
+    assert!(list.contains_key("local-market"));
+    assert!(list["test-market"].auto_update);
+    assert!(!list["local-market"].auto_update);
+}
+
+#[test]
+fn test_register_extra_marketplaces_deduplication() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let plugins_dir = tmp.path().join("plugins-home");
+    fs::create_dir_all(&plugins_dir).expect("mkdir");
+
+    let mm = MarketplaceManager::new(plugins_dir);
+
+    let extras = vec![ExtraMarketplaceEntry {
+        name: "dup-market".to_string(),
+        source: MarketplaceSource::Git {
+            url: "https://example.com/repo.git".to_string(),
+            git_ref: None,
+        },
+        auto_update: false,
+    }];
+
+    // First registration
+    let added = mm.register_extra(&extras).expect("first register");
+    assert_eq!(added, 1);
+
+    // Second registration — should skip duplicate
+    let added = mm.register_extra(&extras).expect("second register");
+    assert_eq!(added, 0);
+
+    // Still only one entry
+    assert_eq!(mm.list().len(), 1);
+}
+
+#[test]
+fn test_register_extra_marketplaces_empty() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let plugins_dir = tmp.path().join("plugins-home");
+    fs::create_dir_all(&plugins_dir).expect("mkdir");
+
+    let mm = MarketplaceManager::new(plugins_dir);
+    let added = mm.register_extra(&[]).expect("empty register");
+    assert_eq!(added, 0);
+}
+
+#[test]
+fn test_integrate_with_extra_marketplaces() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let plugins_dir = tmp.path().join("plugins-home");
+    fs::create_dir_all(&plugins_dir).expect("mkdir");
+
+    let extras = vec![ExtraMarketplaceEntry {
+        name: "integrated-market".to_string(),
+        source: MarketplaceSource::Url {
+            url: "https://example.com/marketplace.json".to_string(),
+        },
+        auto_update: true,
+    }];
+
+    let config = PluginIntegrationConfig::default()
+        .with_plugins_dir(plugins_dir.clone())
+        .with_extra_known_marketplaces(extras);
+
+    let mut skill_manager = SkillManager::new();
+    let hook_registry = HookRegistry::default();
+
+    let result = integrate_plugins(&config, &mut skill_manager, &hook_registry, None);
+    assert!(result.registry.is_empty()); // no actual plugins
+
+    // Verify marketplace was registered
+    let mm = MarketplaceManager::new(plugins_dir);
+    let list = mm.list();
+    assert_eq!(list.len(), 1);
+    assert!(list.contains_key("integrated-market"));
 }

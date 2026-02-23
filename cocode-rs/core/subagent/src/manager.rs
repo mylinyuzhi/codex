@@ -88,6 +88,26 @@ pub struct AgentExecuteParams {
     pub permission_mode: Option<cocode_protocol::PermissionMode>,
     /// Whether to fork the parent conversation context.
     pub fork_context: bool,
+    /// Optional custom system prompt (replaces default system prompt entirely).
+    pub custom_system_prompt: Option<String>,
+    /// Skills to load for this agent (by name).
+    pub skills: Vec<String>,
+    /// Memory scope for persistent agent memory.
+    pub memory: Option<crate::definition::MemoryScope>,
+    /// MCP server references required by this agent.
+    pub mcp_servers: Option<Vec<crate::definition::McpServerRef>>,
+    /// Isolation mode for this agent's execution environment.
+    pub isolation: Option<crate::definition::IsolationMode>,
+    /// Agent-scoped hook definitions.
+    ///
+    /// Registered before the agent loop starts and unregistered after it completes.
+    /// `Stop` events are remapped to `SubagentStop`.
+    pub hooks: Option<Vec<crate::definition::AgentHookDefinition>>,
+    /// Allowed subagent types when `Task(type1, type2)` is in the tools list.
+    ///
+    /// When set, the Task tool will only allow spawning the specified types.
+    /// `None` means no restriction (all agent types are available).
+    pub task_type_restrictions: Option<Vec<String>>,
 }
 
 /// Callback type for executing an agent with filtered tools.
@@ -98,6 +118,16 @@ pub type AgentExecuteFn = Box<
             AgentExecuteParams,
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Callback type for firing hooks when a background agent completes.
+///
+/// Receives `(agent_type, agent_id)`. Called from the background task
+/// after the agent finishes, so hooks can observe completion.
+pub type BackgroundStopHookFn = Arc<
+    dyn Fn(String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         + Send
         + Sync,
 >;
@@ -114,6 +144,8 @@ pub struct SubagentManager {
     output_dir: PathBuf,
     /// Optional event sender for background agent completion notifications.
     event_tx: Option<mpsc::Sender<LoopEvent>>,
+    /// Optional callback for SubagentStop hooks on background completion.
+    background_stop_hook_fn: Option<BackgroundStopHookFn>,
 }
 
 impl SubagentManager {
@@ -126,6 +158,7 @@ impl SubagentManager {
             execute_fn: None,
             output_dir: std::env::temp_dir().join("cocode-agents"),
             event_tx: None,
+            background_stop_hook_fn: None,
         }
     }
 
@@ -171,6 +204,11 @@ impl SubagentManager {
         self.event_tx = Some(tx);
     }
 
+    /// Set the callback for SubagentStop hooks on background completion.
+    pub fn set_background_stop_hook_fn(&mut self, f: BackgroundStopHookFn) {
+        self.background_stop_hook_fn = Some(f);
+    }
+
     /// Get registered agent type definitions.
     pub fn definitions(&self) -> &[AgentDefinition] {
         &self.definitions
@@ -192,7 +230,7 @@ impl SubagentManager {
             prompt: prompt.to_string(),
             identity: None,
             max_turns: None,
-            run_in_background: false,
+            run_in_background: Some(false),
             allowed_tools: None,
             resume_from: None,
         };
@@ -273,7 +311,7 @@ impl SubagentManager {
             agent_id = %agent_id,
             agent_type = %input.agent_type,
             prompt_len = input.prompt.len(),
-            background = input.run_in_background,
+            background = ?input.run_in_background,
             resume_from = ?input.resume_from,
             "Spawning subagent"
         );
@@ -288,11 +326,14 @@ impl SubagentManager {
         // Resolve max_turns (spawn input > definition)
         let max_turns = input.max_turns.or(definition.max_turns);
 
-        // Inject critical_reminder into prompt (prepend before user prompt)
-        let prompt = if let Some(ref reminder) = definition.critical_reminder {
-            format!("{reminder}\n\n{}", input.prompt)
+        // When use_custom_prompt is set, critical_reminder becomes the full system prompt
+        // and is NOT injected into the user prompt. Otherwise, prepend as before.
+        let (prompt, custom_system_prompt) = if definition.use_custom_prompt {
+            (input.prompt.clone(), definition.critical_reminder.clone())
+        } else if let Some(ref reminder) = definition.critical_reminder {
+            (format!("{reminder}\n\n{}", input.prompt), None)
         } else {
-            input.prompt.clone()
+            (input.prompt.clone(), None)
         };
 
         tracing::debug!(
@@ -303,26 +344,32 @@ impl SubagentManager {
             "Resolved agent definition fields"
         );
 
-        // Apply three-layer tool filtering
+        // Resolve run_in_background: input override > definition default
+        let run_in_background = input.run_in_background.unwrap_or(definition.background);
+
+        // Apply four-layer tool filtering
         let tools_to_filter = if let Some(ref allowed) = input.allowed_tools {
             // If spawn input specifies tools, use those as the base
             allowed.clone()
         } else {
             self.all_tools.clone()
         };
-        let filtered_tools =
-            filter_tools_for_agent(&tools_to_filter, &definition, input.run_in_background);
+        let filter_result =
+            filter_tools_for_agent(&tools_to_filter, &definition, run_in_background);
+        let filtered_tools = filter_result.tools;
+        let task_type_restrictions = filter_result.task_type_restrictions;
 
         tracing::debug!(
             agent_id = %agent_id,
             tools_count = filtered_tools.len(),
+            ?task_type_restrictions,
             "Filtered tools for subagent"
         );
 
         // Create cancellation token for this agent
         let cancel_token = CancellationToken::new();
 
-        if input.run_in_background {
+        if run_in_background {
             // Background execution
             let output_file = self.output_dir.join(format!("{agent_id}.jsonl"));
 
@@ -356,10 +403,19 @@ impl SubagentManager {
                     cancel_token: cancel_token.clone(),
                     permission_mode: definition.permission_mode,
                     fork_context: definition.fork_context,
+                    custom_system_prompt: custom_system_prompt.clone(),
+                    skills: definition.skills.clone(),
+                    memory: definition.memory,
+                    mcp_servers: definition.mcp_servers.clone(),
+                    isolation: definition.isolation,
+                    hooks: definition.hooks.clone(),
+                    task_type_restrictions: task_type_restrictions.clone(),
                 };
 
                 let prompt_for_transcript = prompt.clone();
                 let event_tx = self.event_tx.clone();
+                let stop_hook_fn = self.background_stop_hook_fn.clone();
+                let agent_type_for_hook = input.agent_type.clone();
                 tokio::spawn(async move {
                     let result = execute_fn(params).await;
 
@@ -393,6 +449,11 @@ impl SubagentManager {
                                 result: output_str,
                             })
                             .await;
+                    }
+
+                    // Fire SubagentStop hook for background agents
+                    if let Some(hook_fn) = stop_hook_fn {
+                        hook_fn(agent_type_for_hook, agent_id_clone).await;
                     }
                 });
             }
@@ -435,6 +496,13 @@ impl SubagentManager {
                     cancel_token: cancel_token.clone(),
                     permission_mode: definition.permission_mode,
                     fork_context: definition.fork_context,
+                    custom_system_prompt: custom_system_prompt.clone(),
+                    skills: definition.skills.clone(),
+                    memory: definition.memory,
+                    mcp_servers: definition.mcp_servers.clone(),
+                    isolation: definition.isolation,
+                    hooks: definition.hooks.clone(),
+                    task_type_restrictions,
                 };
 
                 // Pin the future so it can be moved into a background task on Ctrl+B
@@ -489,6 +557,8 @@ impl SubagentManager {
                         let output_file_clone = output_file.clone();
                         let prompt_for_transcript = prompt.clone();
                         let event_tx = self.event_tx.clone();
+                        let stop_hook_fn = self.background_stop_hook_fn.clone();
+                        let agent_type_for_hook = input.agent_type.clone();
 
                         tokio::spawn(async move {
                             let result = execute_future.await;
@@ -532,6 +602,11 @@ impl SubagentManager {
                                         result: output_str,
                                     })
                                     .await;
+                            }
+
+                            // Fire SubagentStop hook for background agents
+                            if let Some(hook_fn) = stop_hook_fn {
+                                hook_fn(agent_type_for_hook, agent_id_clone).await;
                             }
                         });
 

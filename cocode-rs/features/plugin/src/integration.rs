@@ -19,6 +19,8 @@ use tracing::warn;
 
 use crate::installed_registry::InstalledPluginsRegistry;
 use crate::loader::load_plugins_from_roots;
+use crate::marketplace_manager::MarketplaceManager;
+use crate::marketplace_types::MarketplaceSource;
 use crate::mcp::McpTransport;
 use crate::plugin_settings::PluginSettings;
 use crate::registry::PluginRegistry;
@@ -41,6 +43,33 @@ pub struct PluginIntegrationConfig {
 
     /// Extra plugin directories from `--plugin-dir` flags (Flag scope).
     pub inline_dirs: Vec<PathBuf>,
+
+    /// Plugin enable/disable overrides from main config settings.
+    ///
+    /// Keys are `"pluginName"` or `"pluginName@marketplaceName"`.
+    /// These are merged with (and override) the per-file plugin settings.
+    pub config_enabled_plugins: std::collections::HashMap<String, bool>,
+
+    /// Extra marketplace sources from project settings.
+    ///
+    /// Each entry is `(name, source, auto_update)`. Registered with the
+    /// `MarketplaceManager` before loading plugins, so team-shared
+    /// marketplaces are automatically available.
+    pub extra_known_marketplaces: Vec<ExtraMarketplaceEntry>,
+}
+
+/// An extra marketplace source to register during plugin integration.
+///
+/// This is the plugin-crate representation of `ExtraMarketplaceConfig`
+/// from the config crate (converted at the call site in session state).
+#[derive(Debug, Clone)]
+pub struct ExtraMarketplaceEntry {
+    /// Display name for the marketplace.
+    pub name: String,
+    /// Source type and location.
+    pub source: MarketplaceSource,
+    /// Whether to automatically update this marketplace.
+    pub auto_update: bool,
 }
 
 impl PluginIntegrationConfig {
@@ -65,6 +94,8 @@ impl PluginIntegrationConfig {
             project_dir,
             plugins_dir,
             inline_dirs: Vec::new(),
+            config_enabled_plugins: std::collections::HashMap::new(),
+            extra_known_marketplaces: Vec::new(),
         }
     }
 
@@ -98,6 +129,21 @@ impl PluginIntegrationConfig {
         self
     }
 
+    /// Set plugin enable/disable overrides from main config.
+    pub fn with_config_enabled_plugins(
+        mut self,
+        enabled: std::collections::HashMap<String, bool>,
+    ) -> Self {
+        self.config_enabled_plugins = enabled;
+        self
+    }
+
+    /// Set extra marketplace sources from project settings.
+    pub fn with_extra_known_marketplaces(mut self, extras: Vec<ExtraMarketplaceEntry>) -> Self {
+        self.extra_known_marketplaces = extras;
+        self
+    }
+
     /// Build the list of plugin roots with their scopes.
     fn plugin_roots(&self) -> Vec<(PathBuf, PluginScope)> {
         let mut roots = Vec::new();
@@ -121,7 +167,13 @@ impl PluginIntegrationConfig {
             let settings = PluginSettings::load(&settings_path);
 
             for (plugin_id, entries) in &registry.plugins {
-                if !settings.is_enabled(plugin_id) {
+                // Config-level overrides take priority over per-file settings
+                let enabled = self
+                    .config_enabled_plugins
+                    .get(plugin_id)
+                    .copied()
+                    .unwrap_or_else(|| settings.is_enabled(plugin_id));
+                if !enabled {
                     continue;
                 }
                 for entry in entries {
@@ -148,6 +200,20 @@ impl PluginIntegrationConfig {
     }
 }
 
+/// Result of plugin integration.
+#[derive(Debug)]
+pub struct PluginIntegrationResult {
+    /// The populated plugin registry.
+    pub registry: PluginRegistry,
+
+    /// Default agent name from a plugin's `settings.json`, if any.
+    ///
+    /// When a plugin specifies `"agent": "agent-name"` in its root
+    /// `settings.json`, the session should activate that agent as the
+    /// default thread agent.
+    pub default_agent: Option<String>,
+}
+
 /// Integrate plugins with runtime components.
 ///
 /// This function:
@@ -159,7 +225,7 @@ impl PluginIntegrationConfig {
 /// 6. Applies agents to the subagent manager (if provided)
 /// 7. Applies command contributions (skill/agent commands)
 ///
-/// Returns the populated plugin registry.
+/// Returns the populated plugin registry and any agent override.
 ///
 /// MCP server contributions are *not* connected here because they require
 /// async I/O. Use [`connect_plugin_mcp_servers`] after this call to start
@@ -169,7 +235,23 @@ pub fn integrate_plugins(
     skill_manager: &mut SkillManager,
     hook_registry: &HookRegistry,
     subagent_manager: Option<&mut SubagentManager>,
-) -> PluginRegistry {
+) -> PluginIntegrationResult {
+    // Register extra marketplaces from project settings (if any)
+    if !config.extra_known_marketplaces.is_empty() {
+        if let Some(ref plugins_dir) = config.plugins_dir {
+            let mm = MarketplaceManager::new(plugins_dir.clone());
+            match mm.register_extra(&config.extra_known_marketplaces) {
+                Ok(added) if added > 0 => {
+                    info!(added, "Extra marketplaces registered");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to register extra marketplaces");
+                }
+                _ => {}
+            }
+        }
+    }
+
     let roots = config.plugin_roots();
 
     info!(
@@ -200,6 +282,15 @@ pub fn integrate_plugins(
         registry.apply_commands_to(skill_manager, None);
     }
 
+    // Check for default agent override from plugin settings.json
+    let default_agent = registry
+        .all()
+        .filter_map(|p| p.settings.agent.clone())
+        .next();
+    if let Some(ref agent) = default_agent {
+        info!(agent, "Plugin specifies default agent");
+    }
+
     info!(
         plugins = registry.len(),
         skills = registry.skill_contributions().len(),
@@ -208,10 +299,14 @@ pub fn integrate_plugins(
         commands = registry.command_contributions().len(),
         mcp_servers = registry.mcp_server_contributions().len(),
         lsp_servers = registry.lsp_server_contributions().len(),
+        output_styles = registry.output_style_contributions().len(),
         "Plugin integration complete"
     );
 
-    registry
+    PluginIntegrationResult {
+        registry,
+        default_agent,
+    }
 }
 
 /// Load plugins without applying to runtime components.

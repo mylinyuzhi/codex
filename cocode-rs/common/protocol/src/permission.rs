@@ -41,6 +41,20 @@ impl PermissionMode {
         matches!(self, PermissionMode::Bypass)
     }
 
+    /// Cycle to the next permission mode.
+    ///
+    /// Claude Code cycles: Default → AcceptEdits → Plan → Default.
+    /// Bypass and DontAsk don't participate in the cycle (they stay as-is).
+    pub fn next_cycle(&self) -> Self {
+        match self {
+            PermissionMode::Default => PermissionMode::AcceptEdits,
+            PermissionMode::AcceptEdits => PermissionMode::Plan,
+            PermissionMode::Plan => PermissionMode::Default,
+            // Bypass and DontAsk are sticky — they don't participate in the cycle
+            other => *other,
+        }
+    }
+
     /// Get the mode as a string.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -272,6 +286,19 @@ impl std::fmt::Display for RuleSource {
     }
 }
 
+/// A prompt-based permission declared in a plan's `allowedPrompts`.
+///
+/// When the user approves a plan via `ExitPlanMode`, these pre-declared
+/// permissions are injected into the session's approval store so the
+/// corresponding tool invocations proceed without further prompting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedPrompt {
+    /// The tool this permission applies to (e.g. "Bash").
+    pub tool: String,
+    /// Semantic description of the permitted action (e.g. "run tests").
+    pub prompt: String,
+}
+
 /// Result of a user approval interaction.
 ///
 /// Returned from `PermissionRequester::request_permission()` to convey
@@ -288,6 +315,72 @@ pub enum ApprovalDecision {
     },
     /// Deny the operation.
     Denied,
+}
+
+/// Plan exit option for the multi-choice ExitPlanMode approval dialog.
+///
+/// Matches Claude Code's 5-way ExitPlanMode dialog:
+/// 1. Clear context + auto-accept edits (most common)
+/// 2. Clear context + bypass permissions
+/// 3. Keep context + elevate to accept-edits
+/// 4. Keep context + manual approve (restore pre-plan mode)
+/// 5. Keep planning (deny)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanExitOption {
+    /// Approve: clear conversation context, switch to AcceptEdits mode.
+    ///
+    /// The plan content is injected as the first message in the fresh conversation.
+    ClearAndAcceptEdits,
+    /// Approve: clear conversation context, switch to Bypass mode.
+    ///
+    /// For advanced users who want full auto-approval.
+    ClearAndBypass,
+    /// Approve: keep current context, elevate to AcceptEdits mode.
+    ///
+    /// Useful when context is small and doesn't need clearing.
+    KeepAndElevate,
+    /// Approve: keep current context, restore pre-plan mode (manual approve).
+    ///
+    /// Returns to Default mode so every tool call still requires manual approval.
+    KeepAndDefault,
+    /// Deny: stay in plan mode and continue planning.
+    KeepPlanning,
+}
+
+impl PlanExitOption {
+    /// Whether this option approves the plan (vs continuing to plan).
+    pub fn is_approved(&self) -> bool {
+        !matches!(self, PlanExitOption::KeepPlanning)
+    }
+
+    /// Whether this option requires clearing the conversation context.
+    pub fn should_clear_context(&self) -> bool {
+        matches!(
+            self,
+            PlanExitOption::ClearAndAcceptEdits | PlanExitOption::ClearAndBypass
+        )
+    }
+
+    /// Whether this option keeps the current conversation context.
+    pub fn should_keep_context(&self) -> bool {
+        matches!(
+            self,
+            PlanExitOption::KeepAndElevate | PlanExitOption::KeepAndDefault
+        )
+    }
+
+    /// The target permission mode after exiting plan mode.
+    pub fn target_mode(&self) -> Option<PermissionMode> {
+        match self {
+            PlanExitOption::ClearAndAcceptEdits | PlanExitOption::KeepAndElevate => {
+                Some(PermissionMode::AcceptEdits)
+            }
+            PlanExitOption::ClearAndBypass => Some(PermissionMode::Bypass),
+            PlanExitOption::KeepAndDefault => Some(PermissionMode::Default),
+            PlanExitOption::KeepPlanning => None,
+        }
+    }
 }
 
 /// Request for user approval of an operation.

@@ -13,8 +13,10 @@ path = "src/main.rs"
 # Internal
 cocode-arg0.workspace = true
 cocode-session = { workspace = true, features = [] }
+cocode-subagent.workspace = true
 cocode-config.workspace = true
 cocode-otel.workspace = true
+cocode-plugin.workspace = true
 cocode-protocol.workspace = true
 cocode-skill.workspace = true
 cocode-system-reminder.workspace = true

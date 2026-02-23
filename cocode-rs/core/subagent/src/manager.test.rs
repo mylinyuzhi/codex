@@ -14,6 +14,13 @@ fn test_definition(name: &str) -> AgentDefinition {
         color: None,
         critical_reminder: None,
         source: crate::definition::AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }
 }
 
@@ -60,7 +67,7 @@ async fn test_spawn_full_with_stub() {
         prompt: "test".to_string(),
         identity: None,
         max_turns: None,
-        run_in_background: false,
+        run_in_background: Some(false),
         allowed_tools: None,
         resume_from: None,
     };
@@ -81,7 +88,7 @@ async fn test_spawn_full_background() {
         prompt: "test".to_string(),
         identity: None,
         max_turns: None,
-        run_in_background: true,
+        run_in_background: Some(true),
         allowed_tools: None,
         resume_from: None,
     };
@@ -152,7 +159,7 @@ async fn test_critical_reminder_injected_into_prompt() {
         prompt: "find the config file".to_string(),
         identity: None,
         max_turns: None,
-        run_in_background: false,
+        run_in_background: Some(false),
         allowed_tools: None,
         resume_from: None,
     };
@@ -197,7 +204,7 @@ async fn test_no_critical_reminder_passes_prompt_unchanged() {
         prompt: "run ls -la".to_string(),
         identity: None,
         max_turns: None,
-        run_in_background: false,
+        run_in_background: Some(false),
         allowed_tools: None,
         resume_from: None,
     };

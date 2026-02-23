@@ -1,3 +1,5 @@
+use cocode_protocol::AllowedPrompt;
+use cocode_protocol::PlanExitOption;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -23,6 +25,11 @@ pub enum StopReason {
     PlanModeExit {
         /// Whether the plan was approved by the user.
         approved: bool,
+        /// The user's chosen exit option (None for legacy/subagent exits).
+        exit_option: Option<PlanExitOption>,
+        /// Pre-declared permissions from the plan's `allowedPrompts`.
+        #[serde(default)]
+        allowed_prompts: Vec<AllowedPrompt>,
     },
 
     /// A hook requested the loop to stop.
@@ -124,6 +131,8 @@ impl LoopResult {
         input_tokens: i32,
         output_tokens: i32,
         approved: bool,
+        exit_option: Option<PlanExitOption>,
+        allowed_prompts: Vec<AllowedPrompt>,
         content: Vec<hyper_sdk::ContentBlock>,
     ) -> Self {
         // Extract text from content blocks
@@ -135,7 +144,11 @@ impl LoopResult {
             })
             .collect();
         Self {
-            stop_reason: StopReason::PlanModeExit { approved },
+            stop_reason: StopReason::PlanModeExit {
+                approved,
+                exit_option,
+                allowed_prompts,
+            },
             turns_completed: turns,
             total_input_tokens: input_tokens,
             total_output_tokens: output_tokens,

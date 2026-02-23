@@ -55,5 +55,9 @@ pub use manager::SessionManager;
 pub use persistence::load_session_from_file;
 pub use persistence::save_session_to_file;
 pub use session::Session;
+pub use state::PartialCompactResult;
 pub use state::SessionState;
 pub use state::TurnResult;
+
+// Re-export from cocode-tools for the TUI driver
+pub use cocode_tools::QuestionResponder;

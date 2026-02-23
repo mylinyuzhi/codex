@@ -9,8 +9,16 @@ fn test_stop_reason_variants() {
         StopReason::Error {
             message: "timeout".to_string(),
         },
-        StopReason::PlanModeExit { approved: true },
-        StopReason::PlanModeExit { approved: false },
+        StopReason::PlanModeExit {
+            approved: true,
+            exit_option: None,
+            allowed_prompts: vec![],
+        },
+        StopReason::PlanModeExit {
+            approved: false,
+            exit_option: Some(PlanExitOption::KeepPlanning),
+            allowed_prompts: vec![],
+        },
         StopReason::HookStopped,
     ];
     // Verify all variants can be cloned and debug-printed.
@@ -68,11 +76,52 @@ fn test_stop_reason_serde_roundtrip() {
 
 #[test]
 fn test_plan_mode_exit_serde() {
-    let reason = StopReason::PlanModeExit { approved: true };
+    let reason = StopReason::PlanModeExit {
+        approved: true,
+        exit_option: None,
+        allowed_prompts: vec![],
+    };
     let json = serde_json::to_string(&reason).expect("serialize");
     let back: StopReason = serde_json::from_str(&json).expect("deserialize");
     match back {
-        StopReason::PlanModeExit { approved } => assert!(approved),
+        StopReason::PlanModeExit {
+            approved,
+            exit_option,
+            ..
+        } => {
+            assert!(approved);
+            assert!(exit_option.is_none());
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn test_plan_mode_exit_with_option_serde() {
+    use cocode_protocol::AllowedPrompt;
+
+    let reason = StopReason::PlanModeExit {
+        approved: true,
+        exit_option: Some(PlanExitOption::ClearAndAcceptEdits),
+        allowed_prompts: vec![AllowedPrompt {
+            tool: "Bash".to_string(),
+            prompt: "run tests".to_string(),
+        }],
+    };
+    let json = serde_json::to_string(&reason).expect("serialize");
+    let back: StopReason = serde_json::from_str(&json).expect("deserialize");
+    match back {
+        StopReason::PlanModeExit {
+            approved,
+            exit_option,
+            allowed_prompts,
+        } => {
+            assert!(approved);
+            assert_eq!(exit_option, Some(PlanExitOption::ClearAndAcceptEdits));
+            assert_eq!(allowed_prompts.len(), 1);
+            assert_eq!(allowed_prompts[0].tool, "Bash");
+            assert_eq!(allowed_prompts[0].prompt, "run tests");
+        }
         other => panic!("unexpected variant: {other:?}"),
     }
 }

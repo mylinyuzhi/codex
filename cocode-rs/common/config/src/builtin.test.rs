@@ -363,7 +363,7 @@ fn test_load_custom_output_styles_ignores_non_md() {
 #[test]
 fn test_find_output_style_builtin() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let style = find_output_style("explanatory", tmp.path()).unwrap();
+    let style = find_output_style("explanatory", tmp.path(), None).unwrap();
     assert_eq!(style.name, "explanatory");
     assert!(style.source.is_builtin());
     assert!(style.content.contains("Explanatory Style Active"));
@@ -372,9 +372,9 @@ fn test_find_output_style_builtin() {
 #[test]
 fn test_find_output_style_case_insensitive() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let style1 = find_output_style("EXPLANATORY", tmp.path()).unwrap();
-    let style2 = find_output_style("Explanatory", tmp.path()).unwrap();
-    let style3 = find_output_style("explanatory", tmp.path()).unwrap();
+    let style1 = find_output_style("EXPLANATORY", tmp.path(), None).unwrap();
+    let style2 = find_output_style("Explanatory", tmp.path(), None).unwrap();
+    let style3 = find_output_style("explanatory", tmp.path(), None).unwrap();
 
     assert_eq!(style1.content, style2.content);
     assert_eq!(style2.content, style3.content);
@@ -383,7 +383,7 @@ fn test_find_output_style_case_insensitive() {
 #[test]
 fn test_find_output_style_not_found() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let style = find_output_style("nonexistent-style", tmp.path());
+    let style = find_output_style("nonexistent-style", tmp.path(), None);
     assert!(style.is_none());
 }
 
@@ -396,12 +396,21 @@ fn test_output_style_source() {
     let custom = OutputStyleSource::Custom(PathBuf::from("/test/style.md"));
     assert!(!custom.is_builtin());
     assert!(custom.is_custom());
+
+    let project =
+        OutputStyleSource::Project(PathBuf::from("/project/.cocode/output-styles/test.md"));
+    assert!(project.is_project());
+    assert!(!project.is_builtin());
+
+    let plugin = OutputStyleSource::Plugin;
+    assert!(plugin.is_plugin());
+    assert!(!plugin.is_builtin());
 }
 
 #[test]
 fn test_load_all_output_styles() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let styles = load_all_output_styles(tmp.path());
+    let styles = load_all_output_styles(tmp.path(), None);
 
     // Should have at least the built-in styles
     assert!(styles.len() >= 2);

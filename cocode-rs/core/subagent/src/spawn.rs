@@ -26,8 +26,11 @@ pub struct SpawnInput {
     pub max_turns: Option<i32>,
 
     /// Whether this agent should run in the background.
+    ///
+    /// - `Some(true/false)`: Explicitly set by the model.
+    /// - `None`: Deferred to the agent definition's `background` default.
     #[serde(default)]
-    pub run_in_background: bool,
+    pub run_in_background: Option<bool>,
 
     /// Override the allowed tools for this spawn.
     #[serde(default)]

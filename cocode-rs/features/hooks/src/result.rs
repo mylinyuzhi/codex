@@ -56,6 +56,18 @@ pub enum HookResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+
+    /// Emit a system message to the user (informational).
+    SystemMessage {
+        /// The message to display.
+        message: String,
+    },
+
+    /// Replace the tool output (PostToolUse hooks only).
+    ModifyOutput {
+        /// The replacement tool output.
+        new_output: Value,
+    },
 }
 
 /// A completed hook execution with metadata.

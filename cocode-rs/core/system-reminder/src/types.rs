@@ -69,8 +69,6 @@ pub enum AttachmentType {
     ChangedFiles,
     /// Plan mode entry instructions (5-phase workflow).
     PlanModeEnter,
-    /// Plan content after ExitPlanMode approval.
-    PlanModeApproved,
     /// Reference to plan file after compaction.
     PlanModeFileReference,
     /// Periodic reminder to use update_plan tool.
@@ -140,6 +138,10 @@ pub enum AttachmentType {
     // === Compact file reference ===
     /// References to large files that were compacted.
     CompactFileReference,
+
+    // === Rewind ===
+    /// Notification that a rewind occurred (one-time, consumed after generation).
+    Rewind,
 }
 
 impl AttachmentType {
@@ -150,7 +152,6 @@ impl AttachmentType {
             AttachmentType::SecurityGuidelines
             | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
-            | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
             | AttachmentType::PlanToolReminder
             | AttachmentType::PlanModeExit
@@ -174,7 +175,8 @@ impl AttachmentType {
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::TokenUsage
             | AttachmentType::BudgetUsd
-            | AttachmentType::CompactFileReference => XmlTag::SystemReminder,
+            | AttachmentType::CompactFileReference
+            | AttachmentType::Rewind => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -194,7 +196,6 @@ impl AttachmentType {
             AttachmentType::SecurityGuidelines
             | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
-            | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
             | AttachmentType::PlanToolReminder
             | AttachmentType::PlanModeExit
@@ -220,7 +221,8 @@ impl AttachmentType {
             | AttachmentType::TokenUsage
             | AttachmentType::BudgetUsd
             | AttachmentType::AlreadyReadFile
-            | AttachmentType::CompactFileReference => ReminderTier::MainAgentOnly,
+            | AttachmentType::CompactFileReference
+            | AttachmentType::Rewind => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
@@ -235,7 +237,6 @@ impl AttachmentType {
             AttachmentType::SecurityGuidelines => "security_guidelines",
             AttachmentType::ChangedFiles => "changed_files",
             AttachmentType::PlanModeEnter => "plan_mode_enter",
-            AttachmentType::PlanModeApproved => "plan_mode_approved",
             AttachmentType::PlanModeFileReference => "plan_mode_file_reference",
             AttachmentType::PlanToolReminder => "plan_tool_reminder",
             AttachmentType::PlanModeExit => "plan_mode_exit",
@@ -263,6 +264,7 @@ impl AttachmentType {
             AttachmentType::BudgetUsd => "budget_usd",
             AttachmentType::AlreadyReadFile => "already_read_file",
             AttachmentType::CompactFileReference => "compact_file_reference",
+            AttachmentType::Rewind => "rewind",
         }
     }
 }

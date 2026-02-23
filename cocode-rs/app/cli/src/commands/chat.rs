@@ -65,6 +65,7 @@ pub async fn run(
     config: &ConfigManager,
     verbose: bool,
     system_prompt_suffix: Option<String>,
+    cli_agents: Vec<cocode_subagent::AgentDefinition>,
 ) -> anyhow::Result<()> {
     // Initialize logging for REPL mode (stderr)
     let _ = init_repl_logging(config, verbose);
@@ -77,6 +78,17 @@ pub async fn run(
     // Build Config snapshot from ConfigManager
     let snapshot =
         Arc::new(config.build_config(ConfigOverrides::default().with_cwd(working_dir.clone()))?);
+
+    // Fire-and-forget cleanup of expired sessions (>30 days old)
+    {
+        let sessions_dir = cocode_session::persistence::default_sessions_dir();
+        tokio::spawn(async move {
+            let mgr = cocode_session::SessionManager::with_storage_dir(sessions_dir);
+            if let Err(e) = mgr.cleanup_expired_sessions(30).await {
+                tracing::debug!("Session cleanup failed: {e}");
+            }
+        });
+    }
 
     // Use current config (profile-based)
     let spec = config.current_spec();
@@ -106,6 +118,14 @@ pub async fn run(
         state.set_system_prompt_suffix(suffix);
     }
 
+    // Register CLI-provided agent definitions
+    if !cli_agents.is_empty() {
+        let mut mgr = state.subagent_manager().lock().await;
+        for agent in cli_agents {
+            mgr.register_agent_type(agent);
+        }
+    }
+
     // Handle initial prompt (non-interactive mode)
     if let Some(prompt) = initial_prompt {
         let result = state.run_turn(&prompt).await?;
@@ -122,7 +142,14 @@ pub async fn run(
     if !state.session.ephemeral {
         let session_id = state.session.id.clone();
         let path = cocode_session::persistence::session_file_path(&session_id);
-        cocode_session::save_session_to_file(&state.session, state.history(), &path).await?;
+        let snapshots = if let Some(sm) = state.snapshot_manager() {
+            let json = sm.serialize_snapshots().await?;
+            serde_json::from_str(&json)?
+        } else {
+            Vec::new()
+        };
+        cocode_session::save_session_to_file(&state.session, state.history(), snapshots, &path)
+            .await?;
         println!("Session saved: {session_id}");
     }
 

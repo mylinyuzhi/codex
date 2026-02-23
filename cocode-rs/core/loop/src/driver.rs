@@ -28,6 +28,7 @@ use cocode_protocol::RoleSelections;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
+use cocode_system_reminder::ApprovedPlanInfo;
 use cocode_system_reminder::AsyncHookResponseInfo;
 use cocode_system_reminder::FileTracker;
 use cocode_system_reminder::GeneratorContext;
@@ -155,6 +156,12 @@ pub struct AgentLoop {
     /// Whether this is a subagent (spawned by Task tool).
     /// When true, MainAgentOnly tier reminders are skipped.
     is_subagent: bool,
+    /// Optional custom system prompt that replaces the default `SystemPromptBuilder::build()`.
+    ///
+    /// When set (and `is_subagent` is true), the agent uses this as its full system prompt
+    /// instead of the standard multi-section generated prompt. This allows agent definitions
+    /// to provide focused, minimal prompts without inheriting the parent's full instructions.
+    custom_system_prompt: Option<String>,
     /// Whether the current turn has user input.
     /// When false, UserPrompt tier reminders are skipped.
     current_turn_has_user_input: bool,
@@ -220,6 +227,22 @@ pub struct AgentLoop {
     // LSP
     /// Optional LSP server manager for language intelligence tools.
     lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
+
+    // Task type restrictions
+    /// Allowed subagent types when `Task(type1, type2)` is in the agent's tools.
+    task_type_restrictions: Option<Vec<String>>,
+
+    // Rewind / snapshot system
+    /// Optional snapshot manager for file backups and ghost commits.
+    /// Provides two-tier rewind: Tier 1 (file backup) for all workspaces,
+    /// Tier 2 (ghost commit) for git repos.
+    snapshot_manager: Option<Arc<cocode_file_backup::SnapshotManager>>,
+
+    /// Question responder for AskUserQuestion tool.
+    ///
+    /// Shared across turns so the TUI driver can send responses that
+    /// unblock the AskUserQuestion tool's oneshot channel.
+    question_responder: Arc<cocode_tools::QuestionResponder>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -240,6 +263,7 @@ pub struct AgentLoopBuilder {
     cancel_token: CancellationToken,
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     is_subagent: bool,
+    custom_system_prompt: Option<String>,
     plan_mode_state: Option<PlanModeState>,
     shell_executor: Option<ShellExecutor>,
     spawn_agent_fn: Option<SpawnAgentFn>,
@@ -252,6 +276,10 @@ pub struct AgentLoopBuilder {
     permission_rules: Vec<cocode_tools::PermissionRule>,
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
     lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
+    task_type_restrictions: Option<Vec<String>>,
+    snapshot_manager: Option<Arc<cocode_file_backup::SnapshotManager>>,
+    question_responder: Option<Arc<cocode_tools::QuestionResponder>>,
+    approval_store: Option<Arc<tokio::sync::Mutex<ApprovalStore>>>,
 }
 
 impl AgentLoopBuilder {
@@ -274,6 +302,7 @@ impl AgentLoopBuilder {
             cancel_token: CancellationToken::new(),
             extraction_agent: None,
             is_subagent: false,
+            custom_system_prompt: None,
             plan_mode_state: None,
             shell_executor: None,
             spawn_agent_fn: None,
@@ -286,6 +315,10 @@ impl AgentLoopBuilder {
             permission_rules: Vec::new(),
             otel_manager: None,
             lsp_manager: None,
+            task_type_restrictions: None,
+            snapshot_manager: None,
+            question_responder: None,
+            approval_store: None,
         }
     }
 
@@ -387,6 +420,15 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set a custom system prompt for this agent.
+    ///
+    /// When set, this replaces the standard `SystemPromptBuilder::build()` output.
+    /// Used by subagents with `use_custom_prompt: true` in their definition.
+    pub fn custom_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.custom_system_prompt = Some(prompt.into());
+        self
+    }
+
     /// Set initial plan mode state (for session resumption).
     pub fn plan_mode_state(mut self, state: PlanModeState) -> Self {
         self.plan_mode_state = Some(state);
@@ -482,6 +524,32 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set Task type restrictions for subagent spawning.
+    pub fn task_type_restrictions(mut self, restrictions: Option<Vec<String>>) -> Self {
+        self.task_type_restrictions = restrictions;
+        self
+    }
+
+    /// Set the snapshot manager for rewind support.
+    pub fn snapshot_manager(mut self, mgr: Arc<cocode_file_backup::SnapshotManager>) -> Self {
+        self.snapshot_manager = Some(mgr);
+        self
+    }
+
+    /// Set the question responder for AskUserQuestion tool.
+    pub fn question_responder(mut self, responder: Arc<cocode_tools::QuestionResponder>) -> Self {
+        self.question_responder = Some(responder);
+        self
+    }
+
+    /// Set a shared approval store (persists across turns).
+    ///
+    /// If not set, a fresh approval store is created per loop instance.
+    pub fn approval_store(mut self, store: Arc<tokio::sync::Mutex<ApprovalStore>>) -> Self {
+        self.approval_store = Some(store);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
@@ -500,8 +568,10 @@ impl AgentLoopBuilder {
         let file_tracker = FileTracker::new();
         // Create shared file tracker for tool execution (persists across turns)
         let shared_tools_file_tracker = Arc::new(tokio::sync::Mutex::new(ToolsFileTracker::new()));
-        // Create shared approval store for tool execution (persists across turns)
-        let shared_approval_store = Arc::new(tokio::sync::Mutex::new(ApprovalStore::new()));
+        // Use provided approval store or create a fresh one
+        let shared_approval_store = self
+            .approval_store
+            .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(ApprovalStore::new())));
 
         // Create status channel if not provided
         let status_tx = self
@@ -539,6 +609,7 @@ impl AgentLoopBuilder {
             total_output_tokens: 0,
             extraction_agent: self.extraction_agent,
             is_subagent: self.is_subagent,
+            custom_system_prompt: self.custom_system_prompt,
             // Initially true - the first turn always has user input
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
@@ -556,6 +627,11 @@ impl AgentLoopBuilder {
             status_tx,
             otel_manager: self.otel_manager,
             lsp_manager: self.lsp_manager,
+            task_type_restrictions: self.task_type_restrictions,
+            snapshot_manager: self.snapshot_manager,
+            question_responder: self
+                .question_responder
+                .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
         }
     }
 }
@@ -614,6 +690,14 @@ impl AgentLoop {
     /// Take the current task list (if any) set by a TodoWrite tool call.
     pub fn take_todos(&mut self) -> Option<serde_json::Value> {
         self.current_todos.take()
+    }
+
+    /// Take the plan mode state for persistence across loop runs.
+    ///
+    /// Called by `SessionState` after the loop finishes to preserve plan mode
+    /// state (is_active, has_exited, needs_exit_attachment, etc.) for the next turn.
+    pub fn take_plan_mode_state(&mut self) -> Option<PlanModeState> {
+        Some(std::mem::take(&mut self.plan_mode_state))
     }
 
     /// Subscribe to status updates.
@@ -712,8 +796,9 @@ impl AgentLoop {
             .core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
             .await;
 
-        // Execute Stop hooks when the agent loop finishes
-        {
+        // Execute Stop hooks when the agent loop finishes.
+        // If a Stop hook rejects, re-enter the loop once (guard prevents infinite loops).
+        let result = {
             let mut ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::Stop,
                 session_id.clone(),
@@ -726,8 +811,44 @@ impl AgentLoop {
                     ctx = ctx.with_last_assistant_message(&loop_result.final_text);
                 }
             }
-            self.execute_lifecycle_hooks(ctx).await;
-        }
+            let stop_rejected = self.execute_lifecycle_hooks(ctx).await;
+
+            if stop_rejected {
+                // Hook forced continuation — add a user-side system-reminder and re-enter.
+                let turn_id = uuid::Uuid::new_v4().to_string();
+                let steering = TrackedMessage::system_reminder(
+                    "A Stop hook blocked the stop and requested continuation. \
+                     Please continue with your tasks.",
+                    "stop_hook_continuation",
+                    &turn_id,
+                );
+                let turn = Turn::new(1, steering);
+                self.message_history.add_turn(turn);
+
+                // Re-enter with stop_hook_active=true to prevent infinite loops
+                let re_result = self
+                    .core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
+                    .await;
+
+                // Fire Stop hooks again with stop_hook_active=true (rejection is ignored)
+                let mut ctx2 = cocode_hooks::HookContext::new(
+                    cocode_hooks::HookEventType::Stop,
+                    session_id.clone(),
+                    self.context.environment.cwd.clone(),
+                )
+                .with_stop_hook_active(true);
+                if let Ok(ref lr) = re_result {
+                    if !lr.final_text.is_empty() {
+                        ctx2 = ctx2.with_last_assistant_message(&lr.final_text);
+                    }
+                }
+                self.execute_lifecycle_hooks(ctx2).await;
+
+                re_result
+            } else {
+                result
+            }
+        };
 
         // Execute SessionEnd hooks to signal session lifecycle completion
         {
@@ -836,6 +957,17 @@ impl AgentLoop {
                 percent_left: status.percent_left,
             })
             .await;
+
+            self.fire_notification_hook(
+                "context_warning",
+                "Context window warning",
+                &format!(
+                    "Context usage at {:.0}% ({:.0}% remaining)",
+                    (1.0 - status.percent_left) * 100.0,
+                    status.percent_left * 100.0,
+                ),
+            )
+            .await;
         }
 
         // Trigger auto-compact if above threshold (and auto-compact is enabled)
@@ -874,6 +1006,17 @@ impl AgentLoop {
         if let Some(otel) = &self.otel_manager {
             otel.counter("cocode.turn.started", 1, &[]);
         }
+
+        // ── STEP 6.1: Start turn snapshot (rewind support) ──
+        // Start a new snapshot for this turn: sets the current turn on the backup
+        // store (Tier 1) and creates a ghost commit in the background (Tier 2, git only).
+        let create_ghost = self.features.enabled(cocode_protocol::Feature::GhostCommit);
+        let turn_ghost_commit = if let Some(ref sm) = self.snapshot_manager {
+            sm.start_turn_snapshot(&turn_id, self.turn_number, create_ghost)
+                .await
+        } else {
+            None
+        };
 
         // ── STEP 6.5: Generate system reminders ──
         // System reminders provide dynamic context (file changes, plan mode, etc.)
@@ -940,16 +1083,56 @@ impl AgentLoop {
             .cwd(self.context.environment.cwd.clone())
             .file_tracker(&self.file_tracker)
             .is_plan_mode(self.plan_mode_state.is_active)
-            .is_plan_reentry(self.plan_mode_state.is_reentry());
+            .is_plan_reentry(self.plan_mode_state.is_reentry())
+            .is_plan_interview_phase(
+                self.plan_mode_state.is_active
+                    && self
+                        .features
+                        .enabled(cocode_protocol::Feature::PlanModeInterview),
+            );
 
         // Pass user prompt for @mention file injection
         if let Some(ref prompt) = user_prompt_text {
             gen_ctx_builder = gen_ctx_builder.user_prompt(prompt);
         }
 
-        // Add plan file path if in plan mode
+        // Add plan file path if available (even after exit, for reference)
         if let Some(path) = self.plan_mode_state.plan_file_path.clone() {
             gen_ctx_builder = gen_ctx_builder.plan_file_path(path);
+        }
+
+        // Inject plan file reference after compaction (one-shot)
+        if self.plan_mode_state.needs_plan_reference {
+            if let Some(ref plan_path) = self.plan_mode_state.plan_file_path {
+                if let Ok(content) = std::fs::read_to_string(plan_path) {
+                    gen_ctx_builder =
+                        gen_ctx_builder.restored_plan(cocode_system_reminder::RestoredPlanInfo {
+                            content,
+                            file_path: plan_path.clone(),
+                        });
+                }
+            }
+            // Consume the flag so it's only injected once
+            self.plan_mode_state.needs_plan_reference = false;
+        }
+
+        // Inject approved plan content after ExitPlanMode (one-shot)
+        if self.plan_mode_state.needs_exit_attachment {
+            gen_ctx_builder = gen_ctx_builder.plan_mode_exit_pending(true);
+            // Read plan content from disk for the approved plan injection
+            if let Some(ref plan_path) = self.plan_mode_state.plan_file_path {
+                if let Ok(content) = std::fs::read_to_string(plan_path) {
+                    gen_ctx_builder = gen_ctx_builder.approved_plan(ApprovedPlanInfo {
+                        content,
+                        approved_turn: self
+                            .plan_mode_state
+                            .exited_at_turn
+                            .unwrap_or(self.turn_number),
+                    });
+                }
+            }
+            // Consume the flag so it's only injected once
+            self.plan_mode_state.clear_exit_attachment();
         }
 
         // Add hook state to generator context
@@ -1006,6 +1189,19 @@ impl AgentLoop {
             let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
             if !drained.is_empty() {
                 gen_ctx_builder = gen_ctx_builder.queued_commands(drained);
+            }
+        }
+
+        // Inject rewind info from snapshot manager (one-shot consumption).
+        if let Some(ref sm) = self.snapshot_manager {
+            if let Some(info) = sm.take_rewind_info().await {
+                gen_ctx_builder =
+                    gen_ctx_builder.rewind_info(cocode_system_reminder::RewindContextInfo {
+                        rewound_turn_number: info.rewound_turn_number,
+                        restored_file_count: info.restored_file_count,
+                        used_git_restore: info.restored_commit_id.is_some(),
+                        rewind_mode: info.mode,
+                    });
             }
         }
 
@@ -1080,6 +1276,11 @@ impl AgentLoop {
         // Share OTel manager for tool execution metrics/events
         .with_otel_manager(self.otel_manager.clone());
 
+        // Wire file backup store from snapshot manager for Tier 1 rewind
+        if let Some(ref sm) = self.snapshot_manager {
+            executor = executor.with_file_backup_store(sm.backup_store().clone());
+        }
+
         // Wire permission rules into executor
         if !self.permission_rules.is_empty() {
             let evaluator =
@@ -1090,6 +1291,11 @@ impl AgentLoop {
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
             executor = executor.with_spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Wire task type restrictions for Task(type) syntax
+        if let Some(ref restrictions) = self.task_type_restrictions {
+            executor = executor.with_task_type_restrictions(restrictions.clone());
         }
 
         // Wire model_call_fn for SmartEdit LLM correction (prefer Fast model, fallback to Main)
@@ -1122,6 +1328,9 @@ impl AgentLoop {
         if let Some(ref lm) = self.lsp_manager {
             executor = executor.with_lsp_manager(lm.clone());
         }
+
+        // Wire question responder for AskUserQuestion tool
+        executor = executor.with_question_responder(self.question_responder.clone());
 
         // Share invoked skills tracker with the executor so the driver
         // can read which skills were invoked during tool execution
@@ -1277,40 +1486,99 @@ impl AgentLoop {
             for tc in &tool_calls {
                 match tc.name.as_str() {
                     "EnterPlanMode" => {
+                        // Skip if already in plan mode (prevents pre_plan_mode corruption)
+                        if self.plan_mode_state.is_active {
+                            tracing::warn!(
+                                "EnterPlanMode called while already in plan mode, ignoring"
+                            );
+                            continue;
+                        }
                         // Find the result for this tool call to extract plan file path
                         if let Some(result) = results.iter().find(|r| r.call_id == tc.id)
                             && let Ok(output) = &result.result
                         {
-                            // Extract plan file path from output
-                            // The output is text containing "Plan file: /path/to/file"
-                            if let ToolResultContent::Text(text) = &output.content
-                                && let Some(path_line) =
-                                    text.lines().find(|l| l.starts_with("Plan file:"))
-                            {
-                                let path_str = path_line.trim_start_matches("Plan file:").trim();
-                                let path = std::path::PathBuf::from(path_str);
-                                let slug = path
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("plan")
-                                    .to_string();
-                                self.plan_mode_state.enter(path, slug, self.turn_number);
-                                info!(turn = self.turn_number, "Entered plan mode");
+                            if let ToolResultContent::Structured(json) = &output.content {
+                                if let (Some(path_str), Some(slug)) = (
+                                    json.get("planFilePath").and_then(|v| v.as_str()),
+                                    json.get("slug").and_then(|v| v.as_str()),
+                                ) {
+                                    let path = std::path::PathBuf::from(path_str);
+                                    self.plan_mode_state.enter_with_mode(
+                                        path,
+                                        slug.to_string(),
+                                        self.turn_number,
+                                        self.config.permission_mode,
+                                    );
+                                    // Enforce Plan permission mode so the executor
+                                    // blocks non-read-only tools (especially Bash).
+                                    self.config.permission_mode =
+                                        cocode_protocol::PermissionMode::Plan;
+                                    info!(turn = self.turn_number, "Entered plan mode");
+                                }
                             }
                         }
                     }
                     "ExitPlanMode" => {
-                        // Update plan mode state
-                        self.plan_mode_state.exit(self.turn_number);
-                        info!(turn = self.turn_number, "Exited plan mode");
+                        // Skip if not in plan mode (prevents spurious state changes)
+                        if !self.plan_mode_state.is_active {
+                            tracing::warn!("ExitPlanMode called while not in plan mode, ignoring");
+                            continue;
+                        }
+                        // Update plan mode state and restore pre-plan permission mode
+                        let restored_mode = self.plan_mode_state.exit(self.turn_number);
+                        if let Some(mode) = restored_mode {
+                            self.config.permission_mode = mode;
+                            info!(
+                                turn = self.turn_number,
+                                ?mode,
+                                "Restored permission mode after plan exit"
+                            );
+                        }
 
-                        // Return with plan mode exit stop reason
-                        // Note: approval is false until user confirms
+                        // Extract allowedPrompts from the tool result's structured JSON
+                        let allowed_prompts = results
+                            .iter()
+                            .find(|r| r.call_id == tc.id)
+                            .and_then(|r| r.result.as_ref().ok())
+                            .and_then(|output| match &output.content {
+                                ToolResultContent::Structured(json) => {
+                                    json.get("allowedPrompts")?.as_array().map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|item| {
+                                                Some(cocode_protocol::AllowedPrompt {
+                                                    tool: item.get("tool")?.as_str()?.to_string(),
+                                                    prompt: item
+                                                        .get("prompt")?
+                                                        .as_str()?
+                                                        .to_string(),
+                                                })
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+
+                        info!(
+                            turn = self.turn_number,
+                            allowed_prompts_count = allowed_prompts.len(),
+                            "Exited plan mode"
+                        );
+
+                        // If we reach here, the tool executed — meaning the
+                        // user approved via the check_permission dialog.
+                        // (If the user denied, the tool would not have
+                        // executed and we wouldn't be here.)
+                        // The exit_option will be determined by the TUI approval
+                        // dialog and passed back through the session layer.
                         return Ok(LoopResult::plan_mode_exit(
                             self.turn_number,
                             self.total_input_tokens,
                             self.total_output_tokens,
-                            false, // approved = false, awaiting user approval
+                            true, // approved: user approved via permission dialog
+                            None, // exit_option: determined by TUI layer
+                            allowed_prompts,
                             collected.content,
                         ));
                     }
@@ -1415,6 +1683,14 @@ impl AgentLoop {
         if let Some(otel) = &self.otel_manager {
             otel.record_duration("cocode.turn.duration_ms", turn_start.elapsed(), &[]);
             otel.counter("cocode.turn.completed", 1, &[]);
+        }
+
+        // ── STEP 16.5: Finalize turn snapshot (rewind support) ──
+        // Collect file backups from this turn and the ghost commit (if created)
+        // into a TurnSnapshot entry on the snapshot stack.
+        if let Some(ref sm) = self.snapshot_manager {
+            sm.finalize_turn_snapshot(&turn_id, self.turn_number, turn_ghost_commit)
+                .await;
         }
 
         // ── STEP 18: Recurse or return ──
@@ -1581,11 +1857,17 @@ impl AgentLoop {
                                 // Attempt model fallback
                                 if self.fallback_state.should_fallback(&self.fallback_config)
                                     && let Some(fallback_model) = self.fallback_state.next_model(&self.fallback_config) {
+                                        let from_model = self.fallback_state.current_model.clone();
                                         self.emit(LoopEvent::ModelFallbackStarted {
-                                            from: self.fallback_state.current_model.clone(),
+                                            from: from_model.clone(),
                                             to: fallback_model.clone(),
                                             reason: format!("Stream stalled for {stall_timeout:?}"),
                                         }).await;
+                                        self.fire_notification_hook(
+                                            "model_fallback",
+                                            "Model fallback",
+                                            &format!("Falling back from {from_model} to {fallback_model}"),
+                                        ).await;
                                         self.fallback_state.record_fallback(
                                             fallback_model,
                                             format!("Stream stalled for {stall_timeout:?}"),
@@ -1735,8 +2017,12 @@ impl AgentLoop {
         injected_messages: &[InjectedMessage],
         model_info: &cocode_protocol::ModelInfo,
     ) -> (Vec<Message>, Vec<ToolDefinition>) {
-        // Build system prompt
-        let system_prompt = SystemPromptBuilder::build(&self.context);
+        // Build system prompt (use custom prompt if set, otherwise generate from builder)
+        let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
+            custom.clone()
+        } else {
+            SystemPromptBuilder::build(&self.context)
+        };
 
         // Get conversation messages
         let messages = self.message_history.messages_for_api();
@@ -2113,6 +2399,13 @@ impl AgentLoop {
         self.message_history
             .update_boundary_post_tokens(post_tokens);
 
+        // Set compaction boundary on the snapshot manager so rewinding
+        // cannot go past compacted turns (messages are gone, files would be
+        // inconsistent).
+        if let Some(ref sm) = self.snapshot_manager {
+            sm.set_compaction_boundary(self.turn_number).await;
+        }
+
         // Compaction complete - restore status to Idle
         self.set_status(AgentStatus::Idle);
         if let Some(otel) = &self.otel_manager {
@@ -2270,11 +2563,39 @@ impl AgentLoop {
                         );
                     }
                 }
+                cocode_hooks::HookResult::SystemMessage { message } => {
+                    info!(
+                        hook_name = %outcome.hook_name,
+                        event = %ctx.event_type,
+                        "Lifecycle hook system message: {message}"
+                    );
+                }
                 _ => {}
             }
         }
 
         rejected
+    }
+
+    /// Fire a Notification hook (informational, non-blocking).
+    async fn fire_notification_hook(&self, notification_type: &str, title: &str, message: &str) {
+        let ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::Notification,
+            uuid::Uuid::new_v4().to_string(),
+            self.context.environment.cwd.clone(),
+        )
+        .with_notification_type(notification_type)
+        .with_title(title)
+        .with_message(message);
+
+        let outcomes = self.hooks.execute(&ctx).await;
+        for outcome in &outcomes {
+            self.emit(LoopEvent::HookExecuted {
+                hook_type: ctx.event_type.clone(),
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+        }
     }
 
     /// Restore context after compaction.
@@ -2349,16 +2670,19 @@ impl AgentLoop {
         // Build skills list from invoked skills
         let skills: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
 
-        // Get plan content if in plan mode
-        let plan = if self.plan_mode_state.is_active {
-            if let Some(plan_path) = &self.plan_mode_state.plan_file_path {
-                tokio::fs::read_to_string(plan_path).await.ok()
-            } else {
-                None
-            }
+        // Get plan content if plan file exists (even if plan mode is not active,
+        // the plan may have been approved and should survive compaction)
+        let plan = if let Some(plan_path) = &self.plan_mode_state.plan_file_path {
+            tokio::fs::read_to_string(plan_path).await.ok()
         } else {
             None
         };
+
+        // Mark that a plan file reference should be injected on the next turn
+        // so the model knows the plan still exists after compaction
+        if plan.is_some() {
+            self.plan_mode_state.needs_plan_reference = true;
+        }
 
         // Build context restoration
         let restoration = build_context_restoration_with_config(
@@ -2540,9 +2864,31 @@ impl AgentLoop {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        // Create a user message containing the tool results
+        // Collect images from tool results
+        let all_images: Vec<&cocode_protocol::ImageData> = results
+            .iter()
+            .filter_map(|r| r.result.as_ref().ok())
+            .flat_map(|output| &output.images)
+            .collect();
+
+        // Create a user message containing the tool results (and images if any)
         // This will be normalized by MessageHistory::messages_for_api() to the correct format
-        let user_msg = TrackedMessage::user(&tool_results_text, &next_turn_id);
+        let user_msg = if all_images.is_empty() {
+            TrackedMessage::user(&tool_results_text, &next_turn_id)
+        } else {
+            let mut content_blocks = vec![ContentBlock::text(&tool_results_text)];
+            for img in &all_images {
+                content_blocks.push(ContentBlock::Image {
+                    source: hyper_sdk::ImageSource::Base64 {
+                        data: img.data.clone(),
+                        media_type: img.media_type.clone(),
+                    },
+                    detail: None,
+                });
+            }
+            let message = Message::new(hyper_sdk::Role::User, content_blocks);
+            TrackedMessage::new(message, &next_turn_id, cocode_message::MessageSource::User)
+        };
         let turn = Turn::new(self.turn_number + 1, user_msg);
         self.message_history.add_turn(turn);
     }
@@ -2634,6 +2980,16 @@ impl AgentLoop {
     /// Returns a reference to the message history.
     pub fn message_history(&self) -> &MessageHistory {
         &self.message_history
+    }
+
+    /// Returns a mutable reference to the message history.
+    pub fn message_history_mut(&mut self) -> &mut MessageHistory {
+        &mut self.message_history
+    }
+
+    /// Returns the snapshot manager (if configured).
+    pub fn snapshot_manager(&self) -> Option<&Arc<cocode_file_backup::SnapshotManager>> {
+        self.snapshot_manager.as_ref()
     }
 
     /// Returns a reference to the loop configuration.

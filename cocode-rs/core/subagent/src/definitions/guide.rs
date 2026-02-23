@@ -32,6 +32,13 @@ pub fn guide_agent() -> AgentDefinition {
             "CRITICAL: This is a READ-ONLY help task. Do not modify any files.".to_string(),
         ),
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }
 }
 

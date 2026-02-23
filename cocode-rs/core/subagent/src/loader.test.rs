@@ -156,6 +156,13 @@ fn test_merge_custom_agents_override() {
         color: None,
         critical_reminder: None,
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }];
 
     let custom = vec![AgentDefinition {
@@ -171,6 +178,13 @@ fn test_merge_custom_agents_override() {
         color: Some("green".to_string()),
         critical_reminder: None,
         source: AgentSource::UserSettings,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }];
 
     merge_custom_agents(&mut existing, custom);
@@ -195,6 +209,13 @@ fn test_merge_custom_agents_new_type() {
         color: None,
         critical_reminder: None,
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }];
 
     let custom = vec![AgentDefinition {
@@ -210,6 +231,13 @@ fn test_merge_custom_agents_new_type() {
         color: None,
         critical_reminder: None,
         source: AgentSource::ProjectSettings,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }];
 
     merge_custom_agents(&mut existing, custom);

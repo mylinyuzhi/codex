@@ -22,6 +22,7 @@ fn make_plugin(name: &str, scope: PluginScope) -> LoadedPlugin {
         path: PathBuf::from(format!("/plugins/{name}")),
         scope,
         contributions: Vec::new(),
+        settings: crate::manifest::PluginRootSettings::default(),
     }
 }
 

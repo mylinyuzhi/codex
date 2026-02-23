@@ -24,6 +24,42 @@ const DEFAULT_TIMEOUT_SECS: i64 = 120;
 /// Maximum timeout in seconds.
 const MAX_TIMEOUT_SECS: i64 = 600;
 
+/// Commands safe for plan mode (read-only, no side effects).
+/// Superset of the concurrency-safe set, adding text processing and inspection tools
+/// that are harmless when used in pipelines.
+const PLAN_MODE_SAFE_BINARIES: &[&str] = &[
+    // Basic inspection (same as concurrency whitelist)
+    "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "which", "whoami", "pwd", "echo",
+    "date", "env", "printenv", "uname", "hostname", "df", "du", "file", "stat", "type",
+    // Text processing (pipe-friendly, no side effects)
+    "sed", "awk", "sort", "uniq", "cut", "tr", "fmt", "column", "paste", "join", "comm",
+    // Comparison / inspection
+    "diff", "cmp", // Path utilities
+    "dirname", "basename", "realpath", "readlink", // Tree / structured data
+    "tree", "jq", "yq", // Output / testing
+    "printf", "test", "true", "false", // Binary inspection
+    "strings", "xxd", "od", "hexdump",
+];
+
+/// Git subcommands that are read-only (expanded for plan mode).
+const PLAN_MODE_GIT_SUBCOMMANDS: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "tag",
+    "remote",
+    "rev-parse",
+    "describe",
+    "ls-files",
+    "ls-tree",
+    "cat-file",
+    "config",
+    "blame",
+    "shortlog",
+];
+
 /// Tool for executing shell commands.
 pub struct BashTool;
 
@@ -106,6 +142,69 @@ pub fn is_read_only_command(command: &str) -> bool {
     }
 }
 
+/// Check if a binary name (with its args) is safe for plan mode.
+fn is_plan_mode_safe_binary(name: &str, args: &[String]) -> bool {
+    // git: only allow read-only subcommands
+    if name == "git" {
+        let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
+        return PLAN_MODE_GIT_SUBCOMMANDS.contains(&subcommand);
+    }
+
+    // sed: block -i (in-place editing)
+    if name == "sed" {
+        let has_inplace = args.iter().any(|a| {
+            // Standalone -i or -i.bak
+            if a == "-i" || a.starts_with("-i") {
+                return true;
+            }
+            // Combined short flags containing 'i': -ni, -in, etc.
+            a.starts_with('-') && !a.starts_with("--") && a.contains('i')
+        });
+        return !has_inplace;
+    }
+
+    PLAN_MODE_SAFE_BINARIES.contains(&name)
+}
+
+/// Check if a command is allowed in plan mode.
+///
+/// Plan mode only permits read-only commands. Uses a two-layer approach:
+/// 1. **Fast path**: `is_read_only_command()` for simple commands without operators
+/// 2. **Shell parser**: `try_extract_safe_commands()` for pipelines and chained commands,
+///    verifying every binary in the pipeline is in the safe set
+fn is_plan_mode_allowed(command: &str) -> bool {
+    let trimmed = command.trim();
+
+    // Commands with potential shell expansions ($VAR, $(cmd), `cmd`) skip the
+    // fast path. is_read_only_command doesn't inspect these, but the parser
+    // properly rejects dangerous constructs while allowing safe uses (e.g.
+    // '$5' inside single quotes).
+    let has_expansion = trimmed.contains('$') || trimmed.contains('`');
+
+    // Fast path: simple read-only commands without pipes/operators/expansions
+    if !has_expansion && is_read_only_command(command) {
+        return true;
+    }
+
+    // Shell parser path: handle piped/chained commands.
+    // try_extract_safe_commands() returns None for dangerous constructs
+    // (subshells, redirections, variable expansions, command substitutions).
+    let mut parser = cocode_shell_parser::ShellParser::new();
+    let parsed = parser.parse(command);
+
+    let commands = match parsed.try_extract_safe_commands() {
+        Some(cmds) => cmds,
+        None => return false,
+    };
+
+    // Every command in the pipeline must use a safe binary
+    commands.iter().all(|cmd| {
+        let name = cmd.first().map(|s| s.as_str()).unwrap_or("");
+        let args: &[String] = if cmd.len() > 1 { &cmd[1..] } else { &[] };
+        is_plan_mode_safe_binary(name, args)
+    })
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -167,6 +266,19 @@ impl Tool for BashTool {
             Some(cmd) => cmd,
             None => return PermissionResult::Passthrough,
         };
+
+        // Plan mode: only allow read-only commands.
+        if _ctx.is_plan_mode {
+            if is_plan_mode_allowed(command) {
+                return PermissionResult::Allowed;
+            }
+            return PermissionResult::Denied {
+                reason: "Plan mode is active. Only read-only commands are allowed during \
+                         planning. Use Read, Glob, and Grep tools to explore the codebase, \
+                         or run read-only shell commands (e.g. ls, cat, grep, git status)."
+                    .to_string(),
+            };
+        }
 
         // Read-only commands are always allowed
         if is_read_only_command(command) {

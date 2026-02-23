@@ -155,7 +155,7 @@ pub enum ModelSelection { Inherit, Alias(String), Specific { provider, model } }
 // Built-in agents (4)
 pub fn builtin_agents() -> Vec<AgentDefinition>;  // Bash, general-purpose, Explore, Plan
 
-// Three-layer tool filtering
+// Four-layer tool filtering
 pub fn filter_tools_for_agent(tools: &[Arc<dyn Tool>], agent_def: &AgentDefinition) -> Vec<Arc<dyn Tool>>;
 ```
 

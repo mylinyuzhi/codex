@@ -221,6 +221,56 @@ impl PluginManifest {
     }
 }
 
+/// Plugin root settings loaded from `settings.json` at the plugin root.
+///
+/// This is separate from the plugin manifest (`plugin.json`) and contains
+/// runtime configuration for the plugin. Currently supports:
+/// - `agent`: Name of a custom agent to activate as the main thread when the plugin is enabled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginRootSettings {
+    /// Name of the agent to use as the default for this plugin.
+    ///
+    /// When set and the plugin is enabled, this agent will be activated
+    /// as the main thread agent.
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+impl PluginRootSettings {
+    /// Load settings from a plugin directory.
+    ///
+    /// Looks for `settings.json` at the plugin root. Returns default settings
+    /// if the file doesn't exist or cannot be parsed.
+    pub fn from_dir(dir: &Path) -> Self {
+        let settings_path = dir.join("settings.json");
+        if !settings_path.exists() {
+            return Self::default();
+        }
+
+        match fs::read_to_string(&settings_path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(settings) => settings,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %settings_path.display(),
+                        error = %e,
+                        "Failed to parse plugin settings.json"
+                    );
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    path = %settings_path.display(),
+                    error = %e,
+                    "Failed to read plugin settings.json"
+                );
+                Self::default()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "manifest.test.rs"]
 mod tests;

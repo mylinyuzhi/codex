@@ -220,6 +220,15 @@ pub struct StreamingToolExecutor {
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
     /// Optional LSP server manager for language intelligence tools.
     lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
+    /// Allowed subagent types for the Task tool.
+    ///
+    /// Set from `Task(type1, type2)` syntax in the agent's tool allow-list.
+    /// When `Some`, the Task tool only allows spawning the specified types.
+    task_type_restrictions: Option<Vec<String>>,
+    /// Optional file backup store for pre-modify snapshots (Tier 1 rewind).
+    file_backup_store: Option<Arc<cocode_file_backup::FileBackupStore>>,
+    /// Optional question responder for AskUserQuestion tool.
+    question_responder: Option<Arc<crate::context::QuestionResponder>>,
 }
 
 /// Result of pre-hook execution.
@@ -269,6 +278,9 @@ impl StreamingToolExecutor {
             skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
             otel_manager: None,
             lsp_manager: None,
+            task_type_restrictions: None,
+            file_backup_store: None,
+            question_responder: None,
         }
     }
 
@@ -377,6 +389,32 @@ impl StreamingToolExecutor {
     /// Set the LSP server manager for language intelligence tools.
     pub fn with_lsp_manager(mut self, manager: Arc<cocode_lsp::LspServerManager>) -> Self {
         self.lsp_manager = Some(manager);
+        self
+    }
+
+    /// Set Task type restrictions for subagent spawning.
+    ///
+    /// When set, the Task tool will only allow spawning the specified agent types.
+    pub fn with_task_type_restrictions(mut self, restrictions: Vec<String>) -> Self {
+        self.task_type_restrictions = Some(restrictions);
+        self
+    }
+
+    /// Set the file backup store for pre-modify snapshots.
+    pub fn with_file_backup_store(
+        mut self,
+        store: Arc<cocode_file_backup::FileBackupStore>,
+    ) -> Self {
+        self.file_backup_store = Some(store);
+        self
+    }
+
+    /// Set the question responder for AskUserQuestion tool.
+    pub fn with_question_responder(
+        mut self,
+        responder: Arc<crate::context::QuestionResponder>,
+    ) -> Self {
+        self.question_responder = Some(responder);
         self
     }
 
@@ -630,7 +668,7 @@ impl StreamingToolExecutor {
             let tool_duration = tool_start.elapsed();
 
             // Execute post-hooks (shared logic with execute_single_tool)
-            run_post_hooks(
+            let post_rejection = run_post_hooks(
                 hooks.as_deref(),
                 &name,
                 &call_id,
@@ -640,6 +678,15 @@ impl StreamingToolExecutor {
                 &cwd,
             )
             .await;
+
+            // If a post-hook rejected, replace the tool output with an error
+            let result = if let Some(reason) = post_rejection {
+                Ok(ToolOutput::error(format!(
+                    "PostToolUse hook blocked this tool's output: {reason}"
+                )))
+            } else {
+                result
+            };
 
             // Record tool metrics in OTel
             if let Some(otel) = &otel_manager {
@@ -789,8 +836,18 @@ impl StreamingToolExecutor {
         let tool_duration = tool_start.elapsed();
 
         // Execute post-hooks
-        self.execute_post_hooks(&name, &call_id, &modified_input, &result)
+        let post_rejection = self
+            .execute_post_hooks(&name, &call_id, &modified_input, &result)
             .await;
+
+        // If a post-hook rejected, replace the tool output with an error
+        let result = if let Some(reason) = post_rejection {
+            Ok(ToolOutput::error(format!(
+                "PostToolUse hook blocked this tool's output: {reason}"
+            )))
+        } else {
+            result
+        };
 
         // Record tool metrics in OTel
         if let Some(otel) = &self.otel_manager {
@@ -1020,7 +1077,18 @@ impl StreamingToolExecutor {
             builder = builder.permission_evaluator(evaluator.clone());
         }
 
-        builder.build()
+        let mut ctx = builder.build();
+
+        // Set task type restrictions for the Task tool
+        ctx.task_type_restrictions = self.task_type_restrictions.clone();
+
+        // Set file backup store for pre-modify snapshots
+        ctx.file_backup_store = self.file_backup_store.clone();
+
+        // Set question responder for AskUserQuestion tool
+        ctx.question_responder = self.question_responder.clone();
+
+        ctx
     }
 
     /// Emit a loop event.
@@ -1149,6 +1217,16 @@ impl StreamingToolExecutor {
                         skip_permission = true;
                     }
                 }
+                HookResult::SystemMessage { message } => {
+                    debug!(
+                        tool = %tool_name,
+                        hook = %outcome.hook_name,
+                        "Pre-hook system message: {message}"
+                    );
+                }
+                HookResult::ModifyOutput { .. } => {
+                    // ModifyOutput is only relevant for PostToolUse, ignore in PreToolUse
+                }
             }
         }
 
@@ -1160,13 +1238,15 @@ impl StreamingToolExecutor {
     }
 
     /// Execute post-tool-use hooks.
+    ///
+    /// Returns `Some(reason)` if a post-hook rejected.
     async fn execute_post_hooks(
         &self,
         tool_name: &str,
         tool_use_id: &str,
         input: &Value,
         result: &Result<ToolOutput>,
-    ) {
+    ) -> Option<String> {
         run_post_hooks(
             self.hooks.as_deref(),
             tool_name,
@@ -1176,7 +1256,7 @@ impl StreamingToolExecutor {
             &self.config.session_id,
             &self.config.cwd,
         )
-        .await;
+        .await
     }
 }
 
@@ -1184,6 +1264,9 @@ impl StreamingToolExecutor {
 ///
 /// Used by both `start_tool_execution` (spawned safe tools) and
 /// `execute_single_tool` (inline unsafe tools) to ensure consistent behavior.
+///
+/// Returns `Some(reason)` if a PostToolUse hook rejected the result,
+/// meaning the tool output should be replaced with an error message.
 async fn run_post_hooks(
     hooks: Option<&HookRegistry>,
     tool_name: &str,
@@ -1192,10 +1275,10 @@ async fn run_post_hooks(
     result: &Result<ToolOutput>,
     session_id: &str,
     cwd: &Path,
-) {
+) -> Option<String> {
     let hooks = match hooks {
         Some(h) => h,
-        None => return,
+        None => return None,
     };
 
     let is_error = result.is_err();
@@ -1223,16 +1306,35 @@ async fn run_post_hooks(
     }
 
     let outcomes = hooks.execute(&ctx).await;
+    let mut rejection_reason = None;
     for outcome in outcomes {
-        if let HookResult::Reject { reason } = outcome.result {
-            warn!(
-                tool = %tool_name,
-                hook = %outcome.hook_name,
-                reason = %reason,
-                "Post-hook returned rejection (logged but result unchanged)"
-            );
+        match outcome.result {
+            HookResult::Reject { reason } => {
+                warn!(
+                    tool = %tool_name,
+                    hook = %outcome.hook_name,
+                    reason = %reason,
+                    "PostToolUse hook rejected — tool output will be replaced"
+                );
+                rejection_reason = Some(reason);
+            }
+            HookResult::ModifyOutput { new_output } => {
+                debug!(
+                    tool = %tool_name,
+                    hook = %outcome.hook_name,
+                    "PostToolUse hook provided replacement output"
+                );
+                // Use the new output as the replacement message
+                let msg = new_output
+                    .as_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| new_output.to_string());
+                rejection_reason = Some(msg);
+            }
+            _ => {}
         }
     }
+    rejection_reason
 }
 
 /// Execute a single tool with timeout and cancellation support.
@@ -1287,16 +1389,21 @@ fn is_read_only_or_plan_tool(name: &str) -> bool {
     matches!(
         name,
         "Read"
+            | "ReadManyFiles"
             | "Glob"
             | "Grep"
+            | "LS"
             | "Task"
             | "TaskOutput"
+            | "TaskStop"
             | "WebFetch"
             | "WebSearch"
             | "EnterPlanMode"
             | "ExitPlanMode"
             | "AskUserQuestion"
             | "Lsp"
+            | "MCPSearch"
+            | "TodoWrite"
     )
 }
 
@@ -1304,6 +1411,7 @@ fn is_read_only_or_plan_tool(name: &str) -> bool {
 fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
     input
         .get("file_path")
+        .or_else(|| input.get("notebook_path"))
         .and_then(|v| v.as_str())
         .map(std::path::PathBuf::from)
 }
@@ -1582,6 +1690,79 @@ async fn execute_tool_inner(
                         cocode_otel::ToolDecisionSource::Config,
                     );
                 }
+            } else if let Some(hooks) = &ctx.hook_registry
+                && let Some(override_decision) = {
+                    // Fire PermissionRequest hooks before interactive approval
+                    let perm_ctx = HookContext::new(
+                        HookEventType::PermissionRequest,
+                        ctx.session_id.clone(),
+                        ctx.cwd.clone(),
+                    )
+                    .with_tool(name, input.clone())
+                    .with_tool_use_id(call_id)
+                    .with_permission_mode(match ctx.permission_mode {
+                        PermissionMode::Default => "default",
+                        PermissionMode::Plan => "plan",
+                        PermissionMode::AcceptEdits => "acceptEdits",
+                        PermissionMode::Bypass => "bypassPermissions",
+                        PermissionMode::DontAsk => "dontAsk",
+                    });
+                    let outcomes = hooks.execute(&perm_ctx).await;
+                    let mut decision = None;
+                    for outcome in outcomes {
+                        if let HookResult::PermissionOverride {
+                            decision: d,
+                            reason,
+                        } = outcome.result
+                        {
+                            info!(
+                                hook = %outcome.hook_name,
+                                decision = %d,
+                                reason = ?reason,
+                                "PermissionRequest hook overrode decision"
+                            );
+                            decision = Some((d, reason));
+                            break;
+                        }
+                    }
+                    decision
+                }
+            {
+                // Hook provided a permission override
+                match override_decision.0.as_str() {
+                    "allow" => {
+                        if let Some(otel) = otel_manager {
+                            otel.tool_decision(
+                                name,
+                                call_id,
+                                "allowed",
+                                cocode_otel::ToolDecisionSource::Config,
+                            );
+                        }
+                        // Auto-approve: remember in session
+                        ctx.approve_pattern(name, pattern).await;
+                    }
+                    "deny" => {
+                        if let Some(otel) = otel_manager {
+                            otel.tool_decision(
+                                name,
+                                call_id,
+                                "denied",
+                                cocode_otel::ToolDecisionSource::Config,
+                            );
+                        }
+                        let reason = override_decision
+                            .1
+                            .unwrap_or_else(|| "PermissionRequest hook denied".to_string());
+                        return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                            message: reason,
+                        }
+                        .build());
+                    }
+                    _ => {
+                        // "ask" or unknown — fall through to interactive approval
+                    }
+                }
             } else if let Some(requester) = &ctx.permission_requester {
                 // Use the permission requester for interactive approval
                 let worker_id = ctx.call_id.clone();
@@ -1647,6 +1828,17 @@ async fn execute_tool_inner(
         }
         cocode_protocol::PermissionResult::Passthrough => {
             // Should not happen after pipeline — treat as allowed
+        }
+    }
+
+    // Pre-execute file backup (Tier 1 rewind)
+    if !tool.is_read_only() {
+        if let Some(ref backup_store) = ctx.file_backup_store {
+            if let Some(file_path) = extract_file_path(&input) {
+                if let Err(e) = backup_store.backup_before_modify(&file_path).await {
+                    tracing::warn!("File backup failed for {}: {e}", file_path.display());
+                }
+            }
         }
     }
 

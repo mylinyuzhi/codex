@@ -6,6 +6,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use cocode_protocol::PermissionMode;
+
 /// Plan mode state for a session.
 ///
 /// Tracks whether plan mode is active, the current plan file path,
@@ -22,16 +24,40 @@ pub struct PlanModeState {
     pub has_exited: bool,
     /// Whether the exit notification needs to be attached (one-time).
     pub needs_exit_attachment: bool,
+    /// Whether a plan file reference needs to be injected after compaction (one-time).
+    ///
+    /// Set after context compaction when a plan file exists. The
+    /// `PlanFileReferenceGenerator` consumes this flag on the next turn.
+    pub needs_plan_reference: bool,
     /// Turn number when plan mode was entered.
     pub entered_at_turn: Option<i32>,
     /// Turn number when plan mode was exited.
     pub exited_at_turn: Option<i32>,
+    /// Permission mode saved before entering plan mode.
+    ///
+    /// On exit, this is restored so the session returns to its
+    /// previous permission state (e.g., default → plan → default).
+    pub pre_plan_mode: Option<PermissionMode>,
 }
 
 impl PlanModeState {
     /// Create a new empty plan mode state.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enter plan mode with the given plan file path and slug.
+    ///
+    /// Saves `current_mode` so it can be restored on exit.
+    pub fn enter_with_mode(
+        &mut self,
+        plan_file_path: PathBuf,
+        slug: String,
+        turn: i32,
+        current_mode: PermissionMode,
+    ) {
+        self.pre_plan_mode = Some(current_mode);
+        self.enter(plan_file_path, slug, turn);
     }
 
     /// Enter plan mode with the given plan file path and slug.
@@ -43,12 +69,14 @@ impl PlanModeState {
         self.needs_exit_attachment = false;
     }
 
-    /// Exit plan mode.
-    pub fn exit(&mut self, turn: i32) {
+    /// Exit plan mode and return the permission mode to restore.
+    pub fn exit(&mut self, turn: i32) -> Option<PermissionMode> {
         self.is_active = false;
         self.has_exited = true;
         self.exited_at_turn = Some(turn);
         self.needs_exit_attachment = true;
+        self.plan_slug = None;
+        self.pre_plan_mode.take()
     }
 
     /// Clear the exit attachment flag after it has been sent.

@@ -45,6 +45,8 @@ fn test_hook_output_continue() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     assert!(matches!(result, HookResult::Continue));
@@ -61,6 +63,8 @@ fn test_hook_output_reject() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -81,6 +85,8 @@ fn test_hook_output_reject_default_reason() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {
@@ -101,6 +107,8 @@ fn test_hook_output_modify_input() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ModifyInput { new_input } = result {
@@ -121,6 +129,8 @@ fn test_hook_output_additional_context() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::ContinueWithContext { additional_context } = result {
@@ -141,6 +151,8 @@ fn test_hook_output_async() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result = output.into_result(Some("test-hook"));
     if let HookResult::Async { task_id, hook_name } = result {
@@ -201,6 +213,8 @@ fn test_hook_output_serde() {
         permission_decision: None,
         decision: None,
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let json = serde_json::to_string(&output).expect("serialize");
     let parsed: HookOutput = serde_json::from_str(&json).expect("deserialize");
@@ -268,6 +282,8 @@ fn test_hook_output_decision_block() {
         permission_decision: None,
         decision: Some("block".to_string()),
         hook_specific_output: None,
+        system_message: None,
+        updated_tool_output: None,
     };
     let result: HookResult = output.into();
     if let HookResult::Reject { reason } = result {

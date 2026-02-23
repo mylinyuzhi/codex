@@ -92,6 +92,7 @@ impl McpToolWrapper {
                 content: ToolResultContent::Structured(structured),
                 is_error,
                 modifiers: Vec::new(),
+                images: Vec::new(),
             });
         }
 
@@ -110,6 +111,7 @@ impl McpToolWrapper {
             content: ToolResultContent::Text(text),
             is_error,
             modifiers: Vec::new(),
+            images: Vec::new(),
         })
     }
 }

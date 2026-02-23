@@ -49,6 +49,8 @@ pub use event::HookEventType;
 pub use handlers::command::HookOutput;
 pub use handlers::inline::InlineHandler;
 pub use matcher::HookMatcher;
+pub use registry::HookAgentFn;
+pub use registry::HookModelCallFn;
 pub use registry::HookRegistry;
 pub use result::HookOutcome;
 pub use result::HookResult;

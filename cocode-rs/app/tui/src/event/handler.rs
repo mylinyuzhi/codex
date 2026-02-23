@@ -178,6 +178,10 @@ fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {
             Some(TuiCommand::ApproveAll)
         }
 
+        // Tab navigation for multi-tab overlays (plugin manager)
+        KeyCode::Tab if key.modifiers.is_empty() => Some(TuiCommand::PluginManagerNextTab),
+        KeyCode::BackTab => Some(TuiCommand::PluginManagerPrevTab),
+
         // Navigation
         KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::CursorUp),
         KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::CursorDown),
@@ -187,6 +191,14 @@ fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
+        }
+
+        // Clipboard paste (Ctrl+V / Alt+V) — for image paste in question "Other" field
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(TuiCommand::PasteFromClipboard)
+        }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) => {
+            Some(TuiCommand::PasteFromClipboard)
         }
 
         // Character input for filter-based overlays
@@ -224,6 +236,9 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // External editor (Ctrl+E)
         (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(TuiCommand::OpenExternalEditor),
+
+        // Open plan file in external editor (Ctrl+G, plan mode only)
+        (KeyModifiers::CONTROL, KeyCode::Char('g')) => Some(TuiCommand::OpenPlanEditor),
 
         // Command palette (Ctrl+P)
         (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(TuiCommand::ShowCommandPalette),

@@ -24,6 +24,8 @@ fn make_hook(name: &str, event: HookEventType, matcher: Option<HookMatcher>) -> 
         enabled: true,
         timeout_secs: 30,
         once: false,
+        status_message: None,
+        group_id: None,
     }
 }
 
@@ -40,6 +42,8 @@ fn make_once_hook(name: &str, event: HookEventType) -> HookDefinition {
         enabled: true,
         timeout_secs: 30,
         once: true,
+        status_message: None,
+        group_id: None,
     }
 }
 

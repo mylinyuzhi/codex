@@ -238,7 +238,7 @@ impl SessionManager {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "json") {
                 match load_session_from_file(&path).await {
-                    Ok((session, _history)) => {
+                    Ok((session, _history, _snapshots)) => {
                         // Extract model/provider before moving session fields
                         let model = session.model().unwrap_or("").to_string();
                         let provider = session.provider().unwrap_or("").to_string();
@@ -265,7 +265,7 @@ impl SessionManager {
         Ok(summaries)
     }
 
-    /// Save a session to disk.
+    /// Save a session to disk (including snapshot stack for rewind support).
     pub async fn save_session(&self, id: &str) -> anyhow::Result<()> {
         let state = self
             .sessions
@@ -277,8 +277,16 @@ impl SessionManager {
             return Ok(());
         }
 
+        // Serialize snapshot stack (empty vec if no snapshot manager).
+        let snapshots = if let Some(sm) = state.snapshot_manager() {
+            let json = sm.serialize_snapshots().await?;
+            serde_json::from_str(&json)?
+        } else {
+            Vec::new()
+        };
+
         let path = self.storage_dir.join(format!("{id}.json"));
-        save_session_to_file(&state.session, &state.message_history, &path).await
+        save_session_to_file(&state.session, &state.message_history, snapshots, &path).await
     }
 
     /// Save all active sessions.
@@ -291,7 +299,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Load a session from disk.
+    /// Load a session from disk (including snapshot stack for rewind support).
     pub async fn load_session(&mut self, id: &str, config: Arc<Config>) -> anyhow::Result<()> {
         let path = self.storage_dir.join(format!("{id}.json"));
 
@@ -302,17 +310,28 @@ impl SessionManager {
             ));
         }
 
-        let (session, history) = load_session_from_file(&path).await?;
+        let (session, history, snapshots) = load_session_from_file(&path).await?;
 
         info!(
             session_id = %session.id,
             model = ?session.model(),
+            snapshots = snapshots.len(),
             "Loading session"
         );
 
         let mut state = SessionState::new(session, config).await?;
         // Restore the message history
         state.message_history = history;
+
+        // Restore snapshot stack for rewind support
+        if !snapshots.is_empty() {
+            if let Some(sm) = state.snapshot_manager() {
+                let json = serde_json::to_string(&snapshots)?;
+                if let Err(e) = sm.restore_snapshots(&json).await {
+                    tracing::warn!("Failed to restore snapshots: {e}");
+                }
+            }
+        }
 
         self.sessions.insert(id.to_string(), state);
 
@@ -331,6 +350,60 @@ impl SessionManager {
         }
 
         Ok(())
+    }
+
+    /// Remove sessions whose last activity is older than `retention_days`.
+    ///
+    /// Deletes both the session JSON file and the associated file-backup
+    /// directory. Runs best-effort: individual failures are logged and skipped.
+    pub async fn cleanup_expired_sessions(&self, retention_days: i64) -> anyhow::Result<u32> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days);
+        let mut cleaned = 0u32;
+
+        if !self.storage_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut entries = fs::read_dir(&self.storage_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if !path.extension().is_some_and(|ext| ext == "json") {
+                continue;
+            }
+
+            match load_session_from_file(&path).await {
+                Ok((session, _, _)) => {
+                    if session.last_activity_at < cutoff {
+                        info!(
+                            session_id = %session.id,
+                            last_activity = %session.last_activity_at,
+                            "Cleaning up expired session"
+                        );
+                        // Delete session file
+                        if let Err(e) = fs::remove_file(&path).await {
+                            warn!(path = %path.display(), "Failed to delete session file: {e}");
+                            continue;
+                        }
+                        // Delete backup directory
+                        let backup_dir = self.storage_dir.join(&session.id);
+                        if backup_dir.exists() {
+                            if let Err(e) = fs::remove_dir_all(&backup_dir).await {
+                                warn!(path = %backup_dir.display(), "Failed to delete backup dir: {e}");
+                            }
+                        }
+                        cleaned += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!(path = %path.display(), "Failed to load session for cleanup: {e}");
+                }
+            }
+        }
+
+        if cleaned > 0 {
+            info!(cleaned, "Expired sessions cleaned up");
+        }
+        Ok(cleaned)
     }
 
     /// Get the storage directory.

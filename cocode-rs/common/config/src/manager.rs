@@ -161,13 +161,13 @@ impl ConfigManager {
         resolver.provider_type(provider)
     }
 
-    /// Resolve a model alias to its API model name (O(1) lookup, no resolution).
+    /// Resolve the API model name for a given slug (O(1) lookup, no resolution).
     ///
-    /// Returns the alias if set and non-empty, otherwise returns the slug.
+    /// Returns the api_model_name if set and non-empty, otherwise returns the slug.
     /// The result is an owned `String` because the resolver is behind a `RwLock`.
-    pub fn resolve_model_alias(&self, provider: &str, model: &str) -> Result<String, ConfigError> {
+    pub fn resolve_api_model_name(&self, provider: &str, model: &str) -> Result<String, ConfigError> {
         let resolver = self.read_resolver()?;
-        Ok(resolver.resolve_model_alias(provider, model).to_string())
+        Ok(resolver.resolve_api_model_name(provider, model).to_string())
     }
 
     /// List model slugs configured for a provider (O(1) lookup, no resolution).
@@ -736,6 +736,8 @@ impl ConfigManager {
             allow_managed_hooks_only: resolved.allow_managed_hooks_only,
             otel,
             output_style: resolved.output_style,
+            enabled_plugins: resolved.enabled_plugins,
+            extra_known_marketplaces: resolved.extra_known_marketplaces,
         })
     }
 

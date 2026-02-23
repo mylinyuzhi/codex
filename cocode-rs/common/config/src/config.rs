@@ -199,6 +199,17 @@ pub struct Config {
     // ============================================================
     /// Active output style name (e.g., "explanatory", "learning", or custom).
     pub output_style: Option<String>,
+
+    // ============================================================
+    // 18. Plugin Settings
+    // ============================================================
+    /// Plugin enable/disable state from config (merged across user/project/local).
+    ///
+    /// Keys are `"pluginName"` or `"pluginName@marketplaceName"`.
+    pub enabled_plugins: HashMap<String, bool>,
+
+    /// Extra marketplace sources from project settings.
+    pub extra_known_marketplaces: Vec<crate::json_config::ExtraMarketplaceConfig>,
 }
 
 impl Config {
@@ -278,7 +289,7 @@ impl Config {
     /// Get complete ProviderModel (ModelInfo + alias) for a provider/model.
     ///
     /// This is a more efficient alternative to calling both `resolve_model_info()`
-    /// and `resolve_model_alias()` separately, as it performs a single lookup.
+    /// and `resolve_api_model_name()` separately, as it performs a single lookup.
     pub fn resolve_provider_model(
         &self,
         provider: &str,
@@ -297,14 +308,14 @@ impl Config {
             .map(|m| &m.info)
     }
 
-    /// Get API model name (alias) for a provider/model (for ModelHub model creation).
+    /// Get API model name for a provider/model (for ModelHub model creation).
     ///
-    /// Returns the alias if set and non-empty, otherwise returns the slug.
-    pub fn resolve_model_alias<'a>(&'a self, provider: &str, model: &'a str) -> &'a str {
+    /// Returns the api_model_name if set and non-empty, otherwise returns the slug.
+    pub fn resolve_api_model_name<'a>(&'a self, provider: &str, model: &'a str) -> &'a str {
         self.providers
             .get(provider)
             .and_then(|p| p.models.get(model))
-            .and_then(|m| m.model_alias.as_deref())
+            .and_then(|m| m.api_model_name.as_deref())
             .unwrap_or(model)
     }
 
@@ -378,6 +389,8 @@ impl Default for Config {
             allow_managed_hooks_only: false,
             otel: None,
             output_style: None,
+            enabled_plugins: HashMap::new(),
+            extra_known_marketplaces: Vec::new(),
         }
     }
 }

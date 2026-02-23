@@ -53,6 +53,9 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
+    /// Enable file checkpointing (rewind support). When disabled, no
+    /// file backups or snapshots are created.
+    FileCheckpointing,
 
     // Experimental
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -80,6 +83,8 @@ pub enum Feature {
     SmartEdit,
     /// Gate the NotebookEdit tool behind opt-in config.
     NotebookEdit,
+    /// Enable interview-style plan mode (iterative pair-planning).
+    PlanModeInterview,
 }
 
 impl Feature {
@@ -191,6 +196,12 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::FileCheckpointing,
+        key: "file_checkpointing",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
     // Beta program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::HierarchicalAgents,
@@ -268,6 +279,12 @@ const FEATURES: &[FeatureSpec] = &[
         id: Feature::NotebookEdit,
         key: "notebook_edit",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PlanModeInterview,
+        key: "plan_mode_interview",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

@@ -131,6 +131,8 @@ impl From<HookJsonEntry> for HookDefinition {
             enabled: entry.enabled,
             timeout_secs: entry.timeout_secs,
             once: entry.once,
+            status_message: None,
+            group_id: None,
         }
     }
 }

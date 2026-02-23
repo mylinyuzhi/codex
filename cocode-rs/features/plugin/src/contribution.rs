@@ -141,6 +141,10 @@ pub struct PluginContributions {
     /// Paths to LSP server configuration files.
     #[serde(default)]
     pub lsp_servers: StringOrVec,
+
+    /// Paths to output style directories.
+    #[serde(default)]
+    pub output_styles: StringOrVec,
 }
 
 /// A contribution from a plugin.
@@ -195,6 +199,23 @@ pub enum PluginContribution {
         /// The plugin that contributed this server.
         plugin_name: String,
     },
+
+    /// An output style contribution.
+    OutputStyle {
+        /// The output style definition.
+        style: OutputStyleDefinition,
+        /// The plugin that contributed this style.
+        plugin_name: String,
+    },
+}
+
+/// An output style definition loaded from a plugin.
+#[derive(Debug, Clone)]
+pub struct OutputStyleDefinition {
+    /// Style name (derived from the filename).
+    pub name: String,
+    /// The style prompt content (loaded from .md file).
+    pub prompt: String,
 }
 
 impl PluginContribution {
@@ -207,6 +228,7 @@ impl PluginContribution {
             Self::Command { command, .. } => &command.name,
             Self::McpServer { config, .. } => &config.name,
             Self::LspServer { config, .. } => &config.name,
+            Self::OutputStyle { style, .. } => &style.name,
         }
     }
 
@@ -218,7 +240,8 @@ impl PluginContribution {
             | Self::Agent { plugin_name, .. }
             | Self::Command { plugin_name, .. }
             | Self::McpServer { plugin_name, .. }
-            | Self::LspServer { plugin_name, .. } => plugin_name,
+            | Self::LspServer { plugin_name, .. }
+            | Self::OutputStyle { plugin_name, .. } => plugin_name,
         }
     }
 

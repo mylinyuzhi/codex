@@ -240,11 +240,18 @@ pub fn default_output_styles_dir(cocode_home: &std::path::Path) -> PathBuf {
     cocode_home.join("output-styles")
 }
 
-/// Load all output styles (built-in + custom).
+/// Load all output styles (built-in + user-level custom + project-level custom).
 ///
-/// Returns a combined list with built-in styles first, then custom styles.
-/// Custom styles can shadow built-in styles with the same name.
-pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleInfo> {
+/// Returns a combined list with built-in styles first, then user-level custom,
+/// then project-level custom. Project-level styles take precedence over
+/// user-level styles with the same name.
+///
+/// `project_dir` is the project root (e.g. the git working directory).
+/// Pass `None` if no project context is available.
+pub fn load_all_output_styles(
+    cocode_home: &std::path::Path,
+    project_dir: Option<&std::path::Path>,
+) -> Vec<OutputStyleInfo> {
     let mut styles = Vec::new();
 
     // Add built-in styles (keep_coding_instructions defaults to true)
@@ -260,9 +267,9 @@ pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleI
         }
     }
 
-    // Add custom styles from default directory (keep_coding_instructions defaults to false)
-    let dir = default_output_styles_dir(cocode_home);
-    for custom in load_custom_output_styles(&dir) {
+    // Add custom styles from user-level directory
+    let user_dir = default_output_styles_dir(cocode_home);
+    for custom in load_custom_output_styles(&user_dir) {
         let keep_coding = custom.keep_coding_instructions;
         styles.push(OutputStyleInfo {
             name: custom.name,
@@ -271,6 +278,24 @@ pub fn load_all_output_styles(cocode_home: &std::path::Path) -> Vec<OutputStyleI
             source: OutputStyleSource::Custom(custom.path),
             keep_coding_instructions: keep_coding,
         });
+    }
+
+    // Add project-level custom styles (override user-level with same name)
+    if let Some(proj) = project_dir {
+        let project_style_dir = proj.join(".cocode").join("output-styles");
+        for custom in load_custom_output_styles(&project_style_dir) {
+            // Remove any user-level style with the same name (project takes precedence)
+            let name_lower = custom.name.to_lowercase();
+            styles.retain(|s| s.source.is_builtin() || s.name.to_lowercase() != name_lower);
+            let keep_coding = custom.keep_coding_instructions;
+            styles.push(OutputStyleInfo {
+                name: custom.name,
+                description: custom.description,
+                content: custom.content,
+                source: OutputStyleSource::Project(custom.path),
+                keep_coding_instructions: keep_coding,
+            });
+        }
     }
 
     styles
@@ -306,8 +331,12 @@ pub struct OutputStyleInfo {
 pub enum OutputStyleSource {
     /// Built-in style compiled into the binary.
     Builtin,
-    /// Custom style loaded from a file.
+    /// Custom style loaded from a user-level file (`~/.cocode/output-styles/`).
     Custom(PathBuf),
+    /// Project-level style loaded from `.cocode/output-styles/` in the project root.
+    Project(PathBuf),
+    /// Plugin-contributed style.
+    Plugin,
 }
 
 impl OutputStyleSource {
@@ -320,16 +349,56 @@ impl OutputStyleSource {
     pub fn is_custom(&self) -> bool {
         matches!(self, Self::Custom(_))
     }
+
+    /// Check if this is a project-level style.
+    pub fn is_project(&self) -> bool {
+        matches!(self, Self::Project(_))
+    }
+
+    /// Check if this is a plugin-contributed style.
+    pub fn is_plugin(&self) -> bool {
+        matches!(self, Self::Plugin)
+    }
+
+    /// Human-readable label for the source.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Builtin => "built-in",
+            Self::Custom(_) => "custom",
+            Self::Project(_) => "project",
+            Self::Plugin => "plugin",
+        }
+    }
 }
 
 /// Find an output style by name.
 ///
-/// Searches both built-in and custom styles. Custom styles take precedence
-/// when there's a name conflict.
-pub fn find_output_style(name: &str, cocode_home: &std::path::Path) -> Option<OutputStyleInfo> {
+/// Searches project-level, user-level custom, and built-in styles.
+/// Priority: project-level > user-level custom > built-in.
+pub fn find_output_style(
+    name: &str,
+    cocode_home: &std::path::Path,
+    project_dir: Option<&std::path::Path>,
+) -> Option<OutputStyleInfo> {
     let name_lower = name.to_lowercase();
 
-    // Check custom styles first (they take precedence)
+    // Check project-level styles first (highest precedence)
+    if let Some(proj) = project_dir {
+        let project_style_dir = proj.join(".cocode").join("output-styles");
+        for custom in load_custom_output_styles(&project_style_dir) {
+            if custom.name.to_lowercase() == name_lower {
+                return Some(OutputStyleInfo {
+                    name: custom.name,
+                    description: custom.description,
+                    content: custom.content,
+                    source: OutputStyleSource::Project(custom.path),
+                    keep_coding_instructions: custom.keep_coding_instructions,
+                });
+            }
+        }
+    }
+
+    // Check user-level custom styles
     let dir = default_output_styles_dir(cocode_home);
     for custom in load_custom_output_styles(&dir) {
         if custom.name.to_lowercase() == name_lower {

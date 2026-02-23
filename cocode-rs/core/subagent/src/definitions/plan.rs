@@ -29,6 +29,13 @@ pub fn plan_agent() -> AgentDefinition {
             "CRITICAL: This is a READ-ONLY planning task. Do not modify files.".to_string(),
         ),
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }
 }
 

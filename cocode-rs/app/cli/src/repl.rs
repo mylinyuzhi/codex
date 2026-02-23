@@ -161,6 +161,31 @@ impl<'a> Repl<'a> {
                 "skills" => {
                     self.list_skills().await;
                 }
+                "agents" => {
+                    let mgr = self.session.subagent_manager().lock().await;
+                    let defs = mgr.definitions();
+                    if defs.is_empty() {
+                        println!("No agents registered.");
+                    } else {
+                        println!("Registered agents ({}):", defs.len());
+                        for def in defs {
+                            let model = def
+                                .identity
+                                .as_ref()
+                                .map(|i| format!("{i:?}"))
+                                .unwrap_or_else(|| "inherit".to_string());
+                            let tools_info = if def.tools.is_empty() {
+                                "all".to_string()
+                            } else {
+                                def.tools.join(", ")
+                            };
+                            println!(
+                                "  {} [{:?}] - {} (model: {}, tools: {})",
+                                def.agent_type, def.source, def.description, model, tools_info,
+                            );
+                        }
+                    }
+                }
                 "todos" => {
                     // Read task list directly from the most recent TodoWrite call
                     println!("{}", self.session.current_todos());
@@ -238,13 +263,41 @@ impl<'a> Repl<'a> {
 
         match result {
             Some(skill_result) => {
-                // Handle fork context
+                // Handle fork context — spawn subagent
                 if skill_result.context == SkillContext::Fork {
-                    warn!(
+                    let agent_type = skill_result
+                        .agent
+                        .clone()
+                        .unwrap_or_else(|| "general".to_string());
+                    info!(
                         skill = %skill_result.skill_name,
-                        agent = ?skill_result.agent,
-                        "Fork context is not supported in the REPL; executing inline"
+                        agent_type,
+                        "Spawning subagent for fork context skill"
                     );
+
+                    match self
+                        .session
+                        .spawn_subagent_for_skill(
+                            &agent_type,
+                            &skill_result.prompt,
+                            skill_result.model.as_deref(),
+                            skill_result.allowed_tools.clone(),
+                        )
+                        .await
+                    {
+                        Ok(result) => {
+                            println!("{}", result.output.unwrap_or_default());
+                            return Ok(true);
+                        }
+                        Err(e) => {
+                            warn!(
+                                skill = %skill_result.skill_name,
+                                error = %e,
+                                "Fork spawn failed; falling back to inline execution"
+                            );
+                            // Fall through to inline execution
+                        }
+                    }
                 }
 
                 if let Some(ref tools) = skill_result.allowed_tools {

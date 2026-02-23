@@ -146,6 +146,7 @@ Preview (first {} chars):
         content: ToolResultContent::Text(persisted_content),
         is_error: output.is_error,
         modifiers: output.modifiers,
+        images: output.images,
     }
 }
 

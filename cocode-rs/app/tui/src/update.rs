@@ -37,10 +37,10 @@ pub async fn handle_command(
     match cmd {
         // ========== Mode Toggles ==========
         TuiCommand::TogglePlanMode => {
-            state.toggle_plan_mode();
+            state.cycle_permission_mode();
             let _ = command_tx
-                .send(UserCommand::SetPlanMode {
-                    active: state.session.plan_mode,
+                .send(UserCommand::SetPermissionMode {
+                    mode: state.session.permission_mode,
                 })
                 .await;
         }
@@ -137,6 +137,14 @@ pub async fn handle_command(
         TuiCommand::Interrupt => {
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
+        TuiCommand::ShowRewindSelector => {
+            // Request checkpoint list from core, which will open the overlay on response
+            let _ = command_tx.send(UserCommand::RequestRewindCheckpoints).await;
+        }
+        TuiCommand::Rewind => {
+            // Legacy: direct rewind of last turn (for programmatic use)
+            let _ = command_tx.send(UserCommand::Rewind).await;
+        }
         TuiCommand::ClearScreen => {
             // Clear chat history and reset scroll
             state.session.messages.clear();
@@ -145,11 +153,31 @@ pub async fn handle_command(
             tracing::debug!("Screen cleared - chat history reset");
         }
         TuiCommand::Cancel => {
-            // Close overlay if present, otherwise clear input
-            if state.has_overlay() {
+            // Close overlay if present, otherwise clear input, otherwise double-Esc for rewind
+            if let Some(Overlay::PlanExitApproval(ref mut pe)) = state.ui.overlay {
+                if pe.feedback_active {
+                    // Exit feedback mode, go back to option selection
+                    pe.feedback_active = false;
+                    pe.feedback_text.clear();
+                } else {
+                    state.ui.clear_overlay();
+                }
+            } else if let Some(Overlay::RewindSelector(ref mut rw)) = state.ui.overlay {
+                // In mode selection, go back to checkpoint selection instead of closing
+                if !rw.go_back() {
+                    state.ui.clear_overlay();
+                }
+            } else if state.has_overlay() {
                 state.ui.clear_overlay();
             } else if !state.ui.input.is_empty() {
                 state.ui.input.take();
+            } else if state.ui.is_double_esc() {
+                // Double-Esc detected: open rewind selector
+                state.ui.reset_esc_time();
+                let _ = command_tx.send(UserCommand::RequestRewindCheckpoints).await;
+            } else {
+                // First Esc: record time for double-Esc detection
+                state.ui.record_esc();
             }
         }
 
@@ -208,11 +236,33 @@ pub async fn handle_command(
                 Some(Overlay::ModelPicker(picker)) => {
                     picker.filter.push(c);
                 }
+                Some(Overlay::OutputStylePicker(picker)) => {
+                    picker.filter.push(c);
+                }
                 Some(Overlay::CommandPalette(palette)) => {
                     palette.insert_char(c);
                 }
                 Some(Overlay::SessionBrowser(browser)) => {
                     browser.insert_char(c);
+                }
+                Some(Overlay::PluginManager(manager)) => {
+                    manager.insert_char(c);
+                }
+                Some(Overlay::RewindSelector(rw))
+                    if rw.phase == crate::state::RewindSelectorPhase::InputSummarizeContext =>
+                {
+                    rw.insert_context_char(c);
+                }
+                Some(Overlay::PlanExitApproval(pe)) if pe.feedback_active => {
+                    pe.feedback_text.push(c);
+                }
+                Some(Overlay::Question(q)) if q.other_input_active => {
+                    q.other_text.push(c);
+                }
+                Some(Overlay::Question(q))
+                    if c == ' ' && q.current().is_some_and(|qi| qi.multi_select) =>
+                {
+                    q.toggle_selected();
                 }
                 _ => {
                     state.ui.input.insert_char(c);
@@ -223,11 +273,28 @@ pub async fn handle_command(
             Some(Overlay::ModelPicker(picker)) => {
                 picker.filter.pop();
             }
+            Some(Overlay::OutputStylePicker(picker)) => {
+                picker.filter.pop();
+            }
             Some(Overlay::CommandPalette(palette)) => {
                 palette.delete_char();
             }
             Some(Overlay::SessionBrowser(browser)) => {
                 browser.delete_char();
+            }
+            Some(Overlay::PluginManager(manager)) => {
+                manager.delete_char();
+            }
+            Some(Overlay::RewindSelector(rw))
+                if rw.phase == crate::state::RewindSelectorPhase::InputSummarizeContext =>
+            {
+                rw.delete_context_char();
+            }
+            Some(Overlay::PlanExitApproval(pe)) if pe.feedback_active => {
+                pe.feedback_text.pop();
+            }
+            Some(Overlay::Question(q)) if q.other_input_active => {
+                q.other_text.pop();
             }
             _ => {
                 state.ui.input.delete_backward();
@@ -251,11 +318,26 @@ pub async fn handle_command(
                 Some(Overlay::ModelPicker(picker)) => {
                     picker.move_up();
                 }
+                Some(Overlay::OutputStylePicker(picker)) => {
+                    picker.move_up();
+                }
                 Some(Overlay::CommandPalette(palette)) => {
                     palette.move_up();
                 }
                 Some(Overlay::SessionBrowser(browser)) => {
                     browser.move_up();
+                }
+                Some(Overlay::PluginManager(manager)) => {
+                    manager.move_up();
+                }
+                Some(Overlay::RewindSelector(rw)) => {
+                    rw.move_up();
+                }
+                Some(Overlay::PlanExitApproval(plan_exit)) => {
+                    plan_exit.move_up();
+                }
+                Some(Overlay::Question(q)) => {
+                    q.move_up();
                 }
                 Some(Overlay::Help) => {
                     state.ui.help_scroll = (state.ui.help_scroll - 1).max(0);
@@ -275,11 +357,26 @@ pub async fn handle_command(
                 Some(Overlay::ModelPicker(picker)) => {
                     picker.move_down();
                 }
+                Some(Overlay::OutputStylePicker(picker)) => {
+                    picker.move_down();
+                }
                 Some(Overlay::CommandPalette(palette)) => {
                     palette.move_down();
                 }
                 Some(Overlay::SessionBrowser(browser)) => {
                     browser.move_down();
+                }
+                Some(Overlay::PluginManager(manager)) => {
+                    manager.move_down();
+                }
+                Some(Overlay::RewindSelector(rw)) => {
+                    rw.move_down();
+                }
+                Some(Overlay::PlanExitApproval(plan_exit)) => {
+                    plan_exit.move_down();
+                }
+                Some(Overlay::Question(q)) => {
+                    q.move_down();
                 }
                 Some(Overlay::Help) => {
                     state.ui.help_scroll += 1;
@@ -314,12 +411,93 @@ pub async fn handle_command(
 
         // ========== Approval ==========
         TuiCommand::Approve => {
-            if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
+            if let Some(Overlay::Question(ref mut q_overlay)) = state.ui.overlay {
+                // Handle question overlay confirmation
+                if q_overlay.other_input_active {
+                    // Confirm "Other" text input, then advance
+                    let all_done = q_overlay.confirm_current();
+                    if all_done {
+                        let mut answers = q_overlay.collect_answers();
+                        embed_images_in_answers(&mut answers, paste_manager);
+                        let request_id = q_overlay.request_id.clone();
+                        let _ = command_tx
+                            .send(UserCommand::QuestionResponse {
+                                request_id,
+                                answers,
+                            })
+                            .await;
+                        state.ui.clear_overlay();
+                    }
+                } else if q_overlay.is_other_selected() {
+                    // Activate "Other" text input mode
+                    q_overlay.other_input_active = true;
+                    q_overlay.other_text.clear();
+                } else {
+                    let all_done = q_overlay.confirm_current();
+                    if all_done {
+                        let mut answers = q_overlay.collect_answers();
+                        embed_images_in_answers(&mut answers, paste_manager);
+                        let request_id = q_overlay.request_id.clone();
+                        let _ = command_tx
+                            .send(UserCommand::QuestionResponse {
+                                request_id,
+                                answers,
+                            })
+                            .await;
+                        state.ui.clear_overlay();
+                    }
+                }
+            } else if let Some(Overlay::PlanExitApproval(ref mut plan_exit)) = state.ui.overlay {
+                // Handle 5-option plan exit approval
+                let option = plan_exit.selected_option();
+
+                if option == cocode_protocol::PlanExitOption::KeepPlanning {
+                    if plan_exit.feedback_active {
+                        // Second Enter: send denial with feedback text
+                        let request_id = plan_exit.request.request_id.clone();
+                        let feedback = if plan_exit.feedback_text.trim().is_empty() {
+                            None
+                        } else {
+                            Some(plan_exit.feedback_text.clone())
+                        };
+                        let _ = command_tx
+                            .send(UserCommand::ApprovalResponse {
+                                request_id,
+                                decision: cocode_protocol::ApprovalDecision::Denied,
+                                plan_exit_option: Some(option),
+                                feedback,
+                            })
+                            .await;
+                        state.ui.clear_overlay();
+                    } else {
+                        // First Enter: activate feedback text input
+                        plan_exit.feedback_active = true;
+                    }
+                } else {
+                    let request_id = plan_exit.request.request_id.clone();
+                    let decision = if option.is_approved() {
+                        cocode_protocol::ApprovalDecision::Approved
+                    } else {
+                        cocode_protocol::ApprovalDecision::Denied
+                    };
+                    let _ = command_tx
+                        .send(UserCommand::ApprovalResponse {
+                            request_id,
+                            decision,
+                            plan_exit_option: Some(option),
+                            feedback: None,
+                        })
+                        .await;
+                    state.ui.clear_overlay();
+                }
+            } else if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id,
                         decision: cocode_protocol::ApprovalDecision::Approved,
+                        plan_exit_option: None,
+                        feedback: None,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -330,6 +508,19 @@ pub async fn handle_command(
                     let selection = (*selection).clone();
                     state.session.current_selection = Some(selection.clone());
                     let _ = command_tx.send(UserCommand::SetModel { selection }).await;
+                }
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::OutputStylePicker(ref picker)) = state.ui.overlay {
+                // Select output style
+                let filtered = picker.filtered_items();
+                if let Some(item) = filtered.get(picker.selected as usize) {
+                    let style_name = item.name.clone();
+                    state.session.output_style = Some(style_name.clone());
+                    let _ = command_tx
+                        .send(UserCommand::SetOutputStyle {
+                            style: Some(style_name),
+                        })
+                        .await;
                 }
                 state.ui.clear_overlay();
             } else if let Some(Overlay::CommandPalette(ref palette)) = state.ui.overlay {
@@ -350,15 +541,71 @@ pub async fn handle_command(
                 } else {
                     state.ui.clear_overlay();
                 }
+            } else if let Some(Overlay::RewindSelector(ref mut rw)) = state.ui.overlay {
+                // Confirm selection (checkpoint, mode, or summarize context)
+                use crate::state::RewindAction;
+                match rw.confirm() {
+                    Some(RewindAction::Rewind { turn_number, mode }) => {
+                        rw.set_loading(t!("dialog.rewind_loading_restore").to_string());
+                        let _ = command_tx
+                            .send(UserCommand::RewindToTurn { turn_number, mode })
+                            .await;
+                        // Overlay is closed on RewindCompleted event
+                    }
+                    Some(RewindAction::Summarize {
+                        turn_number,
+                        context,
+                    }) => {
+                        rw.set_loading(t!("dialog.rewind_loading_summarize").to_string());
+                        let _ = command_tx
+                            .send(UserCommand::SummarizeFromTurn {
+                                turn_number,
+                                context,
+                            })
+                            .await;
+                        // Overlay is closed on SummarizeCompleted/SummarizeFailed event
+                    }
+                    None => {
+                        // Advanced to next phase (mode selection or context input)
+                    }
+                }
+            } else if let Some(Overlay::PluginManager(ref _manager)) = state.ui.overlay {
+                // TODO: Handle Enter on selected item (install/enable/disable/etc.)
+                // For now, just log the action
+                tracing::info!("Plugin manager action requested");
             }
         }
         TuiCommand::Deny => {
-            if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
+            if let Some(Overlay::Question(ref q_overlay)) = state.ui.overlay {
+                // Cancel question — send empty answers so the tool unblocks
+                let request_id = q_overlay.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::QuestionResponse {
+                        request_id,
+                        answers: serde_json::json!({}),
+                    })
+                    .await;
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::PlanExitApproval(ref plan_exit)) = state.ui.overlay {
+                // Quick deny (N key) — send KeepPlanning without feedback
+                let request_id = plan_exit.request.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision: cocode_protocol::ApprovalDecision::Denied,
+                        plan_exit_option: Some(cocode_protocol::PlanExitOption::KeepPlanning),
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id,
                         decision: cocode_protocol::ApprovalDecision::Denied,
+                        plan_exit_option: None,
+                        feedback: None,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -379,6 +626,8 @@ pub async fn handle_command(
                     .send(UserCommand::ApprovalResponse {
                         request_id,
                         decision,
+                        plan_exit_option: None,
+                        feedback: None,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -506,6 +755,40 @@ pub async fn handle_command(
             tracing::info!("External editor requested (not yet implemented)");
         }
 
+        // ========== Plan File Editor (Ctrl+G) ==========
+        TuiCommand::OpenPlanEditor => {
+            if state.session.plan_mode {
+                if let Some(ref plan_file) = state.session.plan_file {
+                    let plan_path = plan_file.clone();
+                    // Read existing plan content (or empty string for new plans)
+                    let content = std::fs::read_to_string(&plan_path).unwrap_or_default();
+                    match crate::editor::edit_in_external_editor(&content) {
+                        Ok(result) => {
+                            if result.modified {
+                                // Write the edited content back to the plan file
+                                if let Err(e) = std::fs::write(&plan_path, &result.content) {
+                                    state.ui.toast_error(format!("Failed to save plan: {e}"));
+                                } else {
+                                    state.ui.toast_success("Plan saved!".to_string());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            state.ui.toast_error(format!("Editor error: {e}"));
+                        }
+                    }
+                } else {
+                    state
+                        .ui
+                        .toast_info("No plan file available yet.".to_string());
+                }
+            } else {
+                state
+                    .ui
+                    .toast_info("Ctrl+G: Open plan file in editor (plan mode only)".to_string());
+            }
+        }
+
         // ========== Clipboard Paste ==========
         TuiCommand::PasteFromClipboard => {
             // Handled in app.rs (needs &mut paste_manager)
@@ -540,6 +823,36 @@ pub async fn handle_command(
         TuiCommand::DeleteSession(_session_id) => {
             // TODO: Implement session deletion
             tracing::info!("Delete session requested (not yet implemented)");
+        }
+
+        // ========== Plugin Manager ==========
+        TuiCommand::ShowPluginManager => {
+            // Request plugin data from the session — the response will
+            // arrive as `LoopEvent::PluginDataReady` and open the overlay.
+            let _ = command_tx.send(UserCommand::RequestPluginData).await;
+        }
+        TuiCommand::PluginManagerNextTab => {
+            if let Some(Overlay::PluginManager(ref mut manager)) = state.ui.overlay {
+                manager.next_tab();
+            }
+        }
+        TuiCommand::PluginManagerPrevTab => {
+            if let Some(Overlay::PlanExitApproval(ref mut plan_exit)) = state.ui.overlay {
+                // Shift+Tab in PlanExitOverlay: select option 0 (ClearAndAcceptEdits)
+                let request_id = plan_exit.request.request_id.clone();
+                let option = cocode_protocol::PlanExitOption::ClearAndAcceptEdits;
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision: cocode_protocol::ApprovalDecision::Approved,
+                        plan_exit_option: Some(option),
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::PluginManager(ref mut manager)) = state.ui.overlay {
+                manager.prev_tab();
+            }
         }
 
         // ========== Thinking Toggle ==========
@@ -667,8 +980,44 @@ async fn handle_local_command(
         "cancel" => {
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
+        "output-style" => {
+            let args = _args.trim();
+            if args.is_empty() {
+                // No args: open interactive picker overlay
+                let _ = command_tx.send(UserCommand::RequestOutputStyles).await;
+            } else {
+                // Optimistically update TUI state for status bar display
+                match args {
+                    "off" | "none" | "disable" => {
+                        state.session.output_style = None;
+                    }
+                    "status" | "list" | "help" => {}
+                    name => {
+                        state.session.output_style = Some(name.to_string());
+                    }
+                }
+                // Dispatch to agent driver for full processing
+                let msg_id = format!("user-{}", state.session.messages.len());
+                let display = format!("/{} {args}", local_cmd.name);
+                state
+                    .session
+                    .add_message(ChatMessage::user(&msg_id, &display));
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSkill {
+                        name: local_cmd.name.to_string(),
+                        args: args.to_string(),
+                    })
+                    .await;
+                state.ui.scroll_offset = 0;
+                state.ui.reset_user_scrolled();
+            }
+        }
+        "rewind" | "checkpoint" => {
+            // Open the rewind checkpoint selector (same as Ctrl+Z)
+            let _ = command_tx.send(UserCommand::RequestRewindCheckpoints).await;
+        }
         // Commands that need the agent driver: dispatch via ExecuteSkill
-        "compact" | "skills" | "todos" | "output-style" => {
+        "compact" | "skills" | "todos" | "agents" => {
             let msg_id = format!("user-{}", state.session.messages.len());
             let display = format!("/{}", local_cmd.name);
             state
@@ -701,10 +1050,10 @@ async fn execute_command_action(
 
     match action {
         CommandAction::TogglePlanMode => {
-            state.toggle_plan_mode();
+            state.cycle_permission_mode();
             let _ = command_tx
-                .send(UserCommand::SetPlanMode {
-                    active: state.session.plan_mode,
+                .send(UserCommand::SetPermissionMode {
+                    mode: state.session.permission_mode,
                 })
                 .await;
         }
@@ -731,6 +1080,9 @@ async fn execute_command_action(
             state.ui.set_overlay(Overlay::SessionBrowser(
                 crate::state::SessionBrowserOverlay::new(sessions),
             ));
+        }
+        CommandAction::ShowPluginManager => {
+            let _ = command_tx.send(UserCommand::RequestPluginData).await;
         }
         CommandAction::ClearScreen => {
             state.session.messages.clear();
@@ -781,6 +1133,12 @@ fn get_default_commands() -> Vec<crate::state::CommandItem> {
             description: t!("palette.session_browser_desc").to_string(),
             shortcut: Some("Ctrl+S".to_string()),
             action: CommandAction::ShowSessionBrowser,
+        },
+        CommandItem {
+            name: t!("palette.plugin_manager").to_string(),
+            description: t!("palette.plugin_manager_desc").to_string(),
+            shortcut: None,
+            action: CommandAction::ShowPluginManager,
         },
         CommandItem {
             name: t!("palette.clear_screen").to_string(),
@@ -925,12 +1283,22 @@ pub fn handle_file_search_event(state: &mut AppState, event: FileSearchEvent) {
 pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
     match event {
         // ========== Turn Lifecycle ==========
-        LoopEvent::TurnStarted { turn_id, .. } => {
+        LoopEvent::TurnStarted {
+            turn_id,
+            turn_number,
+        } => {
             state.ui.start_streaming(turn_id);
             // Clear previous thinking duration when starting a new turn
             state.ui.clear_thinking_duration();
             // Reset thinking tokens for new turn
             state.session.reset_thinking_tokens();
+            // Track current turn number and tag the last user message
+            state.session.current_turn_number = Some(turn_number);
+            if let Some(msg) = state.session.messages.last_mut() {
+                if msg.role == crate::state::MessageRole::User && msg.turn_number.is_none() {
+                    msg.turn_number = Some(turn_number);
+                }
+            }
         }
         LoopEvent::TurnCompleted { turn_id, usage } => {
             // Stop thinking timer if still running
@@ -943,6 +1311,7 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                 if !streaming.thinking.is_empty() {
                     message.thinking = Some(streaming.thinking);
                 }
+                message.turn_number = state.session.current_turn_number;
                 message.complete();
                 state.session.add_message(message);
             }
@@ -992,9 +1361,28 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // ========== Permission ==========
         LoopEvent::ApprovalRequired { request } => {
+            if request.tool_name == "ExitPlanMode" {
+                // Use the 4-option plan exit overlay for ExitPlanMode
+                state.ui.set_overlay(Overlay::PlanExitApproval(
+                    crate::state::PlanExitOverlay::new(request),
+                ));
+            } else {
+                state
+                    .ui
+                    .set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
+            }
+        }
+
+        // ========== User Questions ==========
+        LoopEvent::QuestionAsked {
+            request_id,
+            questions,
+        } => {
             state
                 .ui
-                .set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
+                .set_overlay(Overlay::Question(crate::state::QuestionOverlay::new(
+                    request_id, &questions,
+                )));
         }
 
         // ========== Token Usage ==========
@@ -1009,11 +1397,35 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
         // ========== Plan Mode ==========
         LoopEvent::PlanModeEntered { plan_file } => {
             state.session.plan_mode = true;
-            state.session.plan_file = Some(plan_file);
+            state.session.permission_mode = cocode_protocol::PermissionMode::Plan;
+            state.session.plan_file = plan_file;
         }
         LoopEvent::PlanModeExited { .. } => {
             state.session.plan_mode = false;
             state.session.plan_file = None;
+            if state.session.permission_mode == cocode_protocol::PermissionMode::Plan {
+                state.session.permission_mode = cocode_protocol::PermissionMode::Default;
+            }
+        }
+
+        // ========== Context Cleared ==========
+        LoopEvent::ContextCleared { new_mode } => {
+            // Clear all TUI conversation state
+            state.session.messages.clear();
+            state.session.tool_executions.clear();
+            state.session.subagents.clear();
+            state.session.plan_mode = false;
+            state.session.plan_file = None;
+            state.session.permission_mode = new_mode;
+            state.ui.scroll_offset = 0;
+            state.ui.user_scrolled = false;
+            tracing::info!(?new_mode, "Context cleared after plan exit");
+        }
+
+        // ========== Permission Mode ==========
+        LoopEvent::PermissionModeChanged { mode } => {
+            state.session.permission_mode = mode;
+            state.session.plan_mode = mode == cocode_protocol::PermissionMode::Plan;
         }
 
         // ========== Subagent Events ==========
@@ -1167,6 +1579,153 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             }
         }
 
+        // ========== Plugin Data ==========
+        LoopEvent::PluginDataReady {
+            installed,
+            marketplaces,
+        } => {
+            use crate::state::MarketplaceSummary;
+            use crate::state::PluginSummary;
+
+            let installed_items: Vec<PluginSummary> = installed
+                .into_iter()
+                .map(|p| PluginSummary {
+                    name: p.name,
+                    description: p.description,
+                    version: p.version,
+                    enabled: p.enabled,
+                    scope: p.scope,
+                    skills_count: p.skills_count,
+                    hooks_count: p.hooks_count,
+                    agents_count: p.agents_count,
+                })
+                .collect();
+            let marketplace_items: Vec<MarketplaceSummary> = marketplaces
+                .into_iter()
+                .map(|m| MarketplaceSummary {
+                    name: m.name,
+                    source_type: m.source_type,
+                    source: m.source,
+                    auto_update: m.auto_update,
+                    plugin_count: m.plugin_count,
+                })
+                .collect();
+            state.ui.set_overlay(Overlay::PluginManager(
+                crate::state::PluginManagerOverlay::new(
+                    installed_items,
+                    marketplace_items,
+                    Vec::new(),
+                ),
+            ));
+        }
+
+        // ========== Output Styles ==========
+        LoopEvent::OutputStylesReady { styles } => {
+            use crate::state::OutputStylePickerItem;
+
+            let items: Vec<OutputStylePickerItem> = styles
+                .into_iter()
+                .map(|s| OutputStylePickerItem {
+                    name: s.name,
+                    source: s.source,
+                    description: s.description,
+                })
+                .collect();
+            if items.is_empty() {
+                state
+                    .ui
+                    .toast_info("No output styles available.".to_string());
+            } else {
+                state.ui.set_overlay(Overlay::OutputStylePicker(
+                    crate::state::OutputStylePickerOverlay::new(items),
+                ));
+            }
+        }
+
+        // ========== Rewind ==========
+        LoopEvent::RewindCompleted {
+            rewound_turn,
+            restored_files,
+            mode,
+            restored_prompt,
+            ..
+        } => {
+            use crate::i18n::t;
+            use cocode_protocol::RewindMode;
+
+            // Remove TUI chat messages if conversation was rewound
+            if mode != RewindMode::CodeOnly {
+                while let Some(msg) = state.session.messages.last() {
+                    if msg.turn_number.is_some_and(|n| n >= rewound_turn) {
+                        state.session.messages.pop();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Restore the original prompt into the input field
+            if let Some(prompt) = restored_prompt {
+                if !prompt.is_empty() {
+                    state.ui.input.set_text(&prompt);
+                }
+            }
+
+            // Close the rewind overlay if open
+            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
+                state.ui.clear_overlay();
+            }
+
+            state.ui.toast_success(t!(
+                "toast.rewind_success",
+                turn = rewound_turn,
+                files = restored_files
+            ));
+        }
+        LoopEvent::RewindFailed { error } => {
+            use crate::i18n::t;
+            // Close the rewind overlay if open
+            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
+                state.ui.clear_overlay();
+            }
+            state
+                .ui
+                .toast_error(t!("toast.rewind_failed", error = error));
+        }
+        LoopEvent::RewindCheckpointsReady { checkpoints } => {
+            use crate::i18n::t;
+            if checkpoints.is_empty() {
+                state.ui.toast_info(t!("toast.rewind_no_checkpoints"));
+            } else {
+                state.ui.set_overlay(Overlay::RewindSelector(
+                    crate::state::RewindSelectorOverlay::new(checkpoints),
+                ));
+            }
+        }
+
+        // ========== Summarize ==========
+        LoopEvent::SummarizeCompleted {
+            from_turn,
+            summary_tokens: _,
+        } => {
+            // Close the rewind overlay if open (loading state)
+            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
+                state.ui.clear_overlay();
+            }
+            state
+                .ui
+                .toast_success(t!("toast.summarize_success", turn = from_turn));
+        }
+        LoopEvent::SummarizeFailed { error } => {
+            // Close the rewind overlay if open (loading state)
+            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
+                state.ui.clear_overlay();
+            }
+            state
+                .ui
+                .toast_error(t!("toast.summarize_failed", error = error));
+        }
+
         // ========== Hooks ==========
         LoopEvent::HookExecuted {
             hook_type,
@@ -1181,6 +1740,45 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // Other events we don't need to handle in the TUI
         _ => {}
+    }
+}
+
+/// Extract images from paste pills in question answers and embed them as `_images` metadata.
+///
+/// Scans each answer value for paste pills (e.g., `[Image #1]`). When found,
+/// resolves them via the `PasteManager` to get base64-encoded image data and
+/// injects an `_images` array into the answers JSON object.
+fn embed_images_in_answers(answers: &mut serde_json::Value, paste_manager: &PasteManager) {
+    let obj = match answers.as_object_mut() {
+        Some(obj) => obj,
+        None => return,
+    };
+
+    let mut images = Vec::new();
+    for value in obj.values() {
+        let text = match value.as_str() {
+            Some(t) => t,
+            None => continue,
+        };
+        for block in paste_manager.resolve_to_blocks(text) {
+            if let hyper_sdk::ContentBlock::Image {
+                source:
+                    hyper_sdk::ImageSource::Base64 {
+                        data, media_type, ..
+                    },
+                ..
+            } = block
+            {
+                images.push(serde_json::json!({
+                    "data": data,
+                    "media_type": media_type,
+                }));
+            }
+        }
+    }
+
+    if !images.is_empty() {
+        obj.insert("_images".to_string(), serde_json::Value::Array(images));
     }
 }
 

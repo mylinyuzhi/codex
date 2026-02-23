@@ -61,7 +61,8 @@ impl Tool for TaskTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model to use for this agent"
+                    "description": "Optional model to use for this agent",
+                    "enum": ["sonnet", "opus", "haiku"]
                 },
                 "max_turns": {
                     "type": "integer",
@@ -106,7 +107,7 @@ impl Tool for TaskTool {
         })?;
 
         // Parse optional fields
-        let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
+        let run_in_background = input["run_in_background"].as_bool();
         let model = input["model"].as_str().map(String::from);
         let max_turns = input["max_turns"].as_i64().map(|n| n as i32);
         let allowed_tools = input["allowed_tools"].as_array().map(|arr| {
@@ -127,10 +128,61 @@ impl Tool for TaskTool {
             )));
         }
 
+        // Check Task(type) restrictions: only allow spawning permitted agent types
+        if let Some(ref restrictions) = ctx.task_type_restrictions {
+            if !restrictions.iter().any(|t| t == subagent_type) {
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!(
+                        "Agent type '{subagent_type}' is not allowed. Permitted types: {}",
+                        restrictions.join(", ")
+                    ),
+                }
+                .build()
+                .into());
+            }
+        }
+
+        // Execute SubagentStart hooks before spawning (non-blocking per CC semantics)
+        let mut hook_additional_context: Option<String> = None;
+        if let Some(hooks) = &ctx.hook_registry {
+            let hook_ctx = cocode_hooks::HookContext::new(
+                cocode_hooks::HookEventType::SubagentStart,
+                ctx.session_id.clone(),
+                ctx.cwd.clone(),
+            )
+            .with_agent_type(subagent_type)
+            .with_metadata("description", description);
+            let outcomes = hooks.execute(&hook_ctx).await;
+            for outcome in &outcomes {
+                match &outcome.result {
+                    cocode_hooks::HookResult::Reject { reason } => {
+                        // Non-blocking: warn but don't prevent spawning
+                        tracing::warn!(
+                            hook = %outcome.hook_name,
+                            %reason,
+                            "SubagentStart hook rejected (non-blocking)"
+                        );
+                    }
+                    cocode_hooks::HookResult::ContinueWithContext { additional_context } => {
+                        if let Some(ctx_text) = additional_context {
+                            hook_additional_context = Some(ctx_text.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Prepend hook context to prompt if provided
+        let effective_prompt = match hook_additional_context {
+            Some(ref ctx_text) => format!("{ctx_text}\n\n{prompt}"),
+            None => prompt.to_string(),
+        };
+
         // Build spawn input with parent's selections for isolation
         let spawn_input = SpawnAgentInput {
             agent_type: subagent_type.to_string(),
-            prompt: prompt.to_string(),
+            prompt: effective_prompt,
             model,
             max_turns,
             run_in_background,
@@ -139,26 +191,6 @@ impl Tool for TaskTool {
             permission_mode: None, // Resolved by driver from AgentDefinition
             resume_from,
         };
-
-        // Execute SubagentStart hooks before spawning
-        if let Some(hooks) = &ctx.hook_registry {
-            let hook_ctx = cocode_hooks::HookContext::new(
-                cocode_hooks::HookEventType::SubagentStart,
-                ctx.session_id.clone(),
-                ctx.cwd.clone(),
-            )
-            .with_metadata("agent_type", subagent_type)
-            .with_metadata("description", description);
-            let outcomes = hooks.execute(&hook_ctx).await;
-            for outcome in &outcomes {
-                if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                    return Err(crate::error::tool_error::HookRejectedSnafu {
-                        reason: reason.clone(),
-                    }
-                    .build());
-                }
-            }
-        }
 
         // Spawn the agent
         match ctx.spawn_agent(spawn_input).await {
@@ -180,7 +212,7 @@ impl Tool for TaskTool {
                 })
                 .await;
 
-                if run_in_background {
+                if result.output_file.is_some() {
                     // Emit SubagentBackgrounded event
                     let output_file = result.output_file.clone().unwrap_or_default();
                     ctx.emit_event(cocode_protocol::LoopEvent::SubagentBackgrounded {
@@ -201,42 +233,80 @@ impl Tool for TaskTool {
                         result.agent_id
                     )))
                 } else {
-                    // Emit SubagentCompleted event for foreground agents
-                    ctx.emit_event(cocode_protocol::LoopEvent::SubagentCompleted {
-                        agent_id: result.agent_id.clone(),
-                        result: result.output.clone().unwrap_or_default(),
-                    })
-                    .await;
+                    // Execute SubagentStop hooks BEFORE emitting completion event
+                    // (blocking: exit 2 / Reject prevents agent from stopping)
+                    let output = result.output.clone().unwrap_or_else(|| {
+                        format!("Agent '{subagent_type}' completed with no output.")
+                    });
 
-                    // Execute SubagentStop hooks after foreground completion
+                    let mut stop_blocked = false;
+                    let mut stop_reason = String::new();
                     if let Some(hooks) = &ctx.hook_registry {
                         let hook_ctx = cocode_hooks::HookContext::new(
                             cocode_hooks::HookEventType::SubagentStop,
                             ctx.session_id.clone(),
                             ctx.cwd.clone(),
                         )
-                        .with_metadata("agent_type", subagent_type)
-                        .with_metadata("agent_id", result.agent_id.clone());
+                        .with_agent_type(subagent_type)
+                        .with_agent_id(result.agent_id.clone())
+                        .with_last_assistant_message(output.clone());
                         let outcomes = hooks.execute(&hook_ctx).await;
                         for outcome in &outcomes {
                             if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                                tracing::warn!(
+                                stop_blocked = true;
+                                stop_reason = reason.clone();
+                                tracing::info!(
                                     hook = %outcome.hook_name,
                                     %reason,
-                                    "SubagentStop hook rejected (ignored, agent already completed)"
+                                    "SubagentStop hook blocked completion"
                                 );
                             }
                         }
                     }
 
-                    // Foreground agent - return the result
-                    let output = result.output.unwrap_or_else(|| {
-                        format!("Agent '{subagent_type}' completed with no output.")
-                    });
-                    Ok(ToolOutput::text(format!(
-                        "agentId: {}\n\n{}",
-                        result.agent_id, output
-                    )))
+                    if stop_blocked {
+                        // Agent continues — return output with stop reason
+                        let blocked_output =
+                            format!("{output}\n\n[SubagentStop hook blocked: {stop_reason}]");
+                        Ok(ToolOutput::text(format!(
+                            "agentId: {}\n\n{}",
+                            result.agent_id, blocked_output
+                        )))
+                    } else {
+                        // Normal completion — emit event AFTER hooks pass
+                        ctx.emit_event(cocode_protocol::LoopEvent::SubagentCompleted {
+                            agent_id: result.agent_id.clone(),
+                            result: output.clone(),
+                        })
+                        .await;
+
+                        // Fire TaskCompleted hooks
+                        if let Some(hooks) = &ctx.hook_registry {
+                            let hook_ctx = cocode_hooks::HookContext::new(
+                                cocode_hooks::HookEventType::TaskCompleted,
+                                ctx.session_id.clone(),
+                                ctx.cwd.clone(),
+                            )
+                            .with_task_id(&result.agent_id)
+                            .with_task_subject(description);
+                            let outcomes = hooks.execute(&hook_ctx).await;
+                            for outcome in &outcomes {
+                                if let cocode_hooks::HookResult::Reject { reason } = &outcome.result
+                                {
+                                    tracing::info!(
+                                        hook = %outcome.hook_name,
+                                        %reason,
+                                        "TaskCompleted hook rejected (informational)"
+                                    );
+                                }
+                            }
+                        }
+
+                        Ok(ToolOutput::text(format!(
+                            "agentId: {}\n\n{}",
+                            result.agent_id, output
+                        )))
+                    }
                 }
             }
             Err(e) => Ok(ToolOutput::error(format!(

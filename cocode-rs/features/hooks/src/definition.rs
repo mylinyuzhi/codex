@@ -51,6 +51,21 @@ pub struct HookDefinition {
     /// Note: The hook is only removed on successful execution (not on timeout or failure).
     #[serde(default)]
     pub once: bool,
+
+    /// Optional status message for UI spinner text while hook runs.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "statusMessage"
+    )]
+    pub status_message: Option<String>,
+
+    /// Optional group ID for batch register/unregister.
+    ///
+    /// Used by subagent hooks: all hooks from the same agent share a group ID
+    /// so they can be unregistered together when the agent completes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
 }
 
 impl HookDefinition {

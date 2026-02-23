@@ -66,6 +66,47 @@ pub struct AgentDefinition {
     /// Where this definition originates from.
     #[serde(default)]
     pub source: AgentSource,
+
+    /// Skills to load for this agent (by name).
+    #[serde(default)]
+    pub skills: Vec<String>,
+
+    /// Default background mode for this agent.
+    ///
+    /// When `true`, the agent runs in the background by default unless
+    /// the spawn input explicitly overrides it.
+    #[serde(default)]
+    pub background: bool,
+
+    /// Memory scope for persistent agent memory.
+    ///
+    /// When set, the agent gets a persistent memory directory and its
+    /// `MEMORY.md` (first 200 lines) is injected into the prompt.
+    #[serde(default)]
+    pub memory: Option<MemoryScope>,
+
+    /// Hook definitions scoped to this agent's lifecycle.
+    ///
+    /// These hooks are registered when the agent starts and unregistered
+    /// when it completes. A `Stop` event in agent hooks is remapped to
+    /// `SubagentStop`.
+    #[serde(default)]
+    pub hooks: Option<Vec<AgentHookDefinition>>,
+
+    /// MCP server references required by this agent.
+    #[serde(default)]
+    pub mcp_servers: Option<Vec<McpServerRef>>,
+
+    /// Isolation mode for this agent's execution environment.
+    #[serde(default)]
+    pub isolation: Option<IsolationMode>,
+
+    /// Whether the markdown body (`critical_reminder`) is the full system prompt.
+    ///
+    /// When `true` and `critical_reminder` is set, the body replaces the entire
+    /// generated system prompt instead of being prepended to the user prompt.
+    #[serde(default)]
+    pub use_custom_prompt: bool,
 }
 
 /// Where an agent definition originates from.
@@ -76,6 +117,70 @@ pub enum AgentSource {
     UserSettings,
     ProjectSettings,
     Plugin,
+    CliFlag,
+}
+
+impl AgentSource {
+    /// Returns the priority of this source (higher = takes precedence).
+    pub fn priority(self) -> u8 {
+        match self {
+            AgentSource::BuiltIn => 0,
+            AgentSource::Plugin => 1,
+            AgentSource::UserSettings => 2,
+            AgentSource::ProjectSettings => 3,
+            AgentSource::CliFlag => 4,
+        }
+    }
+}
+
+/// Memory scope for persistent agent memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    /// User-level memory: `~/.cocode/agent-memory/{agent_type}/`
+    User,
+    /// Project-level memory: `.cocode/agent-memory/{agent_type}/`
+    Project,
+    /// Local (gitignored) memory: `.cocode/agent-memory-local/{agent_type}/`
+    Local,
+}
+
+/// A lightweight hook definition scoped to an agent.
+///
+/// Similar to `HookDefinition` but serialized from agent frontmatter.
+/// The `Stop` event type is remapped to `SubagentStop` when registered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentHookDefinition {
+    /// The event type this hook triggers on.
+    pub event: String,
+    /// Optional matcher pattern (e.g., tool name).
+    #[serde(default)]
+    pub matcher: Option<String>,
+    /// The command to execute.
+    pub command: String,
+    /// Optional timeout in seconds.
+    #[serde(default)]
+    pub timeout: Option<u32>,
+}
+
+/// Reference to an MCP server required by an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerRef {
+    /// The MCP server name (must match a configured server).
+    pub name: String,
+    /// Optional transport override (e.g., "stdio", "sse").
+    #[serde(default)]
+    pub transport: Option<String>,
+}
+
+/// Isolation mode for agent execution environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IsolationMode {
+    /// No isolation (default) — agent shares parent's working directory.
+    None,
+    /// Git worktree isolation — agent runs in a detached worktree.
+    Worktree,
 }
 
 #[cfg(test)]

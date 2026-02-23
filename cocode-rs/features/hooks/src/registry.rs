@@ -3,7 +3,11 @@
 //! The `HookRegistry` is the central coordinator: it stores all registered
 //! hooks and, when an event occurs, finds the matching hooks and executes them.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
 
@@ -16,8 +20,28 @@ use crate::definition::HookDefinition;
 use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::handlers;
+use crate::handlers::inline::InlineHandler;
 use crate::result::HookOutcome;
 use crate::result::HookResult;
+use crate::settings::HookSettings;
+
+/// Callback for LLM model calls (used by Prompt handler in LLM verification mode).
+///
+/// Args: (system_prompt, user_message) -> Ok(response_text) or Err(error_message)
+pub type HookModelCallFn = Arc<
+    dyn Fn(String, String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Callback for spawning a verification agent (used by Agent handler).
+///
+/// Args: (prompt, allowed_tools, max_turns) -> Ok(agent_output_text) or Err(error_message)
+pub type HookAgentFn = Arc<
+    dyn Fn(String, Vec<String>, i32) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Central registry that stores hooks and dispatches events.
 ///
@@ -29,6 +53,15 @@ use crate::result::HookResult;
 /// from the executor.
 pub struct HookRegistry {
     hooks: RwLock<Vec<HookDefinition>>,
+    /// Inline handlers stored separately (closures are not serializable).
+    /// Keyed by hook name to match against `HookHandler::Inline` definitions.
+    inline_handlers: RwLock<HashMap<String, InlineHandler>>,
+    /// Settings that control hook execution (e.g., disable_all_hooks).
+    settings: RwLock<HookSettings>,
+    /// Optional LLM callback for Prompt handler verification mode.
+    model_call_fn: RwLock<Option<HookModelCallFn>>,
+    /// Optional agent spawn callback for Agent handler verification mode.
+    agent_fn: RwLock<Option<HookAgentFn>>,
 }
 
 impl Default for HookRegistry {
@@ -42,6 +75,41 @@ impl HookRegistry {
     pub fn new() -> Self {
         Self {
             hooks: RwLock::new(Vec::new()),
+            inline_handlers: RwLock::new(HashMap::new()),
+            settings: RwLock::new(HookSettings::default()),
+            model_call_fn: RwLock::new(None),
+            agent_fn: RwLock::new(None),
+        }
+    }
+
+    /// Sets the LLM callback for Prompt handler verification mode.
+    pub fn set_model_call_fn(&self, f: HookModelCallFn) {
+        if let Ok(mut slot) = self.model_call_fn.write() {
+            *slot = Some(f);
+        }
+    }
+
+    /// Sets the agent spawn callback for Agent handler verification mode.
+    pub fn set_agent_fn(&self, f: HookAgentFn) {
+        if let Ok(mut slot) = self.agent_fn.write() {
+            *slot = Some(f);
+        }
+    }
+
+    /// Returns a clone of the model call callback if set.
+    fn get_model_call_fn(&self) -> Option<HookModelCallFn> {
+        self.model_call_fn.read().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Returns a clone of the agent callback if set.
+    fn get_agent_fn(&self) -> Option<HookAgentFn> {
+        self.agent_fn.read().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Updates the hook settings (e.g., `disable_all_hooks`, `allow_managed_hooks_only`).
+    pub fn set_settings(&self, new_settings: HookSettings) {
+        if let Ok(mut settings) = self.settings.write() {
+            *settings = new_settings;
         }
     }
 
@@ -62,6 +130,18 @@ impl HookRegistry {
     pub fn register_all(&self, hooks: impl IntoIterator<Item = HookDefinition>) {
         for hook in hooks {
             self.register(hook);
+        }
+    }
+
+    /// Registers an inline (closure) handler with its hook definition.
+    ///
+    /// The handler is stored separately from the definition since closures
+    /// are not serializable. The hook definition should use `HookHandler::Inline`.
+    pub fn register_inline(&self, hook: HookDefinition, handler: InlineHandler) {
+        let name = hook.name.clone();
+        self.register(hook);
+        if let Ok(mut handlers) = self.inline_handlers.write() {
+            handlers.insert(name, handler);
         }
     }
 
@@ -88,13 +168,33 @@ impl HookRegistry {
     /// One-shot hooks (`once: true`) are removed after successful execution.
     /// They are NOT removed on timeout or failure, allowing retry.
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
+        // Check settings at execution time (Issue C fix: previously only checked during aggregation)
+        if let Ok(settings) = self.settings.read() {
+            if settings.disable_all_hooks {
+                return Vec::new();
+            }
+        }
+
         // Get matching hooks (clone to release lock during execution)
         // The match target varies by event type (tool_name, source, notification_type, etc.)
         let match_target = ctx.match_target();
+        let allow_managed_only = self
+            .settings
+            .read()
+            .map(|s| s.allow_managed_hooks_only)
+            .unwrap_or(false);
+
         let matching: Vec<HookDefinition> = if let Ok(hooks) = self.hooks.read() {
             hooks
                 .iter()
                 .filter(|h| h.enabled && h.event_type == ctx.event_type)
+                .filter(|h| {
+                    // When allow_managed_hooks_only is set, skip non-managed hooks
+                    if allow_managed_only && !h.source.is_managed() {
+                        return false;
+                    }
+                    true
+                })
                 .filter(|h| {
                     match (&h.matcher, match_target) {
                         (Some(matcher), Some(target)) => matcher.matches(target),
@@ -108,6 +208,23 @@ impl HookRegistry {
             return Vec::new();
         };
 
+        // Pre-execute inline handlers synchronously (closures can't be sent across threads)
+        let mut inline_results: HashMap<String, HookResult> = HashMap::new();
+        if let Ok(handlers) = self.inline_handlers.read() {
+            for hook in &matching {
+                if matches!(hook.handler, HookHandler::Inline) {
+                    if let Some(handler) = handlers.get(&hook.name) {
+                        let result = handler(ctx);
+                        inline_results.insert(hook.name.clone(), result);
+                    }
+                }
+            }
+        }
+
+        // Snapshot callbacks for use in spawned tasks
+        let model_call_fn = self.get_model_call_fn();
+        let agent_fn = self.get_agent_fn();
+
         // Execute all matching hooks in parallel
         let futures: Vec<_> = matching
             .iter()
@@ -117,11 +234,28 @@ impl HookRegistry {
                 let timeout_secs = hook.effective_timeout_secs();
                 let once = hook.once;
                 let ctx = ctx.clone();
+                let model_call_fn = model_call_fn.clone();
+                let agent_fn = agent_fn.clone();
+                // Use pre-computed inline result if available
+                let inline_result = inline_results.remove(&hook_name);
                 async move {
                     let start = Instant::now();
                     let timeout = tokio::time::Duration::from_secs(timeout_secs as u64);
-                    let result =
-                        tokio::time::timeout(timeout, execute_handler(&handler, &ctx)).await;
+                    let result = if let Some(r) = inline_result {
+                        // Inline handler already executed synchronously
+                        Ok(r)
+                    } else {
+                        tokio::time::timeout(
+                            timeout,
+                            execute_handler(
+                                &handler,
+                                &ctx,
+                                model_call_fn.as_ref(),
+                                agent_fn.as_ref(),
+                            ),
+                        )
+                        .await
+                    };
 
                     let duration_ms = start.elapsed().as_millis() as i64;
 
@@ -176,18 +310,21 @@ impl HookRegistry {
 
         // Remove one-shot hooks that executed successfully
         if !once_hooks_to_remove.is_empty() {
-            self.remove_hooks_by_name(&once_hooks_to_remove);
+            self.remove_once_hooks_by_name(&once_hooks_to_remove);
         }
 
         outcomes
     }
 
-    /// Removes hooks by their names.
-    fn remove_hooks_by_name(&self, names: &[String]) {
+    /// Removes one-shot hooks by their names.
+    ///
+    /// Only removes hooks that are both in the `names` set AND have `once: true`,
+    /// preventing accidental removal of non-one-shot hooks with the same name.
+    fn remove_once_hooks_by_name(&self, names: &[String]) {
         let names_set: HashSet<_> = names.iter().collect();
         if let Ok(mut hooks) = self.hooks.write() {
             let before = hooks.len();
-            hooks.retain(|h| !names_set.contains(&h.name));
+            hooks.retain(|h| !(h.once && names_set.contains(&h.name)));
             let removed = before - hooks.len();
             if removed > 0 {
                 info!(
@@ -196,13 +333,29 @@ impl HookRegistry {
                 );
             }
         }
+        // Also clean up inline handlers for removed one-shot hooks
+        if let Ok(mut handlers) = self.inline_handlers.write() {
+            for name in names {
+                handlers.remove(name);
+            }
+        }
     }
 
     /// Removes all hooks from a specific source (e.g., when a skill ends).
     pub fn remove_hooks_by_source_name(&self, source_name: &str) {
+        let mut removed_names = Vec::new();
         if let Ok(mut hooks) = self.hooks.write() {
             let before = hooks.len();
-            hooks.retain(|h| h.source.name() != Some(source_name));
+            hooks.retain(|h| {
+                if h.source.name() == Some(source_name) {
+                    if matches!(h.handler, HookHandler::Inline) {
+                        removed_names.push(h.name.clone());
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
             let removed = before - hooks.len();
             if removed > 0 {
                 info!(
@@ -210,6 +363,14 @@ impl HookRegistry {
                     count = removed,
                     "Removed hooks by source"
                 );
+            }
+        }
+        // Clean up inline handlers for removed hooks
+        if !removed_names.is_empty() {
+            if let Ok(mut handlers) = self.inline_handlers.write() {
+                for name in &removed_names {
+                    handlers.remove(name);
+                }
             }
         }
     }
@@ -231,6 +392,9 @@ impl HookRegistry {
         if let Ok(mut hooks) = self.hooks.write() {
             hooks.clear();
         }
+        if let Ok(mut handlers) = self.inline_handlers.write() {
+            handlers.clear();
+        }
     }
 
     /// Returns the number of registered hooks.
@@ -247,33 +411,134 @@ impl HookRegistry {
     pub fn all_hooks(&self) -> Vec<HookDefinition> {
         self.hooks.read().map(|h| h.clone()).unwrap_or_default()
     }
+
+    /// Registers a group of hooks with a shared group ID.
+    ///
+    /// Used by subagent hooks: all hooks in the group share the same
+    /// `group_id` so they can be unregistered together when the agent completes.
+    pub fn register_group(&self, group_id: &str, hooks: impl IntoIterator<Item = HookDefinition>) {
+        if let Ok(mut all) = self.hooks.write() {
+            for mut hook in hooks {
+                hook.group_id = Some(group_id.to_string());
+                info!(
+                    name = %hook.name,
+                    event = %hook.event_type,
+                    group_id,
+                    "Registered grouped hook"
+                );
+                all.push(hook);
+            }
+        }
+    }
+
+    /// Removes all hooks with the given group ID.
+    ///
+    /// Used to clean up subagent hooks when the agent completes.
+    pub fn unregister_group(&self, group_id: &str) {
+        if let Ok(mut hooks) = self.hooks.write() {
+            let before = hooks.len();
+            hooks.retain(|h| h.group_id.as_deref() != Some(group_id));
+            let removed = before - hooks.len();
+            if removed > 0 {
+                info!(group_id, count = removed, "Removed hooks by group");
+            }
+        }
+    }
 }
 
 /// Dispatches execution to the appropriate handler.
-async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult {
+async fn execute_handler(
+    handler: &HookHandler,
+    ctx: &HookContext,
+    model_call_fn: Option<&HookModelCallFn>,
+    agent_fn: Option<&HookAgentFn>,
+) -> HookResult {
     match handler {
         HookHandler::Command { command } => {
             // Pass full HookContext to command handler for env vars and stdin JSON
             handlers::command::CommandHandler::execute(command, ctx).await
         }
-        // NOTE: `model` field is ignored — LLM verification mode is not yet implemented.
-        // When `model` is set, this should call an LLM via a callback instead of
-        // template expansion. See `PromptHandler::prepare_verification_request`.
-        HookHandler::Prompt { template, .. } => {
-            let arguments = ctx
-                .tool_input
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            handlers::prompt::PromptHandler::execute(template, &arguments)
+        HookHandler::Prompt { template, model } => {
+            if model.is_some() {
+                // LLM verification mode: query the model via callback
+                if let Some(call_fn) = model_call_fn {
+                    let config = handlers::prompt::PromptVerificationConfig::default();
+                    let (system_prompt, user_message) =
+                        handlers::prompt::PromptHandler::prepare_verification_request(
+                            template, ctx, &config,
+                        );
+                    match call_fn(system_prompt, user_message).await {
+                        Ok(response) => {
+                            handlers::prompt::PromptHandler::parse_verification_response(&response)
+                        }
+                        Err(e) => {
+                            warn!("LLM verification call failed: {e}");
+                            HookResult::Continue
+                        }
+                    }
+                } else {
+                    // No LLM callback available — fall back to template expansion
+                    warn!(
+                        "Prompt hook has model set but no model_call_fn is registered, falling back to template mode"
+                    );
+                    let arguments = ctx
+                        .tool_input
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    handlers::prompt::PromptHandler::execute(template, &arguments)
+                }
+            } else {
+                // Template-only mode
+                let arguments = ctx
+                    .tool_input
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                handlers::prompt::PromptHandler::execute(template, &arguments)
+            }
         }
-        // NOTE: `prompt` and `timeout` fields are ignored — agent handler is a stub.
-        // Full implementation requires a `SpawnAgentFn` callback injected into
-        // `HookRegistry`. See `AgentHandler::prepare_verification_request`.
-        HookHandler::Agent { max_turns, .. } => handlers::agent::AgentHandler::execute(*max_turns),
+        HookHandler::Agent {
+            max_turns, prompt, ..
+        } => {
+            if let Some(spawn_fn) = agent_fn {
+                // Real agent execution via callback
+                let (config, default_prompt) =
+                    handlers::agent::AgentHandler::prepare_verification_request(ctx, *max_turns);
+                let effective_prompt = prompt.as_deref().map_or_else(
+                    || default_prompt.clone(),
+                    |p| {
+                        // Expand $ARGUMENTS in custom prompt
+                        let ctx_json =
+                            serde_json::to_string_pretty(ctx).unwrap_or_else(|_| "{}".to_string());
+                        p.replace("$ARGUMENTS", &ctx_json)
+                    },
+                );
+                match spawn_fn(
+                    effective_prompt,
+                    config.allowed_tools.clone(),
+                    config.max_turns,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        handlers::agent::AgentHandler::parse_verification_response(&response)
+                    }
+                    Err(e) => {
+                        warn!("Agent hook execution failed: {e}");
+                        HookResult::Continue
+                    }
+                }
+            } else {
+                // No agent callback — stub behavior
+                handlers::agent::AgentHandler::execute(*max_turns)
+            }
+        }
         HookHandler::Webhook { url } => handlers::webhook::WebhookHandler::execute(url, ctx).await,
         HookHandler::Inline => {
-            warn!("Inline handler cannot be dispatched through the registry");
+            // Inline handlers are pre-executed synchronously in execute().
+            // If we reach here, no inline handler was registered for this hook.
+            warn!("Inline hook definition has no registered handler closure");
             HookResult::Continue
         }
     }

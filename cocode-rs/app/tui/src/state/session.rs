@@ -23,6 +23,9 @@ pub struct SessionState {
     /// Whether plan mode is active.
     pub plan_mode: bool,
 
+    /// Current permission mode (Default/AcceptEdits/Plan/Bypass/DontAsk).
+    pub permission_mode: cocode_protocol::PermissionMode,
+
     /// Current phase in plan mode (if active).
     pub plan_phase: Option<PlanPhase>,
 
@@ -72,6 +75,12 @@ pub struct SessionState {
 
     /// Estimated cost in cents.
     pub estimated_cost_cents: i32,
+
+    /// Active output style name (for status bar display).
+    pub output_style: Option<String>,
+
+    /// Current turn number (set by TurnStarted, used for message tagging).
+    pub current_turn_number: Option<i32>,
 }
 
 impl SessionState {
@@ -340,6 +349,9 @@ pub struct ChatMessage {
 
     /// Inline tool calls associated with this message.
     pub tool_calls: Vec<InlineToolCall>,
+
+    /// Turn number this message belongs to (for precise rewind).
+    pub turn_number: Option<i32>,
 }
 
 /// An inline tool call displayed within a chat message.
@@ -363,6 +375,7 @@ impl ChatMessage {
             streaming: false,
             thinking: None,
             tool_calls: Vec::new(),
+            turn_number: None,
         }
     }
 
@@ -375,6 +388,7 @@ impl ChatMessage {
             streaming: false,
             thinking: None,
             tool_calls: Vec::new(),
+            turn_number: None,
         }
     }
 
@@ -387,6 +401,7 @@ impl ChatMessage {
             streaming: true,
             thinking: None,
             tool_calls: Vec::new(),
+            turn_number: None,
         }
     }
 

@@ -337,3 +337,79 @@ fn test_find_config_files_excludes_non_matching() {
     assert_eq!(provider_files.len(), 1);
     assert!(provider_files[0].ends_with("provider.json"));
 }
+
+#[test]
+fn test_load_config_with_settings_local() {
+    let (temp_dir, loader) = create_temp_config();
+
+    // Base config
+    let config_json = r#"{
+        "models": {
+            "main": "openai/gpt-5"
+        },
+        "profile": "fast"
+    }"#;
+    std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
+
+    // Local settings override
+    let local_json = r#"{
+        "outputStyle": "explanatory"
+    }"#;
+    std::fs::write(temp_dir.path().join(SETTINGS_LOCAL_FILE), local_json).unwrap();
+
+    let config = loader.load_config().unwrap();
+    // Base fields preserved
+    assert_eq!(config.profile, Some("fast".to_string()));
+    assert!(config.models.is_some());
+    // Local override applied
+    assert_eq!(config.output_style, Some("explanatory".to_string()));
+}
+
+#[test]
+fn test_load_config_local_overrides_base() {
+    let (temp_dir, loader) = create_temp_config();
+
+    // Base config with output_style
+    let config_json = r#"{
+        "outputStyle": "learning"
+    }"#;
+    std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
+
+    // Local settings override the same field
+    let local_json = r#"{
+        "outputStyle": "explanatory"
+    }"#;
+    std::fs::write(temp_dir.path().join(SETTINGS_LOCAL_FILE), local_json).unwrap();
+
+    let config = loader.load_config().unwrap();
+    // Local wins over base
+    assert_eq!(config.output_style, Some("explanatory".to_string()));
+}
+
+#[test]
+fn test_load_config_no_settings_local() {
+    let (temp_dir, loader) = create_temp_config();
+
+    // Only base config, no settings.local.json
+    let config_json = r#"{
+        "profile": "fast",
+        "outputStyle": "learning"
+    }"#;
+    std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
+
+    let config = loader.load_config().unwrap();
+    assert_eq!(config.profile, Some("fast".to_string()));
+    assert_eq!(config.output_style, Some("learning".to_string()));
+}
+
+#[test]
+fn test_load_config_empty_settings_local() {
+    let (temp_dir, loader) = create_temp_config();
+
+    let config_json = r#"{"outputStyle": "learning"}"#;
+    std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
+    std::fs::write(temp_dir.path().join(SETTINGS_LOCAL_FILE), "{}").unwrap();
+
+    let config = loader.load_config().unwrap();
+    assert_eq!(config.output_style, Some("learning".to_string()));
+}

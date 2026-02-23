@@ -48,6 +48,10 @@ pub struct Session {
     /// Unique session identifier (UUID v4).
     pub id: String,
 
+    /// Parent session ID (set when this session was created by clear-context from another).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+
     /// Session creation timestamp.
     pub created_at: DateTime<Utc>,
 
@@ -84,6 +88,7 @@ impl Session {
         let now = Utc::now();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
             created_at: now,
             last_activity_at: now,
             working_dir,
@@ -105,6 +110,7 @@ impl Session {
         let now = Utc::now();
         Self {
             id: id.into(),
+            parent_id: None,
             created_at: now,
             last_activity_at: now,
             working_dir,
@@ -123,6 +129,7 @@ impl Session {
         let now = Utc::now();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
             created_at: now,
             last_activity_at: now,
             working_dir,
@@ -166,6 +173,25 @@ impl Session {
     /// Get seconds since last activity.
     pub fn idle_secs(&self) -> i64 {
         (Utc::now() - self.last_activity_at).num_seconds()
+    }
+
+    /// Create a child session from this session (for clear-context flow).
+    ///
+    /// Generates a new UUID, copies working_dir and selections,
+    /// and sets `parent_id` to the current session's ID.
+    pub fn derive_child(&self) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            parent_id: Some(self.id.clone()),
+            created_at: now,
+            last_activity_at: now,
+            working_dir: self.working_dir.clone(),
+            selections: self.selections.clone(),
+            max_turns: self.max_turns,
+            title: self.title.clone(),
+            ephemeral: self.ephemeral,
+        }
     }
 
     // ==========================================================

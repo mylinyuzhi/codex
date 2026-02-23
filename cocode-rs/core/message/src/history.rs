@@ -362,6 +362,14 @@ impl MessageHistory {
         self.total_output_tokens = 0;
     }
 
+    /// Remove all turns at or after the given turn number.
+    ///
+    /// Used by the rewind system to roll back conversation history
+    /// when files are restored to a previous state.
+    pub fn truncate_from_turn(&mut self, from_turn_number: i32) {
+        self.turns.retain(|t| t.number < from_turn_number);
+    }
+
     /// Get the compaction boundary (if any).
     pub fn compaction_boundary(&self) -> Option<&CompactionBoundary> {
         self.compaction_boundary.as_ref()

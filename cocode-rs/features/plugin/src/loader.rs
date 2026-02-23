@@ -16,6 +16,7 @@ use crate::lsp_loader::load_lsp_servers_from_file;
 use crate::manifest::PLUGIN_DIR;
 use crate::manifest::PLUGIN_JSON;
 use crate::manifest::PluginManifest;
+use crate::manifest::PluginRootSettings;
 use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
 
@@ -45,6 +46,9 @@ pub struct LoadedPlugin {
 
     /// Loaded contributions.
     pub contributions: Vec<PluginContribution>,
+
+    /// Plugin root settings (from `settings.json`).
+    pub settings: PluginRootSettings,
 }
 
 impl LoadedPlugin {
@@ -141,11 +145,15 @@ impl PluginLoader {
         let contributions =
             self.load_contributions(dir, &manifest.contributions, &manifest.plugin.name)?;
 
+        // Load plugin root settings
+        let settings = PluginRootSettings::from_dir(dir);
+
         info!(
             name = %manifest.plugin.name,
             version = %manifest.plugin.version,
             scope = %scope,
             contributions = contributions.len(),
+            agent = ?settings.agent,
             "Loaded plugin"
         );
 
@@ -154,6 +162,7 @@ impl PluginLoader {
             path: dir.to_path_buf(),
             scope,
             contributions,
+            settings,
         })
     }
 
@@ -432,6 +441,37 @@ impl PluginLoader {
             }
         }
 
+        // Load output styles (declared or auto-discover outputStyles/)
+        let style_paths = if contributions.output_styles.is_empty() {
+            self.auto_discover_dir(plugin_dir, "outputStyles")
+        } else {
+            contributions.output_styles.iter().cloned().collect()
+        };
+        for style_path in &style_paths {
+            let full_path = match self.validate_path(plugin_dir, style_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %style_path,
+                        error = %e,
+                        "Invalid output style path in plugin"
+                    );
+                    continue;
+                }
+            };
+            if full_path.is_dir() {
+                let styles = load_output_styles_from_dir(&full_path, plugin_name);
+                result.extend(styles);
+            } else {
+                debug!(
+                    plugin = %plugin_name,
+                    path = %full_path.display(),
+                    "Output style path not found or not a directory"
+                );
+            }
+        }
+
         Ok(result)
     }
 
@@ -525,6 +565,63 @@ pub fn load_plugins_from_roots(roots: &[(PathBuf, PluginScope)]) -> Vec<LoadedPl
     info!(total = plugins.len(), "Plugin loading complete");
 
     plugins
+}
+
+/// Load output styles from a directory.
+///
+/// Each `.md` file in the directory is treated as an output style definition.
+/// The filename (without extension) becomes the style name.
+fn load_output_styles_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribution> {
+    use crate::contribution::OutputStyleDefinition;
+
+    let mut results = Vec::new();
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(
+                plugin = %plugin_name,
+                dir = %dir.display(),
+                error = %e,
+                "Failed to read output styles directory"
+            );
+            return results;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            match std::fs::read_to_string(&path) {
+                Ok(prompt) => {
+                    debug!(
+                        plugin = %plugin_name,
+                        style = %name,
+                        "Loaded output style"
+                    );
+                    results.push(PluginContribution::OutputStyle {
+                        style: OutputStyleDefinition { name, prompt },
+                        plugin_name: plugin_name.to_string(),
+                    });
+                }
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to read output style file"
+                    );
+                }
+            }
+        }
+    }
+
+    results
 }
 
 #[cfg(test)]

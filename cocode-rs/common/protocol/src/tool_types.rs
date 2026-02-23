@@ -44,6 +44,15 @@ impl std::fmt::Display for ConcurrencySafety {
     }
 }
 
+/// Image data for tool results (base64-encoded).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageData {
+    /// Base64-encoded image bytes.
+    pub data: String,
+    /// MIME type (e.g., "image/png").
+    pub media_type: String,
+}
+
 /// Output from a tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolOutput {
@@ -55,6 +64,9 @@ pub struct ToolOutput {
     /// Context modifiers to apply after this tool execution.
     #[serde(default)]
     pub modifiers: Vec<ContextModifier>,
+    /// Images to include in the tool result (e.g., from AskUserQuestion).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageData>,
 }
 
 impl ToolOutput {
@@ -64,6 +76,7 @@ impl ToolOutput {
             content: ToolResultContent::Text(content.into()),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -73,6 +86,7 @@ impl ToolOutput {
             content: ToolResultContent::Text(message.into()),
             is_error: true,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -82,6 +96,7 @@ impl ToolOutput {
             content: ToolResultContent::Structured(value),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 

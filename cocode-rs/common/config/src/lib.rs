@@ -93,8 +93,10 @@ pub use cocode_protocol::WireApi;
 // Re-export JSON config types
 pub use json_config::AppConfig;
 pub use json_config::ConfigProfile;
+pub use json_config::ExtraMarketplaceConfig;
 pub use json_config::FeaturesConfig;
 pub use json_config::LoggingConfig;
+pub use json_config::MarketplaceSourceConfig;
 pub use json_config::OtelJsonConfig;
 pub use json_config::PermissionsConfig;
 pub use json_config::ResolvedAppConfig;

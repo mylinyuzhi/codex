@@ -152,6 +152,15 @@ pub struct HookContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_instructions: Option<String>,
 
+    // -- ConfigChange --
+    /// The config key that changed (populated for `ConfigChange` events).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_key: Option<String>,
+
+    /// The new config value (populated for `ConfigChange` events).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_value: Option<Value>,
+
     // -- SessionEnd --
     /// The reason the session ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +205,8 @@ impl HookContext {
             task_description: None,
             trigger: None,
             custom_instructions: None,
+            config_key: None,
+            config_value: None,
             reason: None,
             metadata: HashMap::new(),
         }
@@ -382,6 +393,18 @@ impl HookContext {
         self
     }
 
+    /// Sets the config key (for `ConfigChange` events).
+    pub fn with_config_key(mut self, key: impl Into<String>) -> Self {
+        self.config_key = Some(key.into());
+        self
+    }
+
+    /// Sets the config value (for `ConfigChange` events).
+    pub fn with_config_value(mut self, value: Value) -> Self {
+        self.config_value = Some(value);
+        self
+    }
+
     /// Sets the session end reason (for `SessionEnd` events).
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
@@ -408,6 +431,7 @@ impl HookContext {
     /// - Notification: `notification_type`
     /// - SubagentStart/SubagentStop: `agent_type`
     /// - PreCompact: `trigger`
+    /// - ConfigChange: `config_key`
     /// - UserPromptSubmit, Stop, TeammateIdle, TaskCompleted: no matcher
     pub fn match_target(&self) -> Option<&str> {
         match self.event_type {
@@ -422,6 +446,7 @@ impl HookContext {
                 self.agent_type.as_deref()
             }
             HookEventType::PreCompact => self.trigger.as_deref(),
+            HookEventType::ConfigChange => self.config_key.as_deref(),
             // UserPromptSubmit, Stop, TeammateIdle, TaskCompleted: no matcher target
             _ => None,
         }

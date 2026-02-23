@@ -94,6 +94,8 @@ pub struct AttachmentSettings {
     pub budget_usd: bool,
     /// Enable compact file references (for large files after compaction).
     pub compact_file_reference: bool,
+    /// Enable rewind notifications.
+    pub rewind: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -124,6 +126,7 @@ impl Default for AttachmentSettings {
             already_read_files: true,
             budget_usd: true,
             compact_file_reference: true,
+            rewind: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }
@@ -257,6 +260,7 @@ impl OutputStyleConfig {
     pub fn resolve_prompt_config(
         &self,
         cocode_home: &std::path::Path,
+        project_dir: Option<&std::path::Path>,
     ) -> Option<cocode_context::OutputStylePromptConfig> {
         if !self.enabled {
             return None;
@@ -264,7 +268,8 @@ impl OutputStyleConfig {
 
         // Try to find by style_name first (gives us full OutputStyleInfo with keep_coding_instructions)
         if let Some(name) = &self.style_name
-            && let Some(info) = cocode_config::builtin::find_output_style(name, cocode_home)
+            && let Some(info) =
+                cocode_config::builtin::find_output_style(name, cocode_home, project_dir)
         {
             let keep_coding = self
                 .keep_coding_instructions

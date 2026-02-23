@@ -12,14 +12,20 @@ use cocode_context::ContextInjection;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
 use cocode_context::InjectionPosition;
+use cocode_hooks::HookDefinition;
+use cocode_hooks::HookHandler;
 use cocode_hooks::HookRegistry;
+use cocode_hooks::HookSource;
 use cocode_loop::AgentLoop;
 use cocode_loop::CompactionConfig;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
+use cocode_loop::StopReason;
 use cocode_message::MessageHistory;
+use cocode_plan_mode::PlanModeState;
 use cocode_protocol::LoopEvent;
+use cocode_protocol::PermissionMode;
 use cocode_protocol::ProviderType;
 use cocode_protocol::RoleSelection;
 use cocode_protocol::RoleSelections;
@@ -33,6 +39,8 @@ use cocode_shell::ShellExecutor;
 use cocode_skill::SkillInterface;
 use cocode_skill::SkillManager;
 use cocode_subagent::AgentExecuteParams;
+use cocode_subagent::IsolationMode;
+use cocode_subagent::MemoryScope;
 use cocode_subagent::SubagentManager;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
@@ -65,6 +73,9 @@ pub struct TurnResult {
 
     /// Whether the loop completed (model stop signal).
     pub is_complete: bool,
+
+    /// The reason the loop stopped (preserved for plan mode exit handling).
+    pub stop_reason: StopReason,
 }
 
 impl TurnResult {
@@ -79,8 +90,18 @@ impl TurnResult {
             ),
             has_pending_tools: false,
             is_complete: true,
+            stop_reason: result.stop_reason.clone(),
         }
     }
+}
+
+/// Result of a partial compaction (summarize from a user-selected turn).
+#[derive(Debug, Clone)]
+pub struct PartialCompactResult {
+    /// Turn number from which summarization was requested.
+    pub from_turn: i32,
+    /// Estimated token count of the summary that was generated.
+    pub summary_tokens: i32,
 }
 
 /// Session state aggregate for an active conversation.
@@ -209,6 +230,33 @@ pub struct SessionState {
     /// Runtime output style override.
     /// `None` = use config default, `Some(None)` = disabled, `Some(Some(name))` = active style.
     output_style_override: Option<Option<String>>,
+
+    /// Output styles contributed by plugins.
+    ///
+    /// Checked as a fallback when `find_output_style()` doesn't find a
+    /// built-in or custom style. Populated from `PluginRegistry::output_style_contributions()`.
+    plugin_output_styles: Vec<(String, String)>,
+
+    /// Optional snapshot manager for rewind support (file backups + ghost commits).
+    snapshot_manager: Option<Arc<cocode_file_backup::SnapshotManager>>,
+
+    /// Plan mode state persisted across AgentLoop runs.
+    ///
+    /// Each `run_turn_streaming()` creates a new `AgentLoop`, so plan mode
+    /// state must live here and be passed to/extracted from the loop.
+    plan_mode_state: PlanModeState,
+
+    /// Question responder for AskUserQuestion tool.
+    ///
+    /// Shared across turns so the TUI driver can send responses that
+    /// unblock the AskUserQuestion tool's oneshot channel.
+    question_responder: Arc<cocode_tools::QuestionResponder>,
+
+    /// Shared approval store for tool permissions (persists across turns).
+    ///
+    /// Pre-declared permissions from `ExitPlanMode`'s `allowedPrompts` are
+    /// injected here so they survive across `AgentLoop` instances.
+    shared_approval_store: Arc<tokio::sync::Mutex<cocode_tools::ApprovalStore>>,
 }
 
 impl SessionState {
@@ -264,7 +312,7 @@ impl SessionState {
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
-        cocode_tools::builtin::register_builtin_tools(&mut tool_registry);
+        cocode_tools::builtin::register_builtin_tools(&mut tool_registry, &config.features);
 
         // Create hook registry and load hooks via aggregator (respects disable/managed-only)
         let hook_registry = HookRegistry::new();
@@ -332,28 +380,148 @@ impl SessionState {
 
         // Create subagent manager and load builtin + custom agents
         let mut subagent_manager = SubagentManager::new();
-        let agent_defs =
+        let mut agent_defs =
             cocode_subagent::all_agents(&config.cocode_home, Some(session.working_dir.as_path()));
+
+        // Merge CLI agents (highest priority) from --agents flag
+        if let Ok(cli_json) = std::env::var("COCODE_CLI_AGENTS") {
+            if let Ok(cli_agents) =
+                serde_json::from_str::<Vec<cocode_subagent::AgentDefinition>>(&cli_json)
+            {
+                cocode_subagent::merge_custom_agents(&mut agent_defs, cli_agents);
+            }
+        }
+
         for def in agent_defs {
             subagent_manager.register_agent_type(def);
         }
 
         // Load plugins from standard directories and installed plugin cache
-        let plugin_config = cocode_plugin::PluginIntegrationConfig::with_defaults(
+        let mut plugin_config = cocode_plugin::PluginIntegrationConfig::with_defaults(
             &config.cocode_home,
             Some(&session.working_dir),
         );
-        let plugin_registry = cocode_plugin::integrate_plugins(
+
+        // Pick up --plugin-dir flags passed via env var from CLI
+        if let Ok(dirs_json) = std::env::var("COCODE_PLUGIN_DIRS") {
+            if let Ok(dirs) = serde_json::from_str::<Vec<std::path::PathBuf>>(&dirs_json) {
+                if !dirs.is_empty() {
+                    tracing::info!(count = dirs.len(), "Loading inline plugin directories");
+                    plugin_config = plugin_config.with_inline_dirs(dirs);
+                }
+            }
+        }
+
+        // Pass config-level enabled_plugins overrides (from user/project/local settings)
+        if !config.enabled_plugins.is_empty() {
+            plugin_config =
+                plugin_config.with_config_enabled_plugins(config.enabled_plugins.clone());
+        }
+
+        // Pass extra marketplace sources from project settings
+        if !config.extra_known_marketplaces.is_empty() {
+            let extras = convert_extra_marketplaces(&config.extra_known_marketplaces);
+            if !extras.is_empty() {
+                tracing::info!(
+                    count = extras.len(),
+                    "Registering extra marketplaces from config"
+                );
+                plugin_config = plugin_config.with_extra_known_marketplaces(extras);
+            }
+        }
+
+        let plugin_result = cocode_plugin::integrate_plugins(
             &plugin_config,
             &mut skill_manager,
             &hook_registry,
             Some(&mut subagent_manager),
         );
-        let plugin_registry = if plugin_registry.is_empty() {
+
+        // Apply default agent override from plugin settings.json
+        let plugin_agent_suffix = if let Some(ref agent_type) = plugin_result.default_agent {
+            if let Some(def) = subagent_manager
+                .definitions()
+                .iter()
+                .find(|d| d.agent_type == *agent_type)
+            {
+                tracing::info!(
+                    agent = agent_type,
+                    identity = ?def.identity,
+                    has_reminder = def.critical_reminder.is_some(),
+                    "Applying plugin default agent to session"
+                );
+
+                // Override model selection if the agent specifies an identity
+                match &def.identity {
+                    Some(cocode_protocol::execution::ExecutionIdentity::Spec(spec)) => {
+                        session.selections.set(
+                            cocode_protocol::ModelRole::Main,
+                            cocode_protocol::RoleSelection::new(spec.clone()),
+                        );
+                    }
+                    Some(cocode_protocol::execution::ExecutionIdentity::Role(role)) => {
+                        // Copy the role's selection to Main if different
+                        if *role != cocode_protocol::ModelRole::Main {
+                            if let Some(sel) = session.selections.get(*role).cloned() {
+                                session
+                                    .selections
+                                    .set(cocode_protocol::ModelRole::Main, sel);
+                            }
+                        }
+                    }
+                    _ => {} // Inherit or None: keep current model
+                }
+
+                // Override max_turns if the agent specifies one
+                if let Some(max_turns) = def.max_turns {
+                    session.max_turns = Some(max_turns);
+                }
+
+                // Return critical_reminder to set as system_prompt_suffix later
+                def.critical_reminder.clone()
+            } else {
+                tracing::warn!(
+                    agent = agent_type,
+                    "Plugin default agent not found in registered definitions"
+                );
+                None
+            }
+        } else {
+            None
+        };
+
+        // Extract plugin output styles before consuming the registry
+        let plugin_output_styles: Vec<(String, String)> = plugin_result
+            .registry
+            .output_style_contributions()
+            .iter()
+            .map(|(style, _plugin)| (style.name.clone(), style.prompt.clone()))
+            .collect();
+
+        let plugin_registry = if plugin_result.registry.is_empty() {
             None
         } else {
-            Some(plugin_registry)
+            Some(plugin_result.registry)
         };
+
+        // Spawn best-effort background cache GC (fire-and-forget)
+        if let Some(ref plugins_dir) = plugin_config.plugins_dir {
+            let dir = plugins_dir.clone();
+            tokio::spawn(async move {
+                match cocode_plugin::cleanup_orphaned_cache(
+                    &dir,
+                    cocode_plugin::DEFAULT_CACHE_GRACE_PERIOD,
+                ) {
+                    Ok(removed) if removed > 0 => {
+                        tracing::debug!(removed, "Plugin cache GC completed");
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "Plugin cache GC failed (non-fatal)");
+                    }
+                    _ => {}
+                }
+            });
+        }
 
         // Connect plugin MCP servers (async: starts server processes and registers tools)
         let mcp_clients = if let Some(ref pr) = plugin_registry {
@@ -423,6 +591,33 @@ impl SessionState {
             mgr
         });
 
+        // Create snapshot manager for rewind support (file backups + ghost commits)
+        let snapshot_manager = if config
+            .features
+            .enabled(cocode_protocol::Feature::FileCheckpointing)
+        {
+            let sessions_dir = config.cocode_home.join("sessions");
+            match cocode_file_backup::FileBackupStore::new(&sessions_dir, &session.id).await {
+                Ok(backup_store) => {
+                    let is_git = detect_git_repo(&session.working_dir);
+                    let sm = cocode_file_backup::SnapshotManager::new(
+                        Arc::new(backup_store),
+                        session.working_dir.clone(),
+                        is_git,
+                        cocode_file_backup::GhostConfig::default(),
+                    );
+                    Some(Arc::new(sm))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create file backup store: {e}");
+                    None
+                }
+            }
+        } else {
+            tracing::debug!("File checkpointing disabled by feature flag");
+            None
+        };
+
         Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -445,12 +640,19 @@ impl SessionState {
             provider_type,
             shell_executor,
             queued_commands: Arc::new(Mutex::new(Vec::new())),
-            system_prompt_suffix: None,
+            system_prompt_suffix: plugin_agent_suffix,
             config,
             permission_rules,
             todos: serde_json::json!([]),
             otel_manager,
             output_style_override: None,
+            plugin_output_styles,
+            snapshot_manager,
+            plan_mode_state: PlanModeState::new(),
+            question_responder: Arc::new(cocode_tools::QuestionResponder::new()),
+            shared_approval_store: Arc::new(tokio::sync::Mutex::new(
+                cocode_tools::ApprovalStore::new(),
+            )),
         })
     }
 
@@ -511,11 +713,63 @@ impl SessionState {
             mgr.set_execute_fn(execute_fn);
             mgr.set_all_tools(self.tool_registry.tool_names());
             mgr.set_event_tx(event_tx.clone());
+            mgr.set_background_stop_hook_fn(self.build_background_stop_hook_fn());
+        }
+
+        // Wire hook callbacks for LLM verification (Prompt handler) and agent spawning (Agent handler).
+        // Both use spawn_agent_fn to avoid needing direct model access.
+        {
+            // Model call: spawn a 1-turn "explore" subagent with the system+user prompt combined
+            let spawn_fn_for_model = self.build_spawn_agent_fn();
+            self.hook_registry.set_model_call_fn(std::sync::Arc::new(
+                move |system_prompt: String, user_message: String| {
+                    let spawn_fn = spawn_fn_for_model.clone();
+                    Box::pin(async move {
+                        let combined = format!("{system_prompt}\n\n{user_message}");
+                        let input = cocode_tools::SpawnAgentInput {
+                            agent_type: "explore".to_string(),
+                            prompt: combined,
+                            model: None,
+                            max_turns: Some(1),
+                            run_in_background: None,
+                            allowed_tools: Some(vec![]),
+                            parent_selections: None,
+                            permission_mode: None,
+                            resume_from: None,
+                        };
+                        let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
+                        Ok(result.output.unwrap_or_default())
+                    })
+                },
+            ));
+
+            // Agent callback: spawn an "explore" subagent with restricted tools
+            let spawn_fn_for_agent = self.build_spawn_agent_fn();
+            self.hook_registry.set_agent_fn(std::sync::Arc::new(
+                move |prompt: String, allowed_tools: Vec<String>, max_turns: i32| {
+                    let spawn_fn = spawn_fn_for_agent.clone();
+                    Box::pin(async move {
+                        let input = cocode_tools::SpawnAgentInput {
+                            agent_type: "explore".to_string(),
+                            prompt,
+                            model: None,
+                            max_turns: Some(max_turns),
+                            run_in_background: None,
+                            allowed_tools: Some(allowed_tools),
+                            parent_selections: None,
+                            permission_mode: None,
+                            resume_from: None,
+                        };
+                        let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
+                        Ok(result.output.unwrap_or_default())
+                    })
+                },
+            ));
         }
 
         // Build and run the agent loop
         // Clone selections so the loop has its own copy (isolation)
-        let mut loop_instance = AgentLoop::builder()
+        let mut builder = AgentLoop::builder()
             .api_client(self.api_client.clone())
             .model_hub(self.model_hub.clone())
             .selections(self.session.selections.clone())
@@ -537,13 +791,42 @@ impl SessionState {
             .otel_manager(self.otel_manager.clone())
             .lsp_manager(self.lsp_manager.clone())
             .spawn_agent_fn(self.build_spawn_agent_fn())
-            .build();
+            .plan_mode_state(self.plan_mode_state.clone())
+            .question_responder(self.question_responder.clone())
+            .approval_store(self.shared_approval_store.clone());
+
+        // Wire snapshot manager for rewind support (main turn only)
+        if let Some(ref sm) = self.snapshot_manager {
+            builder = builder.snapshot_manager(sm.clone());
+        }
+
+        let mut loop_instance = builder.build();
 
         let result = loop_instance.run(user_input).await?;
 
         // Extract todos state before dropping the loop
         if let Some(todos) = loop_instance.take_todos() {
             self.todos = todos;
+        }
+
+        // Extract plan mode state from the loop (persists across turns)
+        if let Some(plan_state) = loop_instance.take_plan_mode_state() {
+            self.plan_mode_state = plan_state;
+        }
+
+        // Inject allowed prompts from plan exit into the shared approval store
+        if let StopReason::PlanModeExit {
+            ref allowed_prompts,
+            ..
+        } = result.stop_reason
+        {
+            if !allowed_prompts.is_empty() {
+                self.inject_allowed_prompts(allowed_prompts).await;
+                info!(
+                    count = allowed_prompts.len(),
+                    "Injected allowed prompts from plan exit into approval store"
+                );
+            }
         }
 
         // Drop the event sender to signal end of events, then wait for task to complete
@@ -646,6 +929,55 @@ impl SessionState {
         result
     }
 
+    /// Spawn a subagent for a skill with `context: fork`.
+    ///
+    /// Bridges the skill execution layer to the subagent manager,
+    /// converting model name → `ExecutionIdentity` and invoking `spawn_full`.
+    pub async fn spawn_subagent_for_skill(
+        &mut self,
+        agent_type: &str,
+        prompt: &str,
+        model: Option<&str>,
+        allowed_tools: Option<Vec<String>>,
+    ) -> anyhow::Result<cocode_tools::SpawnAgentResult> {
+        // Convert model string → ExecutionIdentity
+        let identity = model.map(|m| {
+            if m.contains('/') {
+                match m.parse::<ModelSpec>() {
+                    Ok(spec) => ExecutionIdentity::Spec(spec),
+                    Err(_) => ExecutionIdentity::Inherit,
+                }
+            } else {
+                match m.to_lowercase().as_str() {
+                    "haiku" => ExecutionIdentity::Role(ModelRole::Fast),
+                    "sonnet" | "opus" => ExecutionIdentity::Role(ModelRole::Main),
+                    _ => ExecutionIdentity::Inherit,
+                }
+            }
+        });
+
+        let spawn_input = cocode_subagent::SpawnInput {
+            agent_type: agent_type.to_string(),
+            prompt: prompt.to_string(),
+            identity,
+            max_turns: None,
+            run_in_background: Some(false),
+            allowed_tools,
+            resume_from: None,
+        };
+
+        let mut mgr = self.subagent_manager.lock().await;
+        let result = mgr.spawn_full(spawn_input).await?;
+
+        Ok(cocode_tools::SpawnAgentResult {
+            agent_id: result.agent_id,
+            output: result.output,
+            output_file: result.background.as_ref().map(|bg| bg.output_file.clone()),
+            cancel_token: result.cancel_token,
+            color: result.color,
+        })
+    }
+
     /// Handle a loop event (logging).
     fn handle_event(event: &LoopEvent) {
         match event {
@@ -709,6 +1041,63 @@ impl SessionState {
     /// `CancellationToken` is one-shot — once cancelled it stays cancelled.
     pub fn reset_cancel_token(&mut self) {
         self.cancel_token = CancellationToken::new();
+    }
+
+    /// Reset the shell executor's CWD to the original working directory.
+    ///
+    /// Called during clear context after plan exit so the next turn
+    /// starts from the project root instead of whatever CWD the shell
+    /// navigated to during the planning phase.
+    pub fn reset_shell_cwd(&mut self) {
+        self.shell_executor
+            .set_cwd(self.session.working_dir.clone());
+    }
+
+    /// Inject allowed prompts from a plan's `allowedPrompts` into the
+    /// shared approval store so they persist across subsequent turns.
+    pub async fn inject_allowed_prompts(&self, prompts: &[cocode_protocol::AllowedPrompt]) {
+        let mut store = self.shared_approval_store.lock().await;
+        for ap in prompts {
+            store.approve_pattern(&ap.tool, &ap.prompt);
+        }
+    }
+
+    /// Clear conversation context for plan exit (creates new session identity).
+    ///
+    /// This fires SessionEnd hooks for the old session, replaces it with
+    /// a child session (new ID, parent tracking), clears message history,
+    /// resets shell CWD, and fires SessionStart hooks for the new session.
+    pub async fn clear_context(&mut self) {
+        // Fire SessionEnd hooks with the OLD session ID
+        let end_ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::SessionEnd,
+            self.session.id.clone(),
+            self.session.working_dir.clone(),
+        )
+        .with_reason("context_clear");
+        self.hook_registry.execute(&end_ctx).await;
+
+        // Create child session (new ID, parent tracking)
+        let child = self.session.derive_child();
+        self.session = child;
+
+        // Clear message history
+        self.message_history.clear();
+
+        // Reset shell CWD to project root
+        self.reset_shell_cwd();
+
+        // Reset plan mode state for the fresh session
+        self.plan_mode_state = PlanModeState::new();
+
+        // Fire SessionStart hooks with the NEW session ID
+        let start_ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::SessionStart,
+            self.session.id.clone(),
+            self.session.working_dir.clone(),
+        )
+        .with_source("context_clear");
+        self.hook_registry.execute(&start_ctx).await;
     }
 
     /// Get the session ID.
@@ -791,6 +1180,62 @@ impl SessionState {
     /// Get the plugin registry, if any plugins are loaded.
     pub fn plugin_registry(&self) -> Option<&cocode_plugin::PluginRegistry> {
         self.plugin_registry.as_ref()
+    }
+
+    /// Build plugin summary data for the TUI Plugin Manager overlay.
+    ///
+    /// Returns `(installed_plugins, marketplace_summaries)`.
+    pub fn plugin_summaries(
+        &self,
+    ) -> (
+        Vec<cocode_protocol::PluginSummaryInfo>,
+        Vec<cocode_protocol::MarketplaceSummaryInfo>,
+    ) {
+        let installed = if let Some(ref registry) = self.plugin_registry {
+            registry
+                .all()
+                .map(|p| {
+                    let skills = p.contributions.iter().filter(|c| c.is_skill()).count() as i32;
+                    let hooks = p.contributions.iter().filter(|c| c.is_hook()).count() as i32;
+                    let agents = p.contributions.iter().filter(|c| c.is_agent()).count() as i32;
+                    cocode_protocol::PluginSummaryInfo {
+                        name: p.name().to_string(),
+                        description: p.manifest.plugin.description.clone(),
+                        version: p.version().to_string(),
+                        enabled: true, // if it's in the registry, it's enabled
+                        scope: format!("{:?}", p.scope),
+                        skills_count: skills,
+                        hooks_count: hooks,
+                        agents_count: agents,
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Load marketplace data
+        let plugins_dir = self.config.cocode_home.join("plugins");
+        let marketplaces = if plugins_dir.is_dir() {
+            let mm = cocode_plugin::MarketplaceManager::new(plugins_dir);
+            mm.list()
+                .into_iter()
+                .map(|(name, km)| {
+                    let (source_type, source) = marketplace_source_display(&km.source);
+                    cocode_protocol::MarketplaceSummaryInfo {
+                        name,
+                        source_type,
+                        source,
+                        auto_update: km.auto_update,
+                        plugin_count: 0, // would require loading manifest
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        (installed, marketplaces)
     }
 
     /// Get the subagent manager (shared handle).
@@ -971,6 +1416,7 @@ impl SessionState {
     /// Resolve the active output style for prompt generation.
     ///
     /// Priority: runtime override > config file setting.
+    /// Style lookup: built-in/custom > plugin-contributed.
     fn resolve_output_style(&self) -> Option<cocode_context::OutputStylePromptConfig> {
         // Determine the effective style name
         let style_name: Option<&str> = match &self.output_style_override {
@@ -980,14 +1426,34 @@ impl SessionState {
 
         let name = style_name?;
 
-        // Find the style info (from built-in or custom styles)
-        let info = cocode_config::builtin::find_output_style(name, &self.config.cocode_home)?;
+        // Try built-in and custom styles first (project-level > user-level > built-in)
+        if let Some(info) = cocode_config::builtin::find_output_style(
+            name,
+            &self.config.cocode_home,
+            Some(&self.config.cwd),
+        ) {
+            return Some(cocode_context::OutputStylePromptConfig {
+                name: info.name,
+                content: info.content,
+                keep_coding_instructions: info.keep_coding_instructions,
+            });
+        }
 
-        Some(cocode_context::OutputStylePromptConfig {
-            name: info.name,
-            content: info.content,
-            keep_coding_instructions: info.keep_coding_instructions,
-        })
+        // Fall back to plugin-contributed styles
+        let name_lower = name.to_lowercase();
+        if let Some((style_name, prompt)) = self
+            .plugin_output_styles
+            .iter()
+            .find(|(n, _)| n.to_lowercase() == name_lower)
+        {
+            return Some(cocode_context::OutputStylePromptConfig {
+                name: style_name.clone(),
+                content: prompt.clone(),
+                keep_coding_instructions: false,
+            });
+        }
+
+        None
     }
 
     /// Build context injections from the system prompt suffix.
@@ -1068,12 +1534,75 @@ impl SessionState {
         }
     }
 
+    /// Get the project directory (working directory) for project-level lookups.
+    pub fn project_dir(&self) -> &std::path::Path {
+        &self.session.working_dir
+    }
+
+    /// Get the cocode home directory.
+    pub fn cocode_home(&self) -> &std::path::Path {
+        &self.config.cocode_home
+    }
+
+    /// Get the plugin-contributed output styles.
+    pub fn plugin_output_styles(&self) -> &[(String, String)] {
+        &self.plugin_output_styles
+    }
+
+    /// Get the plan mode state.
+    pub fn plan_mode_state(&self) -> &PlanModeState {
+        &self.plan_mode_state
+    }
+
+    /// Get a mutable reference to plan mode state.
+    pub fn plan_mode_state_mut(&mut self) -> &mut PlanModeState {
+        &mut self.plan_mode_state
+    }
+
+    /// Set the permission mode for the session.
+    ///
+    /// Updates the loop config's permission mode. If switching to Plan mode,
+    /// also saves the pre-plan mode for restoration on exit.
+    pub fn set_permission_mode(&mut self, mode: PermissionMode) {
+        let old_mode = self.loop_config.permission_mode;
+        self.loop_config.permission_mode = mode;
+
+        if mode == PermissionMode::Plan && old_mode != PermissionMode::Plan {
+            // Entering plan mode: save the old mode for restoration
+            self.plan_mode_state.pre_plan_mode = Some(old_mode);
+            self.plan_mode_state.is_active = true;
+        } else if mode != PermissionMode::Plan && old_mode == PermissionMode::Plan {
+            // Leaving plan mode via mode cycle (not via ExitPlanMode tool)
+            self.plan_mode_state.is_active = false;
+            self.plan_mode_state.pre_plan_mode = None;
+        }
+    }
+
+    /// Get the snapshot manager (if configured for rewind support).
+    pub fn snapshot_manager(&self) -> Option<&Arc<cocode_file_backup::SnapshotManager>> {
+        self.snapshot_manager.as_ref()
+    }
+
+    /// Set the snapshot manager for rewind support.
+    pub fn set_snapshot_manager(&mut self, mgr: Arc<cocode_file_backup::SnapshotManager>) {
+        self.snapshot_manager = Some(mgr);
+    }
+
     /// Get a shared handle to the queued commands.
     ///
     /// The TUI driver uses this to push commands while a turn is running,
     /// without needing `&mut self`.
     pub fn shared_queued_commands(&self) -> Arc<Mutex<Vec<QueuedCommandInfo>>> {
         self.queued_commands.clone()
+    }
+
+    /// Get a shared handle to the question responder.
+    ///
+    /// The TUI driver extracts this before a turn starts and passes it to
+    /// `handle_in_flight_command` so question responses can unblock the
+    /// AskUserQuestion tool immediately during the turn.
+    pub fn question_responder(&self) -> Arc<cocode_tools::QuestionResponder> {
+        self.question_responder.clone()
     }
 
     /// Get the current task list from the most recent TodoWrite tool call.
@@ -1106,6 +1635,13 @@ impl SessionState {
         output
     }
 
+    /// Replace the current task list.
+    ///
+    /// Used by rewind to reconstruct todo state from retained message history.
+    pub fn set_todos(&mut self, todos: serde_json::Value) {
+        self.todos = todos;
+    }
+
     // ==========================================================
     // Subagent Wiring
     // ==========================================================
@@ -1126,6 +1662,7 @@ impl SessionState {
         let hook_registry = self.hook_registry.clone();
         let shell_executor = self.shell_executor.clone();
         let working_dir = self.session.working_dir.clone();
+        let cocode_home = self.config.cocode_home.clone();
         let context_window = self.context_window;
         let features = self.config.features.clone();
         let web_search_config = self.config.web_search_config.clone();
@@ -1143,6 +1680,7 @@ impl SessionState {
             let hook_registry = hook_registry.clone();
             let shell_executor = shell_executor.clone();
             let working_dir = working_dir.clone();
+            let cocode_home = cocode_home.clone();
             let features = features.clone();
             let web_search_config = web_search_config.clone();
             let web_fetch_config = web_fetch_config.clone();
@@ -1154,25 +1692,183 @@ impl SessionState {
             let parent_event_tx = parent_event_tx.clone();
 
             Box::pin(async move {
+                // ── G5: Worktree isolation ──────────────────────────────
+                let (effective_working_dir, worktree_path) =
+                    if params.isolation == Some(IsolationMode::Worktree) {
+                        let wt_path = working_dir.join(".cocode").join("worktrees").join(format!(
+                            "{}-{}",
+                            params.agent_type,
+                            uuid::Uuid::new_v4().simple()
+                        ));
+                        let output = tokio::process::Command::new("git")
+                            .args(["worktree", "add", "--detach", &wt_path.to_string_lossy()])
+                            .current_dir(&working_dir)
+                            .output()
+                            .await;
+                        match output {
+                            Ok(o) if o.status.success() => {
+                                tracing::info!(
+                                    path = %wt_path.display(),
+                                    agent_type = %params.agent_type,
+                                    "Created git worktree for agent isolation"
+                                );
+                                (wt_path.clone(), Some(wt_path))
+                            }
+                            Ok(o) => {
+                                tracing::warn!(
+                                    stderr = %String::from_utf8_lossy(&o.stderr),
+                                    "Failed to create worktree, falling back to shared CWD"
+                                );
+                                (working_dir.clone(), None)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "Failed to run git worktree command, falling back to shared CWD"
+                                );
+                                (working_dir.clone(), None)
+                            }
+                        }
+                    } else {
+                        (working_dir.clone(), None)
+                    };
+
                 // Fork shell executor for isolated CWD tracking
-                let forked_shell = shell_executor.fork_for_subagent(working_dir.clone());
+                let forked_shell = shell_executor.fork_for_subagent(effective_working_dir.clone());
 
                 // Build environment info for the child
                 let environment = EnvironmentInfo::builder()
-                    .cwd(&working_dir)
+                    .cwd(&effective_working_dir)
                     .context_window(context_window)
                     .max_output_tokens(16_384)
                     .build()
                     .map_err(|e| anyhow::anyhow!("Failed to build child environment: {e}"))?;
 
-                let context = ConversationContext::builder()
+                // GAP-3: Resolve preloaded skills into context injections
+                let mut injections = Vec::new();
+                if !params.skills.is_empty() {
+                    for skill_name in &params.skills {
+                        if let Some(skill) = skill_manager.get(skill_name) {
+                            injections.push(ContextInjection {
+                                label: format!("agent-skill:{skill_name}"),
+                                content: skill.prompt.clone(),
+                                position: InjectionPosition::EndOfPrompt,
+                            });
+                            tracing::debug!(
+                                agent_type = %params.agent_type,
+                                skill = %skill_name,
+                                "Preloaded skill into subagent context"
+                            );
+                        } else {
+                            tracing::warn!(
+                                agent_type = %params.agent_type,
+                                skill = %skill_name,
+                                "Skill not found for preload, skipping"
+                            );
+                        }
+                    }
+                }
+
+                let mut ctx_builder = ConversationContext::builder()
                     .environment(environment)
-                    .tool_names(tool_registry.tool_names())
+                    .tool_names(tool_registry.tool_names());
+                if !injections.is_empty() {
+                    ctx_builder = ctx_builder.injections(injections);
+                }
+                let context = ctx_builder
                     .build()
                     .map_err(|e| anyhow::anyhow!("Failed to build child context: {e}"))?;
 
-                // Resolve selections: apply identity override if specified
-                let child_selections = if let Some(ref identity) = params.identity {
+                // ── G1: Memory injection ───────────────────────────────
+                let mut effective_prompt = params.prompt.clone();
+                if let Some(ref scope) = params.memory {
+                    let memory_dir = match scope {
+                        MemoryScope::User => {
+                            cocode_home.join("agent-memory").join(&params.agent_type)
+                        }
+                        MemoryScope::Project => effective_working_dir
+                            .join(".cocode")
+                            .join("agent-memory")
+                            .join(&params.agent_type),
+                        MemoryScope::Local => effective_working_dir
+                            .join(".cocode")
+                            .join("agent-memory-local")
+                            .join(&params.agent_type),
+                    };
+                    tokio::fs::create_dir_all(&memory_dir).await.ok();
+                    let memory_file = memory_dir.join("MEMORY.md");
+                    if memory_file.exists() {
+                        match tokio::fs::read_to_string(&memory_file).await {
+                            Ok(content) => {
+                                let truncated: String =
+                                    content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                if !truncated.is_empty() {
+                                    effective_prompt = format!(
+                                        "## Agent Memory\n\n{truncated}\n\n{effective_prompt}"
+                                    );
+                                    tracing::debug!(
+                                        agent_type = %params.agent_type,
+                                        memory_lines = content.lines().count().min(200),
+                                        "Injected agent memory into prompt"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %memory_file.display(),
+                                    "Failed to read agent MEMORY.md"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ── G2: Skills filtering ───────────────────────────────
+                if !params.skills.is_empty() {
+                    let mut skill_prefix = String::new();
+                    for skill_name in &params.skills {
+                        if let Some(skill) = skill_manager.get(skill_name) {
+                            skill_prefix.push_str(&format!(
+                                "\n<skill name=\"{skill_name}\">\n{}\n</skill>\n",
+                                skill.prompt
+                            ));
+                        } else {
+                            tracing::warn!(
+                                skill = %skill_name,
+                                agent_type = %params.agent_type,
+                                "Skill not found for agent"
+                            );
+                        }
+                    }
+                    if !skill_prefix.is_empty() {
+                        effective_prompt = format!("{skill_prefix}\n{effective_prompt}");
+                        tracing::debug!(
+                            agent_type = %params.agent_type,
+                            skills = ?params.skills,
+                            "Injected skill prompts into agent prompt"
+                        );
+                    }
+                }
+
+                // Resolve selections: env var override > params.identity > parent
+                // COCODE_SUBAGENT_MODEL env var takes highest priority
+                let env_identity = std::env::var("COCODE_SUBAGENT_MODEL").ok().map(|m| {
+                    if m.contains('/') {
+                        match m.parse::<ModelSpec>() {
+                            Ok(spec) => ExecutionIdentity::Spec(spec),
+                            Err(_) => ExecutionIdentity::Inherit,
+                        }
+                    } else {
+                        match m.to_lowercase().as_str() {
+                            "haiku" => ExecutionIdentity::Role(ModelRole::Fast),
+                            "sonnet" | "opus" => ExecutionIdentity::Role(ModelRole::Main),
+                            _ => ExecutionIdentity::Inherit,
+                        }
+                    }
+                });
+                let effective_identity = env_identity.as_ref().or(params.identity.as_ref());
+                let child_selections = if let Some(identity) = effective_identity {
                     let mut sel = selections.clone();
                     match identity {
                         ExecutionIdentity::Role(role) => {
@@ -1200,6 +1896,66 @@ impl SessionState {
                     ..LoopConfig::default()
                 };
 
+                // ── G3: Agent-scoped hook registration ─────────────────
+                let hook_group_id = format!(
+                    "agent-{}-{}",
+                    params.agent_type,
+                    uuid::Uuid::new_v4().simple()
+                );
+                let has_agent_hooks = params.hooks.is_some();
+                if let Some(ref agent_hooks) = params.hooks {
+                    let hook_defs: Vec<HookDefinition> = agent_hooks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, h)| {
+                            // Remap Stop → SubagentStop
+                            let event_str = if h.event == "Stop" || h.event == "stop" {
+                                "SubagentStop"
+                            } else {
+                                &h.event
+                            };
+                            let event_type =
+                                match event_str.parse::<cocode_protocol::HookEventType>() {
+                                    Ok(et) => et,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            event = %h.event,
+                                            error = %e,
+                                            "Skipping agent hook with unknown event type"
+                                        );
+                                        return None;
+                                    }
+                                };
+                            let matcher = h
+                                .matcher
+                                .as_ref()
+                                .map(|m| cocode_hooks::HookMatcher::Regex { pattern: m.clone() });
+                            Some(HookDefinition {
+                                name: format!("{hook_group_id}-hook-{idx}"),
+                                event_type,
+                                matcher,
+                                handler: HookHandler::Command {
+                                    command: h.command.clone(),
+                                },
+                                source: HookSource::Session,
+                                enabled: true,
+                                timeout_secs: h.timeout.unwrap_or(30) as i32,
+                                once: false,
+                                status_message: None,
+                                group_id: None, // set by register_group
+                            })
+                        })
+                        .collect();
+                    if !hook_defs.is_empty() {
+                        hook_registry.register_group(&hook_group_id, hook_defs);
+                        tracing::debug!(
+                            group_id = %hook_group_id,
+                            agent_type = %params.agent_type,
+                            "Registered agent-scoped hooks"
+                        );
+                    }
+                }
+
                 // Build the child loop — forward parent event_tx so the TUI
                 // sees subagent progress, text deltas, and tool activity.
                 let mut builder = AgentLoop::builder()
@@ -1211,7 +1967,7 @@ impl SessionState {
                     .config(child_config)
                     .fallback_config(FallbackConfig::default())
                     .compaction_config(CompactionConfig::default())
-                    .hooks(hook_registry)
+                    .hooks(hook_registry.clone())
                     .event_tx(parent_event_tx)
                     .cancel_token(params.cancel_token)
                     .features(features)
@@ -1221,8 +1977,14 @@ impl SessionState {
                     .shell_executor(forked_shell)
                     .skill_manager(skill_manager)
                     .lsp_manager(lsp_manager)
-                    .is_subagent(true);
+                    .is_subagent(true)
+                    .task_type_restrictions(params.task_type_restrictions);
                 // NO .spawn_agent_fn() — prevents infinite recursion
+
+                // Apply custom system prompt if the agent definition requested it
+                if let Some(ref custom_prompt) = params.custom_system_prompt {
+                    builder = builder.custom_system_prompt(custom_prompt.clone());
+                }
 
                 // Fork parent context if requested
                 if params.fork_context {
@@ -1230,9 +1992,82 @@ impl SessionState {
                 }
 
                 let mut loop_instance = builder.build();
-                let result = loop_instance.run(&params.prompt).await?;
+                let result = loop_instance.run(&effective_prompt).await;
 
+                // ── G3: Unregister agent-scoped hooks ──────────────────
+                if has_agent_hooks {
+                    hook_registry.unregister_group(&hook_group_id);
+                    tracing::debug!(
+                        group_id = %hook_group_id,
+                        "Unregistered agent-scoped hooks"
+                    );
+                }
+
+                // ── G5: Worktree cleanup ───────────────────────────────
+                if let Some(ref wt_path) = worktree_path {
+                    let remove_output = tokio::process::Command::new("git")
+                        .args(["worktree", "remove", "--force", &wt_path.to_string_lossy()])
+                        .current_dir(&working_dir)
+                        .output()
+                        .await;
+                    match remove_output {
+                        Ok(o) if o.status.success() => {
+                            tracing::info!(
+                                path = %wt_path.display(),
+                                "Removed git worktree after agent completion"
+                            );
+                        }
+                        Ok(o) => {
+                            tracing::warn!(
+                                stderr = %String::from_utf8_lossy(&o.stderr),
+                                path = %wt_path.display(),
+                                "Failed to remove git worktree"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                path = %wt_path.display(),
+                                "Failed to run git worktree remove"
+                            );
+                        }
+                    }
+                }
+
+                let result = result?;
                 Ok(result.final_text)
+            })
+        })
+    }
+
+    /// Build the callback for firing SubagentStop hooks when background agents complete.
+    fn build_background_stop_hook_fn(&self) -> cocode_subagent::BackgroundStopHookFn {
+        let hook_registry = self.hook_registry.clone();
+        let session_id = self.session.id.clone();
+        let cwd = self.session.working_dir.clone();
+
+        Arc::new(move |agent_type: String, agent_id: String| {
+            let hook_registry = hook_registry.clone();
+            let session_id = session_id.clone();
+            let cwd = cwd.clone();
+            Box::pin(async move {
+                let hook_ctx = cocode_hooks::HookContext::new(
+                    cocode_hooks::HookEventType::SubagentStop,
+                    session_id,
+                    cwd,
+                )
+                .with_metadata("agent_type", agent_type)
+                .with_metadata("agent_id", agent_id);
+                let outcomes = hook_registry.execute(&hook_ctx).await;
+                for outcome in &outcomes {
+                    if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
+                        tracing::warn!(
+                            hook = %outcome.hook_name,
+                            %reason,
+                            "SubagentStop hook rejected (ignored, background agent already completed)"
+                        );
+                    }
+                }
             })
         })
     }
@@ -1360,12 +2195,13 @@ impl SessionState {
             mgr.set_execute_fn(execute_fn);
             mgr.set_all_tools(self.tool_registry.tool_names());
             mgr.set_event_tx(event_tx.clone());
+            mgr.set_background_stop_hook_fn(self.build_background_stop_hook_fn());
         }
 
         // Build and run the agent loop with the provided event channel
         // Clone selections so the loop has its own copy (isolation)
         // Pass queued commands for consume-then-remove steering injection
-        let mut loop_instance = AgentLoop::builder()
+        let mut builder = AgentLoop::builder()
             .api_client(self.api_client.clone())
             .model_hub(self.model_hub.clone())
             .selections(self.session.selections.clone())
@@ -1387,7 +2223,16 @@ impl SessionState {
             .otel_manager(self.otel_manager.clone())
             .lsp_manager(self.lsp_manager.clone())
             .spawn_agent_fn(self.build_spawn_agent_fn())
-            .build();
+            .plan_mode_state(self.plan_mode_state.clone())
+            .question_responder(self.question_responder.clone())
+            .approval_store(self.shared_approval_store.clone());
+
+        // Wire snapshot manager for rewind support (skill turn)
+        if let Some(ref sm) = self.snapshot_manager {
+            builder = builder.snapshot_manager(sm.clone());
+        }
+
+        let mut loop_instance = builder.build();
 
         // Queued commands are consumed as steering in core_message_loop Step 6.5.
         // No post-idle re-execution needed — steering asks the model to address
@@ -1401,6 +2246,11 @@ impl SessionState {
             self.todos = todos;
         }
 
+        // Extract plan mode state from the loop (persists across turns)
+        if let Some(plan_state) = loop_instance.take_plan_mode_state() {
+            self.plan_mode_state = plan_state;
+        }
+
         // Update totals
         self.total_turns += result.turns_completed;
         self.total_input_tokens += result.total_input_tokens;
@@ -1408,6 +2258,218 @@ impl SessionState {
 
         Ok(TurnResult::from_loop_result(&result))
     }
+
+    /// Run partial compaction (summarize) from a specific turn onward.
+    ///
+    /// This summarizes the conversation from `from_turn_number` to the end,
+    /// replacing those turns with an LLM-generated summary while keeping all
+    /// earlier turns intact.
+    ///
+    /// If `user_context` is provided, it is included in the summarization prompt
+    /// to guide what the summary should focus on.
+    pub async fn run_partial_compact(
+        &mut self,
+        from_turn_number: i32,
+        event_tx: mpsc::Sender<LoopEvent>,
+        user_context: Option<&str>,
+    ) -> anyhow::Result<PartialCompactResult> {
+        info!(
+            from_turn_number,
+            ?user_context,
+            "Running partial compaction (summarize from turn)"
+        );
+
+        let _ = event_tx.send(LoopEvent::CompactionStarted).await;
+
+        // 1. Build conversation text from turns at/after from_turn_number.
+        // Extract Message objects (role + content) from turns, matching the
+        // format used by the existing compact() in core/loop driver.
+        let conversation_text: String = self
+            .message_history
+            .turns()
+            .iter()
+            .filter(|t| t.number >= from_turn_number)
+            .flat_map(|t| {
+                let mut msgs = vec![&t.user_message.inner];
+                if let Some(ref asst) = t.assistant_message {
+                    msgs.push(&asst.inner);
+                }
+                msgs
+            })
+            .map(|m| format!("{m:?}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if conversation_text.is_empty() {
+            anyhow::bail!("No turns found at or after turn {from_turn_number}");
+        }
+
+        // 2. Build summarization prompt
+        let max_output_tokens = 4096;
+        let system_prompt = cocode_loop::build_compact_instructions(max_output_tokens);
+        let context_instruction = match user_context {
+            Some(ctx) if !ctx.is_empty() => {
+                format!("\n\nThe user has requested that the summary focus on: {ctx}")
+            }
+            _ => String::new(),
+        };
+        let user_prompt = format!(
+            "Please summarize the following conversation:\n\n---\n\n{conversation_text}\n\n---\n\nProvide your summary using the required section format.{context_instruction}"
+        );
+
+        let summary_messages = vec![
+            cocode_api::Message::system(&system_prompt),
+            cocode_api::Message::user(&user_prompt),
+        ];
+
+        // 3. Call LLM for summary
+        let session_id = format!("summarize-{from_turn_number}");
+        let turn_count = self.message_history.turn_count();
+        let (ctx, compact_model) = self
+            .model_hub
+            .prepare_compact_with_selections(&self.session.selections, &session_id, turn_count)
+            .map_err(|e| anyhow::anyhow!("Failed to prepare compact model: {e}"))?;
+
+        let summary_request = cocode_api::RequestBuilder::new(ctx)
+            .messages(summary_messages)
+            .max_tokens(max_output_tokens)
+            .build();
+
+        let response = self
+            .api_client
+            .generate(&*compact_model, summary_request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Summarization LLM call failed: {e}"))?;
+
+        let summary_text: String = response
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                hyper_sdk::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        if summary_text.is_empty() {
+            anyhow::bail!("Summarization produced empty output");
+        }
+
+        // 4. Apply: truncate turns from from_turn_number, store summary
+        let pre_tokens = self.message_history.estimate_tokens();
+
+        // Calculate keep_turns: number of turns AFTER the summarized portion
+        // (apply_compaction_with_metadata keeps the LAST keep_turns turns).
+        // We want to keep turns BEFORE from_turn_number, so:
+        //   keep_turns = number of turns with number < from_turn_number
+        let keep_turns = self
+            .message_history
+            .turns()
+            .iter()
+            .filter(|t| t.number < from_turn_number)
+            .count() as i32;
+
+        // Use the standard compaction path, which:
+        // - Stores the summary
+        // - Removes older turns (keeping the last `keep_turns`)
+        // - Records compaction boundary
+        //
+        // NOTE: apply_compaction_with_metadata keeps the LAST N turns.
+        // For partial compact, we want the FIRST N turns (before from_turn).
+        // So instead, we truncate from from_turn and set the summary directly.
+        self.message_history.truncate_from_turn(from_turn_number);
+
+        // Append to or replace the compacted summary
+        let existing = self.message_history.compacted_summary().map(String::from);
+        let final_summary = match existing {
+            Some(prev) => format!("{prev}\n\n---\n\n{summary_text}"),
+            None => summary_text,
+        };
+        let remaining_turns = self.message_history.turn_count();
+        self.message_history.apply_compaction_with_metadata(
+            final_summary,
+            remaining_turns,
+            "summarize",
+            pre_tokens.saturating_sub(self.message_history.estimate_tokens()),
+            cocode_protocol::CompactTrigger::Manual,
+            pre_tokens,
+            None,
+            true,
+        );
+
+        let post_tokens = self.message_history.estimate_tokens();
+
+        // 5. Set compaction boundary on snapshot manager
+        if let Some(ref sm) = self.snapshot_manager {
+            sm.set_compaction_boundary(from_turn_number).await;
+        }
+
+        let _ = event_tx
+            .send(LoopEvent::CompactionCompleted {
+                removed_messages: 0,
+                summary_tokens: post_tokens,
+            })
+            .await;
+
+        info!(
+            from_turn_number,
+            pre_tokens, post_tokens, keep_turns, "Partial compaction completed"
+        );
+
+        Ok(PartialCompactResult {
+            from_turn: from_turn_number,
+            summary_tokens: post_tokens,
+        })
+    }
+}
+
+/// Convert a `MarketplaceSource` to `(source_type, source_display)` for UI.
+fn marketplace_source_display(source: &cocode_plugin::MarketplaceSource) -> (String, String) {
+    match source {
+        cocode_plugin::MarketplaceSource::Github { repo, .. } => {
+            ("github".to_string(), repo.clone())
+        }
+        cocode_plugin::MarketplaceSource::Git { url, .. } => ("git".to_string(), url.clone()),
+        cocode_plugin::MarketplaceSource::File { path } => {
+            ("file".to_string(), path.display().to_string())
+        }
+        cocode_plugin::MarketplaceSource::Directory { path } => {
+            ("directory".to_string(), path.display().to_string())
+        }
+        cocode_plugin::MarketplaceSource::Url { url } => ("url".to_string(), url.clone()),
+    }
+}
+
+/// Convert config extra marketplace entries to plugin-crate entries.
+fn convert_extra_marketplaces(
+    extras: &[cocode_config::json_config::ExtraMarketplaceConfig],
+) -> Vec<cocode_plugin::ExtraMarketplaceEntry> {
+    use cocode_config::json_config::MarketplaceSourceConfig;
+    use cocode_plugin::MarketplaceSource;
+
+    extras
+        .iter()
+        .map(|cfg| {
+            let source = match &cfg.source {
+                MarketplaceSourceConfig::Github { repo, git_ref } => MarketplaceSource::Github {
+                    repo: repo.clone(),
+                    git_ref: git_ref.clone(),
+                },
+                MarketplaceSourceConfig::Git { url, git_ref } => MarketplaceSource::Git {
+                    url: url.clone(),
+                    git_ref: git_ref.clone(),
+                },
+                MarketplaceSourceConfig::Directory { path } => MarketplaceSource::Directory {
+                    path: std::path::PathBuf::from(path),
+                },
+                MarketplaceSourceConfig::Url { url } => MarketplaceSource::Url { url: url.clone() },
+            };
+            cocode_plugin::ExtraMarketplaceEntry {
+                name: cfg.name.clone(),
+                source,
+                auto_update: cfg.auto_update,
+            }
+        })
+        .collect()
 }
 
 /// Convert config hook entries to hook definitions.
@@ -1440,18 +2502,19 @@ fn convert_config_hooks(
 
             // Each handler becomes a separate HookDefinition
             for (h_idx, handler_cfg) in group.hooks.iter().enumerate() {
-                let (handler, timeout_secs, once) = match handler_cfg {
+                let (handler, timeout_secs, once, status_message) = match handler_cfg {
                     HookHandlerConfig::Command {
                         command,
                         timeout,
                         once,
-                        ..
+                        status_message,
                     } => (
                         cocode_hooks::HookHandler::Command {
                             command: command.clone(),
                         },
                         timeout.unwrap_or(30),
                         once.unwrap_or(false),
+                        status_message.clone(),
                     ),
                     HookHandlerConfig::Prompt {
                         prompt,
@@ -1465,6 +2528,7 @@ fn convert_config_hooks(
                         },
                         timeout.unwrap_or(30),
                         once.unwrap_or(false),
+                        None,
                     ),
                     HookHandlerConfig::Agent {
                         prompt,
@@ -1479,6 +2543,7 @@ fn convert_config_hooks(
                         },
                         timeout.unwrap_or(60),
                         once.unwrap_or(false),
+                        None,
                     ),
                 };
 
@@ -1491,11 +2556,26 @@ fn convert_config_hooks(
                     enabled: true,
                     timeout_secs,
                     once,
+                    status_message,
+                    group_id: None,
                 });
             }
         }
     }
     defs
+}
+
+/// Detect whether a directory is inside a git repository by walking up
+/// the directory tree looking for a `.git` directory or file.
+fn detect_git_repo(path: &std::path::Path) -> bool {
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
 }
 
 #[cfg(test)]

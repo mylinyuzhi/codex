@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use cocode_file_backup::TurnSnapshot;
 use cocode_message::MessageHistory;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,6 +23,13 @@ pub struct PersistedSession {
     /// Message history.
     pub history: MessageHistory,
 
+    /// Snapshot stack for rewind support.
+    ///
+    /// Persisted so that rewind works across session resume. When absent
+    /// (e.g., files saved by older versions), defaults to an empty stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<TurnSnapshot>,
+
     /// File format version for future compatibility.
     #[serde(default = "default_version")]
     pub version: i32,
@@ -33,37 +41,21 @@ fn default_version() -> i32 {
 
 impl PersistedSession {
     /// Create a new persisted session.
-    pub fn new(session: Session, history: MessageHistory) -> Self {
+    pub fn new(session: Session, history: MessageHistory, snapshots: Vec<TurnSnapshot>) -> Self {
         Self {
             session,
             history,
+            snapshots,
             version: 1,
         }
     }
 }
 
-/// Save a session and its history to a JSON file.
-///
-/// # Arguments
-///
-/// * `session` - The session metadata to save
-/// * `history` - The message history to save
-/// * `path` - The file path to save to
-///
-/// # Example
-///
-/// ```ignore
-/// use cocode_session::{Session, save_session_to_file};
-/// use cocode_message::MessageHistory;
-/// use std::path::Path;
-///
-/// let session = Session::new(...);
-/// let history = MessageHistory::new();
-/// save_session_to_file(&session, &history, Path::new("session.json")).await?;
-/// ```
+/// Save a session, its history, and snapshot stack to a JSON file.
 pub async fn save_session_to_file(
     session: &Session,
     history: &MessageHistory,
+    snapshots: Vec<TurnSnapshot>,
     path: &Path,
 ) -> anyhow::Result<()> {
     info!(
@@ -77,7 +69,7 @@ pub async fn save_session_to_file(
         fs::create_dir_all(parent).await?;
     }
 
-    let persisted = PersistedSession::new(session.clone(), history.clone());
+    let persisted = PersistedSession::new(session.clone(), history.clone(), snapshots);
     let json = serde_json::to_string_pretty(&persisted)?;
 
     fs::write(path, json).await?;
@@ -91,26 +83,10 @@ pub async fn save_session_to_file(
     Ok(())
 }
 
-/// Load a session and its history from a JSON file.
-///
-/// # Arguments
-///
-/// * `path` - The file path to load from
-///
-/// # Returns
-///
-/// A tuple of (Session, MessageHistory)
-///
-/// # Example
-///
-/// ```ignore
-/// use cocode_session::load_session_from_file;
-/// use std::path::Path;
-///
-/// let (session, history) = load_session_from_file(Path::new("session.json")).await?;
-/// println!("Loaded session: {}", session.id);
-/// ```
-pub async fn load_session_from_file(path: &Path) -> anyhow::Result<(Session, MessageHistory)> {
+/// Load a session, its history, and snapshot stack from a JSON file.
+pub async fn load_session_from_file(
+    path: &Path,
+) -> anyhow::Result<(Session, MessageHistory, Vec<TurnSnapshot>)> {
     info!(path = %path.display(), "Loading session");
 
     let content = fs::read_to_string(path).await?;
@@ -119,10 +95,11 @@ pub async fn load_session_from_file(path: &Path) -> anyhow::Result<(Session, Mes
     debug!(
         session_id = %persisted.session.id,
         version = persisted.version,
+        snapshots = persisted.snapshots.len(),
         "Session loaded"
     );
 
-    Ok((persisted.session, persisted.history))
+    Ok((persisted.session, persisted.history, persisted.snapshots))
 }
 
 /// Check if a session file exists.

@@ -173,11 +173,11 @@ impl ConfigResolver {
         config.base_instructions.clone()
     }
 
-    /// Resolve a model alias to its API model name.
+    /// Resolve the API model name for a given slug.
     ///
-    /// Returns the alias if set and non-empty, otherwise returns the slug.
+    /// Returns the api_model_name if set and non-empty, otherwise returns the slug.
     /// For example, slug "deepseek-r1" might return "ep-20250109-xxxxx".
-    pub fn resolve_model_alias<'a>(&'a self, provider_name: &str, slug: &'a str) -> &'a str {
+    pub fn resolve_api_model_name<'a>(&'a self, provider_name: &str, slug: &'a str) -> &'a str {
         self.providers
             .get(provider_name)
             .and_then(|p| p.find_model(slug))
@@ -251,9 +251,9 @@ impl ConfigResolver {
                 self.resolve_model_info_for_provider(provider_config, slug)
             };
 
-            // Create ProviderModel with model_alias preserved
+            // Create ProviderModel with api_model_name preserved
             let provider_model = if let Some(alias) = &model_entry.model_alias {
-                ProviderModel::with_alias(model_info, alias)
+                ProviderModel::with_api_model_name(model_info, alias)
             } else {
                 ProviderModel::new(model_info)
             };

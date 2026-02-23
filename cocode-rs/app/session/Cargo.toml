@@ -23,6 +23,7 @@ cocode-shell.workspace = true
 
 # Internal - features
 cocode-hooks.workspace = true
+cocode-plan-mode.workspace = true
 cocode-plugin.workspace = true
 cocode-skill.workspace = true
 cocode-subagent.workspace = true
@@ -30,6 +31,7 @@ cocode-system-reminder.workspace = true
 
 # Internal - standalone
 cocode-lsp.workspace = true
+cocode-file-backup.workspace = true
 
 # Internal - common (OTel)
 cocode-otel.workspace = true

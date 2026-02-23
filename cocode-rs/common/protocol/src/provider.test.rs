@@ -172,7 +172,7 @@ fn test_provider_model_new() {
 
     assert_eq!(pm.slug(), "gpt-4");
     assert_eq!(pm.api_model_name(), "gpt-4"); // No alias, returns slug
-    assert!(pm.model_alias.is_none());
+    assert!(pm.api_model_name.is_none());
     assert_eq!(pm.info.timeout_secs, Some(120));
 }
 
@@ -182,11 +182,11 @@ fn test_provider_model_with_alias() {
         slug: "deepseek-r1".to_string(),
         ..Default::default()
     };
-    let pm = ProviderModel::with_alias(model_info, "ep-20250101-xxxxx");
+    let pm = ProviderModel::with_api_model_name(model_info, "ep-20250101-xxxxx");
 
     assert_eq!(pm.slug(), "deepseek-r1");
     assert_eq!(pm.api_model_name(), "ep-20250101-xxxxx"); // Returns alias
-    assert_eq!(pm.model_alias, Some("ep-20250101-xxxxx".to_string()));
+    assert_eq!(pm.api_model_name, Some("ep-20250101-xxxxx".to_string()));
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn test_provider_model_empty_alias_falls_back_to_slug() {
     // Create with empty string alias
     let pm = ProviderModel {
         info: model_info,
-        model_alias: Some("".to_string()),
+        api_model_name: Some("".to_string()),
     };
     // Should fall back to slug, not return empty string
     assert_eq!(pm.api_model_name(), "gpt-4");
@@ -234,11 +234,11 @@ fn test_provider_model_serde() {
         timeout_secs: Some(120),
         ..Default::default()
     };
-    let pm = ProviderModel::with_alias(model_info, "ep-xxx");
+    let pm = ProviderModel::with_api_model_name(model_info, "ep-xxx");
 
     let json = serde_json::to_string(&pm).expect("serialize");
     assert!(json.contains("\"slug\":\"test-model\""));
-    assert!(json.contains("\"model_alias\":\"ep-xxx\""));
+    assert!(json.contains("\"api_model_name\":\"ep-xxx\""));
 
     let parsed: ProviderModel = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed.slug(), "test-model");

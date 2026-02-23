@@ -84,13 +84,19 @@ pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 
 use crate::registry::ToolRegistry;
+use cocode_protocol::Features;
 
 /// Register all built-in tools with a registry.
 ///
 /// All tools including `apply_patch` are always registered. Which tool
 /// definitions are sent to a model is decided at request time by
 /// `select_tools_for_model()` based on `ModelInfo.apply_patch_tool_type`.
-pub fn register_builtin_tools(registry: &mut ToolRegistry) {
+///
+/// The `features` parameter is used to configure interview-conditional
+/// tool descriptions (e.g., EnterPlanMode).
+pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) {
+    let interview_phase = features.enabled(cocode_protocol::Feature::PlanModeInterview);
+
     registry.register(ReadTool::new());
     registry.register(GlobTool::new());
     registry.register(GrepTool::new());
@@ -101,7 +107,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(TaskOutputTool::new());
     registry.register(KillShellTool::new());
     registry.register(TodoWriteTool::new());
-    registry.register(EnterPlanModeTool::new());
+    registry.register(EnterPlanModeTool::with_interview_phase(interview_phase));
     registry.register(ExitPlanModeTool::new());
     registry.register(AskUserQuestionTool::new());
     registry.register(WebFetchTool::new());

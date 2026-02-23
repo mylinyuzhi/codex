@@ -201,6 +201,7 @@ impl ToolOutputExt for ToolOutput {
             content: ToolResultContent::Text(content.into()),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -209,6 +210,7 @@ impl ToolOutputExt for ToolOutput {
             content: ToolResultContent::Structured(value),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -217,6 +219,7 @@ impl ToolOutputExt for ToolOutput {
             content: ToolResultContent::Text(message.into()),
             is_error: true,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -225,6 +228,7 @@ impl ToolOutputExt for ToolOutput {
             content: ToolResultContent::Text(String::new()),
             is_error: false,
             modifiers: Vec::new(),
+            images: Vec::new(),
         }
     }
 }

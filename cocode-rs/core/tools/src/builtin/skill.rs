@@ -2,12 +2,14 @@
 
 use super::prompts;
 use crate::context::InvokedSkill;
+use crate::context::SpawnAgentInput;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
+use cocode_skill::SkillContext;
 use cocode_skill::register_skill_hooks;
 use serde_json::Value;
 use std::time::Instant;
@@ -118,6 +120,64 @@ impl Tool for SkillTool {
                 "Base directory for this skill: {}\n\n{prompt}",
                 base_dir.display()
             );
+        }
+
+        // Check for fork context — spawn subagent instead of inline execution
+        if skill.context == SkillContext::Fork {
+            if ctx.can_spawn_agent() {
+                let agent_type = skill.agent.clone().unwrap_or_else(|| "general".to_string());
+                let spawn_input = SpawnAgentInput {
+                    agent_type: agent_type.clone(),
+                    prompt: prompt.clone(),
+                    model: skill.model.clone(),
+                    max_turns: None,
+                    run_in_background: Some(false),
+                    allowed_tools: skill.allowed_tools.clone(),
+                    parent_selections: ctx.parent_selections.clone(),
+                    permission_mode: None,
+                    resume_from: None,
+                };
+
+                // Emit SubagentSpawned event for TUI visibility
+                ctx.emit_event(cocode_protocol::LoopEvent::SubagentSpawned {
+                    agent_id: String::new(), // Will be filled by result
+                    agent_type: agent_type.clone(),
+                    description: format!("Skill fork: {skill_name}"),
+                    color: None,
+                })
+                .await;
+
+                match ctx.spawn_agent(spawn_input).await {
+                    Ok(result) => {
+                        // Register cancel token for background agents
+                        if let Some(token) = result.cancel_token.clone() {
+                            ctx.agent_cancel_tokens
+                                .lock()
+                                .await
+                                .insert(result.agent_id.clone(), token);
+                        }
+
+                        let output_text = result.output.unwrap_or_default();
+                        return Ok(ToolOutput::text(format!(
+                            "<skill-result name=\"{skill_name}\" agent=\"forked\" agent_id=\"{}\">\n{output_text}\n</skill-result>",
+                            result.agent_id
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            skill_name,
+                            error = %e,
+                            "Fork context spawn failed; falling back to inline execution"
+                        );
+                        // Fall through to inline execution
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    skill_name,
+                    "Fork context requested but spawn unavailable; executing inline"
+                );
+            }
         }
 
         // Register skill hooks if the skill has an interface with hooks

@@ -428,16 +428,40 @@ pub enum LoopEvent {
         failed: Vec<(String, String)>,
     },
 
+    // ========== User Questions ==========
+    /// The model is asking the user a question (AskUserQuestion tool).
+    ///
+    /// The TUI should display a question overlay and send back the user's
+    /// answers via `UserCommand::QuestionResponse`.
+    QuestionAsked {
+        /// Unique request identifier (used to correlate the response).
+        request_id: String,
+        /// The questions to display (JSON array of question objects).
+        questions: Value,
+    },
+
     // ========== Plan Mode ==========
     /// Plan mode has been entered.
     PlanModeEntered {
-        /// Path to the plan file.
-        plan_file: PathBuf,
+        /// Path to the plan file (None when entered via Tab cycling).
+        plan_file: Option<PathBuf>,
     },
     /// Plan mode has been exited.
     PlanModeExited {
         /// Whether the plan was approved.
         approved: bool,
+    },
+    /// Conversation context was cleared (e.g., after plan mode exit with clear option).
+    ContextCleared {
+        /// The new permission mode applied after clearing.
+        new_mode: crate::PermissionMode,
+    },
+
+    // ========== Permission Mode ==========
+    /// Permission mode has been changed (e.g., via Shift+Tab cycling).
+    PermissionModeChanged {
+        /// The new permission mode.
+        mode: crate::PermissionMode,
     },
 
     // ========== Hooks ==========
@@ -536,6 +560,23 @@ pub enum LoopEvent {
         agents: Vec<PluginAgentInfo>,
     },
 
+    /// Plugin data ready for UI display.
+    ///
+    /// Sent in response to a request for plugin summary data.
+    /// Contains installed plugins and marketplace info for the Plugin Manager overlay.
+    PluginDataReady {
+        /// Installed plugin summaries.
+        installed: Vec<PluginSummaryInfo>,
+        /// Known marketplace summaries.
+        marketplaces: Vec<MarketplaceSummaryInfo>,
+    },
+
+    /// Output styles data ready for the picker overlay.
+    OutputStylesReady {
+        /// Available output style items: (name, source_label, description).
+        styles: Vec<OutputStyleItem>,
+    },
+
     // ========== Errors & Control ==========
     /// An error occurred in the loop.
     Error {
@@ -546,6 +587,83 @@ pub enum LoopEvent {
     Interrupted,
     /// Maximum turns reached.
     MaxTurnsReached,
+
+    // ========== Rewind ==========
+    /// A rewind completed successfully.
+    RewindCompleted {
+        /// The turn number that was rewound.
+        rewound_turn: i32,
+        /// Number of files restored.
+        restored_files: i32,
+        /// Number of messages removed from conversation history.
+        messages_removed: i32,
+        /// The rewind mode used.
+        mode: RewindMode,
+        /// The original user prompt text at the rewound turn (for input restoration).
+        restored_prompt: Option<String>,
+    },
+    /// A rewind attempt failed.
+    RewindFailed {
+        /// Error message.
+        error: String,
+    },
+
+    /// Rewind checkpoints ready for the selector overlay.
+    RewindCheckpointsReady {
+        /// Available checkpoints in chronological order (oldest first).
+        checkpoints: Vec<RewindCheckpointItem>,
+    },
+
+    // ========== Summarize ==========
+    /// Partial compaction (summarize from a user-selected turn) completed.
+    SummarizeCompleted {
+        /// The turn number from which summarization started.
+        from_turn: i32,
+        /// Tokens in the generated summary.
+        summary_tokens: i32,
+    },
+    /// Partial compaction (summarize from a user-selected turn) failed.
+    SummarizeFailed {
+        /// Error message.
+        error: String,
+    },
+}
+
+/// Mode for a rewind operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RewindMode {
+    /// Rewind both code changes and conversation history.
+    CodeAndConversation,
+    /// Rewind conversation only (keep file changes).
+    ConversationOnly,
+    /// Rewind code only (keep conversation history).
+    CodeOnly,
+}
+
+/// Summary of an available checkpoint for the rewind selector overlay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewindCheckpointItem {
+    /// The turn number.
+    pub turn_number: i32,
+    /// Number of files modified in this turn.
+    pub file_count: i32,
+    /// Display text for the user message at this turn.
+    pub user_message_preview: String,
+    /// Whether a ghost commit (full working tree snapshot) is available.
+    pub has_ghost_commit: bool,
+    /// File paths modified in this turn (for diff preview).
+    pub modified_files: Vec<String>,
+}
+
+/// Info about an available output style (for the picker overlay).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputStyleItem {
+    /// Style name.
+    pub name: String,
+    /// Source label (e.g., "built-in", "custom", "project", "plugin").
+    pub source: String,
+    /// Optional description.
+    pub description: Option<String>,
 }
 
 /// Lightweight agent info for plugin agent events.
@@ -557,6 +675,42 @@ pub struct PluginAgentInfo {
     pub agent_type: String,
     /// Short description of what the agent does.
     pub description: String,
+}
+
+/// Summary info for an installed plugin (for UI display).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSummaryInfo {
+    /// Plugin name.
+    pub name: String,
+    /// Short description.
+    pub description: String,
+    /// Version string.
+    pub version: String,
+    /// Whether the plugin is currently enabled.
+    pub enabled: bool,
+    /// Installation scope (user/project/managed/flag).
+    pub scope: String,
+    /// Number of skills contributed.
+    pub skills_count: i32,
+    /// Number of hooks contributed.
+    pub hooks_count: i32,
+    /// Number of agents contributed.
+    pub agents_count: i32,
+}
+
+/// Summary info for a known marketplace (for UI display).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketplaceSummaryInfo {
+    /// Marketplace name.
+    pub name: String,
+    /// Source type (github, git, url, etc.).
+    pub source_type: String,
+    /// Source URL or path.
+    pub source: String,
+    /// Whether auto-update is enabled.
+    pub auto_update: bool,
+    /// Number of plugins (0 if manifest not yet loaded).
+    pub plugin_count: i32,
 }
 
 /// Raw SSE event from the stream.
@@ -805,6 +959,8 @@ pub enum HookEventType {
     TeammateIdle,
     /// When a task is being marked as completed.
     TaskCompleted,
+    /// When configuration changes at runtime.
+    ConfigChange,
 }
 
 impl HookEventType {
@@ -825,6 +981,7 @@ impl HookEventType {
             Self::PermissionRequest => "permission_request",
             Self::TeammateIdle => "teammate_idle",
             Self::TaskCompleted => "task_completed",
+            Self::ConfigChange => "config_change",
         }
     }
 }
@@ -854,6 +1011,7 @@ impl std::str::FromStr for HookEventType {
             "PermissionRequest" | "permission_request" => Ok(Self::PermissionRequest),
             "TeammateIdle" | "teammate_idle" => Ok(Self::TeammateIdle),
             "TaskCompleted" | "task_completed" => Ok(Self::TaskCompleted),
+            "ConfigChange" | "config_change" => Ok(Self::ConfigChange),
             other => Err(format!("unknown hook event type: {other}")),
         }
     }

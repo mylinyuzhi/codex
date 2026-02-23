@@ -11,6 +11,12 @@ fn test_with_defaults_includes_default_enabled_features() {
 }
 
 #[test]
+fn test_file_checkpointing_default_enabled() {
+    let features = Features::with_defaults();
+    assert!(features.enabled(Feature::FileCheckpointing));
+}
+
+#[test]
 fn test_with_defaults_excludes_non_default_features() {
     let features = Features::with_defaults();
 

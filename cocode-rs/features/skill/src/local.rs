@@ -76,9 +76,19 @@ pub fn builtin_local_commands() -> &'static [LocalCommandDef] {
             aliases: &["tasks"],
         },
         LocalCommandDef {
+            name: "agents",
+            description: "List available agent types",
+            aliases: &[],
+        },
+        LocalCommandDef {
             name: "output-style",
             description: "Manage response output styles",
             aliases: &[],
+        },
+        LocalCommandDef {
+            name: "rewind",
+            description: "Rewind to a previous checkpoint",
+            aliases: &["checkpoint"],
         },
         LocalCommandDef {
             name: "exit",

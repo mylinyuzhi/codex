@@ -223,6 +223,9 @@ pub enum TuiCommand {
     /// Open the current input in an external editor.
     OpenExternalEditor,
 
+    /// Open the plan file in an external editor (Ctrl+G, plan mode only).
+    OpenPlanEditor,
+
     // ========== Help ==========
     /// Show the help overlay.
     ShowHelp,
@@ -234,6 +237,16 @@ pub enum TuiCommand {
     // ========== Session Browser ==========
     /// Show session browser.
     ShowSessionBrowser,
+
+    // ========== Plugin Manager ==========
+    /// Show plugin manager overlay.
+    ShowPluginManager,
+
+    /// Switch to the next tab in the plugin manager.
+    PluginManagerNextTab,
+
+    /// Switch to the previous tab in the plugin manager.
+    PluginManagerPrevTab,
 
     /// Load a session.
     LoadSession(String),
@@ -263,6 +276,13 @@ pub enum TuiCommand {
     // ========== Tool Collapse ==========
     /// Toggle collapse of tool results in chat.
     ToggleToolCollapse,
+
+    // ========== Rewind ==========
+    /// Open the rewind selector overlay.
+    ShowRewindSelector,
+
+    /// Rewind the last turn (undo file changes + message history).
+    Rewind,
 
     // ========== Quit ==========
     /// Request to quit the application.
@@ -350,9 +370,17 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::Deny => write!(f, "{}", t!("command.deny")),
             TuiCommand::ApproveAll => write!(f, "{}", t!("command.approve_all")),
             TuiCommand::OpenExternalEditor => write!(f, "{}", t!("command.open_external_editor")),
+            TuiCommand::OpenPlanEditor => write!(f, "Open plan in editor"),
             TuiCommand::ShowHelp => write!(f, "{}", t!("command.show_help")),
             TuiCommand::ShowCommandPalette => write!(f, "{}", t!("command.show_command_palette")),
             TuiCommand::ShowSessionBrowser => write!(f, "{}", t!("command.show_session_browser")),
+            TuiCommand::ShowPluginManager => write!(f, "{}", t!("command.show_plugin_manager")),
+            TuiCommand::PluginManagerNextTab => {
+                write!(f, "{}", t!("command.plugin_manager_next_tab"))
+            }
+            TuiCommand::PluginManagerPrevTab => {
+                write!(f, "{}", t!("command.plugin_manager_prev_tab"))
+            }
             TuiCommand::LoadSession(id) => write!(f, "{}", t!("command.load_session", id = id)),
             TuiCommand::DeleteSession(id) => write!(f, "{}", t!("command.delete_session", id = id)),
             TuiCommand::ToggleThinking => write!(f, "{}", t!("command.toggle_thinking")),
@@ -366,6 +394,8 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::ToggleToolCollapse => {
                 write!(f, "{}", t!("command.toggle_tool_collapse"))
             }
+            TuiCommand::ShowRewindSelector => write!(f, "{}", t!("command.show_rewind_selector")),
+            TuiCommand::Rewind => write!(f, "{}", t!("command.rewind")),
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }

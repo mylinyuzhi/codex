@@ -50,6 +50,9 @@ hyper-sdk = { workspace = true }
 arboard = { workspace = true }
 image = { workspace = true, features = ["png"] }
 
+# Serialization
+serde_json = { workspace = true }
+
 # Utilities
 tracing = { workspace = true }
 

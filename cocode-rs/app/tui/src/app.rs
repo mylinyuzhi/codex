@@ -335,7 +335,18 @@ impl App {
     }
 
     /// Check for @mention in input and trigger file, agent, or symbol search if needed.
+    ///
+    /// Suppressed in plan mode — the model should focus on planning,
+    /// and inline autocomplete suggestions would be distracting.
     fn check_at_mention(&mut self) {
+        if self.state.session.plan_mode {
+            self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
+            self.state.ui.clear_symbol_suggestions();
+            self.file_search.cancel();
+            self.symbol_search.cancel();
+            return;
+        }
         if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
             if has_line_range_suffix(&query) {
                 // User is typing a line range suffix — dismiss autocomplete
@@ -389,7 +400,13 @@ impl App {
     }
 
     /// Check for /command in input and trigger skill search if needed.
+    ///
+    /// Suppressed in plan mode — the model should focus on planning, not skills.
     fn check_slash_command(&mut self) {
+        if self.state.session.plan_mode {
+            self.state.ui.clear_skill_suggestions();
+            return;
+        }
         if let Some((start_pos, query)) = self.state.ui.input.current_slash_token() {
             // Skill suggestions are exclusive with file/agent suggestions
             self.state.ui.clear_file_suggestions();
@@ -471,18 +488,31 @@ impl App {
     ///
     /// Opens the clipboard once, tries image first, falls back to text.
     /// This is separate from `TuiEvent::Paste` which is terminal-provided text.
+    /// When the question overlay "Other" input is active, pastes into that field.
     fn handle_clipboard_paste(&mut self) {
         let cb = match clipboard_paste::open_clipboard() {
             Ok(cb) => cb,
             Err(_) => return,
         };
 
+        // Check if question overlay "Other" input is active
+        let in_question_other = matches!(
+            &self.state.ui.overlay,
+            Some(Overlay::Question(q)) if q.other_input_active
+        );
+
         // 1. Try clipboard image first (JPEG, PNG, GIF, WebP)
         match clipboard_paste::paste_image(cb) {
             Ok((data, media_type)) => {
                 let pill = self.paste_manager.process_image(data, media_type);
-                for c in pill.chars() {
-                    self.state.ui.input.insert_char(c);
+                if in_question_other {
+                    if let Some(Overlay::Question(q)) = &mut self.state.ui.overlay {
+                        q.other_text.push_str(&pill);
+                    }
+                } else {
+                    for c in pill.chars() {
+                        self.state.ui.input.insert_char(c);
+                    }
                 }
                 self.state
                     .ui
@@ -501,8 +531,14 @@ impl App {
         };
         if let Ok(text) = clipboard_paste::paste_text(cb) {
             let processed = self.paste_manager.process_text(text);
-            for c in processed.chars() {
-                self.state.ui.input.insert_char(c);
+            if in_question_other {
+                if let Some(Overlay::Question(q)) = &mut self.state.ui.overlay {
+                    q.other_text.push_str(&processed);
+                }
+            } else {
+                for c in processed.chars() {
+                    self.state.ui.input.insert_char(c);
+                }
             }
         }
     }

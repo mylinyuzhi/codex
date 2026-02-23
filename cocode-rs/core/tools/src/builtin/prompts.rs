@@ -161,7 +161,7 @@ Task fields:\n\
 \n\
 IMPORTANT: Always provide activeForm when creating tasks.";
 
-/// Description for the EnterPlanMode tool.
+/// Description for the EnterPlanMode tool (interview phase OFF — includes workflow).
 pub const ENTER_PLAN_MODE_DESCRIPTION: &str = "\
 Use this tool proactively when you're about to start a non-trivial implementation task. \
 Getting user sign-off on your approach before writing code prevents wasted effort.\n\
@@ -182,6 +182,29 @@ When NOT to use:\n\
 - Pure research/exploration tasks\n\
 \n\
 In plan mode, you'll explore the codebase, design an approach, and present your plan for approval.";
+
+/// Description for the EnterPlanMode tool (interview phase ON — workflow omitted).
+///
+/// When the interview phase is enabled, the "What Happens in Plan Mode" section
+/// is omitted because detailed instructions are provided via the system reminder.
+pub const ENTER_PLAN_MODE_DESCRIPTION_INTERVIEW: &str = "\
+Use this tool proactively when you're about to start a non-trivial implementation task. \
+Getting user sign-off on your approach before writing code prevents wasted effort.\n\
+\n\
+When to use:\n\
+1. New feature implementation\n\
+2. Multiple valid approaches exist\n\
+3. Code modifications that affect existing behavior\n\
+4. Architectural decisions required\n\
+5. Multi-file changes (more than 2-3 files)\n\
+6. Unclear requirements needing exploration\n\
+7. User preferences matter for the approach\n\
+\n\
+When NOT to use:\n\
+- Single-line or few-line fixes\n\
+- Adding a single function with clear requirements\n\
+- User gave very specific, detailed instructions\n\
+- Pure research/exploration tasks";
 
 /// Description for the ExitPlanMode tool.
 pub const EXIT_PLAN_MODE_DESCRIPTION: &str = "\

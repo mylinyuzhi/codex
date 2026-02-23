@@ -132,6 +132,8 @@ fn convert_single_hook(
         enabled: true,
         timeout_secs: config.timeout_secs,
         once: config.once,
+        status_message: None,
+        group_id: None,
     })
 }
 

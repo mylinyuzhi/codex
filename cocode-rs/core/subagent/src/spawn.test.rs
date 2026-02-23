@@ -10,7 +10,7 @@ fn test_spawn_input_defaults() {
     assert_eq!(input.prompt, "list files");
     assert!(input.identity.is_none());
     assert!(input.max_turns.is_none());
-    assert!(!input.run_in_background);
+    assert!(input.run_in_background.is_none());
     assert!(input.allowed_tools.is_none());
 }
 
@@ -21,14 +21,14 @@ fn test_spawn_input_with_identity() {
         prompt: "find all tests".to_string(),
         identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
         max_turns: Some(20),
-        run_in_background: true,
+        run_in_background: Some(true),
         allowed_tools: Some(vec!["Read".to_string(), "Glob".to_string()]),
         resume_from: None,
     };
     let json = serde_json::to_string(&input).expect("serialize");
     let back: SpawnInput = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.agent_type, "explore");
-    assert!(back.run_in_background);
+    assert_eq!(back.run_in_background, Some(true));
     assert!(matches!(
         back.identity,
         Some(ExecutionIdentity::Role(ModelRole::Explore))
@@ -42,7 +42,7 @@ fn test_spawn_input_inherit_identity() {
         prompt: "test".to_string(),
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: None,
-        run_in_background: false,
+        run_in_background: Some(false),
         allowed_tools: None,
         resume_from: None,
     };
@@ -57,7 +57,7 @@ fn test_spawn_input_spec_identity() {
         prompt: "test".to_string(),
         identity: Some(ExecutionIdentity::Spec(spec.clone())),
         max_turns: None,
-        run_in_background: false,
+        run_in_background: None,
         allowed_tools: None,
         resume_from: None,
     };

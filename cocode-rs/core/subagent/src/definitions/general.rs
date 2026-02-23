@@ -22,6 +22,13 @@ pub fn general_agent() -> AgentDefinition {
         color: None,
         critical_reminder: None,
         source: AgentSource::BuiltIn,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     }
 }
 

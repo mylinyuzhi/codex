@@ -63,6 +63,13 @@ fn test_contribution_agent() {
         color: None,
         critical_reminder: None,
         source: cocode_subagent::AgentSource::Plugin,
+        skills: vec![],
+        background: false,
+        memory: None,
+        hooks: None,
+        mcp_servers: None,
+        isolation: None,
+        use_custom_prompt: false,
     };
 
     let contrib = PluginContribution::Agent {
@@ -85,6 +92,7 @@ fn test_contributions_serialize() {
         commands: vec!["commands/".to_string()].into(),
         mcp_servers: Vec::<String>::new().into(),
         lsp_servers: Vec::<String>::new().into(),
+        output_styles: Vec::<String>::new().into(),
     };
 
     let json_str = serde_json::to_string(&contrib).expect("serialize");

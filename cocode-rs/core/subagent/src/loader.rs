@@ -35,7 +35,11 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::definition::AgentDefinition;
+use crate::definition::AgentHookDefinition;
 use crate::definition::AgentSource;
+use crate::definition::IsolationMode;
+use crate::definition::McpServerRef;
+use crate::definition::MemoryScope;
 
 /// YAML frontmatter schema for agent definition files.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -76,6 +80,34 @@ struct AgentFrontmatter {
     /// TUI display color.
     #[serde(default)]
     color: Option<String>,
+
+    /// Skills to load for this agent.
+    #[serde(default)]
+    skills: Option<Vec<String>>,
+
+    /// Default background mode.
+    #[serde(default)]
+    background: Option<bool>,
+
+    /// Memory scope: "user", "project", "local".
+    #[serde(default)]
+    memory: Option<String>,
+
+    /// Hook definitions scoped to this agent.
+    #[serde(default)]
+    hooks: Option<Vec<AgentHookDefinition>>,
+
+    /// MCP server references.
+    #[serde(default)]
+    mcp_servers: Option<Vec<McpServerRef>>,
+
+    /// Isolation mode: "worktree", "none".
+    #[serde(default)]
+    isolation: Option<String>,
+
+    /// Whether to use a custom system prompt instead of the default.
+    #[serde(default)]
+    use_custom_prompt: Option<bool>,
 }
 
 /// Load custom agent definitions from a directory of Markdown files.
@@ -167,6 +199,9 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> anyhow::Result<Agen
     let identity = fm.model.as_deref().map(parse_identity);
     let permission_mode = fm.permission_mode.as_deref().map(parse_permission_mode);
 
+    let memory = fm.memory.as_deref().and_then(parse_memory_scope);
+    let isolation = fm.isolation.as_deref().and_then(parse_isolation_mode);
+
     Ok(AgentDefinition {
         name: agent_type.clone(),
         description,
@@ -180,6 +215,13 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> anyhow::Result<Agen
         color: fm.color,
         critical_reminder,
         source,
+        skills: fm.skills.unwrap_or_default(),
+        background: fm.background.unwrap_or(false),
+        memory,
+        hooks: fm.hooks,
+        mcp_servers: fm.mcp_servers,
+        isolation,
+        use_custom_prompt: fm.use_custom_prompt.unwrap_or(false),
     })
 }
 
@@ -188,8 +230,8 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> anyhow::Result<Agen
 /// Splits on `---` delimiters at line starts. Returns `(yaml_str, body_str)`.
 fn parse_frontmatter(content: &str) -> Result<(&str, &str), String> {
     let content = content.trim_start_matches('\u{feff}');
-    let rest = if content.starts_with("---") {
-        &content[3..]
+    let rest = if let Some(stripped) = content.strip_prefix("---") {
+        stripped
     } else {
         return Err("missing opening `---` frontmatter delimiter".to_string());
     };
@@ -231,6 +273,31 @@ fn parse_identity(s: &str) -> cocode_protocol::execution::ExecutionIdentity {
         "review" => ExecutionIdentity::Role(ModelRole::Review),
         "compact" => ExecutionIdentity::Role(ModelRole::Compact),
         "inherit" | _ => ExecutionIdentity::Inherit,
+    }
+}
+
+/// Parse a memory scope string.
+fn parse_memory_scope(s: &str) -> Option<MemoryScope> {
+    match s.to_lowercase().as_str() {
+        "user" => Some(MemoryScope::User),
+        "project" => Some(MemoryScope::Project),
+        "local" => Some(MemoryScope::Local),
+        _ => {
+            tracing::warn!(value = s, "Unknown memory scope, ignoring");
+            None
+        }
+    }
+}
+
+/// Parse an isolation mode string.
+fn parse_isolation_mode(s: &str) -> Option<IsolationMode> {
+    match s.to_lowercase().as_str() {
+        "worktree" => Some(IsolationMode::Worktree),
+        "none" => Some(IsolationMode::None),
+        _ => {
+            tracing::warn!(value = s, "Unknown isolation mode, ignoring");
+            None
+        }
     }
 }
 
@@ -276,19 +343,30 @@ pub fn load_custom_agents(cocode_home: &Path, project_root: Option<&Path>) -> Ve
 /// Merge custom agents into a list of existing definitions.
 ///
 /// Custom agents with the same `agent_type` as an existing definition
-/// replace the existing one. New agent types are appended.
+/// replace it only if the new agent has equal or higher source priority.
+/// New agent types are always appended.
 pub fn merge_custom_agents(existing: &mut Vec<AgentDefinition>, custom: Vec<AgentDefinition>) {
     for agent in custom {
         if let Some(pos) = existing
             .iter()
             .position(|d| d.agent_type == agent.agent_type)
         {
-            tracing::debug!(
-                agent_type = %agent.agent_type,
-                source = ?agent.source,
-                "Custom agent overrides existing definition"
-            );
-            existing[pos] = agent;
+            if agent.source.priority() >= existing[pos].source.priority() {
+                tracing::debug!(
+                    agent_type = %agent.agent_type,
+                    source = ?agent.source,
+                    prev_source = ?existing[pos].source,
+                    "Custom agent overrides existing definition"
+                );
+                existing[pos] = agent;
+            } else {
+                tracing::debug!(
+                    agent_type = %agent.agent_type,
+                    source = ?agent.source,
+                    prev_source = ?existing[pos].source,
+                    "Custom agent skipped (lower priority)"
+                );
+            }
         } else {
             tracing::debug!(
                 agent_type = %agent.agent_type,

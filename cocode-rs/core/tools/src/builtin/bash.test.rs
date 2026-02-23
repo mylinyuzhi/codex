@@ -78,3 +78,324 @@ fn test_tool_properties() {
     assert_eq!(tool.name(), "Bash");
     assert!(!tool.is_concurrent_safe());
 }
+
+// -- Plan mode safe binary checks --
+
+#[test]
+fn test_plan_mode_safe_binary_basic() {
+    // Basic read-only commands
+    assert!(is_plan_mode_safe_binary("ls", &[]));
+    assert!(is_plan_mode_safe_binary("cat", &[]));
+    assert!(is_plan_mode_safe_binary(
+        "grep",
+        &["-r".into(), "pattern".into()]
+    ));
+    assert!(is_plan_mode_safe_binary("wc", &["-l".into()]));
+    assert!(is_plan_mode_safe_binary(
+        "find",
+        &[".".into(), "-name".into(), "*.rs".into()]
+    ));
+
+    // Text processing commands
+    assert!(is_plan_mode_safe_binary("awk", &["{print $1}".into()]));
+    assert!(is_plan_mode_safe_binary("sort", &[]));
+    assert!(is_plan_mode_safe_binary("uniq", &["-c".into()]));
+    assert!(is_plan_mode_safe_binary(
+        "cut",
+        &["-d,".into(), "-f1".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "tr",
+        &["a-z".into(), "A-Z".into()]
+    ));
+    assert!(is_plan_mode_safe_binary("jq", &[".data".into()]));
+
+    // Path utilities
+    assert!(is_plan_mode_safe_binary("dirname", &["/foo/bar".into()]));
+    assert!(is_plan_mode_safe_binary("basename", &["/foo/bar".into()]));
+    assert!(is_plan_mode_safe_binary("realpath", &[".".into()]));
+
+    // Unsafe commands
+    assert!(!is_plan_mode_safe_binary("rm", &["-rf".into(), "/".into()]));
+    assert!(!is_plan_mode_safe_binary("mkdir", &["foo".into()]));
+    assert!(!is_plan_mode_safe_binary("cp", &["a".into(), "b".into()]));
+    assert!(!is_plan_mode_safe_binary("mv", &["a".into(), "b".into()]));
+    assert!(!is_plan_mode_safe_binary(
+        "chmod",
+        &["755".into(), "file".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "curl",
+        &["https://example.com".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary("npm", &["install".into()]));
+}
+
+#[test]
+fn test_plan_mode_git_subcommands() {
+    // Read-only git subcommands
+    assert!(is_plan_mode_safe_binary("git", &["status".into()]));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["log".into(), "--oneline".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["diff".into(), "HEAD~1".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["show".into(), "HEAD".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["branch".into(), "-a".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["rev-parse".into(), "HEAD".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["blame".into(), "src/main.rs".into()]
+    ));
+    assert!(is_plan_mode_safe_binary("git", &["ls-files".into()]));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["ls-tree".into(), "HEAD".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["cat-file".into(), "-p".into(), "HEAD".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "git",
+        &["config".into(), "--get".into(), "user.name".into()]
+    ));
+    assert!(is_plan_mode_safe_binary("git", &["shortlog".into()]));
+    assert!(is_plan_mode_safe_binary("git", &["describe".into()]));
+
+    // Write git subcommands must be denied
+    assert!(!is_plan_mode_safe_binary("git", &["push".into()]));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["commit".into(), "-m".into(), "msg".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["add".into(), ".".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["reset".into(), "--hard".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["checkout".into(), ".".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["merge".into(), "feature".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["rebase".into(), "main".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary("git", &["stash".into()]));
+    assert!(!is_plan_mode_safe_binary("git", &["pull".into()]));
+    assert!(!is_plan_mode_safe_binary("git", &["fetch".into()]));
+    assert!(!is_plan_mode_safe_binary(
+        "git",
+        &["clean".into(), "-f".into()]
+    ));
+    // git with no subcommand
+    assert!(!is_plan_mode_safe_binary("git", &[]));
+}
+
+#[test]
+fn test_plan_mode_sed_inplace_blocked() {
+    // sed without -i is fine
+    assert!(is_plan_mode_safe_binary("sed", &["s/foo/bar/".into()]));
+    assert!(is_plan_mode_safe_binary(
+        "sed",
+        &["-n".into(), "s/foo/bar/p".into()]
+    ));
+    assert!(is_plan_mode_safe_binary(
+        "sed",
+        &["-e".into(), "s/foo/bar/".into()]
+    ));
+
+    // sed -i in all forms must be blocked
+    assert!(!is_plan_mode_safe_binary(
+        "sed",
+        &["-i".into(), "s/foo/bar/".into(), "file".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "sed",
+        &["-i.bak".into(), "s/foo/bar/".into(), "file".into()]
+    ));
+    // Combined flags with i
+    assert!(!is_plan_mode_safe_binary(
+        "sed",
+        &["-ni".into(), "s/foo/bar/p".into()]
+    ));
+    assert!(!is_plan_mode_safe_binary(
+        "sed",
+        &["-in".into(), "s/foo/bar/p".into()]
+    ));
+}
+
+// -- Plan mode allowed command checks --
+
+#[test]
+fn test_plan_mode_allowed_simple_commands() {
+    // Simple read-only commands (fast path)
+    assert!(is_plan_mode_allowed("ls -la"));
+    assert!(is_plan_mode_allowed("cat file.txt"));
+    assert!(is_plan_mode_allowed("grep -r pattern ."));
+    assert!(is_plan_mode_allowed("git status"));
+    assert!(is_plan_mode_allowed("git log --oneline"));
+    assert!(is_plan_mode_allowed("echo hello"));
+    assert!(is_plan_mode_allowed("pwd"));
+    assert!(is_plan_mode_allowed("wc -l file.txt"));
+}
+
+#[test]
+fn test_plan_mode_allowed_pipelines() {
+    // Pipelines of safe commands
+    assert!(is_plan_mode_allowed("cat file.txt | grep pattern"));
+    assert!(is_plan_mode_allowed("cat file.txt | grep pattern | wc -l"));
+    assert!(is_plan_mode_allowed("ls -la | sort | head -20"));
+    assert!(is_plan_mode_allowed("find . -name '*.rs' | wc -l"));
+    assert!(is_plan_mode_allowed("git log --oneline | head -10"));
+    assert!(is_plan_mode_allowed(
+        "cat file | awk '{print $1}' | sort | uniq -c"
+    ));
+    assert!(is_plan_mode_allowed("git diff HEAD | grep '+' | wc -l"));
+    assert!(is_plan_mode_allowed("cat data.json | jq '.items'"));
+}
+
+#[test]
+fn test_plan_mode_allowed_chained_commands() {
+    // Chained safe commands
+    assert!(is_plan_mode_allowed("ls -la && pwd"));
+    assert!(is_plan_mode_allowed("git status && git log --oneline"));
+    assert!(is_plan_mode_allowed("echo foo || echo bar"));
+}
+
+#[test]
+fn test_plan_mode_denied_write_commands() {
+    // Write commands must be denied
+    assert!(!is_plan_mode_allowed("rm -rf /"));
+    assert!(!is_plan_mode_allowed("mkdir new_dir"));
+    assert!(!is_plan_mode_allowed("cp a b"));
+    assert!(!is_plan_mode_allowed("mv a b"));
+    assert!(!is_plan_mode_allowed("chmod 755 file"));
+    assert!(!is_plan_mode_allowed("npm install"));
+    assert!(!is_plan_mode_allowed("cargo build"));
+    assert!(!is_plan_mode_allowed("make"));
+}
+
+#[test]
+fn test_plan_mode_denied_redirections() {
+    // Redirections are blocked by try_extract_safe_commands
+    assert!(!is_plan_mode_allowed("echo foo > bar"));
+    assert!(!is_plan_mode_allowed("cat file >> output"));
+    assert!(!is_plan_mode_allowed("ls > filelist.txt"));
+}
+
+#[test]
+fn test_plan_mode_denied_command_substitution() {
+    // Command substitutions are blocked by try_extract_safe_commands
+    assert!(!is_plan_mode_allowed("echo $(pwd)"));
+    assert!(!is_plan_mode_allowed("ls $(cat dirs.txt)"));
+}
+
+#[test]
+fn test_plan_mode_denied_variable_expansion() {
+    // Variable expansions are blocked by try_extract_safe_commands
+    assert!(!is_plan_mode_allowed("echo $HOME"));
+    assert!(!is_plan_mode_allowed("ls ${SOME_DIR}"));
+}
+
+#[test]
+fn test_plan_mode_denied_unsafe_in_pipeline() {
+    // Pipeline with any unsafe command is denied
+    assert!(!is_plan_mode_allowed("cat file | rm -rf /"));
+    assert!(!is_plan_mode_allowed("ls | xargs rm"));
+    assert!(!is_plan_mode_allowed("grep pattern | curl -X POST"));
+    assert!(!is_plan_mode_allowed("cat file | python -c 'import os'"));
+}
+
+#[test]
+fn test_plan_mode_denied_git_write_commands() {
+    // Git write commands
+    assert!(!is_plan_mode_allowed("git push"));
+    assert!(!is_plan_mode_allowed("git commit -m 'msg'"));
+    assert!(!is_plan_mode_allowed("git add ."));
+    assert!(!is_plan_mode_allowed("git reset --hard HEAD"));
+}
+
+#[test]
+fn test_plan_mode_denied_sed_inplace() {
+    // sed -i in pipelines
+    assert!(!is_plan_mode_allowed("cat file | sed -i 's/foo/bar/' file"));
+}
+
+#[test]
+fn test_plan_mode_allowed_sed_without_inplace() {
+    // sed without -i in pipeline is fine
+    assert!(is_plan_mode_allowed("cat file | sed 's/foo/bar/'"));
+    assert!(is_plan_mode_allowed("cat file | sed -n 's/foo/bar/p'"));
+}
+
+#[tokio::test]
+async fn test_plan_mode_check_permission_allows_readonly() {
+    let tool = BashTool::new();
+    let mut ctx = make_context();
+    ctx.is_plan_mode = true;
+
+    // Read-only command should be allowed
+    let input = serde_json::json!({ "command": "ls -la" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Allowed));
+
+    // Pipeline of safe commands should be allowed
+    let input = serde_json::json!({ "command": "cat file | grep pattern | wc -l" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Allowed));
+}
+
+#[tokio::test]
+async fn test_plan_mode_check_permission_denies_write() {
+    let tool = BashTool::new();
+    let mut ctx = make_context();
+    ctx.is_plan_mode = true;
+
+    // Write command should be denied
+    let input = serde_json::json!({ "command": "rm -rf /" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Denied { .. }));
+
+    // npm install should be denied
+    let input = serde_json::json!({ "command": "npm install" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Denied { .. }));
+}
+
+#[tokio::test]
+async fn test_non_plan_mode_unaffected() {
+    let tool = BashTool::new();
+    let ctx = make_context();
+    assert!(!ctx.is_plan_mode);
+
+    // In normal mode, read-only commands are still Allowed
+    let input = serde_json::json!({ "command": "ls -la" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Allowed));
+
+    // In normal mode, non-read-only commands go through normal flow (NeedsApproval)
+    let input = serde_json::json!({ "command": "npm install" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::NeedsApproval { .. }));
+}

@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_plan_mode::PlanFileManager;
-use cocode_plan_mode::generate_slug;
+use cocode_plan_mode::get_unique_slug;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
@@ -18,12 +18,25 @@ use serde_json::Value;
 ///
 /// Plan files are stored at `~/.cocode/plans/{slug}.md` following
 /// Claude Code v2.1.7 conventions.
-pub struct EnterPlanModeTool;
+pub struct EnterPlanModeTool {
+    /// Whether the interview phase is enabled.
+    ///
+    /// When true, the tool description omits the "What Happens in Plan Mode"
+    /// section because detailed instructions come via the system reminder.
+    interview_phase: bool,
+}
 
 impl EnterPlanModeTool {
-    /// Create a new EnterPlanMode tool.
+    /// Create a new EnterPlanMode tool (interview phase OFF by default).
     pub fn new() -> Self {
-        Self
+        Self {
+            interview_phase: false,
+        }
+    }
+
+    /// Create a new EnterPlanMode tool with interview phase setting.
+    pub fn with_interview_phase(interview_phase: bool) -> Self {
+        Self { interview_phase }
     }
 }
 
@@ -40,7 +53,11 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        prompts::ENTER_PLAN_MODE_DESCRIPTION
+        if self.interview_phase {
+            prompts::ENTER_PLAN_MODE_DESCRIPTION_INTERVIEW
+        } else {
+            prompts::ENTER_PLAN_MODE_DESCRIPTION
+        }
     }
 
     fn input_schema(&self) -> Value {
@@ -56,44 +73,44 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn is_read_only(&self) -> bool {
-        false
+        true
+    }
+
+    /// Auto-approve: entering plan mode needs no user confirmation.
+    async fn check_permission(
+        &self,
+        _input: &Value,
+        _ctx: &ToolContext,
+    ) -> cocode_protocol::PermissionResult {
+        cocode_protocol::PermissionResult::Allowed
     }
 
     async fn execute(&self, _input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         ctx.emit_progress("Entering plan mode").await;
 
-        // Generate unique slug for this session
-        let slug = generate_slug();
+        // Get or generate the session-unique slug (cached per session_id)
+        let slug = get_unique_slug(&ctx.session_id, None);
 
-        // Create plan file manager and ensure directory exists
-        let manager = match ctx.agent_id.as_ref() {
-            Some(agent_id) => PlanFileManager::for_agent(&ctx.session_id, agent_id),
-            None => PlanFileManager::new(&ctx.session_id),
-        };
+        // Create plan file manager and ensure directory exists.
+        // Subagent filtering (SYSTEM_BLOCKED) prevents subagents from calling
+        // this tool, so we always use the main agent path.
+        let manager = PlanFileManager::new(&ctx.session_id);
 
         let plan_path = match manager.ensure_and_get_path() {
             Ok(path) => path,
             Err(e) => {
-                tracing::warn!("Failed to create plan directory: {e}");
-                // Fallback to cwd-based plan file
-                ctx.cwd.join(".plan.md")
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to create plan directory: {e}"),
+                }
+                .build());
             }
         };
 
         // Emit plan mode event with the plan file path
         ctx.emit_event(cocode_protocol::LoopEvent::PlanModeEntered {
-            plan_file: plan_path.clone(),
+            plan_file: Some(plan_path.clone()),
         })
         .await;
-
-        // Return message with plan file path (aligned with Claude Code)
-        let message = format!(
-            "Entered plan mode. Explore the codebase and design your implementation approach.\n\n\
-             Plan file: {}\n\n\
-             Use the Write tool to create your plan and the Edit tool to modify it.\n\
-             When ready, use ExitPlanMode to submit for review.",
-            plan_path.display()
-        );
 
         tracing::info!(
             session_id = %ctx.session_id,
@@ -102,7 +119,35 @@ impl Tool for EnterPlanModeTool {
             "Entered plan mode"
         );
 
-        Ok(ToolOutput::text(message))
+        // Return structured output so driver.rs can extract path/slug reliably.
+        // The message varies based on interview phase:
+        // - Interview ON: Brief placeholder (full instructions come via system reminder)
+        // - Interview OFF: Step-by-step guide
+        let message = if ctx
+            .features
+            .enabled(cocode_protocol::Feature::PlanModeInterview)
+        {
+            "Entered plan mode. DO NOT write a plan yet — detailed instructions will follow \
+             in the next system message. Wait for those instructions before proceeding."
+                .to_string()
+        } else {
+            "Entered plan mode. Explore the codebase and design your implementation approach.\n\n\
+             1. Read and analyze the user's request — identify key requirements\n\
+             2. Launch Explore agents to search the codebase in parallel\n\
+             3. Synthesize findings into a step-by-step plan\n\
+             4. Write the plan to the plan file using the Write tool\n\
+             5. Use AskUserQuestion for any clarifications\n\
+             6. Call ExitPlanMode when ready for user approval"
+                .to_string()
+        };
+
+        let response = serde_json::json!({
+            "planFilePath": plan_path.display().to_string(),
+            "slug": slug,
+            "message": message
+        });
+
+        Ok(ToolOutput::structured(response))
     }
 }
 

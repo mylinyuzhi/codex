@@ -18,6 +18,7 @@ cocode-system-reminder.workspace = true
 cocode-lsp.workspace = true
 cocode-otel.workspace = true
 cocode-skill.workspace = true
+cocode-file-backup.workspace = true
 hyper-sdk.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tokio-util.workspace = true

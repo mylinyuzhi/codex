@@ -28,9 +28,21 @@ pub use ui::FileSuggestionState;
 pub use ui::FocusTarget;
 pub use ui::HistoryEntry;
 pub use ui::InputState;
+pub use ui::MarketplaceSummary;
 pub use ui::ModelPickerOverlay;
+pub use ui::OutputStylePickerItem;
+pub use ui::OutputStylePickerOverlay;
 pub use ui::Overlay;
 pub use ui::PermissionOverlay;
+pub use ui::PlanExitOverlay;
+pub use ui::PluginErrorEntry;
+pub use ui::PluginManagerOverlay;
+pub use ui::PluginManagerTab;
+pub use ui::PluginSummary;
+pub use ui::QuestionOverlay;
+pub use ui::RewindAction;
+pub use ui::RewindSelectorOverlay;
+pub use ui::RewindSelectorPhase;
 pub use ui::SessionBrowserOverlay;
 pub use ui::SessionSummary;
 pub use ui::SkillSuggestionItem;
@@ -87,10 +99,15 @@ impl AppState {
         matches!(self.running, RunningState::Done)
     }
 
-    /// Toggle plan mode.
-    pub fn toggle_plan_mode(&mut self) {
-        self.session.plan_mode = !self.session.plan_mode;
-        tracing::info!(plan_mode = self.session.plan_mode, "Plan mode toggled");
+    /// Cycle permission mode: Default → AcceptEdits → Plan → Default.
+    ///
+    /// Updates both the permission mode and the plan_mode flag (plan_mode is
+    /// true iff permission_mode == Plan).
+    pub fn cycle_permission_mode(&mut self) {
+        let new_mode = self.session.permission_mode.next_cycle();
+        self.session.permission_mode = new_mode;
+        self.session.plan_mode = new_mode == cocode_protocol::PermissionMode::Plan;
+        tracing::info!(?new_mode, "Permission mode cycled");
     }
 
     /// Cycle to the next thinking level (model-aware).
