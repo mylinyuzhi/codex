@@ -31,31 +31,12 @@ pub enum PromptCacheRetention {
     TwentyFourHours,
 }
 
-/// Prompt caching configuration for requests.
+/// Streaming options for response creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromptCachingConfig {
-    /// Cache key for this request.
+pub struct StreamOptions {
+    /// Whether to include obfuscation in the stream.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_key: Option<String>,
-    /// Cache retention policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention: Option<PromptCacheRetention>,
-}
-
-impl PromptCachingConfig {
-    /// Create a new prompt caching config with a cache key.
-    pub fn with_key(key: impl Into<String>) -> Self {
-        Self {
-            cache_key: Some(key.into()),
-            retention: None,
-        }
-    }
-
-    /// Set the retention policy.
-    pub fn retention(mut self, retention: PromptCacheRetention) -> Self {
-        self.retention = Some(retention);
-        self
-    }
+    pub include_obfuscation: Option<bool>,
 }
 
 // ============================================================================
@@ -394,6 +375,188 @@ pub enum ResponseInputItem {
         /// ID of the item to reference.
         id: String,
     },
+    /// MCP tool call (from a previous assistant turn).
+    #[serde(rename = "mcp_call")]
+    McpCall {
+        /// Unique ID.
+        id: String,
+        /// Arguments (JSON string).
+        arguments: String,
+        /// Tool name.
+        name: String,
+        /// MCP server label.
+        server_label: String,
+        /// Approval request ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_request_id: Option<String>,
+        /// Error if any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// Tool output.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// MCP approval request (from a previous assistant turn).
+    #[serde(rename = "mcp_approval_request")]
+    McpApprovalRequest {
+        /// Unique ID.
+        id: String,
+        /// Arguments (JSON string).
+        arguments: String,
+        /// Tool name requiring approval.
+        name: String,
+        /// MCP server label.
+        server_label: String,
+    },
+    /// MCP approval response.
+    #[serde(rename = "mcp_approval_response")]
+    McpApprovalResponse {
+        /// Approval request ID.
+        approval_request_id: String,
+        /// Whether to approve the request.
+        approve: bool,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional reason for denial.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Local shell call (from a previous assistant turn).
+    #[serde(rename = "local_shell_call")]
+    LocalShellCall {
+        /// Unique ID.
+        id: String,
+        /// Action details.
+        action: serde_json::Value,
+        /// Call ID.
+        call_id: String,
+        /// Status.
+        status: String,
+    },
+    /// Local shell call output.
+    #[serde(rename = "local_shell_call_output")]
+    LocalShellCallOutput {
+        /// Unique ID.
+        id: String,
+        /// Output string.
+        output: String,
+        /// Optional status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Shell tool call (from a previous assistant turn).
+    #[serde(rename = "shell_call")]
+    ShellCall {
+        /// Call ID.
+        call_id: String,
+        /// Action details.
+        action: serde_json::Value,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Shell call output.
+    #[serde(rename = "shell_call_output")]
+    ShellCallOutput {
+        /// Call ID.
+        call_id: String,
+        /// Output items.
+        output: Vec<serde_json::Value>,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Maximum output length.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_output_length: Option<i64>,
+    },
+    /// Apply patch call (from a previous assistant turn).
+    #[serde(rename = "apply_patch_call")]
+    ApplyPatchCall {
+        /// Call ID.
+        call_id: String,
+        /// Operation details.
+        operation: serde_json::Value,
+        /// Status.
+        status: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// Apply patch call output.
+    #[serde(rename = "apply_patch_call_output")]
+    ApplyPatchCallOutput {
+        /// Call ID.
+        call_id: String,
+        /// Status (e.g., "completed" or "failed").
+        status: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional output text.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Computer call output.
+    #[serde(rename = "computer_call_output")]
+    ComputerCallOutput {
+        /// Call ID.
+        call_id: String,
+        /// Output details.
+        output: serde_json::Value,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Acknowledged safety checks.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        acknowledged_safety_checks: Option<Vec<serde_json::Value>>,
+        /// Optional status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Image generation call (from a previous assistant turn).
+    #[serde(rename = "image_generation_call")]
+    ImageGenerationCall {
+        /// Unique ID.
+        id: String,
+        /// Status.
+        status: String,
+        /// Generated result (URL or base64).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
+    /// Reasoning item (from a previous assistant turn).
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        /// Unique ID.
+        id: String,
+        /// Reasoning summaries (required by the API; serialize even when empty).
+        #[serde(default)]
+        summary: Vec<ReasoningSummary>,
+        /// Reasoning content items.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<ReasoningContent>>,
+        /// Encrypted reasoning content (opaque token for multi-turn replay).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encrypted_content: Option<String>,
+        /// Status of the reasoning item.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<ReasoningStatus>,
+    },
+    /// Compaction item (from a previous assistant turn).
+    #[serde(rename = "compaction")]
+    Compaction {
+        /// Unique ID.
+        id: String,
+        /// Encrypted content.
+        encrypted_content: String,
+    },
 }
 
 impl ResponseInputItem {
@@ -512,6 +675,171 @@ impl ResponseInputItem {
     /// Create an item reference.
     pub fn item_reference(id: impl Into<String>) -> Self {
         Self::ItemReference { id: id.into() }
+    }
+
+    /// Create an MCP call input item.
+    pub fn mcp_call(
+        id: impl Into<String>,
+        arguments: impl Into<String>,
+        name: impl Into<String>,
+        server_label: impl Into<String>,
+    ) -> Self {
+        Self::McpCall {
+            id: id.into(),
+            arguments: arguments.into(),
+            name: name.into(),
+            server_label: server_label.into(),
+            approval_request_id: None,
+            error: None,
+            output: None,
+            status: None,
+        }
+    }
+
+    /// Create an MCP approval request input item.
+    pub fn mcp_approval_request(
+        id: impl Into<String>,
+        arguments: impl Into<String>,
+        name: impl Into<String>,
+        server_label: impl Into<String>,
+    ) -> Self {
+        Self::McpApprovalRequest {
+            id: id.into(),
+            arguments: arguments.into(),
+            name: name.into(),
+            server_label: server_label.into(),
+        }
+    }
+
+    /// Create an MCP approval response input item.
+    pub fn mcp_approval_response(approval_request_id: impl Into<String>, approve: bool) -> Self {
+        Self::McpApprovalResponse {
+            approval_request_id: approval_request_id.into(),
+            approve,
+            id: None,
+            reason: None,
+        }
+    }
+
+    /// Create a local shell call input item.
+    pub fn local_shell_call(
+        id: impl Into<String>,
+        action: serde_json::Value,
+        call_id: impl Into<String>,
+        status: impl Into<String>,
+    ) -> Self {
+        Self::LocalShellCall {
+            id: id.into(),
+            action,
+            call_id: call_id.into(),
+            status: status.into(),
+        }
+    }
+
+    /// Create a local shell call output input item.
+    pub fn local_shell_call_output(id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::LocalShellCallOutput {
+            id: id.into(),
+            output: output.into(),
+            status: None,
+        }
+    }
+
+    /// Create a shell call input item.
+    pub fn shell_call(call_id: impl Into<String>, action: serde_json::Value) -> Self {
+        Self::ShellCall {
+            call_id: call_id.into(),
+            action,
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create a shell call output input item.
+    pub fn shell_call_output(call_id: impl Into<String>, output: Vec<serde_json::Value>) -> Self {
+        Self::ShellCallOutput {
+            call_id: call_id.into(),
+            output,
+            id: None,
+            max_output_length: None,
+        }
+    }
+
+    /// Create an apply patch call input item.
+    pub fn apply_patch_call(
+        call_id: impl Into<String>,
+        operation: serde_json::Value,
+        status: impl Into<String>,
+    ) -> Self {
+        Self::ApplyPatchCall {
+            call_id: call_id.into(),
+            operation,
+            status: status.into(),
+            id: None,
+        }
+    }
+
+    /// Create an apply patch call output input item.
+    pub fn apply_patch_call_output(call_id: impl Into<String>, status: impl Into<String>) -> Self {
+        Self::ApplyPatchCallOutput {
+            call_id: call_id.into(),
+            status: status.into(),
+            id: None,
+            output: None,
+        }
+    }
+
+    /// Create a computer call output input item.
+    pub fn computer_call_output(call_id: impl Into<String>, output: serde_json::Value) -> Self {
+        Self::ComputerCallOutput {
+            call_id: call_id.into(),
+            output,
+            id: None,
+            acknowledged_safety_checks: None,
+            status: None,
+        }
+    }
+
+    /// Create an image generation call input item.
+    pub fn image_generation_call(id: impl Into<String>, status: impl Into<String>) -> Self {
+        Self::ImageGenerationCall {
+            id: id.into(),
+            status: status.into(),
+            result: None,
+        }
+    }
+
+    /// Create a reasoning input item from content items.
+    pub fn reasoning(id: impl Into<String>, content: Vec<ReasoningContent>) -> Self {
+        Self::Reasoning {
+            id: id.into(),
+            summary: vec![],
+            content: Some(content),
+            encrypted_content: None,
+            status: None,
+        }
+    }
+
+    /// Create a reasoning input item from encrypted content (for multi-turn replay).
+    pub fn reasoning_encrypted(
+        id: impl Into<String>,
+        encrypted_content: impl Into<String>,
+    ) -> Self {
+        Self::Reasoning {
+            id: id.into(),
+            summary: vec![],
+            content: None,
+            encrypted_content: Some(encrypted_content.into()),
+            status: None,
+        }
+    }
+
+    /// Create a compaction input item.
+    pub fn compaction(id: impl Into<String>, encrypted_content: impl Into<String>) -> Self {
+        Self::Compaction {
+            id: id.into(),
+            encrypted_content: encrypted_content.into(),
+        }
     }
 }
 
@@ -906,16 +1234,12 @@ pub enum OutputItem {
 }
 
 impl OutputItem {
-    /// Serialize this output item as JSON that can be reused as an input item
-    /// in a subsequent request.
+    /// Serialize this output item as a JSON value.
     ///
-    /// In the Python SDK, this pattern is expressed via `ResponseInputItem`:
-    /// callers can either send a fresh message or directly feed a prior
-    /// output item (message, tool call, reasoning, etc.) back into the model.
-    ///
-    /// For HTTP requests and `ConversationParam::Items`, the server accepts
-    /// the same JSON shape as in `Response.output`, so we can safely reuse
-    /// `serde_json::to_value(self)` here.
+    /// Useful for inspecting or logging output items. To feed a previous
+    /// turn's output back into the model, convert the relevant `OutputItem`
+    /// variants into typed `ResponseInputItem` variants and include them in
+    /// the next request's `input` array.
     pub fn to_input_item_value(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
@@ -1122,17 +1446,17 @@ pub struct ResponseCreateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
 
-    /// Stop sequences.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop: Option<Vec<String>>,
-
     /// Whether to store the response server-side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
 
-    /// Prompt caching configuration.
+    /// Streaming options.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_caching: Option<PromptCachingConfig>,
+    pub stream_options: Option<StreamOptions>,
+
+    /// Prompt cache retention policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_retention: Option<PromptCacheRetention>,
 
     /// Request metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1196,45 +1520,36 @@ pub struct ResponseCreateParams {
 }
 
 /// Conversation parameter for multi-turn state.
+///
+/// Mirrors Python's `Union[str, ResponseConversationParam]`:
+/// - `Id(String)` serializes as a plain JSON string: `"conv_abc123"`
+/// - `Object { id }` serializes as an object: `{"id": "conv_abc123"}`
+///
+/// To feed previous output items back into the next turn, add them to the
+/// `input` array as `ResponseInputItem` variants instead of using this field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ConversationParam {
-    /// Reference by ID.
+    /// Reference a prior conversation by plain ID string.
     Id(String),
-    /// Inline conversation items.
-    Items {
-        /// Items to prepend.
-        #[serde(default)]
-        items: Vec<serde_json::Value>,
+    /// Reference a prior conversation using an object with an `id` field.
+    Object {
+        /// Conversation ID.
+        id: String,
     },
-}
-
-impl ConversationParam {
-    /// Build a conversation parameter from a list of output items so that
-    /// the previous response can be fed back into the model as context.
-    ///
-    /// This mirrors the Python SDK's advanced `ResponseInputItem` usage:
-    ///
-    /// - Call the Responses API to obtain a `Response`;
-    /// - Select one or more `OutputItem`s (messages, tool calls, etc.);
-    /// - Use this helper to encode those items as JSON in `ConversationParam`;
-    /// - Send the resulting conversation back via the `conversation` field
-    ///   on the next request.
-    pub fn from_output_items(items: &[OutputItem]) -> Self {
-        let json_items = items.iter().map(OutputItem::to_input_item_value).collect();
-        ConversationParam::Items { items: json_items }
-    }
 }
 
 /// Prompt template parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptParam {
-    /// Prompt template ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    /// Prompt template ID (required).
+    pub id: String,
     /// Template variables.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variables: Option<serde_json::Value>,
+    /// Prompt template version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 impl ResponseCreateParams {
@@ -1252,9 +1567,9 @@ impl ResponseCreateParams {
             previous_response_id: None,
             temperature: None,
             top_p: None,
-            stop: None,
             store: None,
-            prompt_caching: None,
+            stream_options: None,
+            prompt_cache_retention: None,
             metadata: None,
             user: None,
             include: None,
@@ -1287,9 +1602,9 @@ impl ResponseCreateParams {
             previous_response_id: None,
             temperature: None,
             top_p: None,
-            stop: None,
             store: None,
-            prompt_caching: None,
+            stream_options: None,
+            prompt_cache_retention: None,
             metadata: None,
             user: None,
             include: None,
@@ -1373,21 +1688,21 @@ impl ResponseCreateParams {
         self
     }
 
-    /// Set stop sequences.
-    pub fn stop(mut self, sequences: Vec<String>) -> Self {
-        self.stop = Some(sequences);
-        self
-    }
-
     /// Set whether to store the response.
     pub fn store(mut self, store: bool) -> Self {
         self.store = Some(store);
         self
     }
 
-    /// Set prompt caching configuration.
-    pub fn prompt_caching(mut self, config: PromptCachingConfig) -> Self {
-        self.prompt_caching = Some(config);
+    /// Set streaming options.
+    pub fn stream_options(mut self, options: StreamOptions) -> Self {
+        self.stream_options = Some(options);
+        self
+    }
+
+    /// Set prompt cache retention policy.
+    pub fn prompt_cache_retention(mut self, retention: PromptCacheRetention) -> Self {
+        self.prompt_cache_retention = Some(retention);
         self
     }
 

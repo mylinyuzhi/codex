@@ -6,10 +6,16 @@
 //! creation (via `#[snafu(implicit)]`).
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, quote_spanned};
+use proc_macro2::Span;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+use quote::quote_spanned;
+use syn::Attribute;
+use syn::Ident;
+use syn::ItemEnum;
+use syn::Variant;
+use syn::parenthesized;
 use syn::spanned::Spanned;
-use syn::{Attribute, Ident, ItemEnum, Variant, parenthesized};
 
 /// Attribute macro that generates `StackError` and `Debug` impls for snafu error enums.
 ///

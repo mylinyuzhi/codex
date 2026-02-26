@@ -104,22 +104,6 @@ fn test_response_create_params_with_text() {
 }
 
 #[test]
-fn test_prompt_caching_config() {
-    let config =
-        PromptCachingConfig::with_key("my-key").retention(PromptCacheRetention::TwentyFourHours);
-
-    assert_eq!(config.cache_key, Some("my-key".to_string()));
-    assert_eq!(
-        config.retention,
-        Some(PromptCacheRetention::TwentyFourHours)
-    );
-
-    let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains(r#""cache_key":"my-key""#));
-    assert!(json.contains(r#""retention":"24h""#));
-}
-
-#[test]
 fn test_temperature_checked() {
     let params = ResponseCreateParams::new("gpt-4o", vec![]);
     assert!(params.clone().temperature_checked(0.5).is_ok());
@@ -933,27 +917,6 @@ fn test_deserialize_response_null_status_uses_default_helper() {
     let response: Response = serde_json::from_str(json).unwrap();
     assert_eq!(response.status_opt(), None);
     assert_eq!(response.status_or_completed(), ResponseStatus::Completed);
-}
-
-#[test]
-fn test_conversation_param_from_output_items() {
-    let output = OutputItem::Message {
-        id: Some("msg-1".to_string()),
-        role: "assistant".to_string(),
-        content: vec![OutputContentBlock::OutputText {
-            text: "Hi".to_string(),
-            annotations: vec![],
-            logprobs: None,
-        }],
-        status: None,
-    };
-
-    let conv = ConversationParam::from_output_items(&[output]);
-    let json = serde_json::to_string(&conv).unwrap();
-
-    // 检查生成的 JSON 至少包含我们期望的结构片段
-    assert!(json.contains("\"type\":\"message\""));
-    assert!(json.contains("\"role\":\"assistant\""));
 }
 
 #[test]
