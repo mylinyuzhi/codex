@@ -28,7 +28,7 @@ openai-sdk = { path = "../openai" }
 ## Quick Start
 
 ```rust
-use openai_sdk::{Client, ResponseCreateParams, InputMessage};
+use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem};
 
 #[tokio::main]
 async fn main() -> openai_sdk::Result<()> {
@@ -37,7 +37,7 @@ async fn main() -> openai_sdk::Result<()> {
 
     // Build request
     let params = ResponseCreateParams::new("gpt-4o", vec![
-        InputMessage::user_text("What is the capital of France?")
+        ResponseInputItem::user_text("What is the capital of France?")
     ]);
 
     // Make API call
@@ -75,7 +75,7 @@ let client = Client::with_config(config)?;
 
 ```rust
 let params = ResponseCreateParams::new("gpt-4o", vec![
-    InputMessage::user_text("Hello!")
+    ResponseInputItem::user_text("Hello!")
 ])
 .max_output_tokens(1024)
 .temperature(0.7);
@@ -102,11 +102,11 @@ Stream responses in real-time with Server-Sent Events (SSE):
 #### Basic Streaming
 
 ```rust
-use openai_sdk::{Client, ResponseCreateParams, InputMessage, ResponseStreamEvent};
+use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem, ResponseStreamEvent};
 
 let client = Client::from_env()?;
 let params = ResponseCreateParams::new("gpt-4o", vec![
-    InputMessage::user_text("Write a short story about a robot.")
+    ResponseInputItem::user_text("Write a short story about a robot.")
 ]);
 
 let mut stream = client.responses().stream(params).await?;
@@ -175,14 +175,14 @@ while let Some(event) = event_stream.next().await {
 // First turn
 let response1 = client.responses().create(
     ResponseCreateParams::new("gpt-4o", vec![
-        InputMessage::user_text("Remember the number 42")
+        ResponseInputItem::user_text("Remember the number 42")
     ])
 ).await?;
 
 // Continue conversation
 let response2 = client.responses().create(
     ResponseCreateParams::new("gpt-4o", vec![
-        InputMessage::user_text("What number did I mention?")
+        ResponseInputItem::user_text("What number did I mention?")
     ])
     .previous_response_id(&response1.id)
 ).await?;
@@ -208,7 +208,7 @@ let weather_tool = Tool::function(FunctionDefinition {
 });
 
 let params = ResponseCreateParams::new("gpt-4o", vec![
-    InputMessage::user_text("What's the weather in Tokyo?")
+    ResponseInputItem::user_text("What's the weather in Tokyo?")
 ])
 .tools(vec![weather_tool]);
 
@@ -332,7 +332,7 @@ Enable reasoning mode for complex tasks:
 use openai_sdk::{ThinkingConfig, ReasoningSummary};
 
 let params = ResponseCreateParams::new("o1", vec![
-    InputMessage::user_text("Solve this complex math problem...")
+    ResponseInputItem::user_text("Solve this complex math problem...")
 ])
 .thinking(ThinkingConfig::enabled(8192))  // Budget in tokens
 .reasoning(ReasoningConfig {
@@ -370,22 +370,22 @@ println!("Used {} cached tokens", cached);
 ### Image Input
 
 ```rust
-use openai_sdk::{InputMessage, InputContentBlock, ImageSource, ImageDetail};
+use openai_sdk::{ResponseInputItem, InputContentBlock, ImageSource, ImageDetail};
 
 // From URL
-let message = InputMessage::user(vec![
+let message = ResponseInputItem::user_message(vec![
     InputContentBlock::text("What's in this image?"),
     InputContentBlock::image_url("https://example.com/image.jpg", ImageDetail::Auto),
 ]);
 
 // From base64
-let message = InputMessage::user(vec![
+let message = ResponseInputItem::user_message(vec![
     InputContentBlock::text("Describe this:"),
     InputContentBlock::image_base64(base64_data, ImageMediaType::Png, ImageDetail::High),
 ]);
 
 // From file ID
-let message = InputMessage::user(vec![
+let message = ResponseInputItem::user_message(vec![
     InputContentBlock::text("Analyze this:"),
     InputContentBlock::image_file("file-abc123", ImageDetail::Low),
 ]);
@@ -494,7 +494,7 @@ This lets you use the model's own previous outputs (including intermediate
 tool calls and reasoning) as structured context for the next request.
 
 ```rust
-use openai_sdk::{Client, ResponseCreateParams, InputMessage, ConversationParam};
+use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem, ConversationParam};
 
 #[tokio::main]
 async fn main() -> openai_sdk::Result<()> {
@@ -503,7 +503,7 @@ async fn main() -> openai_sdk::Result<()> {
     // First turn: let the model think and potentially call tools
     let first = client.responses().create(
         ResponseCreateParams::new("gpt-4o", vec![
-            InputMessage::user_text("Plan a weekend trip and think step by step."),
+            ResponseInputItem::user_text("Plan a weekend trip and think step by step."),
         ]),
     ).await?;
 
@@ -512,7 +512,7 @@ async fn main() -> openai_sdk::Result<()> {
 
     // Second turn: ask the model to continue from its previous outputs
     let params = ResponseCreateParams::new("gpt-4o", vec![
-        InputMessage::user_text("Continue from where you left off and finalize the plan."),
+        ResponseInputItem::user_text("Continue from where you left off and finalize the plan."),
     ])
     .conversation(conversation);
 
@@ -529,7 +529,7 @@ context on turn n. One straightforward pattern is to maintain a list of
 JSON items and extend it after each response:
 
 ```rust
-use openai_sdk::{Client, ResponseCreateParams, InputMessage, ConversationParam};
+use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem, ConversationParam};
 use serde_json::Value;
 
 #[tokio::main]
@@ -548,7 +548,7 @@ async fn main() -> openai_sdk::Result<()> {
     for (i, prompt) in turns.iter().enumerate() {
         let mut params = ResponseCreateParams::new(
             "gpt-4o",
-            vec![InputMessage::user_text(prompt)],
+            vec![ResponseInputItem::user_text(prompt)],
         );
 
         // For turn > 0, attach all previous output items as conversation
@@ -597,7 +597,7 @@ use openai_sdk::{
     Client,
     ConversationParam,
     InputContentBlock,
-    InputMessage,
+    ResponseInputItem,
     ResponseCreateParams,
 };
 use serde_json::Value;
@@ -609,7 +609,7 @@ async fn main() -> openai_sdk::Result<()> {
     // First turn: the model decides to call a function
     let first = client.responses().create(
         ResponseCreateParams::new("gpt-4o", vec![
-            InputMessage::user_text("Use a tool to fetch the current weather in Tokyo."),
+            ResponseInputItem::user_text("Use a tool to fetch the current weather in Tokyo."),
         ]),
     ).await?;
 
@@ -629,7 +629,7 @@ async fn main() -> openai_sdk::Result<()> {
     // Second turn: send both the prior tool call (via conversation) and
     // the tool output (via FunctionCallOutput) back to the model.
     let mut params = ResponseCreateParams::new("gpt-4o", vec![
-        InputMessage {
+        ResponseInputItem::Message {
             role: openai_sdk::Role::User,
             content: vec![
                 InputContentBlock::text(
@@ -641,6 +641,8 @@ async fn main() -> openai_sdk::Result<()> {
                     is_error: None,
                 },
             ],
+            id: None,
+            status: None,
         },
     ]);
 
@@ -891,7 +893,7 @@ All events include a `sequence_number` field for ordering.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `model` | `String` | Model ID (required) |
-| `input` | `Vec<InputMessage>` | Input messages (required) |
+| `input` | `Vec<ResponseInputItem>` | Input messages (required) |
 | `max_output_tokens` | `i32` | Maximum response tokens |
 | `temperature` | `f64` | Sampling temperature (0-2) |
 | `top_p` | `f64` | Nucleus sampling |
