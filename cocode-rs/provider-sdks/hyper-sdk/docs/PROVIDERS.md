@@ -157,14 +157,11 @@ let result = executor.execute(|| async {
 
 // Check error type for specific handling
 match result {
-    Err(HyperError::QuotaExceeded(_)) => {
-        // Requires billing change, don't retry
-    }
     Err(HyperError::ContextWindowExceeded(_)) => {
         // Reduce input size
     }
     Err(e) if e.is_retryable() => {
-        // Can retry with backoff
+        // Can retry with backoff (includes all 429s)
     }
     _ => {}
 }

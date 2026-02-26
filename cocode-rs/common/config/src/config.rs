@@ -305,7 +305,7 @@ impl Config {
         self.providers
             .get(provider)
             .and_then(|p| p.models.get(model))
-            .map(|m| &m.info)
+            .map(|m| &m.model_info)
     }
 
     /// Get API model name for a provider/model (for ModelHub model creation).
@@ -331,7 +331,7 @@ impl Config {
         let mut selections = Vec::new();
         for (provider_name, provider_info) in &self.providers {
             for (slug, provider_model) in &provider_info.models {
-                let info = &provider_model.info;
+                let info = &provider_model.model_info;
                 let spec = ModelSpec::with_type(provider_name, provider_info.provider_type, slug)
                     .with_display_name(info.display_name_or_slug());
 

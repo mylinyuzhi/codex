@@ -1,16 +1,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::bail;
 use cocode_git::CreateGhostCommitOptions;
 use cocode_git::GhostCommit;
 use cocode_git::GhostSnapshotConfig;
 use cocode_git::RestoreGhostCommitOptions;
 use serde::Deserialize;
 use serde::Serialize;
+use snafu::ResultExt;
+use snafu::ensure;
 use tokio::sync::Mutex;
+
+use crate::Result;
+use crate::error::file_backup_error;
 
 use crate::backup::BackupEntry;
 use crate::backup::FileBackupStore;
@@ -265,27 +267,43 @@ impl SnapshotManager {
                 Some(t) => t,
                 None => match stack.last() {
                     Some(s) => s.turn_number,
-                    None => bail!("No snapshots available to rewind"),
+                    None => {
+                        return file_backup_error::InvalidStateSnafu {
+                            message: "No snapshots available to rewind".to_string(),
+                        }
+                        .fail();
+                    }
                 },
             };
 
             // Check compaction boundary
-            if let Some(b) = boundary
-                && target <= b
-            {
-                bail!("Cannot rewind past compaction boundary (turn {b})");
+            if let Some(b) = boundary {
+                ensure!(
+                    target > b,
+                    file_backup_error::InvalidStateSnafu {
+                        message: format!("Cannot rewind past compaction boundary (turn {b})"),
+                    }
+                );
             }
 
             // Pop all snapshots at or after target turn
             let split_idx = stack.iter().position(|s| s.turn_number >= target);
             match split_idx {
                 Some(idx) => stack.split_off(idx),
-                None => bail!("No snapshots found at or after turn {target}"),
+                None => {
+                    return file_backup_error::InvalidStateSnafu {
+                        message: format!("No snapshots found at or after turn {target}"),
+                    }
+                    .fail();
+                }
             }
         };
 
         if snapshots_to_rewind.is_empty() {
-            bail!("No snapshots available to rewind");
+            return file_backup_error::InvalidStateSnafu {
+                message: "No snapshots available to rewind".to_string(),
+            }
+            .fail();
         }
 
         let earliest_turn = snapshots_to_rewind[0].turn_number;
@@ -372,8 +390,15 @@ impl SnapshotManager {
                         cocode_git::restore_ghost_commit_with_options(&opts, &gc_clone)
                     })
                     .await
-                    .context("ghost commit restore task panicked")?
-                    .context("restoring ghost commit")?;
+                    .context(file_backup_error::TaskJoinSnafu {
+                        message: "ghost commit restore task panicked".to_string(),
+                    })?
+                    .map_err(|e| {
+                        file_backup_error::GitSnafu {
+                            message: format!("restoring ghost commit: {e}"),
+                        }
+                        .build()
+                    })?;
 
                     // Collect all modified file paths across all rewound turns
                     for snap in snapshots {
@@ -394,7 +419,12 @@ impl SnapshotManager {
                         .backup_store
                         .restore_turn(&snap.turn_id)
                         .await
-                        .context("restoring file backups")?;
+                        .map_err(|e| {
+                            file_backup_error::InvalidStateSnafu {
+                                message: format!("restoring file backups: {e}"),
+                            }
+                            .build()
+                        })?;
                     for p in paths {
                         if !all_restored_files.contains(&p) {
                             all_restored_files.push(p);
@@ -409,7 +439,12 @@ impl SnapshotManager {
                     .backup_store
                     .restore_turn(&snap.turn_id)
                     .await
-                    .context("restoring file backups")?;
+                    .map_err(|e| {
+                        file_backup_error::InvalidStateSnafu {
+                            message: format!("restoring file backups: {e}"),
+                        }
+                        .build()
+                    })?;
                 for p in paths {
                     if !all_restored_files.contains(&p) {
                         all_restored_files.push(p);
@@ -469,13 +504,17 @@ impl SnapshotManager {
     /// Serialize snapshots for session persistence.
     pub async fn serialize_snapshots(&self) -> Result<String> {
         let stack = self.snapshot_stack.lock().await;
-        serde_json::to_string_pretty(&*stack).context("serializing snapshots")
+        serde_json::to_string_pretty(&*stack).context(file_backup_error::JsonSnafu {
+            message: "serializing snapshots".to_string(),
+        })
     }
 
     /// Restore snapshots from persisted data.
     pub async fn restore_snapshots(&self, json: &str) -> Result<()> {
         let stack: Vec<TurnSnapshot> =
-            serde_json::from_str(json).context("deserializing snapshots")?;
+            serde_json::from_str(json).context(file_backup_error::JsonSnafu {
+                message: "deserializing snapshots".to_string(),
+            })?;
         *self.snapshot_stack.lock().await = stack;
         Ok(())
     }

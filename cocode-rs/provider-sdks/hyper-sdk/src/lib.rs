@@ -121,6 +121,7 @@ pub mod embedding;
 pub mod error;
 pub mod hooks;
 pub mod http_interceptors;
+pub mod key_rotator;
 pub mod messages;
 pub mod model;
 pub mod object;
@@ -142,6 +143,11 @@ pub mod tools;
 // Error types
 pub use error::HyperError;
 pub use error::Result;
+pub use error::sanitize_api_error;
+pub use error::scrub_secret_patterns;
+
+// Key rotation
+pub use key_rotator::ApiKeyRotator;
 
 // Messages
 pub use messages::ContentBlock;

@@ -120,9 +120,10 @@ pub struct ModelInfo {
     pub base_instructions_file: Option<String>,
 
     // === Provider-Specific Extensions ===
-    /// Options for provider SDK passthrough.
+    /// Model 的可扩展参数，合并后作为 HTTP request body 的 extra 输入。
     ///
-    /// These are merged across configuration layers and passed to provider SDKs.
+    /// 通过 ProviderOptions.extra → params.extra (#[serde(flatten)]) 进入请求体，
+    /// 可覆盖同名 typed fields（如 top_p, temperature）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<HashMap<String, serde_json::Value>>,
 }

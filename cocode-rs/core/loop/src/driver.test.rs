@@ -10,15 +10,6 @@ fn test_default_config() {
 }
 
 #[test]
-fn test_builder_defaults() {
-    let builder = AgentLoopBuilder::new();
-    assert!(builder.api_client.is_none());
-    assert!(builder.tool_registry.is_none());
-    assert!(builder.context.is_none());
-    assert!(builder.event_tx.is_none());
-}
-
-#[test]
 fn test_loop_result_constructors() {
     let completed = LoopResult::completed(5, 1000, 500, "text".to_string(), vec![]);
     assert_eq!(completed.turns_completed, 5);

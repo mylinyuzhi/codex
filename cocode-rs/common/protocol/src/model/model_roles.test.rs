@@ -32,7 +32,7 @@ fn test_model_roles_get_specific() {
 
     // Specific role returns specific model
     let fast = roles.get(ModelRole::Fast).unwrap();
-    assert_eq!(fast.model, "claude-haiku");
+    assert_eq!(fast.slug, "claude-haiku");
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn test_model_roles_get_fallback() {
 
     // Unset role falls back to main
     let vision = roles.get(ModelRole::Vision).unwrap();
-    assert_eq!(vision.model, "claude-opus-4");
+    assert_eq!(vision.slug, "claude-opus-4");
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn test_model_roles_set() {
     let mut roles = ModelRoles::default();
     roles.set(ModelRole::Fast, ModelSpec::new("openai", "gpt-4o-mini"));
 
-    assert_eq!(roles.fast.as_ref().unwrap().model, "gpt-4o-mini");
+    assert_eq!(roles.fast.as_ref().unwrap().slug, "gpt-4o-mini");
 }
 
 #[test]
@@ -75,11 +75,11 @@ fn test_model_roles_merge() {
     base.merge(&other);
 
     // main unchanged
-    assert_eq!(base.main.as_ref().unwrap().model, "claude-opus-4");
+    assert_eq!(base.main.as_ref().unwrap().slug, "claude-opus-4");
     // fast overridden
-    assert_eq!(base.fast.as_ref().unwrap().model, "gpt-4o-mini");
+    assert_eq!(base.fast.as_ref().unwrap().slug, "gpt-4o-mini");
     // vision added
-    assert_eq!(base.vision.as_ref().unwrap().model, "gpt-4o");
+    assert_eq!(base.vision.as_ref().unwrap().slug, "gpt-4o");
 }
 
 #[test]
@@ -106,8 +106,8 @@ fn test_serde_from_json() {
     let roles: ModelRoles = serde_json::from_str(json).unwrap();
 
     assert_eq!(roles.main.as_ref().unwrap().provider, "anthropic");
-    assert_eq!(roles.main.as_ref().unwrap().model, "claude-opus-4");
-    assert_eq!(roles.fast.as_ref().unwrap().model, "claude-haiku");
+    assert_eq!(roles.main.as_ref().unwrap().slug, "claude-opus-4");
+    assert_eq!(roles.fast.as_ref().unwrap().slug, "claude-haiku");
     assert_eq!(roles.vision.as_ref().unwrap().provider, "openai");
 }
 
@@ -145,7 +145,7 @@ fn test_model_roles_set_compact() {
         ModelSpec::new("anthropic", "claude-haiku"),
     );
 
-    assert_eq!(roles.compact.as_ref().unwrap().model, "claude-haiku");
+    assert_eq!(roles.compact.as_ref().unwrap().slug, "claude-haiku");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_model_roles_get_compact_fallback() {
 
     // Compact falls back to main
     let compact = roles.get(ModelRole::Compact).unwrap();
-    assert_eq!(compact.model, "claude-opus-4");
+    assert_eq!(compact.slug, "claude-opus-4");
 }
 
 #[test]
@@ -168,5 +168,5 @@ fn test_model_roles_merge_compact() {
 
     base.merge(&other);
 
-    assert_eq!(base.compact.as_ref().unwrap().model, "gpt-4o-mini");
+    assert_eq!(base.compact.as_ref().unwrap().slug, "gpt-4o-mini");
 }

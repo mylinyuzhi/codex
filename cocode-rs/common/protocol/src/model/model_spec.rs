@@ -51,7 +51,7 @@ pub fn resolve_provider_type(provider: &str) -> ProviderType {
 ///
 /// let spec: ModelSpec = "anthropic/claude-opus-4".parse().unwrap();
 /// assert_eq!(spec.provider, "anthropic");
-/// assert_eq!(spec.model, "claude-opus-4");
+/// assert_eq!(spec.slug, "claude-opus-4");
 /// assert_eq!(spec.provider_type, ProviderType::Anthropic);
 /// assert_eq!(spec.to_string(), "anthropic/claude-opus-4");
 /// ```
@@ -61,8 +61,12 @@ pub struct ModelSpec {
     pub provider: String,
     /// Resolved provider type for API dispatch.
     pub provider_type: ProviderType,
-    /// Model ID (e.g., "claude-opus-4", "gpt-5").
-    pub model: String,
+    /// Model slug — the config key (e.g., "claude-opus-4", "gpt-5").
+    ///
+    /// This is the identifier used in configuration and caching.
+    /// The actual API model name may differ (e.g., Volcengine endpoint IDs);
+    /// use `ProviderModel::api_model_name()` to get the name sent to the API.
+    pub slug: String,
     /// Human-readable display name (e.g., "GPT-5"). Defaults to slug.
     /// Not part of identity (excluded from PartialEq/Hash/Serialize).
     pub display_name: String,
@@ -72,7 +76,7 @@ impl PartialEq for ModelSpec {
     fn eq(&self, other: &Self) -> bool {
         self.provider == other.provider
             && self.provider_type == other.provider_type
-            && self.model == other.model
+            && self.slug == other.slug
     }
 }
 
@@ -82,7 +86,7 @@ impl Hash for ModelSpec {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.provider.hash(state);
         self.provider_type.hash(state);
-        self.model.hash(state);
+        self.slug.hash(state);
     }
 }
 
@@ -98,7 +102,7 @@ impl ModelSpec {
         Self {
             provider,
             provider_type,
-            model,
+            slug: model,
             display_name,
         }
     }
@@ -117,7 +121,7 @@ impl ModelSpec {
         Self {
             provider: provider.into(),
             provider_type,
-            model,
+            slug: model,
             display_name,
         }
     }
@@ -127,11 +131,21 @@ impl ModelSpec {
         self.display_name = name.into();
         self
     }
+
+    /// Get the model slug.
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+
+    /// Enrich display_name from ModelInfo.
+    pub fn enrich_from_model_info(&mut self, info: &super::ModelInfo) {
+        self.display_name = info.display_name_or_slug().to_string();
+    }
 }
 
 impl fmt::Display for ModelSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.provider, self.model)
+        write!(f, "{}/{}", self.provider, self.slug)
     }
 }
 
@@ -168,7 +182,7 @@ impl From<(String, ProviderType, String)> for ModelSpec {
         Self {
             provider,
             provider_type,
-            model,
+            slug: model,
             display_name,
         }
     }

@@ -10,7 +10,6 @@ use super::Metadata;
 use super::OutputContentBlock;
 use super::ResponseStatus;
 use super::Role;
-use super::StopReason;
 use super::Tool;
 use super::ToolChoice;
 use super::Usage;
@@ -114,30 +113,39 @@ impl ThinkingConfig {
 pub enum ReasoningEffort {
     /// No reasoning.
     None,
+    /// Minimal reasoning effort.
+    Minimal,
     /// Low reasoning effort.
     Low,
     /// Medium reasoning effort.
     Medium,
     /// High reasoning effort.
     High,
+    /// Extra high reasoning effort.
+    Xhigh,
 }
 
 /// Reasoning configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReasoningConfig {
     /// Effort level for reasoning.
-    pub effort: ReasoningEffort,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
     /// Whether to generate a summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_summary: Option<String>,
+    /// Summary mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 impl ReasoningConfig {
     /// Create a reasoning config with the given effort level.
     pub fn with_effort(effort: ReasoningEffort) -> Self {
         Self {
-            effort,
+            effort: Some(effort),
             generate_summary: None,
+            summary: None,
         }
     }
 
@@ -232,43 +240,51 @@ pub enum TextFormat {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextConfig {
     /// Format for text output.
-    pub format: TextFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<TextFormat>,
+    /// Verbosity level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
 }
 
 impl TextConfig {
     /// Create a plain text config.
     pub fn text() -> Self {
         Self {
-            format: TextFormat::Text,
+            format: Some(TextFormat::Text),
+            verbosity: None,
         }
     }
 
     /// Create a JSON object config.
     pub fn json_object() -> Self {
         Self {
-            format: TextFormat::JsonObject,
+            format: Some(TextFormat::JsonObject),
+            verbosity: None,
         }
     }
 
     /// Create a JSON schema config.
     pub fn json_schema(schema: serde_json::Value) -> Self {
         Self {
-            format: TextFormat::JsonSchema {
+            format: Some(TextFormat::JsonSchema {
                 schema,
                 name: None,
                 strict: None,
-            },
+            }),
+            verbosity: None,
         }
     }
 
     /// Create a JSON schema config with name and strict mode.
     pub fn json_schema_strict(schema: serde_json::Value, name: impl Into<String>) -> Self {
         Self {
-            format: TextFormat::JsonSchema {
+            format: Some(TextFormat::JsonSchema {
                 schema,
                 name: Some(name.into()),
                 strict: Some(true),
-            },
+            }),
+            verbosity: None,
         }
     }
 }
@@ -416,6 +432,38 @@ impl ReasoningSummary {
     }
 }
 
+/// A content item in reasoning output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningContent {
+    /// The reasoning text.
+    pub text: String,
+    /// The type of content (always "reasoning_text").
+    #[serde(rename = "type")]
+    pub content_type: String,
+}
+
+impl ReasoningContent {
+    /// Create a new reasoning content item.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            content_type: "reasoning_text".to_string(),
+        }
+    }
+}
+
+/// Status of a reasoning item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningStatus {
+    /// Reasoning is in progress.
+    InProgress,
+    /// Reasoning is completed.
+    Completed,
+    /// Reasoning is incomplete.
+    Incomplete,
+}
+
 // ============================================================================
 // Output item
 // ============================================================================
@@ -433,6 +481,9 @@ pub enum OutputItem {
         role: String,
         /// Content blocks.
         content: Vec<OutputContentBlock>,
+        /// Status of the message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// Function call output.
     FunctionCall {
@@ -445,17 +496,26 @@ pub enum OutputItem {
         name: String,
         /// Arguments as JSON string.
         arguments: String,
+        /// Status of the call.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// Reasoning output from reasoning models.
     Reasoning {
         /// Unique ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        /// Reasoning content.
-        content: String,
+        id: String,
+        /// Reasoning content items.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<ReasoningContent>>,
         /// Reasoning summaries.
+        #[serde(default)]
+        summary: Vec<ReasoningSummary>,
+        /// Encrypted reasoning content (opaque token).
         #[serde(skip_serializing_if = "Option::is_none")]
-        summary: Option<Vec<ReasoningSummary>>,
+        encrypted_content: Option<String>,
+        /// Status of the reasoning.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<ReasoningStatus>,
     },
     /// File search tool call.
     #[serde(rename = "file_search_call")]
@@ -463,8 +523,6 @@ pub enum OutputItem {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
-        /// Call ID.
-        call_id: String,
         /// Search queries.
         #[serde(default)]
         queries: Vec<String>,
@@ -481,14 +539,9 @@ pub enum OutputItem {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
-        /// Call ID.
-        call_id: String,
-        /// Search query.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        query: Option<String>,
-        /// Search results.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        results: Option<Vec<WebSearchResult>>,
+        /// Action details.
+        #[serde(default)]
+        action: Option<serde_json::Value>,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -516,8 +569,9 @@ pub enum OutputItem {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
-        /// Call ID.
-        call_id: String,
+        /// Container ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        container_id: Option<String>,
         /// Code to execute.
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<String>,
@@ -534,14 +588,9 @@ pub enum OutputItem {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
-        /// Call ID.
-        call_id: String,
-        /// Generation prompt.
+        /// Generated image result (URL or base64).
         #[serde(skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
-        /// Generated image result.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<ImageGenerationResult>,
+        result: Option<String>,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -554,12 +603,9 @@ pub enum OutputItem {
         id: Option<String>,
         /// Call ID.
         call_id: String,
-        /// Shell command.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-        /// Command output.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
+        /// Action details.
+        #[serde(default)]
+        action: Option<serde_json::Value>,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -570,17 +616,15 @@ pub enum OutputItem {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
-        /// Call ID.
-        call_id: String,
         /// MCP server label.
         #[serde(skip_serializing_if = "Option::is_none")]
         server_label: Option<String>,
         /// Tool name.
         #[serde(skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
-        /// Tool arguments.
+        name: Option<String>,
+        /// Tool arguments (JSON string).
         #[serde(skip_serializing_if = "Option::is_none")]
-        arguments: Option<serde_json::Value>,
+        arguments: Option<String>,
         /// Tool output.
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -590,6 +634,9 @@ pub enum OutputItem {
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
+        /// Approval request ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_request_id: Option<String>,
     },
     /// MCP list tools response.
     #[serde(rename = "mcp_list_tools")]
@@ -603,6 +650,9 @@ pub enum OutputItem {
         /// Available tools.
         #[serde(default)]
         tools: Vec<McpToolInfo>,
+        /// Error if any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     /// MCP approval request.
     #[serde(rename = "mcp_approval_request")]
@@ -615,10 +665,10 @@ pub enum OutputItem {
         server_label: Option<String>,
         /// Tool name requiring approval.
         #[serde(skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
-        /// Arguments for the tool.
+        name: Option<String>,
+        /// Arguments for the tool (JSON string).
         #[serde(skip_serializing_if = "Option::is_none")]
-        arguments: Option<serde_json::Value>,
+        arguments: Option<String>,
     },
     /// Apply patch tool call.
     #[serde(rename = "apply_patch_call")]
@@ -628,30 +678,30 @@ pub enum OutputItem {
         id: Option<String>,
         /// Call ID.
         call_id: String,
-        /// Patch content.
+        /// Operation details.
+        #[serde(default)]
+        operation: Option<serde_json::Value>,
+        /// Created by identifier.
         #[serde(skip_serializing_if = "Option::is_none")]
-        patch: Option<String>,
-        /// Output result.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
+        created_by: Option<String>,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
     },
-    /// Function shell tool call.
-    #[serde(rename = "function_shell_call")]
+    /// Shell tool call (function shell).
+    #[serde(rename = "shell_call")]
     FunctionShellCall {
         /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         /// Call ID.
         call_id: String,
-        /// Shell command.
+        /// Action details.
+        #[serde(default)]
+        action: Option<serde_json::Value>,
+        /// Created by identifier.
         #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-        /// Command output.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
+        created_by: Option<String>,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -668,20 +718,68 @@ pub enum OutputItem {
         name: String,
         /// Tool input (free-form text).
         input: String,
-        /// Status of the call.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        status: Option<String>,
     },
     /// Response compaction item.
     #[serde(rename = "compaction")]
     Compaction {
         /// Unique ID.
+        #[serde(default)]
+        id: String,
+        /// Encrypted content.
+        encrypted_content: String,
+        /// Created by identifier.
         #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        /// Compacted data.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        data: Option<serde_json::Value>,
+        created_by: Option<String>,
     },
+    /// Shell call output.
+    #[serde(rename = "shell_call_output")]
+    ShellCallOutput {
+        /// Unique ID.
+        id: String,
+        /// Call ID.
+        call_id: String,
+        /// Output items.
+        #[serde(default)]
+        output: Vec<serde_json::Value>,
+        /// Maximum output length.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_output_length: Option<i64>,
+        /// Created by identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        created_by: Option<String>,
+    },
+    /// Apply patch call output.
+    #[serde(rename = "apply_patch_call_output")]
+    ApplyPatchCallOutput {
+        /// Unique ID.
+        id: String,
+        /// Call ID.
+        call_id: String,
+        /// Status.
+        status: String,
+        /// Created by identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        created_by: Option<String>,
+        /// Output text.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+}
+
+impl OutputItem {
+    /// Serialize this output item as JSON that can be reused as an input item
+    /// in a subsequent request.
+    ///
+    /// In the Python SDK, this pattern is expressed via `ResponseInputItem`:
+    /// callers can either send a fresh message or directly feed a prior
+    /// output item (message, tool call, reasoning, etc.) back into the model.
+    ///
+    /// For HTTP requests and `ConversationParam::Items`, the server accepts
+    /// the same JSON shape as in `Response.output`, so we can safely reuse
+    /// `serde_json::to_value(self)` here.
+    pub fn to_input_item_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
 }
 
 // ============================================================================
@@ -719,6 +817,15 @@ pub struct WebSearchResult {
     pub snippet: Option<String>,
 }
 
+/// A point in a drag path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DragPathPoint {
+    /// X coordinate.
+    pub x: i32,
+    /// Y coordinate.
+    pub y: i32,
+}
+
 /// Computer action for UI automation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -746,11 +853,10 @@ pub enum ComputerAction {
         x: i32,
         /// Y coordinate.
         y: i32,
-        /// Scroll direction.
-        direction: String,
-        /// Scroll amount.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        amount: Option<i32>,
+        /// Horizontal scroll amount.
+        scroll_x: i32,
+        /// Vertical scroll amount.
+        scroll_y: i32,
     },
     /// Type text action.
     Type {
@@ -758,28 +864,26 @@ pub enum ComputerAction {
         text: String,
     },
     /// Key press action.
-    KeyPress {
-        /// Key to press.
-        key: String,
+    #[serde(rename = "keypress")]
+    Keypress {
+        /// Keys to press.
+        keys: Vec<String>,
     },
     /// Screenshot action.
     Screenshot,
     /// Wait action.
-    Wait {
-        /// Milliseconds to wait.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ms: Option<i32>,
-    },
+    Wait,
     /// Drag action.
     Drag {
-        /// Start X coordinate.
-        start_x: i32,
-        /// Start Y coordinate.
-        start_y: i32,
-        /// End X coordinate.
-        end_x: i32,
-        /// End Y coordinate.
-        end_y: i32,
+        /// Path of points.
+        path: Vec<DragPathPoint>,
+    },
+    /// Move action.
+    Move {
+        /// X coordinate.
+        x: i32,
+        /// Y coordinate.
+        y: i32,
     },
 }
 
@@ -787,8 +891,8 @@ pub enum ComputerAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyCheck {
     /// Check ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(default)]
+    pub id: String,
     /// Check code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
@@ -808,27 +912,10 @@ pub enum CodeInterpreterOutput {
     },
     /// Image output.
     Image {
-        /// Image data (base64 or URL).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        image: Option<String>,
-        /// Image file ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        file_id: Option<String>,
+        /// Image URL.
+        #[serde(default)]
+        url: String,
     },
-}
-
-/// Image generation result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageGenerationResult {
-    /// Generated image URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// Generated image base64.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub b64_json: Option<String>,
-    /// Revised prompt.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revised_prompt: Option<String>,
 }
 
 /// MCP tool information.
@@ -840,8 +927,11 @@ pub struct McpToolInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Tool input schema.
+    #[serde(default)]
+    pub input_schema: serde_json::Value,
+    /// Tool annotations.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_schema: Option<serde_json::Value>,
+    pub annotations: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -980,6 +1070,23 @@ pub enum ConversationParam {
     },
 }
 
+impl ConversationParam {
+    /// Build a conversation parameter from a list of output items so that
+    /// the previous response can be fed back into the model as context.
+    ///
+    /// This mirrors the Python SDK's advanced `ResponseInputItem` usage:
+    ///
+    /// - Call the Responses API to obtain a `Response`;
+    /// - Select one or more `OutputItem`s (messages, tool calls, etc.);
+    /// - Use this helper to encode those items as JSON in `ConversationParam`;
+    /// - Send the resulting conversation back via the `conversation` field
+    ///   on the next request.
+    pub fn from_output_items(items: &[OutputItem]) -> Self {
+        let json_items = items.iter().map(OutputItem::to_input_item_value).collect();
+        ConversationParam::Items { items: json_items }
+    }
+}
+
 /// Prompt template parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptParam {
@@ -988,7 +1095,7 @@ pub struct PromptParam {
     pub id: Option<String>,
     /// Template variables.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub variables: Option<std::collections::HashMap<String, String>>,
+    pub variables: Option<serde_json::Value>,
 }
 
 impl ResponseCreateParams {
@@ -1290,9 +1397,22 @@ impl SdkHttpResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseError {
     /// Error code.
-    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Error message.
     pub message: String,
+}
+
+impl ResponseError {
+    /// Get the optional error code.
+    pub fn code_opt(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    /// Get the error code, defaulting to an empty string when missing.
+    pub fn code_or_empty(&self) -> &str {
+        self.code.as_deref().unwrap_or("")
+    }
 }
 
 /// Prompt template information in response (echoed back).
@@ -1304,6 +1424,9 @@ pub struct ResponsePrompt {
     /// Prompt version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Template variables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<serde_json::Value>,
 }
 
 /// Response from the Responses API.
@@ -1313,13 +1436,15 @@ pub struct Response {
     pub id: String,
 
     /// Response status.
-    pub status: ResponseStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ResponseStatus>,
 
     /// Output items.
     pub output: Vec<OutputItem>,
 
     /// Token usage.
-    pub usage: Usage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 
     /// Creation timestamp (Unix seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1337,10 +1462,6 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResponseError>,
 
-    /// Reason generation stopped.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<StopReason>,
-
     /// Completion timestamp (Unix seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,
@@ -1352,6 +1473,10 @@ pub struct Response {
     /// System instructions (echoed back).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+
+    /// Request metadata (echoed back).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Metadata>,
 
     /// Service tier used for processing.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1417,12 +1542,44 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_identifier: Option<String>,
 
+    /// Previous response ID for multi-turn conversations (echoed back).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
+
+    /// Whether the response was run in the background (echoed back).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
+
+    /// Conversation state for multi-turn (echoed back). This is intentionally
+    /// left as raw JSON to stay forward-compatible with the server and to
+    /// mirror the Python SDK's `Conversation` type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<serde_json::Value>,
+
+    /// User identifier for abuse monitoring (deprecated but still echoed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+
     /// HTTP response metadata (not serialized, populated by client).
     #[serde(skip)]
     pub sdk_http_response: Option<SdkHttpResponse>,
 }
 
 impl Response {
+    /// Get the optional status value.
+    pub fn status_opt(&self) -> Option<ResponseStatus> {
+        self.status
+    }
+
+    /// Get the status, defaulting to `ResponseStatus::Completed` when missing.
+    ///
+    /// This mirrors the Python SDK where `status` is `Optional[ResponseStatus]`
+    /// and may be absent in some edge cases, but most callers expect a
+    /// "completed" status for successful responses.
+    pub fn status_or_completed(&self) -> ResponseStatus {
+        self.status.unwrap_or(ResponseStatus::Completed)
+    }
+
     /// Get concatenated text from all message outputs.
     pub fn text(&self) -> String {
         self.output
@@ -1471,20 +1628,48 @@ impl Response {
             .any(|item| matches!(item, OutputItem::FunctionCall { .. }))
     }
 
-    /// Get reasoning content if present.
-    pub fn reasoning(&self) -> Option<&str> {
+    /// Get reasoning content if present, concatenating all content items.
+    pub fn reasoning(&self) -> Option<String> {
         self.output.iter().find_map(|item| {
             if let OutputItem::Reasoning { content, .. } = item {
-                Some(content.as_str())
+                content
+                    .as_ref()
+                    .map(|items| items.iter().map(|c| c.text.as_str()).collect::<String>())
             } else {
                 None
             }
         })
     }
 
+    /// Get encrypted reasoning content if present.
+    pub fn encrypted_reasoning(&self) -> Option<&str> {
+        self.output.iter().find_map(|item| {
+            if let OutputItem::Reasoning {
+                encrypted_content, ..
+            } = item
+            {
+                encrypted_content.as_deref()
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get optional usage information.
+    pub fn usage_opt(&self) -> Option<&Usage> {
+        self.usage.as_ref()
+    }
+
+    /// Get usage information, defaulting to zero tokens when missing.
+    pub fn usage_or_default(&self) -> Usage {
+        self.usage.clone().unwrap_or_default()
+    }
+
     /// Get cached tokens used (from prompt caching).
     pub fn cached_tokens(&self) -> i32 {
-        self.usage.cached_tokens()
+        self.usage_opt()
+            .map(super::usage::Usage::cached_tokens)
+            .unwrap_or(0)
     }
 
     /// Check if response contains any tool calls (including function calls).
@@ -1508,18 +1693,12 @@ impl Response {
     }
 
     /// Get all web search calls from the response.
-    pub fn web_search_calls(&self) -> Vec<(&str, Option<&str>, Option<&Vec<WebSearchResult>>)> {
+    pub fn web_search_calls(&self) -> Vec<(Option<&str>, Option<&serde_json::Value>)> {
         self.output
             .iter()
             .filter_map(|item| {
-                if let OutputItem::WebSearchCall {
-                    call_id,
-                    query,
-                    results,
-                    ..
-                } = item
-                {
-                    Some((call_id.as_str(), query.as_deref(), results.as_ref()))
+                if let OutputItem::WebSearchCall { id, action, .. } = item {
+                    Some((id.as_deref(), action.as_ref()))
                 } else {
                     None
                 }
@@ -1528,18 +1707,20 @@ impl Response {
     }
 
     /// Get all file search calls from the response.
-    pub fn file_search_calls(&self) -> Vec<(&str, &[String], Option<&Vec<FileSearchResult>>)> {
+    pub fn file_search_calls(
+        &self,
+    ) -> Vec<(Option<&str>, &[String], Option<&Vec<FileSearchResult>>)> {
         self.output
             .iter()
             .filter_map(|item| {
                 if let OutputItem::FileSearchCall {
-                    call_id,
+                    id,
                     queries,
                     results,
                     ..
                 } = item
                 {
-                    Some((call_id.as_str(), queries.as_slice(), results.as_ref()))
+                    Some((id.as_deref(), queries.as_slice(), results.as_ref()))
                 } else {
                     None
                 }
@@ -1567,18 +1748,19 @@ impl Response {
     /// Get all code interpreter calls from the response.
     pub fn code_interpreter_calls(
         &self,
-    ) -> Vec<(&str, Option<&str>, Option<&Vec<CodeInterpreterOutput>>)> {
+    ) -> Vec<(
+        Option<&str>,
+        Option<&str>,
+        Option<&Vec<CodeInterpreterOutput>>,
+    )> {
         self.output
             .iter()
             .filter_map(|item| {
                 if let OutputItem::CodeInterpreterCall {
-                    call_id,
-                    code,
-                    outputs,
-                    ..
+                    id, code, outputs, ..
                 } = item
                 {
-                    Some((call_id.as_str(), code.as_deref(), outputs.as_ref()))
+                    Some((id.as_deref(), code.as_deref(), outputs.as_ref()))
                 } else {
                     None
                 }
@@ -1592,9 +1774,9 @@ impl Response {
             .iter()
             .filter_map(|item| {
                 if let OutputItem::McpCall {
-                    call_id,
+                    id,
                     server_label,
-                    tool_name,
+                    name,
                     arguments,
                     output,
                     error,
@@ -1602,10 +1784,10 @@ impl Response {
                 } = item
                 {
                     Some(MpcCallRef {
-                        call_id: call_id.as_str(),
+                        id: id.as_deref(),
                         server_label: server_label.as_deref(),
-                        tool_name: tool_name.as_deref(),
-                        arguments: arguments.as_ref(),
+                        name: name.as_deref(),
+                        arguments: arguments.as_deref(),
                         output: output.as_deref(),
                         error: error.as_deref(),
                     })
@@ -1617,20 +1799,12 @@ impl Response {
     }
 
     /// Get all image generation calls from the response.
-    pub fn image_generation_calls(
-        &self,
-    ) -> Vec<(&str, Option<&str>, Option<&ImageGenerationResult>)> {
+    pub fn image_generation_calls(&self) -> Vec<(Option<&str>, Option<&str>)> {
         self.output
             .iter()
             .filter_map(|item| {
-                if let OutputItem::ImageGenerationCall {
-                    call_id,
-                    prompt,
-                    result,
-                    ..
-                } = item
-                {
-                    Some((call_id.as_str(), prompt.as_deref(), result.as_ref()))
+                if let OutputItem::ImageGenerationCall { id, result, .. } = item {
+                    Some((id.as_deref(), result.as_deref()))
                 } else {
                     None
                 }
@@ -1659,18 +1833,15 @@ impl Response {
     }
 
     /// Get all local shell calls from the response.
-    pub fn local_shell_calls(&self) -> Vec<(&str, Option<&str>, Option<&str>)> {
+    pub fn local_shell_calls(&self) -> Vec<(&str, Option<&serde_json::Value>)> {
         self.output
             .iter()
             .filter_map(|item| {
                 if let OutputItem::LocalShellCall {
-                    call_id,
-                    command,
-                    output,
-                    ..
+                    call_id, action, ..
                 } = item
                 {
-                    Some((call_id.as_str(), command.as_deref(), output.as_deref()))
+                    Some((call_id.as_str(), action.as_ref()))
                 } else {
                     None
                 }
@@ -1682,14 +1853,14 @@ impl Response {
 /// Reference to an MCP call in a response.
 #[derive(Debug, Clone)]
 pub struct MpcCallRef<'a> {
-    /// Call ID.
-    pub call_id: &'a str,
+    /// Unique ID.
+    pub id: Option<&'a str>,
     /// MCP server label.
     pub server_label: Option<&'a str>,
     /// Tool name.
-    pub tool_name: Option<&'a str>,
-    /// Tool arguments.
-    pub arguments: Option<&'a serde_json::Value>,
+    pub name: Option<&'a str>,
+    /// Tool arguments (JSON string).
+    pub arguments: Option<&'a str>,
     /// Tool output.
     pub output: Option<&'a str>,
     /// Error if any.

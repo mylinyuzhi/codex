@@ -603,13 +603,14 @@ impl Tool for SmartEditTool {
         let response = match call_result {
             Ok(Ok(result)) => result.response,
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "SmartEdit LLM correction call failed");
+                tracing::warn!(status = ?e.status_code(), error = ?e, "SmartEdit LLM correction call failed");
                 let hint = find_closest_match(&content, &working_old);
                 return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
-                        "old_string not found in file (tried exact, flexible, regex matching, and LLM correction failed: {e}): {}\n\
+                        "old_string not found in file (tried exact, flexible, regex matching, and LLM correction failed: {}): {}\n\
                          Hint: {hint}\n\
                          The file may have changed. Use the Read tool to re-read the file and verify the exact content before retrying.",
+                        e.output_msg(),
                         path.display()
                     ),
                 }

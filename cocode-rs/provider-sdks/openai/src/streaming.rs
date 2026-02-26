@@ -35,16 +35,6 @@ pub struct ServerSentEvent {
 }
 
 impl ServerSentEvent {
-    /// Create a new empty SSE.
-    fn new() -> Self {
-        Self {
-            event: None,
-            data: String::new(),
-            id: None,
-            retry: None,
-        }
-    }
-
     /// Parse the data as JSON.
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
         serde_json::from_str(&self.data)
@@ -373,12 +363,17 @@ where
                             let code = error.get("code").and_then(|c| c.as_str());
                             Err(map_stream_error(code, message))
                         } else {
+                            tracing::warn!(
+                                data_len = sse.data.len(),
+                                "Failed to parse SSE event: {e}"
+                            );
                             Err(OpenAIError::Parse(format!(
                                 "Failed to parse SSE event: {e}, data: {}",
                                 &sse.data
                             )))
                         }
                     } else {
+                        tracing::warn!(data_len = sse.data.len(), "Failed to parse SSE event: {e}");
                         Err(OpenAIError::Parse(format!(
                             "Failed to parse SSE event: {e}, data: {}",
                             &sse.data
@@ -422,7 +417,7 @@ fn map_stream_error(code: Option<&str>, message: &str) -> OpenAIError {
             return OpenAIError::ContextWindowExceeded;
         }
         if code.contains("insufficient_quota") {
-            return OpenAIError::QuotaExceeded;
+            return OpenAIError::RateLimited { retry_after: None };
         }
         if code.contains("rate_limit_exceeded") {
             return OpenAIError::RateLimited { retry_after: None };

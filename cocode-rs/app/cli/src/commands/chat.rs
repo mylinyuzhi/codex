@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use cocode_config::ConfigManager;
 use cocode_config::ConfigOverrides;
-use cocode_protocol::ModelSpec;
-use cocode_protocol::RoleSelection;
 use cocode_session::Session;
 use cocode_session::SessionState;
 use tracing::info;
@@ -90,18 +88,9 @@ pub async fn run(
         });
     }
 
-    // Use current config (profile-based)
-    let spec = config.current_spec();
-
-    // Get provider type from snapshot
-    let provider_type = snapshot
-        .provider_type(&spec.provider)
-        .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
-
-    // Create session with the model spec
-    let spec_with_type = ModelSpec::with_type(&spec.provider, provider_type, &spec.model);
-    let selection = RoleSelection::new(spec_with_type);
-    let mut session = Session::new(working_dir, selection);
+    // Build all role selections from config
+    let selections = config.build_all_selections();
+    let mut session = Session::with_selections(working_dir, selections);
 
     if let Some(t) = title {
         session.set_title(t);

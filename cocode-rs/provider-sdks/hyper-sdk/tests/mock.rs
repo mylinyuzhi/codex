@@ -135,7 +135,7 @@ mod mock_openai {
     }
 
     #[tokio::test]
-    async fn test_quota_exceeded_response() {
+    async fn test_quota_exceeded_response_is_retryable() {
         let server = setup_mock_server().await;
 
         Mock::given(method("POST"))
@@ -149,9 +149,9 @@ mod mock_openai {
             .mount(&server)
             .await;
 
-        // Test that quota error is NOT retryable (different from rate limit)
-        let error = HyperError::QuotaExceeded("insufficient_quota".to_string());
-        assert!(!error.is_retryable());
+        // All 429s are retryable (aligned with Python SDKs)
+        let error = HyperError::RateLimitExceeded("insufficient_quota".to_string());
+        assert!(error.is_retryable());
     }
 
     #[tokio::test]
@@ -817,9 +817,9 @@ mod error_mapping {
         let err = HyperError::RateLimitExceeded("Rate limit reached".to_string());
         assert!(err.is_retryable());
 
-        // Quota exceeded - NOT retryable
-        let err = HyperError::QuotaExceeded("insufficient_quota".to_string());
-        assert!(!err.is_retryable());
+        // All 429s (including quota) are retryable (aligned with Python SDKs)
+        let err = HyperError::RateLimitExceeded("insufficient_quota".to_string());
+        assert!(err.is_retryable());
 
         // Context window - NOT retryable
         let err = HyperError::ContextWindowExceeded("too many tokens".to_string());

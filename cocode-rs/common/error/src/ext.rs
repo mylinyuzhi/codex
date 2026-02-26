@@ -88,14 +88,36 @@ pub trait ErrorExt: std::error::Error {
 
     /// Returns a user-friendly error message.
     ///
-    /// For internal/unknown errors, hides implementation details.
-    /// For other errors, returns the Display string.
+    ///
+    /// Global scheme (Greptime-style):
+    /// `KIND - REASON ([EXTERNAL CAUSE])`
+    ///
+    /// - `KIND`: `status_code().name()`
+    /// - `REASON`: current error Display
+    /// - `EXTERNAL CAUSE` (optional): the innermost source Display
     fn output_msg(&self) -> String {
-        match self.status_code() {
-            StatusCode::Internal | StatusCode::Unknown => {
-                format!("Internal error: {}", self.status_code() as i32)
+        let kind = self.status_code().name();
+        let reason = self.to_string();
+
+        // Walk to the innermost source error.
+        // We intentionally avoid system backtraces and only use the error chain.
+        let mut last_source: Option<&(dyn std::error::Error + 'static)> = None;
+        let mut cur: Option<&(dyn std::error::Error + 'static)> = self.source();
+        while let Some(err) = cur {
+            last_source = Some(err);
+            cur = err.source();
+        }
+
+        match last_source {
+            Some(src) => {
+                let cause = src.to_string();
+                if cause.is_empty() || cause == reason {
+                    format!("{kind} - {reason}")
+                } else {
+                    format!("{kind} - {reason} ({cause})")
+                }
             }
-            _ => self.to_string(),
+            None => format!("{kind} - {reason}"),
         }
     }
 
@@ -107,6 +129,56 @@ pub trait ErrorExt: std::error::Error {
 ///
 /// Use this to wrap external errors or for type erasure.
 pub type BoxedError = Box<dyn ErrorExt + Send + Sync>;
+
+/// A sized wrapper for [`BoxedError`] so it can be used as a SNAFU `source`.
+///
+/// Why this exists:
+/// - `BoxedError` is a trait object (`Box<dyn ErrorExt + Send + Sync>`)
+/// - `snafu`'s derive wants a concrete `std::error::Error` source type that
+///   satisfies its internal `AsErrorSource` bounds.
+/// - Using `BoxedError` directly as `#[snafu(source)]` does not compile.
+///
+/// This wrapper keeps the original error chain + status code semantics,
+/// and allows `#[snafu(source(from(BoxedError, BoxedErrorSource::new)))]`.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct BoxedErrorSource {
+    inner: BoxedError,
+}
+
+impl BoxedErrorSource {
+    pub fn new(inner: BoxedError) -> Self {
+        Self { inner }
+    }
+
+    pub fn status_code(&self) -> StatusCode {
+        self.inner.status_code()
+    }
+}
+
+impl std::fmt::Display for BoxedErrorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl std::error::Error for BoxedErrorSource {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
+
+/// Box an internal error that already implements [`ErrorExt`].
+///
+/// This is the preferred boundary conversion: it preserves the concrete error
+/// type (so `Debug` can render `#[stack_trace_debug]` virtual stacks) and avoids
+/// erasing semantics into string-only errors.
+pub fn boxed_err<E>(error: E) -> BoxedError
+where
+    E: ErrorExt + Send + Sync + 'static,
+{
+    Box::new(error)
+}
 
 /// Wraps any `std::error::Error` into a `BoxedError` with the given status code.
 pub fn boxed<E>(error: E, status_code: StatusCode) -> BoxedError

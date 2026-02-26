@@ -173,7 +173,7 @@ fn test_provider_model_new() {
     assert_eq!(pm.slug(), "gpt-4");
     assert_eq!(pm.api_model_name(), "gpt-4"); // No alias, returns slug
     assert!(pm.api_model_name.is_none());
-    assert_eq!(pm.info.timeout_secs, Some(120));
+    assert_eq!(pm.model_info.timeout_secs, Some(120));
 }
 
 #[test]
@@ -220,8 +220,9 @@ fn test_provider_model_empty_alias_falls_back_to_slug() {
     };
     // Create with empty string alias
     let pm = ProviderModel {
-        info: model_info,
+        model_info: model_info,
         api_model_name: Some("".to_string()),
+        model_options: HashMap::new(),
     };
     // Should fall back to slug, not return empty string
     assert_eq!(pm.api_model_name(), "gpt-4");

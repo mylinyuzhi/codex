@@ -179,8 +179,7 @@ fn test_load_config_json() {
     let config = loader.load_config().unwrap();
     assert!(config.models.is_some());
     let models = config.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().provider, "openai");
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5"));
     assert_eq!(config.profile, Some("fast".to_string()));
 }
 
@@ -299,8 +298,7 @@ fn test_load_jsonc_config_file() {
     let config = loader.load_config().unwrap();
     assert!(config.models.is_some());
     let models = config.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().provider, "openai");
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5"));
     assert_eq!(config.profile, Some("fast".to_string()));
 }
 

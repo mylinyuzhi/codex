@@ -17,9 +17,7 @@ serde_json.workspace = true
 humantime-serde = "1.1"
 snafu.workspace = true
 snafu-virtstack.workspace = true
-anyhow.workspace = true
 async-trait.workspace = true
-thiserror.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

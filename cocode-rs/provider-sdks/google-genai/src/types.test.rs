@@ -19,6 +19,7 @@ fn test_request_serialization_structure() {
             "test_func",
         )])]),
         tool_config: None,
+        cached_content: None,
     };
 
     let json = serde_json::to_value(&request).expect("serialization failed");
@@ -358,6 +359,7 @@ fn test_thinking_config_nested_in_generation_config() {
         safety_settings: None,
         tools: None,
         tool_config: None,
+        cached_content: None,
     };
 
     let json = serde_json::to_value(&request).expect("serialization failed");

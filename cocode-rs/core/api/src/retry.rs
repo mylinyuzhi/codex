@@ -4,6 +4,7 @@
 //! capabilities with exponential backoff and retry decisions.
 
 use crate::error::ApiError;
+use cocode_error::ErrorExt;
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::Duration;
@@ -86,12 +87,17 @@ impl RetryConfig {
 /// Retry context that tracks attempts and provides backoff calculation.
 ///
 /// This context is used during a single request's retry cycle. It tracks
-/// the number of attempts and calculates appropriate delays for retries.
+/// the number of attempts, calculates appropriate delays for retries,
+/// and accumulates a diagnostics trail of all failures.
 #[derive(Debug, Clone)]
 pub struct RetryContext {
     config: RetryConfig,
     current_attempt: i32,
     last_error: Option<String>,
+    /// Accumulated failure details from each retry attempt.
+    failures: Vec<String>,
+    /// Optional provider context for diagnostics.
+    provider_context: Option<String>,
 }
 
 impl RetryContext {
@@ -101,6 +107,8 @@ impl RetryContext {
             config,
             current_attempt: 0,
             last_error: None,
+            failures: Vec::new(),
+            provider_context: None,
         }
     }
 
@@ -109,10 +117,27 @@ impl RetryContext {
         Self::new(RetryConfig::default())
     }
 
+    /// Set provider context for diagnostics (e.g., provider name).
+    pub fn with_provider_context(mut self, name: &str) -> Self {
+        self.provider_context = Some(name.to_string());
+        self
+    }
+
     /// Record an attempt and return if retry should be attempted.
     pub fn should_retry(&mut self, error: &ApiError) -> bool {
         self.current_attempt += 1;
         self.last_error = Some(error.to_string());
+
+        // Record failure in diagnostics trail
+        let prefix = self
+            .provider_context
+            .as_ref()
+            .map(|p| format!("[{p}] "))
+            .unwrap_or_default();
+        self.failures.push(format!(
+            "{prefix}attempt {}/{}: {}",
+            self.current_attempt, self.config.max_retries, error,
+        ));
 
         // Check if retryable and within limits
         error.is_retryable() && self.current_attempt <= self.config.max_retries
@@ -121,7 +146,7 @@ impl RetryContext {
     /// Calculate the delay before the next retry.
     pub fn calculate_delay(&self, error: &ApiError) -> Duration {
         // Honor retry-after hint if available
-        if let Some(delay) = error.retry_delay() {
+        if let Some(delay) = error.retry_after() {
             return delay.min(Duration::from_millis(self.config.max_delay_ms as u64));
         }
 
@@ -148,10 +173,16 @@ impl RetryContext {
         self.config.max_retries
     }
 
+    /// Get the accumulated diagnostics trail.
+    pub fn diagnostics(&self) -> &[String] {
+        &self.failures
+    }
+
     /// Reset the context for a new request.
     pub fn reset(&mut self) {
         self.current_attempt = 0;
         self.last_error = None;
+        self.failures.clear();
     }
 
     /// Check if retries are exhausted.
@@ -159,7 +190,7 @@ impl RetryContext {
         self.current_attempt > self.config.max_retries
     }
 
-    /// Create an exhausted error.
+    /// Create an exhausted error with full diagnostics trail.
     pub fn exhausted_error(&self) -> ApiError {
         crate::error::api_error::RetriesExhaustedSnafu {
             attempts: self.current_attempt,
@@ -167,6 +198,7 @@ impl RetryContext {
                 .last_error
                 .clone()
                 .unwrap_or_else(|| "Unknown".to_string()),
+            diagnostics: self.failures.clone(),
         }
         .build()
     }

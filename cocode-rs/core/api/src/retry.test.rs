@@ -151,8 +151,94 @@ fn test_reset() {
     ctx.should_retry(&error);
     ctx.should_retry(&error);
     assert_eq!(ctx.current_attempt(), 2);
+    assert_eq!(ctx.diagnostics().len(), 2);
 
     ctx.reset();
     assert_eq!(ctx.current_attempt(), 0);
     assert!(ctx.last_error().is_none());
+    assert!(ctx.diagnostics().is_empty());
+}
+
+// =========================================================================
+// H3: Failure diagnostics trail tests
+// =========================================================================
+
+#[test]
+fn test_diagnostics_trail_accumulates() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
+    let error: ApiError = NetworkSnafu {
+        message: "connection refused",
+    }
+    .build();
+
+    ctx.should_retry(&error);
+    ctx.should_retry(&error);
+    ctx.should_retry(&error);
+
+    let diagnostics = ctx.diagnostics();
+    assert_eq!(diagnostics.len(), 3);
+    assert!(diagnostics[0].contains("attempt 1/3"));
+    assert!(diagnostics[1].contains("attempt 2/3"));
+    assert!(diagnostics[2].contains("attempt 3/3"));
+    assert!(diagnostics[0].contains("connection refused"));
+}
+
+#[test]
+fn test_diagnostics_trail_with_provider_context() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(2))
+        .with_provider_context("openai");
+    let error: ApiError = NetworkSnafu { message: "timeout" }.build();
+
+    ctx.should_retry(&error);
+    let diagnostics = ctx.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].contains("[openai]"));
+    assert!(diagnostics[0].contains("attempt 1/2"));
+}
+
+#[test]
+fn test_exhausted_error_includes_diagnostics() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(2));
+    let error: ApiError = NetworkSnafu {
+        message: "connection failed",
+    }
+    .build();
+
+    ctx.should_retry(&error);
+    ctx.should_retry(&error);
+    ctx.should_retry(&error); // exceeds max
+
+    let exhausted = ctx.exhausted_error();
+    assert!(matches!(exhausted, ApiError::RetriesExhausted { .. }));
+    let diags = exhausted.diagnostics();
+    assert_eq!(diags.len(), 3);
+}
+
+#[test]
+fn test_diagnostics_empty_initially() {
+    let ctx = RetryContext::with_defaults();
+    assert!(ctx.diagnostics().is_empty());
+}
+
+#[test]
+fn test_diagnostics_non_retryable_still_recorded() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::with_defaults();
+    let error: ApiError = AuthenticationSnafu {
+        message: "invalid key",
+    }
+    .build();
+
+    // Even though should_retry returns false, the failure is still recorded
+    let retryable = ctx.should_retry(&error);
+    assert!(!retryable);
+    assert_eq!(ctx.diagnostics().len(), 1);
+    assert!(ctx.diagnostics()[0].contains("invalid key"));
 }

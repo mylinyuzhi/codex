@@ -104,3 +104,17 @@ fn test_from_provider_info() {
     assert_eq!(model.provider(), "openai");
     assert!(client.config().fallback.enable_stream_fallback);
 }
+
+// =========================================================================
+// M3: Provider-level failover tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_stream_request_with_fallback_empty_models() {
+    let client = ApiClient::new();
+    let request = hyper_sdk::GenerateRequest::new(vec![hyper_sdk::Message::user("test")]);
+    let result = client
+        .stream_request_with_fallback(&[], request, StreamOptions::streaming())
+        .await;
+    assert!(result.is_err());
+}

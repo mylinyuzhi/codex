@@ -137,7 +137,7 @@ fn test_map_stream_error() {
 
     assert!(matches!(
         map_stream_error(Some("insufficient_quota"), "test"),
-        OpenAIError::QuotaExceeded
+        OpenAIError::RateLimited { .. }
     ));
 
     assert!(matches!(

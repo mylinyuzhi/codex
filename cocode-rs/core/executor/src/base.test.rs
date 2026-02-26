@@ -16,6 +16,7 @@ fn test_builder_defaults() {
     let builder = ExecutorBuilder::new();
     assert!(builder.api_client.is_none());
     assert!(builder.model_hub.is_none());
+    assert!(builder.selections.is_none());
     assert!(builder.tool_registry.is_none());
     assert!(builder.hooks.is_none());
     assert!(builder.spawn_agent_fn.is_none());

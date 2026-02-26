@@ -113,24 +113,22 @@ fn default_true() -> bool {
     true
 }
 
-/// Provider configuration from JSON/TOML.
+/// Provider configuration from JSON.
 ///
-/// Example TOML:
-/// ```toml
-/// [providers.openai]
-/// name = "OpenAI"
-/// type = "openai"
-/// base_url = "https://api.openai.com/v1"
-/// env_key = "OPENAI_API_KEY"
-/// streaming = true
-/// wire_api = "responses"
-///
-/// [[providers.openai.models]]
-/// slug = "gpt-5"
-///
-/// [[providers.openai.models]]
-/// slug = "gpt-4o"
-/// timeout_secs = 120
+/// Example JSON:
+/// ```json
+/// {
+///   "name": "openai",
+///   "type": "openai",
+///   "base_url": "https://api.openai.com/v1",
+///   "env_key": "OPENAI_API_KEY",
+///   "streaming": true,
+///   "wire_api": "responses",
+///   "models": [
+///     {"slug": "gpt-5"},
+///     {"slug": "gpt-4o", "api_model_name": "gpt-4o-2024-08-06"}
+///   ]
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -167,7 +165,7 @@ pub struct ProviderConfig {
 
     /// Models this provider serves.
     #[serde(default)]
-    pub models: Vec<ProviderModelEntry>,
+    pub models: Vec<ProviderModelConfig>,
 
     /// Provider-specific SDK client options (e.g., organization_id, use_zhipuai).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,85 +202,70 @@ impl ProviderConfig {
             .with_wire_api(self.wire_api)
     }
 
-    /// Find a model entry by slug.
-    pub fn find_model(&self, slug: &str) -> Option<&ProviderModelEntry> {
-        self.models.iter().find(|m| m.model_info.slug == slug)
+    /// Find a model config by slug.
+    pub fn find_model(&self, slug: &str) -> Option<&ProviderModelConfig> {
+        self.models.iter().find(|m| m.slug == slug)
     }
 
     /// List all model slugs in this provider.
     pub fn list_model_slugs(&self) -> Vec<&str> {
-        self.models
-            .iter()
-            .map(|m| m.model_info.slug.as_str())
-            .collect()
+        self.models.iter().map(|m| m.slug.as_str()).collect()
     }
 }
 
-/// Per-model configuration within a provider.
+/// Per-model configuration within a provider config.
 ///
-/// Uses `#[serde(flatten)]` to allow inline ModelInfo fields in config files.
+/// This is a thin slug reference — all model metadata (context_window, max_output_tokens,
+/// thinking levels, etc.) belongs in `models.json` or builtins, not here.
 ///
-/// Example TOML:
-/// ```toml
-/// [[providers.volcengine.models]]
-/// slug = "deepseek-r1"
-/// model_id = "ep-20250101-xxxxx"  # API endpoint ID
-/// timeout_secs = 300
-/// max_output_tokens = 16384
-/// thinking_budget = 32000
+/// Example JSON:
+/// ```json
+/// {"slug": "deepseek-r1", "api_model_name": "ep-20250101-xxxxx"}
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProviderModelEntry {
-    /// Model info (slug required, other fields optional for overrides).
-    #[serde(flatten)]
-    pub model_info: ModelInfo,
+pub struct ProviderModelConfig {
+    /// Model slug — references a model defined in models.json or builtins.
+    pub slug: String,
 
     /// API model name if different from slug (e.g., "ep-xxx" endpoint ID).
-    /// In config files, can use `model_id` or `model_alias`.
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "model_id")]
-    pub model_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_model_name: Option<String>,
 
     /// Model-specific options (temperature, seed, etc.).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub model_options: HashMap<String, serde_json::Value>,
 }
 
-impl ProviderModelEntry {
+impl ProviderModelConfig {
     /// Create a new entry with just a slug.
     pub fn new(slug: impl Into<String>) -> Self {
         Self {
-            model_info: ModelInfo {
-                slug: slug.into(),
-                ..Default::default()
-            },
-            model_alias: None,
+            slug: slug.into(),
+            api_model_name: None,
             model_options: HashMap::new(),
         }
     }
 
-    /// Create a new entry with a slug and alias.
-    pub fn with_alias(slug: impl Into<String>, alias: impl Into<String>) -> Self {
+    /// Create a new entry with a slug and api_model_name.
+    pub fn with_api_model_name(slug: impl Into<String>, api_model_name: impl Into<String>) -> Self {
         Self {
-            model_info: ModelInfo {
-                slug: slug.into(),
-                ..Default::default()
-            },
-            model_alias: Some(alias.into()),
+            slug: slug.into(),
+            api_model_name: Some(api_model_name.into()),
             model_options: HashMap::new(),
         }
     }
 
     /// Get the slug (model identifier).
     pub fn slug(&self) -> &str {
-        &self.model_info.slug
+        &self.slug
     }
 
     /// Get the API model name (alias if set and non-empty, otherwise slug).
     pub fn api_model_name(&self) -> &str {
-        self.model_alias
+        self.api_model_name
             .as_deref()
             .filter(|s| !s.is_empty())
-            .unwrap_or(&self.model_info.slug)
+            .unwrap_or(&self.slug)
     }
 }
 

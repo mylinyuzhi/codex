@@ -32,4 +32,24 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Error Handling
+
+```rust
+use google_genai::{Client, GenAiError};
+
+match client.generate_content_text("gemini-2.0-flash", "Hello!", None).await {
+    Ok(resp) => println!("{}", resp.text().unwrap_or_default()),
+    Err(GenAiError::Api { code: 429, .. }) => {
+        eprintln!("Rate limited, retry later");
+    }
+    Err(GenAiError::ContextLengthExceeded(msg)) => {
+        eprintln!("Context too long: {}", msg);
+    }
+    Err(GenAiError::ContentBlocked(msg)) => {
+        eprintln!("Content blocked: {}", msg);
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
 See [docs/STATUS.md](docs/STATUS.md) for full implementation status.

@@ -129,7 +129,7 @@ impl InferenceContext {
 
     /// Get the model name.
     pub fn model(&self) -> &str {
-        &self.model_spec.model
+        &self.model_spec.slug
     }
 
     /// Get the context window size.

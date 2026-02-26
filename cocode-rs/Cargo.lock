@@ -853,7 +853,6 @@ dependencies = [
 name = "cocode-api"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "cocode-config",
  "cocode-error",
@@ -865,7 +864,6 @@ dependencies = [
  "serde_json",
  "snafu",
  "snafu-virtstack",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
@@ -920,6 +918,7 @@ dependencies = [
  "clap",
  "cocode-arg0",
  "cocode-config",
+ "cocode-error",
  "cocode-loop",
  "cocode-otel",
  "cocode-plugin",
@@ -990,7 +989,6 @@ dependencies = [
 name = "cocode-executor"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "cocode-api",
@@ -1019,13 +1017,15 @@ dependencies = [
 name = "cocode-file-backup"
 version = "0.0.0"
 dependencies = [
- "anyhow",
+ "cocode-error",
  "cocode-git",
  "cocode-protocol",
  "pretty_assertions",
  "serde",
  "serde_json",
  "sha2",
+ "snafu",
+ "snafu-virtstack",
  "tempfile",
  "tokio",
  "tracing",
@@ -1124,9 +1124,9 @@ dependencies = [
 name = "cocode-loop"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "cocode-api",
  "cocode-context",
+ "cocode-error",
  "cocode-file-backup",
  "cocode-hooks",
  "cocode-lsp",
@@ -1142,6 +1142,8 @@ dependencies = [
  "hyper-sdk",
  "serde",
  "serde_json",
+ "snafu",
+ "snafu-virtstack",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1415,6 +1417,7 @@ dependencies = [
  "cocode-api",
  "cocode-config",
  "cocode-context",
+ "cocode-error",
  "cocode-executor",
  "cocode-file-backup",
  "cocode-hooks",
@@ -1434,6 +1437,8 @@ dependencies = [
  "hyper-sdk",
  "serde",
  "serde_json",
+ "snafu",
+ "snafu-virtstack",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1509,14 +1514,16 @@ dependencies = [
 name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "cocode-config",
+ "cocode-error",
  "cocode-protocol",
  "cocode-tools",
  "once_cell",
  "serde",
  "serde_json",
  "serde_yml",
+ "snafu",
+ "snafu-virtstack",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1573,7 +1580,6 @@ dependencies = [
 name = "cocode-tools"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "cocode-apply-patch",
  "cocode-config",
@@ -4529,6 +4535,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tracing",
  "wiremock",
 ]
 

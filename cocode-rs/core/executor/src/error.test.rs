@@ -1,5 +1,29 @@
 use super::executor_error::*;
 use super::*;
+use snafu::IntoError;
+
+#[derive(Debug)]
+struct DummyError {
+    code: StatusCode,
+}
+
+impl std::fmt::Display for DummyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dummy")
+    }
+}
+
+impl std::error::Error for DummyError {}
+
+impl ErrorExt for DummyError {
+    fn status_code(&self) -> StatusCode {
+        self.code
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 
 #[test]
 fn test_git_error() {
@@ -13,20 +37,23 @@ fn test_git_error() {
 
 #[test]
 fn test_execution_error() {
-    let err: ExecutorError = ExecutionSnafu {
-        message: "iteration failed",
-    }
-    .build();
+    let source = cocode_error::boxed_err(DummyError {
+        code: StatusCode::Internal,
+    });
+    let err: ExecutorError = ExecutionSnafu.into_error(source);
     assert_eq!(err.status_code(), StatusCode::Internal);
     assert!(err.to_string().contains("Iteration execution failed"));
 }
 
 #[test]
 fn test_context_error() {
+    let source = cocode_error::boxed_err(DummyError {
+        code: StatusCode::InvalidArguments,
+    });
     let err: ExecutorError = ContextSnafu {
         message: "invalid config",
     }
-    .build();
+    .into_error(source);
     assert_eq!(err.status_code(), StatusCode::InvalidArguments);
 }
 
@@ -51,7 +78,10 @@ fn test_task_spawn_error() {
 #[test]
 fn test_error_retryable() {
     // Internal errors are retryable
-    let exec_err: ExecutorError = ExecutionSnafu { message: "test" }.build();
+    let source = cocode_error::boxed_err(DummyError {
+        code: StatusCode::Internal,
+    });
+    let exec_err: ExecutorError = ExecutionSnafu.into_error(source);
     assert!(exec_err.status_code().is_retryable());
 
     // IO errors are not retryable by default

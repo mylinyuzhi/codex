@@ -36,7 +36,6 @@ grep-searcher.workspace = true
 ignore.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
-anyhow.workspace = true
 regex-lite.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 lru.workspace = true

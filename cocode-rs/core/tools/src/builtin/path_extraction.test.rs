@@ -49,7 +49,7 @@ fn test_from_model_roles_fast() {
 
     // Fast role should be returned (not main)
     let fast_spec = roles.get(ModelRole::Fast).unwrap();
-    assert_eq!(fast_spec.model, "claude-haiku");
+    assert_eq!(fast_spec.slug, "claude-haiku");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn test_from_model_roles_fallback() {
 
     // Should fall back to main
     let fast_spec = roles.get(ModelRole::Fast).unwrap();
-    assert_eq!(fast_spec.model, "claude-sonnet");
+    assert_eq!(fast_spec.slug, "claude-sonnet");
 }
 
 #[test]

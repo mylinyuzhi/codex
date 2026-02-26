@@ -53,10 +53,6 @@ pub enum OpenAIError {
     #[error("context window exceeded")]
     ContextWindowExceeded,
 
-    /// Quota exceeded / insufficient credits.
-    #[error("quota exceeded")]
-    QuotaExceeded,
-
     /// Previous response not found (for multi-turn conversations).
     #[error("previous response not found")]
     PreviousResponseNotFound,

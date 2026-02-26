@@ -56,11 +56,132 @@ use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ToolConfig;
 use cocode_protocol::WebFetchConfig;
 use cocode_protocol::WebSearchConfig;
+use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelRoles;
+use cocode_protocol::model::ModelSpec;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+
+/// JSON configuration for role-based model assignments.
+///
+/// Each role maps to a "provider/model" string (e.g., "openai/gpt-5").
+/// This is the file-format type; resolved to `ModelRoles` via `into_model_roles()`.
+///
+/// Follows the same pattern as `FeaturesConfig → Features`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ModelsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact: Option<String>,
+}
+
+impl ModelsConfig {
+    /// Convert to runtime `ModelRoles` type.
+    ///
+    /// Parses each "provider/model" string via `ModelSpec::from_str()`.
+    /// Invalid entries are silently skipped.
+    pub fn into_model_roles(self) -> ModelRoles {
+        let mut roles = ModelRoles::default();
+        if let Some(s) = self.main {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.main = Some(spec);
+            }
+        }
+        if let Some(s) = self.fast {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.fast = Some(spec);
+            }
+        }
+        if let Some(s) = self.vision {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.vision = Some(spec);
+            }
+        }
+        if let Some(s) = self.review {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.review = Some(spec);
+            }
+        }
+        if let Some(s) = self.plan {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.plan = Some(spec);
+            }
+        }
+        if let Some(s) = self.explore {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.explore = Some(spec);
+            }
+        }
+        if let Some(s) = self.compact {
+            if let Ok(spec) = s.parse::<ModelSpec>() {
+                roles.compact = Some(spec);
+            }
+        }
+        roles
+    }
+
+    /// Get raw string for a role.
+    pub fn get(&self, role: ModelRole) -> Option<&str> {
+        match role {
+            ModelRole::Main => self.main.as_deref(),
+            ModelRole::Fast => self.fast.as_deref(),
+            ModelRole::Vision => self.vision.as_deref(),
+            ModelRole::Review => self.review.as_deref(),
+            ModelRole::Plan => self.plan.as_deref(),
+            ModelRole::Explore => self.explore.as_deref(),
+            ModelRole::Compact => self.compact.as_deref(),
+        }
+    }
+
+    /// Merge another ModelsConfig. Other's set values take precedence.
+    pub fn merge(&mut self, other: &ModelsConfig) {
+        if other.main.is_some() {
+            self.main.clone_from(&other.main);
+        }
+        if other.fast.is_some() {
+            self.fast.clone_from(&other.fast);
+        }
+        if other.vision.is_some() {
+            self.vision.clone_from(&other.vision);
+        }
+        if other.review.is_some() {
+            self.review.clone_from(&other.review);
+        }
+        if other.plan.is_some() {
+            self.plan.clone_from(&other.plan);
+        }
+        if other.explore.is_some() {
+            self.explore.clone_from(&other.explore);
+        }
+        if other.compact.is_some() {
+            self.compact.clone_from(&other.compact);
+        }
+    }
+
+    /// Check if any roles are configured.
+    pub fn is_empty(&self) -> bool {
+        self.main.is_none()
+            && self.fast.is_none()
+            && self.vision.is_none()
+            && self.review.is_none()
+            && self.plan.is_none()
+            && self.explore.is_none()
+            && self.compact.is_none()
+    }
+}
 
 /// Permission rules configuration section.
 ///
@@ -97,9 +218,9 @@ pub struct PermissionsConfig {
 /// All fields are optional - only set fields will override top-level config.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigProfile {
-    /// Role-based model configuration.
+    /// Role-based model configuration (file-format type).
     #[serde(default)]
-    pub models: Option<ModelRoles>,
+    pub models: Option<ModelsConfig>,
 
     /// Override features.
     #[serde(default)]
@@ -142,9 +263,9 @@ pub struct ConfigProfile {
 /// ```
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct AppConfig {
-    /// Role-based model configuration.
+    /// Role-based model configuration (file-format type).
     #[serde(default)]
-    pub models: Option<ModelRoles>,
+    pub models: Option<ModelsConfig>,
 
     /// Profile name to use (selects from `profiles` table).
     #[serde(default)]
@@ -458,13 +579,13 @@ impl AppConfig {
 
     /// Resolve models with profile override.
     fn resolve_models(&self, profile: Option<&ConfigProfile>) -> ModelRoles {
-        let mut models = self.models.clone().unwrap_or_default();
+        let mut models_config = self.models.clone().unwrap_or_default();
 
         if let Some(profile_models) = profile.and_then(|p| p.models.as_ref()) {
-            models.merge(profile_models);
+            models_config.merge(profile_models);
         }
 
-        models
+        models_config.into_model_roles()
     }
 
     /// Get the currently selected profile (if any).

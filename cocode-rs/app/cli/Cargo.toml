@@ -23,6 +23,7 @@ cocode-system-reminder.workspace = true
 cocode-tui.workspace = true
 cocode-loop.workspace = true
 cocode-utils-common.workspace = true
+cocode-error.workspace = true
 
 # External
 clap = { workspace = true, features = ["derive"] }

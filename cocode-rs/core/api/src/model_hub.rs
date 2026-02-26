@@ -72,6 +72,9 @@ use tracing::debug;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::error::ApiError;
+use crate::error::api_error::InvalidRequestSnafu;
+use crate::error::api_error::SdkSnafu;
 use crate::provider_factory;
 
 // ============================================================================
@@ -116,13 +119,16 @@ pub fn resolve_identity(
     identity: &ExecutionIdentity,
     selections: &RoleSelections,
     parent_spec: Option<&ModelSpec>,
-) -> Result<(ModelSpec, Option<RoleSelection>), HubError> {
+) -> crate::error::Result<(ModelSpec, Option<RoleSelection>)> {
     match identity {
         ExecutionIdentity::Role(role) => {
             let selection = selections
                 .get_or_main(*role)
-                .ok_or_else(|| HubError::NoModelConfigured {
-                    identity: format!("role:{role}"),
+                .ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        message: format!("No model configured for role:{role}"),
+                    }
+                    .build()
                 })?
                 .clone();
 
@@ -133,69 +139,17 @@ pub fn resolve_identity(
             Ok((spec.clone(), None))
         }
         ExecutionIdentity::Inherit => {
-            let spec = parent_spec.ok_or(HubError::InheritWithoutParent)?.clone();
+            let spec = parent_spec
+                .ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        message: "Inherit identity requires parent_spec but none was provided"
+                            .to_string(),
+                    }
+                    .build()
+                })?
+                .clone();
             Ok((spec, None))
         }
-    }
-}
-
-// ============================================================================
-// Error Types
-// ============================================================================
-
-/// Errors that can occur when working with ModelHub.
-#[derive(Debug, thiserror::Error)]
-pub enum HubError {
-    /// No model is configured for the requested identity.
-    #[error("No model configured for {identity}")]
-    NoModelConfigured { identity: String },
-
-    /// Inherit identity used without parent context.
-    #[error("Inherit identity requires parent_spec but none was provided")]
-    InheritWithoutParent,
-
-    /// Failed to resolve provider configuration.
-    #[error("Failed to resolve provider '{provider}': {source}")]
-    ProviderResolution {
-        provider: String,
-        #[source]
-        source: anyhow::Error,
-    },
-
-    /// Failed to create provider instance.
-    #[error("Failed to create provider '{provider}': {source}")]
-    ProviderCreation {
-        provider: String,
-        #[source]
-        source: crate::error::ApiError,
-    },
-
-    /// Failed to create model instance.
-    #[error("Failed to create model '{model}' from provider '{provider}': {source}")]
-    ModelCreation {
-        provider: String,
-        model: String,
-        #[source]
-        source: crate::error::ApiError,
-    },
-
-    /// Failed to resolve model info.
-    #[error("Failed to resolve model info for '{model}': {source}")]
-    ModelInfoResolution {
-        model: String,
-        #[source]
-        source: anyhow::Error,
-    },
-
-    /// Internal lock was poisoned.
-    #[error("Internal lock poisoned")]
-    LockPoisoned,
-}
-
-impl HubError {
-    /// Check if this error indicates no model is configured.
-    pub fn is_no_model_configured(&self) -> bool {
-        matches!(self, Self::NoModelConfigured { .. })
     }
 }
 
@@ -214,6 +168,8 @@ struct CachedModel {
     model: Arc<dyn Model>,
     model_info: ModelInfo,
     provider_type: ProviderType,
+    /// Per-provider model options (deferred merge at build_context time).
+    model_options: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -289,9 +245,9 @@ impl ModelHub {
         agent_kind: AgentKind,
         thinking_level: Option<ThinkingLevel>,
         original_identity: ExecutionIdentity,
-    ) -> Result<(InferenceContext, Arc<dyn Model>), HubError> {
+    ) -> crate::error::Result<(InferenceContext, Arc<dyn Model>)> {
         // Get or create model
-        let (model, model_info, _provider_type) = self.get_or_create_model(spec)?;
+        let (model, model_info, _provider_type, model_options) = self.get_or_create_model(spec)?;
 
         // Build inference context
         let call_id = Uuid::new_v4().to_string();
@@ -305,11 +261,18 @@ impl ModelHub {
             original_identity,
         );
 
-        // Carry model's request_options into the inference context
-        if let Some(opts) = model_info.options
-            && !opts.is_empty()
+        // Merge shared options (info.options) + per-provider model_options at call time.
+        // Per-provider model_options take precedence over shared options.
         {
-            ctx = ctx.with_request_options(opts);
+            let has_shared = model_info.options.as_ref().is_some_and(|o| !o.is_empty());
+            let has_override = !model_options.is_empty();
+            if has_shared || has_override {
+                let mut opts = model_info.options.unwrap_or_default();
+                for (k, v) in &model_options {
+                    opts.insert(k.clone(), v.clone());
+                }
+                ctx = ctx.with_request_options(opts);
+            }
         }
 
         // Apply thinking level if provided
@@ -350,7 +313,7 @@ impl ModelHub {
         turn_number: i32,
         agent_kind: AgentKind,
         parent_spec: Option<&ModelSpec>,
-    ) -> Result<(InferenceContext, Arc<dyn Model>), HubError> {
+    ) -> crate::error::Result<(InferenceContext, Arc<dyn Model>)> {
         // Step 1: Resolve identity to spec and selection
         let (spec, selection) = resolve_identity(identity, selections, parent_spec)?;
 
@@ -374,7 +337,7 @@ impl ModelHub {
         selections: &RoleSelections,
         session_id: &str,
         turn_number: i32,
-    ) -> Result<(InferenceContext, Arc<dyn Model>), HubError> {
+    ) -> crate::error::Result<(InferenceContext, Arc<dyn Model>)> {
         self.prepare_inference_with_selections(
             &ExecutionIdentity::main(),
             selections,
@@ -391,7 +354,7 @@ impl ModelHub {
         selections: &RoleSelections,
         session_id: &str,
         turn_number: i32,
-    ) -> Result<(InferenceContext, Arc<dyn Model>), HubError> {
+    ) -> crate::error::Result<(InferenceContext, Arc<dyn Model>)> {
         self.prepare_inference_with_selections(
             &ExecutionIdentity::compact(),
             selections,
@@ -409,8 +372,11 @@ impl ModelHub {
     /// Get model by explicit ModelSpec.
     ///
     /// This is the core model acquisition method - completely role-agnostic.
-    pub fn get_model(&self, spec: &ModelSpec) -> Result<(Arc<dyn Model>, ProviderType), HubError> {
-        self.get_or_create_model(spec).map(|(m, _, pt)| (m, pt))
+    pub fn get_model(
+        &self,
+        spec: &ModelSpec,
+    ) -> crate::error::Result<(Arc<dyn Model>, ProviderType)> {
+        self.get_or_create_model(spec).map(|(m, _, pt, _)| (m, pt))
     }
 
     /// Get model and info by explicit ModelSpec.
@@ -419,8 +385,9 @@ impl ModelHub {
     pub fn get_model_with_info(
         &self,
         spec: &ModelSpec,
-    ) -> Result<(Arc<dyn Model>, ModelInfo, ProviderType), HubError> {
+    ) -> crate::error::Result<(Arc<dyn Model>, ModelInfo, ProviderType)> {
         self.get_or_create_model(spec)
+            .map(|(m, info, pt, _)| (m, info, pt))
     }
 
     /// Get model for a role using provided selections.
@@ -431,16 +398,16 @@ impl ModelHub {
         &self,
         role: ModelRole,
         selections: &RoleSelections,
-    ) -> Result<(Arc<dyn Model>, ProviderType), HubError> {
-        let selection =
-            selections
-                .get_or_main(role)
-                .ok_or_else(|| HubError::NoModelConfigured {
-                    identity: format!("role:{role}"),
-                })?;
+    ) -> crate::error::Result<(Arc<dyn Model>, ProviderType)> {
+        let selection = selections.get_or_main(role).ok_or_else(|| {
+            InvalidRequestSnafu {
+                message: format!("No model configured for role:{role}"),
+            }
+            .build()
+        })?;
 
         let spec = &selection.model;
-        self.get_or_create_model(spec).map(|(m, _, pt)| (m, pt))
+        self.get_or_create_model(spec).map(|(m, _, pt, _)| (m, pt))
     }
 
     // ========================================================================
@@ -454,7 +421,7 @@ impl ModelHub {
         {
             debug!(
                 provider = %spec.provider,
-                model = %spec.model,
+                model = %spec.slug,
                 "Invalidated cached model"
             );
         }
@@ -481,7 +448,7 @@ impl ModelHub {
                 cache.remove(&spec);
                 debug!(
                     provider = %spec.provider,
-                    model = %spec.model,
+                    model = %spec.slug,
                     "Invalidated cached model (provider invalidation)"
                 );
             }
@@ -513,24 +480,35 @@ impl ModelHub {
     // Private Helpers
     // ========================================================================
 
-    /// Get or create a model instance, returning model, info, and provider type.
+    /// Get or create a model instance, returning model, info, provider type, and model_options.
     fn get_or_create_model(
         &self,
         spec: &ModelSpec,
-    ) -> Result<(Arc<dyn Model>, ModelInfo, ProviderType), HubError> {
+    ) -> crate::error::Result<(
+        Arc<dyn Model>,
+        ModelInfo,
+        ProviderType,
+        HashMap<String, serde_json::Value>,
+    )> {
         // Phase 1: Check model cache (read lock)
         {
-            let cache = self.models.read().map_err(|_| HubError::LockPoisoned)?;
+            let cache = self.models.read().map_err(|_| {
+                SdkSnafu {
+                    message: "Internal lock poisoned",
+                }
+                .build()
+            })?;
             if let Some(cached) = cache.get(spec) {
                 debug!(
                     provider = %spec.provider,
-                    model = %spec.model,
+                    model = %spec.slug,
                     "Model cache hit"
                 );
                 return Ok((
                     cached.model.clone(),
                     cached.model_info.clone(),
                     cached.provider_type,
+                    cached.model_options.clone(),
                 ));
             }
         }
@@ -543,49 +521,52 @@ impl ModelHub {
         // (genuinely needed to build the HTTP client). This phase only does lightweight lookups.
         let provider_model = self
             .config
-            .resolve_provider_model(&spec.provider, &spec.model)
-            .ok_or_else(|| HubError::ModelInfoResolution {
-                model: spec.to_string(),
-                source: anyhow::anyhow!(
-                    "Model '{}' not found in provider '{}'",
-                    spec.model,
-                    spec.provider
-                ),
+            .resolve_provider_model(&spec.provider, &spec.slug)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    message: format!(
+                        "Model '{}' not found in provider '{}'",
+                        spec.slug, spec.provider
+                    ),
+                }
+                .build()
             })?;
 
-        let model_info = provider_model.info.clone();
+        let model_info = provider_model.model_info.clone();
+        let model_options = provider_model.model_options.clone();
         let api_model_name = provider_model.api_model_name();
 
         info!(
             provider = %spec.provider,
-            model = %spec.model,
+            model = %spec.slug,
             api_model = %api_model_name,
             "Creating model"
         );
 
-        let model = provider
-            .model(api_model_name)
-            .map_err(|e| HubError::ModelCreation {
-                provider: spec.provider.clone(),
-                model: spec.model.clone(),
-                source: e.into(),
-            })?;
+        // ProviderCreation: inner error is already ApiError, propagate directly
+        let model: Arc<dyn Model> = provider.model(api_model_name).map_err(ApiError::from)?;
 
         // Phase 4: Double-check and store in model cache (write lock)
         {
-            let mut cache = self.models.write().map_err(|_| HubError::LockPoisoned)?;
+            let mut cache = self.models.write().map_err(|_| {
+                SdkSnafu {
+                    message: "Internal lock poisoned",
+                }
+                .build()
+            })?;
 
             // Another thread might have created it
             if let Some(cached) = cache.get(spec) {
                 debug!(
                     provider = %spec.provider,
-                    model = %spec.model,
+                    model = %spec.slug,
                     "Model created by another thread, using existing"
                 );
                 return Ok((
                     cached.model.clone(),
                     cached.model_info.clone(),
                     cached.provider_type,
+                    cached.model_options.clone(),
                 ));
             }
 
@@ -595,21 +576,27 @@ impl ModelHub {
                     model: model.clone(),
                     model_info: model_info.clone(),
                     provider_type,
+                    model_options: model_options.clone(),
                 },
             );
         }
 
-        Ok((model, model_info, provider_type))
+        Ok((model, model_info, provider_type, model_options))
     }
 
     /// Get or create a provider instance.
     fn get_or_create_provider(
         &self,
         provider_name: &str,
-    ) -> Result<(Arc<dyn Provider>, ProviderType), HubError> {
+    ) -> crate::error::Result<(Arc<dyn Provider>, ProviderType)> {
         // Phase 1: Check provider cache (read lock)
         {
-            let cache = self.providers.read().map_err(|_| HubError::LockPoisoned)?;
+            let cache = self.providers.read().map_err(|_| {
+                SdkSnafu {
+                    message: "Internal lock poisoned",
+                }
+                .build()
+            })?;
             if let Some(cached) = cache.get(provider_name) {
                 debug!(provider = %provider_name, "Provider cache hit");
                 return Ok((cached.provider.clone(), cached.provider_type));
@@ -617,26 +604,26 @@ impl ModelHub {
         }
 
         // Phase 2: Resolve provider info and create provider
-        let provider_info =
-            self.config
-                .provider(provider_name)
-                .ok_or_else(|| HubError::ProviderResolution {
-                    provider: provider_name.to_string(),
-                    source: anyhow::anyhow!("Provider '{provider_name}' not found in config"),
-                })?;
+        let provider_info = self.config.provider(provider_name).ok_or_else(|| {
+            InvalidRequestSnafu {
+                message: format!("Provider '{provider_name}' not found in config"),
+            }
+            .build()
+        })?;
 
         info!(provider = %provider_name, "Creating provider");
-        let provider = provider_factory::create_provider(provider_info).map_err(|e| {
-            HubError::ProviderCreation {
-                provider: provider_name.to_string(),
-                source: e,
-            }
-        })?;
+        // ProviderCreation: inner error is already ApiError, propagate directly
+        let provider = provider_factory::create_provider(provider_info)?;
         let provider_type = provider_info.provider_type;
 
         // Phase 3: Double-check and store in cache (write lock)
         {
-            let mut cache = self.providers.write().map_err(|_| HubError::LockPoisoned)?;
+            let mut cache = self.providers.write().map_err(|_| {
+                SdkSnafu {
+                    message: "Internal lock poisoned",
+                }
+                .build()
+            })?;
 
             // Another thread might have created it
             if let Some(cached) = cache.get(provider_name) {

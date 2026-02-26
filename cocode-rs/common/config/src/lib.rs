@@ -28,9 +28,11 @@
 //! // Load from default path (~/.cocode)
 //! let manager = ConfigManager::from_default()?;
 //!
-//! // Get current provider/model
-//! let spec = manager.current_spec();
-//! println!("Using: {}/{}", spec.provider, spec.model);
+//! // Get current main model
+//! use cocode_protocol::model::ModelRole;
+//! if let Some(spec) = manager.current_spec_for_role(ModelRole::Main) {
+//!     println!("Using: {}/{}", spec.provider, spec.slug);
+//! }
 //!
 //! // Switch to a different provider/model
 //! let new_spec = ModelSpec::new("anthropic", "claude-sonnet-4-20250514");
@@ -81,7 +83,7 @@ pub use types::ApiKey;
 pub use types::ModelSummary;
 pub use types::ModelsFile;
 pub use types::ProviderConfig;
-pub use types::ProviderModelEntry;
+pub use types::ProviderModelConfig;
 pub use types::ProviderSummary;
 pub use types::ProvidersFile;
 // Re-export provider types from protocol
@@ -97,6 +99,7 @@ pub use json_config::ExtraMarketplaceConfig;
 pub use json_config::FeaturesConfig;
 pub use json_config::LoggingConfig;
 pub use json_config::MarketplaceSourceConfig;
+pub use json_config::ModelsConfig;
 pub use json_config::OtelJsonConfig;
 pub use json_config::PermissionsConfig;
 pub use json_config::ResolvedAppConfig;

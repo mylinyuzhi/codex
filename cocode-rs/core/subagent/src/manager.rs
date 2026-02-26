@@ -2,15 +2,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use cocode_error::BoxedError;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
+use snafu::IntoError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::Result;
 use crate::background::BackgroundAgent;
 use crate::definition::AgentDefinition;
+use crate::error::subagent_error;
 use crate::filter::filter_tools_for_agent;
 use crate::spawn::SpawnInput;
 
@@ -116,9 +120,9 @@ pub struct AgentExecuteParams {
 pub type AgentExecuteFn = Box<
     dyn Fn(
             AgentExecuteParams,
-        )
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
-        + Send
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = std::result::Result<String, BoxedError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -224,7 +228,7 @@ impl SubagentManager {
     ///
     /// Returns the unique agent ID on success. This is a basic spawn that
     /// just registers the agent without executing it.
-    pub async fn spawn(&mut self, agent_type: &str, prompt: &str) -> anyhow::Result<String> {
+    pub async fn spawn(&mut self, agent_type: &str, prompt: &str) -> Result<String> {
         let input = SpawnInput {
             agent_type: agent_type.to_string(),
             prompt: prompt.to_string(),
@@ -246,12 +250,17 @@ impl SubagentManager {
     /// 3. If resuming, loads prior output and prepends to prompt
     /// 4. Executes the agent (foreground or background)
     /// 5. Returns the result
-    pub async fn spawn_full(&mut self, mut input: SpawnInput) -> anyhow::Result<SpawnResult> {
+    pub async fn spawn_full(&mut self, mut input: SpawnInput) -> Result<SpawnResult> {
         let definition = self
             .definitions
             .iter()
             .find(|d| d.agent_type == input.agent_type)
-            .ok_or_else(|| anyhow::anyhow!("Unknown agent type: {}", input.agent_type))?
+            .ok_or_else(|| {
+                subagent_error::UnknownAgentTypeSnafu {
+                    agent_type: input.agent_type.clone(),
+                }
+                .build()
+            })?
             .clone();
 
         // Handle resume: load full transcript and reconstruct context
@@ -419,6 +428,15 @@ impl SubagentManager {
                 tokio::spawn(async move {
                     let result = execute_fn(params).await;
 
+                    if let Err(e) = &result {
+                        tracing::error!(
+                            agent_id = %agent_id_clone,
+                            status = ?e.status_code(),
+                            error = ?e,
+                            "Background subagent execution failed"
+                        );
+                    }
+
                     // Write transcript entry with prompt + output for rich resume
                     let recorder =
                         crate::transcript::TranscriptRecorder::new(output_file_clone.clone());
@@ -433,7 +451,7 @@ impl SubagentManager {
                             "status": "failed",
                             "agent_id": agent_id_clone,
                             "prompt": prompt_for_transcript,
-                            "error": e.to_string()
+                            "error": e.output_msg()
                         }),
                     };
                     if let Err(e) = recorder.record(&entry) {
@@ -526,7 +544,10 @@ impl SubagentManager {
                                 if let Some(instance) = self.agents.get_mut(&agent_id) {
                                     instance.status = AgentStatus::Failed;
                                 }
-                                return Err(e);
+                                return Err(subagent_error::ExecuteSnafu {
+                                    message: "Foreground subagent execution".to_string(),
+                                }
+                                .into_error(e));
                             }
                         }
                     }
@@ -563,6 +584,15 @@ impl SubagentManager {
                         tokio::spawn(async move {
                             let result = execute_future.await;
 
+                            if let Err(e) = &result {
+                                tracing::error!(
+                                    agent_id = %agent_id_clone,
+                                    status = ?e.status_code(),
+                                    error = ?e,
+                                    "Backgrounded-from-foreground subagent execution failed"
+                                );
+                            }
+
                             // Write transcript entry with prompt + output for rich resume
                             let recorder = crate::transcript::TranscriptRecorder::new(
                                 output_file_clone.clone(),
@@ -579,7 +609,7 @@ impl SubagentManager {
                                     "status": "failed",
                                     "agent_id": agent_id_clone,
                                     "prompt": prompt_for_transcript,
-                                    "error": e.to_string(),
+                                    "error": e.output_msg(),
                                     "transitioned_from_foreground": true
                                 }),
                             };
@@ -654,17 +684,20 @@ impl SubagentManager {
     }
 
     /// Resume a previously backgrounded agent.
-    pub async fn resume(&mut self, agent_id: &str) -> anyhow::Result<String> {
-        let instance = self
-            .agents
-            .get_mut(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found: {agent_id}"))?;
+    pub async fn resume(&mut self, agent_id: &str) -> Result<String> {
+        let instance = self.agents.get_mut(agent_id).ok_or_else(|| {
+            subagent_error::AgentNotFoundSnafu {
+                agent_id: agent_id.to_string(),
+            }
+            .build()
+        })?;
 
         if instance.status != AgentStatus::Backgrounded {
-            anyhow::bail!(
-                "Agent {agent_id} is not backgrounded (status: {:?})",
-                instance.status
-            );
+            return Err(subagent_error::AgentInvalidStateSnafu {
+                agent_id: agent_id.to_string(),
+                status: format!("{:?}", instance.status),
+            }
+            .build());
         }
 
         tracing::info!(agent_id, "Resuming backgrounded agent");

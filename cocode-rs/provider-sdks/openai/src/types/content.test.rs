@@ -37,7 +37,7 @@ fn test_input_content_image_url_with_detail() {
 
 #[test]
 fn test_input_content_function_output() {
-    let block = InputContentBlock::function_call_output("call-1", r#"{"result": 42}"#, None);
+    let block = InputContentBlock::function_call_output("call-1", r#"{"result": 42}"#);
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"function_call_output""#));
     assert!(json.contains(r#""call_id":"call-1""#));
@@ -84,10 +84,12 @@ fn test_input_file() {
 #[test]
 fn test_computer_call_output() {
     let block =
-        InputContentBlock::computer_call_output_screenshot("call-1", Some("base64".into()), None);
+        InputContentBlock::computer_call_output_screenshot("call-1", Some("file-123".into()), None);
     let json = serde_json::to_string(&block).unwrap();
     assert!(json.contains(r#""type":"computer_call_output""#));
     assert!(json.contains(r#""call_id":"call-1""#));
+    assert!(json.contains(r#""type":"computer_screenshot""#));
+    assert!(json.contains(r#""file_id":"file-123""#));
 
     let block = InputContentBlock::computer_call_output_action("call-2", Some("success".into()));
     let json = serde_json::to_string(&block).unwrap();

@@ -12,10 +12,10 @@
 //! ## Example
 //!
 //! ```no_run
-//! use cocode_shell::path_extractor::{PathExtractor, NoOpExtractor, PathExtractionResult};
+//! use cocode_shell::path_extractor::{PathExtractor, NoOpExtractor, PathExtractionResult, Result};
 //! use std::path::Path;
 //!
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> Result<()> {
 //! let extractor = NoOpExtractor;
 //!
 //! // Check if extraction is enabled
@@ -72,6 +72,9 @@ impl PathExtractionResult {
 /// Boxed future type for dyn-compatible async trait methods.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Result type for path extraction.
+pub type Result<T> = std::result::Result<T, anyhow::Error>;
+
 /// Trait for extracting file paths from command output.
 ///
 /// Implementations can use various strategies to extract paths:
@@ -101,7 +104,7 @@ pub trait PathExtractor: Send + Sync {
         command: &'a str,
         output: &'a str,
         cwd: &'a Path,
-    ) -> BoxFuture<'a, anyhow::Result<PathExtractionResult>>;
+    ) -> BoxFuture<'a, Result<PathExtractionResult>>;
 
     /// Returns true if this extractor is enabled and should be used.
     ///
@@ -122,7 +125,7 @@ impl PathExtractor for NoOpExtractor {
         _command: &'a str,
         _output: &'a str,
         _cwd: &'a Path,
-    ) -> BoxFuture<'a, anyhow::Result<PathExtractionResult>> {
+    ) -> BoxFuture<'a, Result<PathExtractionResult>> {
         Box::pin(async { Ok(PathExtractionResult::empty()) })
     }
 

@@ -64,8 +64,7 @@ cargo build --manifest-path cocode-rs/Cargo.toml
 Use `HyperError` variants:
 - `ProviderNotFound` / `ModelNotFound` - Configuration errors
 - `AuthenticationFailed` - API key issues
-- `RateLimitExceeded` - Retryable (temporary)
-- `QuotaExceeded` - NOT retryable (billing change needed)
+- `RateLimitExceeded` - Retryable (all 429s, aligned with Python SDKs)
 - `ContextWindowExceeded` - Input too long
 - `StreamIdleTimeout` - No events received
 - `Retryable { message, delay }` - Generic retryable with delay hint

@@ -61,10 +61,12 @@ use hyper_sdk::ToolCall;
 use hyper_sdk::ToolDefinition;
 use std::sync::Mutex;
 
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -81,6 +83,7 @@ use crate::compaction::format_restoration_message;
 use crate::compaction::map_message_index_to_keep_turns;
 use crate::compaction::try_session_memory_compact;
 use crate::compaction::write_session_memory;
+use crate::error::agent_loop_error;
 use crate::fallback::FallbackConfig;
 use crate::fallback::FallbackState;
 use crate::result::LoopResult;
@@ -247,19 +250,22 @@ pub struct AgentLoop {
 
 /// Builder for constructing an [`AgentLoop`].
 pub struct AgentLoopBuilder {
-    api_client: Option<ApiClient>,
-    model_hub: Option<Arc<ModelHub>>,
-    selections: Option<RoleSelections>,
-    tool_registry: Option<Arc<ToolRegistry>>,
+    // Required fields (passed via `new()`)
+    api_client: ApiClient,
+    model_hub: Arc<ModelHub>,
+    selections: RoleSelections,
+    tool_registry: Arc<ToolRegistry>,
+    context: ConversationContext,
+    event_tx: mpsc::Sender<LoopEvent>,
+
+    // Optional fields (set via builder methods)
     message_history: Option<MessageHistory>,
-    context: Option<ConversationContext>,
     config: LoopConfig,
     fallback_config: FallbackConfig,
     compaction_config: CompactionConfig,
     compact_config: CompactConfig,
     system_reminder_config: SystemReminderConfig,
     hooks: Option<Arc<HookRegistry>>,
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
     cancel_token: CancellationToken,
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     is_subagent: bool,
@@ -283,22 +289,31 @@ pub struct AgentLoopBuilder {
 }
 
 impl AgentLoopBuilder {
-    /// Create a new builder with default configuration.
-    pub fn new() -> Self {
+    /// Create a new builder with the 6 required fields.
+    ///
+    /// All other fields can be set via builder methods.
+    pub fn new(
+        api_client: ApiClient,
+        model_hub: Arc<ModelHub>,
+        selections: RoleSelections,
+        tool_registry: Arc<ToolRegistry>,
+        context: ConversationContext,
+        event_tx: mpsc::Sender<LoopEvent>,
+    ) -> Self {
         Self {
-            api_client: None,
-            model_hub: None,
-            selections: None,
-            tool_registry: None,
+            api_client,
+            model_hub,
+            selections,
+            tool_registry,
+            context,
+            event_tx,
             message_history: None,
-            context: None,
             config: LoopConfig::default(),
             fallback_config: FallbackConfig::default(),
             compaction_config: CompactionConfig::default(),
             compact_config: CompactConfig::default(),
             system_reminder_config: SystemReminderConfig::default(),
             hooks: None,
-            event_tx: None,
             cancel_token: CancellationToken::new(),
             extraction_agent: None,
             is_subagent: false,
@@ -322,45 +337,8 @@ impl AgentLoopBuilder {
         }
     }
 
-    pub fn api_client(mut self, client: ApiClient) -> Self {
-        self.api_client = Some(client);
-        self
-    }
-
-    /// Set the model hub for model acquisition and caching.
-    ///
-    /// The hub provides:
-    /// - Provider and model caching
-    /// - `InferenceContext` for request building
-    ///
-    /// Note: ModelHub is role-agnostic. Use `selections()` to set role mappings.
-    pub fn model_hub(mut self, hub: Arc<ModelHub>) -> Self {
-        self.model_hub = Some(hub);
-        self
-    }
-
-    /// Set the role selections for this agent loop.
-    ///
-    /// Selections map roles (Main, Fast, Plan, etc.) to model specs and thinking levels.
-    /// This should be cloned from the Session at creation time. Subagents receive
-    /// their own copy, isolating them from future changes to the parent's settings.
-    pub fn selections(mut self, selections: RoleSelections) -> Self {
-        self.selections = Some(selections);
-        self
-    }
-
-    pub fn tool_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
-        self.tool_registry = Some(registry);
-        self
-    }
-
     pub fn message_history(mut self, history: MessageHistory) -> Self {
         self.message_history = Some(history);
-        self
-    }
-
-    pub fn context(mut self, ctx: ConversationContext) -> Self {
-        self.context = Some(ctx);
         self
     }
 
@@ -393,11 +371,6 @@ impl AgentLoopBuilder {
 
     pub fn hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
-        self
-    }
-
-    pub fn event_tx(mut self, tx: mpsc::Sender<LoopEvent>) -> Self {
-        self.event_tx = Some(tx);
         self
     }
 
@@ -477,7 +450,7 @@ impl AgentLoopBuilder {
     /// use cocode_protocol::AgentStatus;
     ///
     /// let (status_tx, status_rx) = watch::channel(AgentStatus::default());
-    /// let loop_builder = AgentLoop::builder()
+    /// let loop_builder = AgentLoop::builder(api_client, model_hub, selections, tool_registry, context, event_tx)
     ///     .status_tx(status_tx)
     ///     // ... other config
     ///     .build();
@@ -551,11 +524,6 @@ impl AgentLoopBuilder {
     }
 
     /// Build the [`AgentLoop`].
-    ///
-    /// # Panics
-    /// Panics if required fields (`api_client`, `tool_registry`,
-    /// `context`, `event_tx`, `model_hub`, `selections`) have not been set.
-    #[allow(clippy::expect_used)]
     pub fn build(self) -> AgentLoop {
         let model_name = self
             .config
@@ -578,19 +546,18 @@ impl AgentLoopBuilder {
             .status_tx
             .unwrap_or_else(|| watch::channel(AgentStatus::default()).0);
 
-        let context = self.context.expect("context is required");
-        let cwd: std::path::PathBuf = context.environment.cwd.clone();
+        let cwd: std::path::PathBuf = self.context.environment.cwd.clone();
         let shell_executor = self
             .shell_executor
             .unwrap_or_else(|| ShellExecutor::new(cwd));
 
         AgentLoop {
-            api_client: self.api_client.expect("api_client is required"),
-            model_hub: self.model_hub.expect("model_hub is required"),
-            selections: self.selections.expect("selections is required"),
-            tool_registry: self.tool_registry.expect("tool_registry is required"),
+            api_client: self.api_client,
+            model_hub: self.model_hub,
+            selections: self.selections,
+            tool_registry: self.tool_registry,
             message_history: self.message_history.unwrap_or_default(),
-            context,
+            context: self.context,
             config: self.config,
             fallback_config: self.fallback_config,
             compaction_config: self.compaction_config,
@@ -601,7 +568,7 @@ impl AgentLoopBuilder {
             shared_approval_store,
             hooks: self.hooks.unwrap_or_else(|| Arc::new(HookRegistry::new())),
             async_hook_tracker: Arc::new(AsyncHookTracker::new()),
-            event_tx: self.event_tx.expect("event_tx is required"),
+            event_tx: self.event_tx,
             turn_number: 0,
             cancel_token: self.cancel_token,
             fallback_state: FallbackState::new(model_name),
@@ -636,16 +603,24 @@ impl AgentLoopBuilder {
     }
 }
 
-impl Default for AgentLoopBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AgentLoop {
     /// Create a builder for constructing an agent loop.
-    pub fn builder() -> AgentLoopBuilder {
-        AgentLoopBuilder::new()
+    pub fn builder(
+        api_client: ApiClient,
+        model_hub: Arc<ModelHub>,
+        selections: RoleSelections,
+        tool_registry: Arc<ToolRegistry>,
+        context: ConversationContext,
+        event_tx: mpsc::Sender<LoopEvent>,
+    ) -> AgentLoopBuilder {
+        AgentLoopBuilder::new(
+            api_client,
+            model_hub,
+            selections,
+            tool_registry,
+            context,
+            event_tx,
+        )
     }
 
     /// Queue a command for real-time steering.
@@ -738,7 +713,7 @@ impl AgentLoop {
     ///
     /// Returns a `LoopResult` describing how the loop terminated along with
     /// aggregate token usage and the final response text.
-    pub async fn run(&mut self, initial_message: &str) -> anyhow::Result<LoopResult> {
+    pub async fn run(&mut self, initial_message: &str) -> crate::error::Result<LoopResult> {
         info!(
             max_turns = ?self.config.max_turns,
             "Starting agent loop"
@@ -884,7 +859,7 @@ impl AgentLoop {
     pub async fn run_and_process_queue(
         &mut self,
         initial_message: &str,
-    ) -> anyhow::Result<LoopResult> {
+    ) -> crate::error::Result<LoopResult> {
         self.run(initial_message).await
     }
 
@@ -902,7 +877,7 @@ impl AgentLoop {
         &mut self,
         query_tracking: &mut QueryTracking,
         auto_compact_tracking: &mut AutoCompactTracking,
-    ) -> anyhow::Result<LoopResult> {
+    ) -> crate::error::Result<LoopResult> {
         // ── STEP 1: Signal stream_request_start ──
         self.emit(LoopEvent::StreamRequestStart).await;
 
@@ -1308,11 +1283,11 @@ impl AgentLoop {
                 Box::pin(async move {
                     let (model, _provider) = hub
                         .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
-                        .map_err(|e| anyhow::anyhow!("Failed to get model: {e}"))?;
+                        .map_err(cocode_error::boxed_err)?;
                     let response = model
                         .generate_object(input.request)
                         .await
-                        .map_err(|e| anyhow::anyhow!("generate_object failed: {e}"))?;
+                        .map_err(|e| cocode_error::boxed(e, cocode_error::StatusCode::External))?;
                     Ok(ModelCallResult { response })
                 })
             });
@@ -1759,7 +1734,7 @@ impl AgentLoop {
         executor: &StreamingToolExecutor,
         injected_messages: &[InjectedMessage],
         query_tracking: &QueryTracking,
-    ) -> anyhow::Result<CollectedResponse> {
+    ) -> crate::error::Result<CollectedResponse> {
         debug!(turn_id, "Sending API request");
 
         // Get model and build request using ModelHub
@@ -1768,7 +1743,7 @@ impl AgentLoop {
         let (ctx, model) = self
             .model_hub
             .prepare_main_with_selections(&self.selections, session_id, self.turn_number)
-            .map_err(|e| anyhow::anyhow!("Failed to prepare main model: {e}"))?;
+            .context(agent_loop_error::PrepareMainModelSnafu)?;
 
         // Build messages and tools using existing logic (model-aware filtering)
         let (messages, tools) = self.build_messages_and_tools(injected_messages, &ctx.model_info);
@@ -1806,7 +1781,7 @@ impl AgentLoop {
             otel.record_api_request(1, status, error.as_deref(), api_connect_duration);
         }
 
-        let mut stream = stream_result.map_err(|e| anyhow::anyhow!("API stream error: {e}"))?;
+        let mut stream = stream_result.context(agent_loop_error::ApiStreamSnafu)?;
 
         let mut all_content: Vec<ContentBlock> = Vec::new();
         let mut final_usage: Option<TokenUsage> = None;
@@ -1841,17 +1816,11 @@ impl AgentLoop {
                         }).await;
 
                         // Handle based on recovery strategy
-                        match self.config.stall_detection.recovery {
-                            cocode_protocol::StallRecovery::Abort => {
-                                return Err(anyhow::anyhow!(
-                                    "Stream stalled for {stall_timeout:?}, aborting"
-                                ));
-                            }
+                        let strategy = self.config.stall_detection.recovery;
+                        match strategy {
+                            cocode_protocol::StallRecovery::Abort => {}
                             cocode_protocol::StallRecovery::Retry => {
                                 warn!(turn_id, timeout = ?stall_timeout, "Stream stalled, retrying");
-                                return Err(anyhow::anyhow!(
-                                    "Stream stalled for {stall_timeout:?}, retry requested"
-                                ));
                             }
                             cocode_protocol::StallRecovery::Fallback => {
                                 // Attempt model fallback
@@ -1876,11 +1845,13 @@ impl AgentLoop {
                                             otel.counter("cocode.model.fallback", 1, &[]);
                                         }
                                     }
-                                return Err(anyhow::anyhow!(
-                                    "Stream stalled for {stall_timeout:?}, fallback triggered"
-                                ));
                             }
                         }
+
+                        return agent_loop_error::StreamStallSnafu {
+                            timeout: format!("{stall_timeout:?}"),
+                            strategy,
+                        }.fail();
                     }
                 }
             } else {
@@ -1913,7 +1884,11 @@ impl AgentLoop {
                         otel.counter("cocode.model.fallback", 1, &[]);
                     }
                 }
-                anyhow::anyhow!("Stream error: {e}")
+                error!("Stream error from provider: {e}");
+                agent_loop_error::StreamSnafu {
+                    message: e.to_string(),
+                }
+                .build()
             })?;
 
             // Update stall timer on any event
@@ -1988,7 +1963,8 @@ impl AgentLoop {
                         }
                     }
 
-                    return Err(anyhow::anyhow!("Stream error: {msg}"));
+                    error!("Stream error from provider: {msg}");
+                    return agent_loop_error::StreamSnafu { message: msg }.fail();
                 }
                 QueryResultType::Retry | QueryResultType::Event => {
                     // Continue
@@ -2150,7 +2126,7 @@ impl AgentLoop {
         tracking: &mut AutoCompactTracking,
         turn_id: &str,
         query_tracking: &QueryTracking,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         // Execute PreCompact hooks before starting compaction
         let hook_ctx = cocode_hooks::HookContext::new(
             cocode_hooks::HookEventType::PreCompact,
@@ -2227,7 +2203,7 @@ impl AgentLoop {
             let (ctx, compact_model) = self
                 .model_hub
                 .prepare_compact_with_selections(&self.selections, session_id, self.turn_number)
-                .map_err(|e| anyhow::anyhow!("Failed to prepare compact model: {e}"))?;
+                .context(agent_loop_error::PrepareCompactModelSnafu)?;
 
             // Use RequestBuilder for the summary request
             let summary_request = RequestBuilder::new(ctx)
@@ -2730,7 +2706,7 @@ impl AgentLoop {
         summary: SessionMemorySummary,
         turn_id: &str,
         tracking: &mut AutoCompactTracking,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         let tokens_before = self.message_history.estimate_tokens();
 
         info!(

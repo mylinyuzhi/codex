@@ -9,18 +9,6 @@ pub struct InputTokensDetails {
     /// Number of tokens retrieved from cache.
     #[serde(default)]
     pub cached_tokens: i32,
-
-    /// Number of text tokens.
-    #[serde(default)]
-    pub text_tokens: i32,
-
-    /// Number of image tokens.
-    #[serde(default)]
-    pub image_tokens: i32,
-
-    /// Number of audio tokens.
-    #[serde(default)]
-    pub audio_tokens: i32,
 }
 
 /// Detailed breakdown of output tokens.
@@ -29,23 +17,17 @@ pub struct OutputTokensDetails {
     /// Number of reasoning tokens.
     #[serde(default)]
     pub reasoning_tokens: i32,
-
-    /// Number of text tokens.
-    #[serde(default)]
-    pub text_tokens: i32,
-
-    /// Number of audio tokens.
-    #[serde(default)]
-    pub audio_tokens: i32,
 }
 
 /// Token usage information.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     /// Number of input tokens.
+    #[serde(default)]
     pub input_tokens: i32,
 
     /// Number of output tokens.
+    #[serde(default)]
     pub output_tokens: i32,
 
     /// Total number of tokens.
@@ -70,16 +52,6 @@ impl Usage {
     /// Get cached tokens from input details (prompt caching).
     pub fn cached_tokens(&self) -> i32 {
         self.input_tokens_details.cached_tokens
-    }
-
-    /// Get text tokens from input details.
-    pub fn input_text_tokens(&self) -> i32 {
-        self.input_tokens_details.text_tokens
-    }
-
-    /// Get image tokens from input details.
-    pub fn image_tokens(&self) -> i32 {
-        self.input_tokens_details.image_tokens
     }
 }
 

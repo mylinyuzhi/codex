@@ -17,7 +17,6 @@ use cocode_loop::StopReason;
 use cocode_otel::otel_provider::OtelProvider;
 use cocode_protocol::LoopError;
 use cocode_protocol::LoopEvent;
-use cocode_protocol::RoleSelection;
 use cocode_protocol::SubmissionId;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
@@ -32,6 +31,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt;
@@ -199,8 +199,8 @@ pub async fn run_tui(
     // Initialize file logging for TUI mode (needs snapshot for OTel config)
     let _logging_state = init_tui_logging(config, &snapshot, verbose);
 
-    // Build the initial RoleSelection from ConfigManager (single source of truth)
-    let initial_selection = config.current_main_selection();
+    // Build initial RoleSelections for ALL configured roles
+    let initial_selections = config.build_all_selections();
 
     // Create channels for TUI-Agent communication
     let (agent_tx, agent_rx, command_tx, command_rx) = create_channels(256);
@@ -215,7 +215,7 @@ pub async fn run_tui(
         agent_tx,
         snapshot.clone(),
         config.clone(),
-        initial_selection,
+        initial_selections,
         title,
         cwd,
         system_prompt_suffix,
@@ -257,7 +257,7 @@ async fn run_agent_driver(
     event_tx: mpsc::Sender<LoopEvent>,
     snapshot: Arc<Config>,
     config: ConfigManager,
-    initial_selection: RoleSelection,
+    initial_selections: cocode_protocol::RoleSelections,
     title: Option<String>,
     working_dir: PathBuf,
     system_prompt_suffix: Option<String>,
@@ -265,8 +265,8 @@ async fn run_agent_driver(
 ) {
     info!("Agent driver started");
 
-    // Create session with model spec
-    let mut session = Session::new(working_dir.clone(), initial_selection);
+    // Create session with all configured role selections
+    let mut session = Session::with_selections(working_dir.clone(), initial_selections);
     if let Some(t) = title {
         session.set_title(t);
     }
@@ -698,7 +698,7 @@ async fn run_turn_concurrent(
     should_shutdown: &mut bool,
     pending_plan_exit_option: &mut Option<cocode_protocol::PlanExitOption>,
     pending_feedback: &mut Option<String>,
-) -> anyhow::Result<TokenUsage> {
+) -> Result<TokenUsage, cocode_error::BoxedError> {
     // Extract shared handles BEFORE borrowing state for the turn.
     // These are cheap clones (CancellationToken and Arc).
     let cancel_token = state.cancel_token();
@@ -738,7 +738,7 @@ async fn run_skill_turn_concurrent(
     command_rx: &mut mpsc::Receiver<UserCommand>,
     deferred: &mut Vec<UserCommand>,
     should_shutdown: &mut bool,
-) -> anyhow::Result<cocode_session::TurnResult> {
+) -> Result<cocode_session::TurnResult, cocode_error::BoxedError> {
     let cancel_token = state.cancel_token();
     let shared_queue = state.shared_queued_commands();
     let question_responder = state.question_responder();
@@ -938,7 +938,10 @@ async fn handle_idle_command(
                 return;
             }
 
-            let new_session = Session::new(working_dir.clone(), selection);
+            // Preserve non-main roles from current session
+            let mut new_selections = state.session.selections.clone();
+            new_selections.set(ModelRole::Main, selection);
+            let new_session = Session::with_selections(working_dir.clone(), new_selections);
 
             let new_snapshot = match config
                 .build_config(ConfigOverrides::default().with_cwd(working_dir.clone()))
@@ -1394,7 +1397,7 @@ async fn handle_plan_exit_option(
 async fn emit_turn_result(
     event_tx: &mpsc::Sender<LoopEvent>,
     turn_id: &str,
-    result: anyhow::Result<TokenUsage>,
+    result: Result<TokenUsage, cocode_error::BoxedError>,
     error_code: &str,
 ) {
     match result {
@@ -1412,12 +1415,14 @@ async fn emit_turn_result(
                 .await;
         }
         Err(e) => {
-            error!("Turn failed: {e}");
+            // 日志：使用内部错误的 Debug（stack_trace_debug）输出虚拟堆栈，避免系统 backtrace 噪音。
+            // 这里的 `e` 不再是 anyhow::Error。
+            error!(error = ?e, status = ?e.status_code(), "Turn failed");
             let _ = event_tx
                 .send(LoopEvent::Error {
                     error: LoopError {
                         code: error_code.to_string(),
-                        message: e.to_string(),
+                        message: e.output_msg(),
                         recoverable: true,
                     },
                 })
@@ -1703,7 +1708,7 @@ async fn run_turn_with_events(
     input: &str,
     event_tx: &mpsc::Sender<LoopEvent>,
     _turn_id: &str,
-) -> anyhow::Result<TokenUsage> {
+) -> Result<TokenUsage, cocode_error::BoxedError> {
     let result = state.run_turn_streaming(input, event_tx.clone()).await?;
     Ok(result.usage)
 }

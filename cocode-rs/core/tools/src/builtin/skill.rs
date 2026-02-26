@@ -166,7 +166,8 @@ impl Tool for SkillTool {
                     Err(e) => {
                         tracing::warn!(
                             skill_name,
-                            error = %e,
+                            status = ?e.status_code(),
+                            error = ?e,
                             "Fork context spawn failed; falling back to inline execution"
                         );
                         // Fall through to inline execution

@@ -12,7 +12,7 @@
 //! use hyper_sdk::HyperClient;
 //! use std::sync::Arc;
 //!
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = Arc::new(HyperClient::from_env()?);
 //! let model_spec = ModelSpec::new("anthropic", "claude-haiku");
 //!
@@ -148,7 +148,7 @@ impl PathExtractor for LlmPathExtractor {
         command: &'a str,
         output: &'a str,
         cwd: &'a Path,
-    ) -> BoxFuture<'a, anyhow::Result<PathExtractionResult>> {
+    ) -> BoxFuture<'a, cocode_shell::path_extractor::Result<PathExtractionResult>> {
         Box::pin(async move {
             let start = Instant::now();
 
@@ -168,7 +168,7 @@ impl PathExtractor for LlmPathExtractor {
             // Get model from client
             let model = match self
                 .client
-                .model(&self.model_spec.provider, &self.model_spec.model)
+                .model(&self.model_spec.provider, &self.model_spec.slug)
             {
                 Ok(m) => m,
                 Err(e) => {

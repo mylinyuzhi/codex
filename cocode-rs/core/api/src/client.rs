@@ -398,6 +398,12 @@ impl ApiClient {
                             tokio::time::sleep(delay).await;
                         }
                         RetryDecision::GiveUp => {
+                            if retry_ctx.current_attempt() > 0 {
+                                tracing::warn!(
+                                    diagnostics = ?retry_ctx.diagnostics(),
+                                    "All retries exhausted"
+                                );
+                            }
                             return Err(api_error);
                         }
                     }
@@ -493,6 +499,109 @@ impl ApiClient {
         };
 
         Ok(UnifiedStream::from_stream(processor))
+    }
+
+    /// Make a streaming request with provider-level failover.
+    ///
+    /// Tries each model in order. For each model, runs the full `stream_request()`
+    /// logic (including retries). On non-retryable error, moves to the next model.
+    /// On success, returns immediately.
+    ///
+    /// If all models fail, returns a `RetriesExhausted` error with combined diagnostics.
+    ///
+    /// # Arguments
+    ///
+    /// * `models` - Ordered list of fallback models to try.
+    /// * `request` - The generate request.
+    /// * `options` - Stream options.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use cocode_api::{ApiClient, StreamOptions};
+    /// use hyper_sdk::{OpenAIProvider, AnthropicProvider, Provider, GenerateRequest, Message};
+    ///
+    /// let openai = OpenAIProvider::from_env()?;
+    /// let anthropic = AnthropicProvider::from_env()?;
+    ///
+    /// let primary = openai.model("gpt-4o")?;
+    /// let fallback = anthropic.model("claude-sonnet-4-20250514")?;
+    ///
+    /// let client = ApiClient::new();
+    /// let request = GenerateRequest::new(vec![Message::user("Hello!")]);
+    /// let models: Vec<&dyn hyper_sdk::Model> = vec![&*primary, &*fallback];
+    ///
+    /// let stream = client
+    ///     .stream_request_with_fallback(&models, request, StreamOptions::streaming())
+    ///     .await?;
+    /// ```
+    pub async fn stream_request_with_fallback(
+        &self,
+        models: &[&dyn Model],
+        request: GenerateRequest,
+        options: StreamOptions,
+    ) -> Result<UnifiedStream> {
+        if models.is_empty() {
+            return Err(ApiError::from(hyper_sdk::HyperError::ModelNotFound(
+                "no models provided for fallback".to_string(),
+            )));
+        }
+
+        if models.len() == 1 {
+            return self.stream_request(models[0], request, options).await;
+        }
+
+        let mut all_failures: Vec<String> = Vec::new();
+        let mut last_error: Option<ApiError> = None;
+
+        for (i, model) in models.iter().enumerate() {
+            info!(
+                model = %model.model_name(),
+                provider = %model.provider(),
+                index = i,
+                total = models.len(),
+                "Trying model for failover"
+            );
+
+            match self
+                .stream_request(*model, request.clone(), options.clone())
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(err) => {
+                    all_failures.push(format!(
+                        "[{}:{}] {}",
+                        model.provider(),
+                        model.model_name(),
+                        err
+                    ));
+
+                    info!(
+                        model = %model.model_name(),
+                        provider = %model.provider(),
+                        error = %err,
+                        remaining = models.len() - i - 1,
+                        "Model failed, trying next fallback"
+                    );
+
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        // All models failed
+        tracing::warn!(
+            diagnostics = ?all_failures,
+            "All fallback models exhausted"
+        );
+        Err(crate::error::api_error::RetriesExhaustedSnafu {
+            attempts: models.len() as i32,
+            message: last_error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "all models failed".to_string()),
+            diagnostics: all_failures,
+        }
+        .build())
     }
 
     /// Internal: make a non-streaming request.

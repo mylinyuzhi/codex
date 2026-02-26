@@ -87,10 +87,17 @@ pub enum InputContentBlock {
     /// File reference.
     InputFile {
         /// File ID from OpenAI Files API.
-        file_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
         /// Optional file name.
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
+        /// Inline file data.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        /// URL to the file.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
     },
     /// Function call output (tool result).
     FunctionCallOutput {
@@ -98,9 +105,12 @@ pub enum InputContentBlock {
         call_id: String,
         /// Output of the function call.
         output: String,
-        /// Whether this is an error result.
+        /// Unique ID.
         #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
+        id: Option<String>,
+        /// Status of the output.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// Computer call output (screenshot/result).
     #[serde(rename = "computer_call_output")]
@@ -112,6 +122,12 @@ pub enum InputContentBlock {
         /// Acknowledged safety checks.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         acknowledged_safety_checks: Vec<String>,
+        /// Unique ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Status of the output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// File search call output.
     #[serde(rename = "file_search_call_output")]
@@ -206,18 +222,20 @@ pub enum AudioFormat {
 
 /// Computer call output data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum ComputerCallOutputData {
     /// Screenshot output.
-    Screenshot {
-        /// Base64-encoded image data.
+    #[serde(rename = "computer_screenshot")]
+    ComputerScreenshot {
+        /// File ID reference.
         #[serde(skip_serializing_if = "Option::is_none")]
-        image_data: Option<String>,
+        file_id: Option<String>,
         /// Image URL.
         #[serde(skip_serializing_if = "Option::is_none")]
         image_url: Option<String>,
     },
     /// Action output.
+    #[serde(rename = "action")]
     Action {
         /// Action result.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -282,15 +300,12 @@ impl InputContentBlock {
     }
 
     /// Create a function call output content block.
-    pub fn function_call_output(
-        call_id: impl Into<String>,
-        output: impl Into<String>,
-        is_error: Option<bool>,
-    ) -> Self {
+    pub fn function_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
         Self::FunctionCallOutput {
             call_id: call_id.into(),
             output: output.into(),
-            is_error,
+            id: None,
+            status: None,
         }
     }
 
@@ -305,32 +320,35 @@ impl InputContentBlock {
     /// Create a file reference content block.
     pub fn file(file_id: impl Into<String>) -> Self {
         Self::InputFile {
-            file_id: file_id.into(),
+            file_id: Some(file_id.into()),
             filename: None,
+            file_data: None,
+            file_url: None,
         }
     }
 
     /// Create a file reference content block with filename.
     pub fn file_with_name(file_id: impl Into<String>, filename: impl Into<String>) -> Self {
         Self::InputFile {
-            file_id: file_id.into(),
+            file_id: Some(file_id.into()),
             filename: Some(filename.into()),
+            file_data: None,
+            file_url: None,
         }
     }
 
     /// Create a computer call output content block with screenshot.
     pub fn computer_call_output_screenshot(
         call_id: impl Into<String>,
-        image_data: Option<String>,
+        file_id: Option<String>,
         image_url: Option<String>,
     ) -> Self {
         Self::ComputerCallOutput {
             call_id: call_id.into(),
-            output: ComputerCallOutputData::Screenshot {
-                image_data,
-                image_url,
-            },
+            output: ComputerCallOutputData::ComputerScreenshot { file_id, image_url },
             acknowledged_safety_checks: vec![],
+            id: None,
+            status: None,
         }
     }
 
@@ -340,6 +358,8 @@ impl InputContentBlock {
             call_id: call_id.into(),
             output: ComputerCallOutputData::Action { result },
             acknowledged_safety_checks: vec![],
+            id: None,
+            status: None,
         }
     }
 
@@ -490,22 +510,45 @@ pub enum Annotation {
         /// File ID referenced.
         file_id: String,
         /// Index in the text.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        index: Option<i32>,
+        #[serde(default)]
+        index: i32,
+        /// Filename of the cited file.
+        #[serde(default)]
+        filename: String,
     },
     /// URL citation.
     UrlCitation {
         /// URL referenced.
         url: String,
         /// Title of the page.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
+        #[serde(default)]
+        title: String,
         /// Start index in text.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        start_index: Option<i32>,
+        #[serde(default)]
+        start_index: i32,
         /// End index in text.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        end_index: Option<i32>,
+        #[serde(default)]
+        end_index: i32,
+    },
+    /// Container file citation.
+    ContainerFileCitation {
+        /// Container ID.
+        container_id: String,
+        /// End index in text.
+        end_index: i32,
+        /// File ID.
+        file_id: String,
+        /// Filename.
+        filename: String,
+        /// Start index in text.
+        start_index: i32,
+    },
+    /// File path annotation.
+    FilePath {
+        /// File ID.
+        file_id: String,
+        /// Index in the text.
+        index: i32,
     },
 }
 

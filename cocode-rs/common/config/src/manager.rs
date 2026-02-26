@@ -54,9 +54,11 @@ use tracing::info;
 /// // Load from default path (~/.cocode)
 /// let manager = ConfigManager::from_default()?;
 ///
-/// // Get current provider/model
-/// let spec = manager.current_spec();
-/// println!("Current: {}/{}", spec.provider, spec.model);
+/// // Get current main model
+/// use cocode_protocol::model::ModelRole;
+/// if let Some(spec) = manager.current_spec_for_role(ModelRole::Main) {
+///     println!("Current: {}/{}", spec.provider, spec.slug);
+/// }
 ///
 /// // Switch to a different model
 /// let new_spec = ModelSpec::new("anthropic", "claude-sonnet-4-20250514");
@@ -165,7 +167,11 @@ impl ConfigManager {
     ///
     /// Returns the api_model_name if set and non-empty, otherwise returns the slug.
     /// The result is an owned `String` because the resolver is behind a `RwLock`.
-    pub fn resolve_api_model_name(&self, provider: &str, model: &str) -> Result<String, ConfigError> {
+    pub fn resolve_api_model_name(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<String, ConfigError> {
         let resolver = self.read_resolver()?;
         Ok(resolver.resolve_api_model_name(provider, model).to_string())
     }
@@ -213,34 +219,35 @@ impl ConfigManager {
     /// 1. Runtime overrides (set via `switch_spec()`)
     /// 2. JSON config with profile resolution (`config.json`)
     /// 3. Built-in defaults ("openai", "gpt-5")
-    pub fn current_spec(&self) -> ModelSpec {
-        self.current_spec_for_role(ModelRole::Main)
-    }
-
     /// Get the current active provider and model for a specific role as a `ModelSpec`.
     ///
     /// Resolution order (highest to lowest precedence):
-    /// 1. Runtime overrides (per-role selections)
-    /// 2. JSON config with profile resolution (`config.json`)
-    /// 3. Built-in defaults ("openai", "gpt-5")
-    pub fn current_spec_for_role(&self, role: ModelRole) -> ModelSpec {
-        // 1. Check runtime overrides first (supports all roles)
+    /// 1. Runtime overrides (per-role, no main fallback)
+    /// 2. JSON config with profile resolution (per-role, no main fallback)
+    ///
+    /// Returns `None` if the specific role isn't configured.
+    /// Role→main fallback belongs at the consumer level (`RoleSelections::get_or_main()`).
+    pub fn current_spec_for_role(&self, role: ModelRole) -> Option<ModelSpec> {
+        // 1. Check runtime overrides first (per-role, no main fallback)
         if let Ok(runtime) = self.read_runtime()
-            && let Some(selection) = runtime.get_or_main(role)
+            && let Some(selection) = runtime.get(role)
         {
-            return selection.model.clone();
+            return Some(selection.model.clone());
         }
 
-        // 2. Check JSON config (with profile resolution)
+        // 2. Check JSON config (with profile resolution, per-role, no main fallback)
         if let Ok(config) = self.read_config() {
             let resolved = config.resolve();
-            if let Some(spec) = resolved.models.get(role) {
-                return spec.clone();
+            if let Some(spec) = resolved.models.get_direct(role) {
+                let mut spec = spec.clone();
+                if let Ok(info) = self.resolve_model_info(&spec.provider, &spec.slug) {
+                    spec.enrich_from_model_info(&info);
+                }
+                return Some(spec);
             }
         }
 
-        // 3. Fallback to built-in default
-        ModelSpec::new("openai", "gpt-5")
+        None
     }
 
     /// Switch to a specific provider and model using a typed `ModelSpec`.
@@ -251,11 +258,16 @@ impl ConfigManager {
         // Validate the provider
         self.validate_provider(&spec.provider)?;
 
+        // Resolve full selection with thinking levels from ModelInfo
+        let selection = self
+            .resolve_selection(&spec.provider, &spec.slug)
+            .unwrap_or_else(|_| RoleSelection::new(spec.clone()));
+
         // Update runtime overrides (in-memory)
         let mut runtime = self.write_runtime()?;
-        runtime.set(ModelRole::Main, RoleSelection::new(spec.clone()));
+        runtime.set(ModelRole::Main, selection);
 
-        info!(provider = %spec.provider, model = %spec.model, "Switched to new model");
+        info!(provider = %spec.provider, model = %spec.slug, "Switched to new model");
         Ok(())
     }
 
@@ -267,13 +279,18 @@ impl ConfigManager {
         // Validate the provider
         self.validate_provider(&spec.provider)?;
 
+        // Resolve full selection with thinking levels from ModelInfo
+        let selection = self
+            .resolve_selection(&spec.provider, &spec.slug)
+            .unwrap_or_else(|_| RoleSelection::new(spec.clone()));
+
         // Update runtime selections
         let mut runtime = self.write_runtime()?;
-        runtime.set(role, RoleSelection::new(spec.clone()));
+        runtime.set(role, selection);
 
         info!(
             provider = %spec.provider,
-            model = %spec.model,
+            model = %spec.slug,
             role = %role,
             "Switched model for role"
         );
@@ -302,7 +319,7 @@ impl ConfigManager {
 
         info!(
             provider = %spec.provider,
-            model = %spec.model,
+            model = %spec.slug,
             role = %role,
             thinking = %thinking_level,
             "Switched model with thinking level for role"
@@ -436,10 +453,53 @@ impl ConfigManager {
     }
 
     /// Build a `RoleSelection` for the current main model.
-    pub fn current_main_selection(&self) -> RoleSelection {
-        let spec = self.current_spec();
-        self.resolve_selection(&spec.provider, &spec.model)
-            .unwrap_or_else(|_| RoleSelection::new(spec))
+    ///
+    /// Returns `None` if main model is not configured.
+    pub fn current_main_selection(&self) -> Option<RoleSelection> {
+        let spec = self.current_spec_for_role(ModelRole::Main)?;
+        Some(
+            self.resolve_selection(&spec.provider, &spec.slug)
+                .unwrap_or_else(|_| RoleSelection::new(spec)),
+        )
+    }
+
+    /// Build `RoleSelections` for ALL configured roles.
+    ///
+    /// Populates each role with correct provider_type, display_name,
+    /// thinking_level, and supported_thinking_levels from ModelInfo.
+    /// Non-configured roles remain None (fallback to main via `get_or_main()`).
+    pub fn build_all_selections(&self) -> RoleSelections {
+        let mut selections = RoleSelections::default();
+
+        // Start from JSON config
+        let models = if let Ok(config) = self.read_config() {
+            config.resolve().models
+        } else {
+            return selections;
+        };
+
+        // Apply runtime overrides
+        let runtime = self.read_runtime().ok();
+
+        for &role in ModelRole::all() {
+            // Runtime override takes precedence
+            if let Some(ref rt) = runtime {
+                if let Some(sel) = rt.get(role) {
+                    selections.set(role, sel.clone());
+                    continue;
+                }
+            }
+
+            // Then JSON config (no main fallback)
+            if let Some(spec) = models.get_direct(role) {
+                let selection = self
+                    .resolve_selection(&spec.provider, &spec.slug)
+                    .unwrap_or_else(|_| RoleSelection::new(spec.clone()));
+                selections.set(role, selection);
+            }
+        }
+
+        selections
     }
 
     /// Build `RoleSelection`s for all configured models across all providers.

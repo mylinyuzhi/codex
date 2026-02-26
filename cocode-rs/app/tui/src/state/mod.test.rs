@@ -166,13 +166,7 @@ fn test_with_selection() {
     let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
     let state = AppState::with_selection(selection);
     assert_eq!(
-        state
-            .session
-            .current_selection
-            .as_ref()
-            .unwrap()
-            .model
-            .model,
+        state.session.current_selection.as_ref().unwrap().model.slug,
         "gpt-5"
     );
 }

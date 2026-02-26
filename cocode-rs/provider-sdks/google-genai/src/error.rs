@@ -36,10 +36,6 @@ pub enum GenAiError {
     #[error("Context length exceeded: {0}")]
     ContextLengthExceeded(String),
 
-    /// Quota exceeded.
-    #[error("Quota exceeded: {0}")]
-    QuotaExceeded(String),
-
     /// Content blocked by safety filters.
     #[error("Content blocked: {0}")]
     ContentBlocked(String),
@@ -56,12 +52,6 @@ impl GenAiError {
             }
             _ => false,
         }
-    }
-
-    /// Check if this is a quota exceeded error.
-    pub fn is_quota_exceeded(&self) -> bool {
-        matches!(self, GenAiError::QuotaExceeded(_))
-            || matches!(self, GenAiError::Api { code: 429, .. })
     }
 
     /// Check if this is a context length exceeded error.

@@ -685,11 +685,11 @@ fn map_anthropic_error(e: &ant::AnthropicError) -> HyperError {
                     delay: None,
                 };
             }
-            // Check for quota exceeded patterns in API errors
+            if *status == 429 {
+                return HyperError::RateLimitExceeded(message.clone());
+            }
             let lower_msg = message.to_lowercase();
-            if lower_msg.contains("quota") || lower_msg.contains("insufficient_quota") {
-                HyperError::QuotaExceeded(message.clone())
-            } else if lower_msg.contains("context") && lower_msg.contains("length") {
+            if lower_msg.contains("context") && lower_msg.contains("length") {
                 HyperError::ContextWindowExceeded(message.clone())
             } else {
                 HyperError::ProviderError {

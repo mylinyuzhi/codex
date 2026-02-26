@@ -20,26 +20,26 @@ fn test_error_constructors() {
 }
 
 #[test]
-fn test_is_retriable() {
+fn test_is_retryable() {
     assert!(
         TimeoutSnafu {
             timeout_secs: 30i64
         }
         .build()
-        .is_retriable()
+        .is_retryable()
     );
     assert!(
         IoSnafu {
             message: "network error"
         }
         .build()
-        .is_retriable()
+        .is_retryable()
     );
-    assert!(!NotFoundSnafu { name: "test" }.build().is_retriable());
+    assert!(!NotFoundSnafu { name: "test" }.build().is_retryable());
     assert!(
         !PermissionDeniedSnafu { message: "denied" }
             .build()
-            .is_retriable()
+            .is_retryable()
     );
 }
 

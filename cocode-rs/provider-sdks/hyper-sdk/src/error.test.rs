@@ -31,7 +31,6 @@ fn test_is_retryable() {
     assert!(HyperError::NetworkError("connection refused".to_string()).is_retryable());
 
     assert!(!HyperError::AuthenticationFailed("invalid key".to_string()).is_retryable());
-    assert!(!HyperError::QuotaExceeded("quota exceeded".to_string()).is_retryable());
 }
 
 #[test]
@@ -89,9 +88,6 @@ fn test_new_error_display() {
     let err = HyperError::StreamIdleTimeout(Duration::from_secs(60));
     assert!(err.to_string().contains("60"));
 
-    let err = HyperError::QuotaExceeded("monthly limit".to_string());
-    assert_eq!(err.to_string(), "quota exceeded: monthly limit");
-
     let err = HyperError::PreviousResponseNotFound("resp_123".to_string());
     assert_eq!(err.to_string(), "previous response not found: resp_123");
 
@@ -131,7 +127,6 @@ fn test_all_error_variants_display() {
             delay: Some(Duration::from_secs(1)),
         },
         HyperError::PreviousResponseNotFound("resp_123".into()),
-        HyperError::QuotaExceeded("monthly".into()),
         HyperError::StreamIdleTimeout(Duration::from_secs(60)),
     ];
 
@@ -177,7 +172,6 @@ fn test_retryable_classification_exhaustive() {
         HyperError::ConfigError("cfg".into()),
         HyperError::Internal("int".into()),
         HyperError::PreviousResponseNotFound("resp".into()),
-        HyperError::QuotaExceeded("quota".into()),
         HyperError::StreamIdleTimeout(Duration::from_secs(60)),
     ];
     for err in non_retryable {
@@ -204,7 +198,6 @@ fn test_retry_delay_only_from_retryable() {
     let other_errors: Vec<HyperError> = vec![
         HyperError::RateLimitExceeded("rate".into()),
         HyperError::NetworkError("net".into()),
-        HyperError::QuotaExceeded("quota".into()),
     ];
     for err in other_errors {
         assert_eq!(
@@ -260,12 +253,8 @@ fn test_error_from_serde_json() {
 }
 
 #[test]
-fn test_quota_vs_rate_limit_distinction() {
-    // Quota exceeded is NOT retryable (requires billing change)
-    let quota = HyperError::QuotaExceeded("monthly quota".into());
-    assert!(!quota.is_retryable());
-
-    // Rate limit IS retryable (temporary)
+fn test_rate_limit_is_retryable() {
+    // All rate limits are retryable (aligned with Python SDKs)
     let rate = HyperError::RateLimitExceeded("too many requests".into());
     assert!(rate.is_retryable());
 }
@@ -301,4 +290,204 @@ fn test_provider_error_with_special_characters() {
     let display = err.to_string();
     assert!(display.contains("error_code_123"));
     assert!(display.contains("quotes"));
+}
+
+// =========================================================================
+// H1: Secret scrubbing tests
+// =========================================================================
+
+#[test]
+fn test_scrub_secret_patterns_sk_prefix() {
+    assert_eq!(
+        scrub_secret_patterns("API key sk-abc123xyz is invalid"),
+        "API key [REDACTED] is invalid"
+    );
+}
+
+#[test]
+fn test_scrub_secret_patterns_github_tokens() {
+    assert_eq!(
+        scrub_secret_patterns("Token ghp_abc123 failed"),
+        "Token [REDACTED] failed"
+    );
+    assert_eq!(
+        scrub_secret_patterns("Token gho_xyz789 failed"),
+        "Token [REDACTED] failed"
+    );
+    assert_eq!(
+        scrub_secret_patterns("Token ghu_abc123 failed"),
+        "Token [REDACTED] failed"
+    );
+    assert_eq!(
+        scrub_secret_patterns("Token github_pat_abc123 failed"),
+        "Token [REDACTED] failed"
+    );
+}
+
+#[test]
+fn test_scrub_secret_patterns_slack_tokens() {
+    assert_eq!(
+        scrub_secret_patterns("Slack xoxb-123-456 error"),
+        "Slack [REDACTED] error"
+    );
+    assert_eq!(
+        scrub_secret_patterns("Slack xoxp-123-456 error"),
+        "Slack [REDACTED] error"
+    );
+}
+
+#[test]
+fn test_scrub_secret_patterns_bearer() {
+    assert_eq!(
+        scrub_secret_patterns("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9 failed"),
+        "Authorization: [REDACTED] failed"
+    );
+}
+
+#[test]
+fn test_scrub_secret_patterns_token_header() {
+    assert_eq!(
+        scrub_secret_patterns("Authorization: token abc123def456 failed"),
+        "Authorization: [REDACTED] failed"
+    );
+}
+
+#[test]
+fn test_scrub_secret_patterns_no_match() {
+    let input = "No secrets in this message";
+    assert_eq!(scrub_secret_patterns(input), input);
+}
+
+#[test]
+fn test_scrub_secret_patterns_multiple_tokens() {
+    let result = scrub_secret_patterns("Keys sk-key1 and sk-key2 both failed");
+    assert_eq!(result, "Keys [REDACTED] and [REDACTED] both failed");
+}
+
+#[test]
+fn test_scrub_secret_patterns_empty() {
+    assert_eq!(scrub_secret_patterns(""), "");
+}
+
+#[test]
+fn test_sanitize_api_error_scrubs_and_truncates() {
+    let msg = sanitize_api_error("Key sk-secret123 failed with error", 20);
+    assert!(!msg.contains("sk-secret123"));
+    assert!(msg.contains("[REDACTED]"));
+}
+
+#[test]
+fn test_sanitize_api_error_no_truncation_needed() {
+    let msg = sanitize_api_error("short", 100);
+    assert_eq!(msg, "short");
+}
+
+#[test]
+fn test_sanitize_api_error_truncation() {
+    let long_msg = "a".repeat(200);
+    let result = sanitize_api_error(&long_msg, 50);
+    assert_eq!(result.len(), 53); // 50 + "..."
+    assert!(result.ends_with("..."));
+}
+
+#[test]
+fn test_sanitize_api_error_multibyte_utf8() {
+    // CJK characters are 3 bytes each in UTF-8
+    let msg = sanitize_api_error("错误信息：密钥无效", 5);
+    assert!(msg.starts_with("错误信息："));
+    assert!(msg.ends_with("..."));
+    // Should not panic on multi-byte boundary
+}
+
+#[test]
+fn test_sanitize_api_error_multibyte_with_scrub() {
+    // Multi-byte chars + secret that gets scrubbed
+    let msg = sanitize_api_error("错误密钥sk-abc123", 5);
+    assert!(!msg.contains("sk-abc123"));
+    assert!(msg.ends_with("..."));
+}
+
+#[test]
+fn test_sanitize_api_error_emoji() {
+    // Emoji are 4 bytes each in UTF-8 — must not panic
+    let msg = sanitize_api_error("🔑🔐🔒🔓🗝️ secret", 3);
+    assert!(msg.starts_with("🔑🔐🔒"));
+    assert!(msg.ends_with("..."));
+}
+
+// =========================================================================
+// M1: Improved retry-after parsing tests
+// =========================================================================
+
+#[test]
+fn test_parse_retry_after_header_format() {
+    // HTTP header format: "Retry-After: 5"
+    assert_eq!(
+        parse_retry_after("Retry-After: 5"),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(
+        parse_retry_after("Retry-After: 10"),
+        Some(Duration::from_secs(10))
+    );
+    assert_eq!(
+        parse_retry_after("Retry-After: 2.5"),
+        Some(Duration::from_secs_f64(2.5))
+    );
+}
+
+#[test]
+fn test_parse_retry_after_header_space_format() {
+    // Space variant: "Retry-After 5"
+    assert_eq!(
+        parse_retry_after("Retry-After 5"),
+        Some(Duration::from_secs(5))
+    );
+}
+
+#[test]
+fn test_parse_retry_after_json_field_format() {
+    // JSON field format: "retry_after: 10"
+    assert_eq!(
+        parse_retry_after("retry_after: 10"),
+        Some(Duration::from_secs(10))
+    );
+    assert_eq!(
+        parse_retry_after("retry_after 5"),
+        Some(Duration::from_secs(5))
+    );
+}
+
+#[test]
+fn test_parse_retry_after_case_insensitive() {
+    assert_eq!(
+        parse_retry_after("RETRY-AFTER: 5"),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(
+        parse_retry_after("RETRY_AFTER: 5"),
+        Some(Duration::from_secs(5))
+    );
+}
+
+#[test]
+fn test_parse_retry_after_capped_at_30s() {
+    // Values > 30s should be capped
+    assert_eq!(
+        parse_retry_after("try again in 60s"),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(
+        parse_retry_after("Retry-After: 120"),
+        Some(Duration::from_secs(30))
+    );
+}
+
+#[test]
+fn test_parse_retry_after_within_message() {
+    // Embedded in a longer error message
+    assert_eq!(
+        parse_retry_after("Rate limited. Retry-After: 5. Please wait."),
+        Some(Duration::from_secs(5))
+    );
 }

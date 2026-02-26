@@ -75,10 +75,10 @@ impl std::fmt::Display for ModelRole {
 /// }"#).unwrap();
 ///
 /// // Fast role returns the configured model
-/// assert_eq!(roles.get(ModelRole::Fast).unwrap().model, "claude-haiku");
+/// assert_eq!(roles.get(ModelRole::Fast).unwrap().slug, "claude-haiku");
 ///
 /// // Vision role falls back to main (not configured)
-/// assert_eq!(roles.get(ModelRole::Vision).unwrap().model, "claude-opus-4");
+/// assert_eq!(roles.get(ModelRole::Vision).unwrap().slug, "claude-opus-4");
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelRoles {
@@ -132,6 +132,19 @@ impl ModelRoles {
             ModelRole::Compact => &self.compact,
         };
         specific.as_ref().or(self.main.as_ref())
+    }
+
+    /// Get model for a role WITHOUT falling back to main.
+    pub fn get_direct(&self, role: ModelRole) -> Option<&ModelSpec> {
+        match role {
+            ModelRole::Main => self.main.as_ref(),
+            ModelRole::Fast => self.fast.as_ref(),
+            ModelRole::Vision => self.vision.as_ref(),
+            ModelRole::Review => self.review.as_ref(),
+            ModelRole::Plan => self.plan.as_ref(),
+            ModelRole::Explore => self.explore.as_ref(),
+            ModelRole::Compact => self.compact.as_ref(),
+        }
     }
 
     /// Get the main model directly (no fallback).

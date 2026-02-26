@@ -86,41 +86,31 @@ fn test_providers_file_from_vec() {
 }
 
 #[test]
-fn test_provider_model_entry_serde() {
+fn test_provider_model_config_serde() {
     let json = r#"{
         "slug": "deepseek-r1",
-        "model_id": "ep-20250101-xxxxx",
-        "timeout_secs": 300,
-        "max_output_tokens": 16384,
-        "default_thinking_level": {"effort": "high", "budget_tokens": 32000}
+        "api_model_name": "ep-20250101-xxxxx"
     }"#;
 
-    let entry: ProviderModelEntry = serde_json::from_str(json).expect("deserialize");
+    let entry: ProviderModelConfig = serde_json::from_str(json).expect("deserialize");
     assert_eq!(entry.slug(), "deepseek-r1");
-    assert_eq!(entry.model_alias, Some("ep-20250101-xxxxx".to_string()));
-    assert_eq!(entry.model_info.timeout_secs, Some(300));
-    assert_eq!(entry.model_info.max_output_tokens, Some(16384));
-    let level = entry.model_info.default_thinking_level.unwrap();
-    assert_eq!(level.budget_tokens, Some(32000));
+    assert_eq!(entry.api_model_name, Some("ep-20250101-xxxxx".to_string()));
 }
 
 #[test]
-fn test_provider_model_entry_api_model_name() {
-    let entry1 = ProviderModelEntry::new("gpt-5");
+fn test_provider_model_config_api_model_name() {
+    let entry1 = ProviderModelConfig::new("gpt-5");
     assert_eq!(entry1.api_model_name(), "gpt-5");
 
-    let entry2 = ProviderModelEntry::with_alias("deepseek-r1", "ep-xxxxx");
+    let entry2 = ProviderModelConfig::with_api_model_name("deepseek-r1", "ep-xxxxx");
     assert_eq!(entry2.api_model_name(), "ep-xxxxx");
 }
 
 #[test]
-fn test_provider_model_entry_empty_alias_falls_back() {
-    let entry = ProviderModelEntry {
-        model_info: ModelInfo {
-            slug: "test-model".to_string(),
-            ..Default::default()
-        },
-        model_alias: Some("".to_string()),
+fn test_provider_model_config_empty_alias_falls_back() {
+    let entry = ProviderModelConfig {
+        slug: "test-model".to_string(),
+        api_model_name: Some("".to_string()),
         model_options: HashMap::new(),
     };
     // Empty alias should fall back to slug
@@ -149,7 +139,7 @@ fn test_provider_config_with_models() {
         "wire_api": "chat",
         "models": [
             {"slug": "gpt-5"},
-            {"slug": "gpt-4o", "timeout_secs": 120}
+            {"slug": "gpt-4o", "api_model_name": "gpt-4o-2024-08-06"}
         ]
     }"#;
 
@@ -164,5 +154,5 @@ fn test_provider_config_with_models() {
     assert_eq!(gpt5.slug(), "gpt-5");
 
     let gpt4o = config.find_model("gpt-4o").expect("gpt-4o exists");
-    assert_eq!(gpt4o.model_info.timeout_secs, Some(120));
+    assert_eq!(gpt4o.api_model_name(), "gpt-4o-2024-08-06");
 }

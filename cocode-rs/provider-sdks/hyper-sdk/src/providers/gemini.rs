@@ -236,7 +236,9 @@ impl Model for GeminiModel {
         // Apply thinking config from unified request config and/or provider-specific options
         config.thinking_config = build_gemini_thinking_config(&request);
 
-        // Apply catchall extra params from provider options
+        // Apply catchall extra params via config.extra → GenerationConfig.extra → #[serde(flatten)]
+        // This flows into the nested generationConfig object, allowing override of typed fields
+        // like temperature, top_p, seed, etc.
         if let Some(ref options) = request.provider_options
             && let Some(gem_opts) = downcast_options::<GeminiOptions>(options)
             && !gem_opts.extra.is_empty()
@@ -295,7 +297,7 @@ impl Model for GeminiModel {
         // Apply thinking config from unified request config and/or provider-specific options
         config.thinking_config = build_gemini_thinking_config(&request);
 
-        // Apply catchall extra params from provider options
+        // Apply catchall extra params via config.extra → GenerationConfig.extra → #[serde(flatten)]
         if let Some(ref options) = request.provider_options
             && let Some(gem_opts) = downcast_options::<GeminiOptions>(options)
             && !gem_opts.extra.is_empty()
@@ -559,8 +561,6 @@ fn convert_gemini_error(err: gem::GenAiError) -> HyperError {
         gem::GenAiError::Parse(msg) => HyperError::Internal(format!("Parse error: {msg}")),
         gem::GenAiError::Validation(msg) => HyperError::InvalidRequest(msg),
         gem::GenAiError::ContextLengthExceeded(msg) => HyperError::ContextWindowExceeded(msg),
-        // QuotaExceeded is NOT retryable (requires billing change)
-        gem::GenAiError::QuotaExceeded(msg) => HyperError::QuotaExceeded(msg),
         gem::GenAiError::ContentBlocked(msg) => HyperError::ProviderError {
             code: "content_blocked".to_string(),
             message: msg,
@@ -676,6 +676,10 @@ fn convert_finish_reason(reason: gem::types::FinishReason) -> FinishReason {
         gem::types::FinishReason::FinishReasonUnspecified => FinishReason::Stop,
         gem::types::FinishReason::ImageSafety => FinishReason::ContentFilter,
         gem::types::FinishReason::UnexpectedToolCall => FinishReason::Stop,
+        gem::types::FinishReason::ImageProhibitedContent => FinishReason::ContentFilter,
+        gem::types::FinishReason::NoImage => FinishReason::Stop,
+        gem::types::FinishReason::ImageRecitation => FinishReason::ContentFilter,
+        gem::types::FinishReason::ImageOther => FinishReason::Stop,
     }
 }
 

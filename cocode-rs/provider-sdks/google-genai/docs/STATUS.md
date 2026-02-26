@@ -109,7 +109,7 @@ Reference: [python-genai](https://github.com/googleapis/python-genai) @ `feae46d
 - [x] All enum types: HarmCategory, HarmBlockThreshold, HarmProbability, BlockedReason, FinishReason
 
 ### Error Handling ✅
-- [x] `GenAiError` - Configuration, Network, Api, Parse, Validation, ContextLengthExceeded, QuotaExceeded, ContentBlocked
+- [x] `GenAiError` - Configuration, Network, Api, Parse, Validation, ContextLengthExceeded, ContentBlocked
 - [x] Retryable error detection
 - [x] Error conversion from reqwest/serde_json
 

@@ -407,10 +407,17 @@ fn convert_ark_response(response: ark::Response) -> Result<GenerateResponse, Hyp
                 content.push(ContentBlock::tool_use(call_id, name, args));
             }
             ark::OutputItem::Reasoning {
-                content: reasoning, ..
+                content: reasoning_content,
+                encrypted_content,
+                ..
             } => {
+                let text = reasoning_content
+                    .as_ref()
+                    .map(|items| items.iter().map(|c| c.text.as_str()).collect::<String>())
+                    .or_else(|| encrypted_content.as_ref().map(|_| String::new()))
+                    .unwrap_or_default();
                 content.push(ContentBlock::Thinking {
-                    content: reasoning.clone(),
+                    content: text,
                     signature: None,
                 });
             }
@@ -464,7 +471,6 @@ fn map_ark_error(e: ark::ArkError) -> HyperError {
             message: "rate limit exceeded".to_string(),
             delay: retry_after,
         },
-        ark::ArkError::QuotaExceeded => HyperError::QuotaExceeded("quota exceeded".to_string()),
         ark::ArkError::ContextWindowExceeded => {
             HyperError::ContextWindowExceeded("context window exceeded".to_string())
         }

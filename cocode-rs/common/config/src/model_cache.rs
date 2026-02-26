@@ -110,7 +110,7 @@ impl ModelCache {
 
         // PHASE 2: Resolve each unique model ONCE into cache
         for spec in model_specs {
-            if let Ok(info) = resolve_fn(&spec.provider, &spec.model) {
+            if let Ok(info) = resolve_fn(&spec.provider, &spec.slug) {
                 self.insert(spec, info);
             }
         }

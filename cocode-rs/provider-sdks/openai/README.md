@@ -474,6 +474,191 @@ InputContentBlock::McpCallOutput {
 InputContentBlock::custom_tool_call_output("call_xyz", "Tool result...")
 ```
 
+### Advanced: Reusing Output Items as Input (ResponseInputItem parity)
+
+The Python SDK exposes a `ResponseInputItem` type that lets you feed whole
+output items (messages, tool calls, reasoning, etc.) back into the model as
+input on subsequent turns.
+
+The Rust SDK provides the same capability while staying close to the wire
+format:
+
+- Every `Response` contains an `output: Vec<OutputItem>` list.
+- Each `OutputItem` can be serialized to JSON using
+  `OutputItem::to_input_item_value()`.
+- You can build a `ConversationParam` directly from a list of `OutputItem`s
+  using `ConversationParam::from_output_items` and pass it to
+  `ResponseCreateParams::conversation(...)`.
+
+This lets you use the model's own previous outputs (including intermediate
+tool calls and reasoning) as structured context for the next request.
+
+```rust
+use openai_sdk::{Client, ResponseCreateParams, InputMessage, ConversationParam};
+
+#[tokio::main]
+async fn main() -> openai_sdk::Result<()> {
+    let client = Client::from_env()?;
+
+    // First turn: let the model think and potentially call tools
+    let first = client.responses().create(
+        ResponseCreateParams::new("gpt-4o", vec![
+            InputMessage::user_text("Plan a weekend trip and think step by step."),
+        ]),
+    ).await?;
+
+    // Build a conversation that reuses all output items from the first turn
+    let conversation = ConversationParam::from_output_items(&first.output);
+
+    // Second turn: ask the model to continue from its previous outputs
+    let params = ResponseCreateParams::new("gpt-4o", vec![
+        InputMessage::user_text("Continue from where you left off and finalize the plan."),
+    ])
+    .conversation(conversation);
+
+    let second = client.responses().create(params).await?;
+    println!("{}", second.text());
+
+    Ok(())
+}
+```
+
+For more than two turns, you generally want to accumulate all prior
+`OutputItem`s (from turns 1..=n-1) and feed them back as conversation
+context on turn n. One straightforward pattern is to maintain a list of
+JSON items and extend it after each response:
+
+```rust
+use openai_sdk::{Client, ResponseCreateParams, InputMessage, ConversationParam};
+use serde_json::Value;
+
+#[tokio::main]
+async fn main() -> openai_sdk::Result<()> {
+    let client = Client::from_env()?;
+
+    // Collect all prior output items as JSON for conversation context.
+    let mut conversation_items: Vec<Value> = Vec::new();
+
+    let turns = vec![
+        "First, brainstorm 3 possible weekend trips.",
+        "Now pick one option and expand it into a day-by-day plan.",
+        "Finally, summarize the plan in 3 bullet points.",
+    ];
+
+    for (i, prompt) in turns.iter().enumerate() {
+        let mut params = ResponseCreateParams::new(
+            "gpt-4o",
+            vec![InputMessage::user_text(prompt)],
+        );
+
+        // For turn > 0, attach all previous output items as conversation
+        // context (this mirrors Python's ResponseInputItem behavior).
+        if !conversation_items.is_empty() {
+            let conv = ConversationParam::Items {
+                items: conversation_items.clone(),
+            };
+            params = params.conversation(conv);
+        }
+
+        let response = client.responses().create(params).await?;
+        println!("Turn {}: {}", i + 1, response.text());
+
+        // Append this turn's output items so that future turns see them.
+        conversation_items.extend(
+            response
+                .output
+                .iter()
+                .map(|item| item.to_input_item_value()),
+        );
+    }
+
+    Ok(())
+}
+```
+
+If you need even more control (for example, mixing previous `OutputItem`s
+with custom input items), you can:
+
+- Call `OutputItem::to_input_item_value()` to get `serde_json::Value` for
+  each output item.
+- Construct your own `ConversationParam::Items { items: Vec<Value> }` and
+  include both previous outputs and custom JSON items.
+
+#### Mixed context example: tool call + tool output
+
+The following example shows how to:
+
+- Keep the previous tool call `OutputItem` in the conversation context, and
+- Provide the corresponding tool output as a `FunctionCallOutput` content
+  block in the next user message.
+
+```rust
+use openai_sdk::{
+    Client,
+    ConversationParam,
+    InputContentBlock,
+    InputMessage,
+    ResponseCreateParams,
+};
+use serde_json::Value;
+
+#[tokio::main]
+async fn main() -> openai_sdk::Result<()> {
+    let client = Client::from_env()?;
+
+    // First turn: the model decides to call a function
+    let first = client.responses().create(
+        ResponseCreateParams::new("gpt-4o", vec![
+            InputMessage::user_text("Use a tool to fetch the current weather in Tokyo."),
+        ]),
+    ).await?;
+
+    // Collect all output items (including the function_call) as JSON
+    let mut conversation_items: Vec<Value> = first
+        .output
+        .iter()
+        .map(|item| item.to_input_item_value())
+        .collect();
+
+    // Assume there was at least one function call and we executed it client-side
+    let (call_id, tool_result) = (
+        "call_123",
+        r#"{"temp": "22C", "condition": "sunny"}"#,
+    );
+
+    // Second turn: send both the prior tool call (via conversation) and
+    // the tool output (via FunctionCallOutput) back to the model.
+    let mut params = ResponseCreateParams::new("gpt-4o", vec![
+        InputMessage {
+            role: openai_sdk::Role::User,
+            content: vec![
+                InputContentBlock::text(
+                    "Here is the result of your tool call, please explain it.",
+                ),
+                InputContentBlock::FunctionCallOutput {
+                    call_id: call_id.to_string(),
+                    output: tool_result.to_string(),
+                    is_error: None,
+                },
+            ],
+        },
+    ]);
+
+    // Attach previous output items as conversation context (ResponseInputItem parity)
+    if !conversation_items.is_empty() {
+        let conv = ConversationParam::Items {
+            items: conversation_items.clone(),
+        };
+        params = params.conversation(conv);
+    }
+
+    let second = client.responses().create(params).await?;
+    println!("Second turn: {}", second.text());
+
+    Ok(())
+}
+```
+
 ### Embeddings API
 
 ```rust
@@ -525,11 +710,8 @@ match client.responses().create(params).await {
     Err(OpenAIError::RateLimited { retry_after }) => {
         println!("Rate limited, retry after {:?}", retry_after);
     }
-    Err(OpenAIError::ContextLengthExceeded { max_tokens }) => {
-        println!("Context too long, max: {}", max_tokens);
-    }
-    Err(OpenAIError::QuotaExceeded) => {
-        println!("API quota exceeded");
+    Err(OpenAIError::ContextWindowExceeded) => {
+        println!("Context window exceeded, reduce input size");
     }
     Err(e) => eprintln!("Error: {}", e),
 }

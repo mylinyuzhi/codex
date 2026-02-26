@@ -4,7 +4,7 @@ use super::*;
 fn test_role_selection_new() {
     let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"));
     assert_eq!(selection.model.provider, "anthropic");
-    assert_eq!(selection.model.model, "claude-opus-4");
+    assert_eq!(selection.model.slug, "claude-opus-4");
     assert!(selection.thinking_level.is_none());
     assert!(selection.supported_thinking_levels.is_none());
 }
@@ -96,11 +96,11 @@ fn test_role_selections_set_and_get() {
     );
 
     assert_eq!(
-        selections.get(ModelRole::Main).unwrap().model.model,
+        selections.get(ModelRole::Main).unwrap().model.slug,
         "claude-opus-4"
     );
     assert_eq!(
-        selections.get(ModelRole::Fast).unwrap().model.model,
+        selections.get(ModelRole::Fast).unwrap().model.slug,
         "claude-haiku"
     );
 }
@@ -117,7 +117,7 @@ fn test_role_selections_get_or_main() {
     // Fast not set, falls back to main
     let fast = selections.get_or_main(ModelRole::Fast);
     assert!(fast.is_some());
-    assert_eq!(fast.unwrap().model.model, "claude-opus-4");
+    assert_eq!(fast.unwrap().model.slug, "claude-opus-4");
 
     // Set fast explicitly
     selections.set(
@@ -126,7 +126,7 @@ fn test_role_selections_get_or_main() {
     );
 
     let fast = selections.get_or_main(ModelRole::Fast);
-    assert_eq!(fast.unwrap().model.model, "claude-haiku");
+    assert_eq!(fast.unwrap().model.slug, "claude-haiku");
 }
 
 #[test]
@@ -193,16 +193,13 @@ fn test_role_selections_merge() {
 
     // main unchanged
     assert_eq!(
-        base.get(ModelRole::Main).unwrap().model.model,
+        base.get(ModelRole::Main).unwrap().model.slug,
         "claude-opus-4"
     );
     // fast overridden
-    assert_eq!(
-        base.get(ModelRole::Fast).unwrap().model.model,
-        "gpt-4o-mini"
-    );
+    assert_eq!(base.get(ModelRole::Fast).unwrap().model.slug, "gpt-4o-mini");
     // vision added
-    assert_eq!(base.get(ModelRole::Vision).unwrap().model.model, "gpt-4o");
+    assert_eq!(base.get(ModelRole::Vision).unwrap().model.slug, "gpt-4o");
 }
 
 #[test]

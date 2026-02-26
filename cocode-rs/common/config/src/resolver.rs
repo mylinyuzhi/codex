@@ -5,9 +5,8 @@
 //! **Precedence (highest to lowest):**
 //! 1. Runtime overrides (API calls, `/model` command)
 //! 2. Environment variables (for secrets)
-//! 3. Model entry in provider config (flattened ModelInfo + model_options)
-//! 4. User model config (`models.json`)
-//! 5. Built-in defaults (compiled into binary)
+//! 3. User model config (`models.json`)
+//! 4. Built-in defaults (compiled into binary)
 
 use crate::builtin;
 use crate::error::ConfigError;
@@ -81,8 +80,6 @@ impl ConfigResolver {
     /// Resolution order (later overrides earlier):
     /// 1. Built-in defaults
     /// 2. User model config (models.json)
-    /// 3. Model entry config (flattened ModelInfo fields)
-    /// 4. Model entry options (merged into ModelInfo.options)
     ///
     /// # Arguments
     /// * `provider_name` - Provider identifier (e.g., "openai", "anthropic")
@@ -181,7 +178,7 @@ impl ConfigResolver {
         self.providers
             .get(provider_name)
             .and_then(|p| p.find_model(slug))
-            .map(super::types::ProviderModelEntry::api_model_name)
+            .map(super::types::ProviderModelConfig::api_model_name)
             .unwrap_or(slug)
     }
 
@@ -251,12 +248,16 @@ impl ConfigResolver {
                 self.resolve_model_info_for_provider(provider_config, slug)
             };
 
-            // Create ProviderModel with api_model_name preserved
-            let provider_model = if let Some(alias) = &model_entry.model_alias {
+            // Create ProviderModel with api_model_name and model_options preserved
+            let mut provider_model = if let Some(alias) = &model_entry.api_model_name {
                 ProviderModel::with_api_model_name(model_info, alias)
             } else {
                 ProviderModel::new(model_info)
             };
+            if !model_entry.model_options.is_empty() {
+                provider_model =
+                    provider_model.with_model_options(model_entry.model_options.clone());
+            }
             models.insert(slug.to_string(), provider_model);
         }
 
@@ -280,10 +281,15 @@ impl ConfigResolver {
 
     /// Resolve and merge model config layers, returning a `ModelInfo`.
     ///
-    /// This is used when building `ProviderInfo.models` to store fully resolved configs.
+    /// Resolution layers:
+    /// 1. Built-in defaults
+    /// 2. User model config (models.json)
+    ///
+    /// Per-provider ModelInfo overrides are intentionally not supported —
+    /// model metadata belongs in models.json or builtins.
     ///
     /// # Arguments
-    /// * `provider_config` - Provider configuration
+    /// * `provider_config` - Provider configuration (used for timeout fallback)
     /// * `slug` - Model configuration identifier
     fn resolve_model_info_for_provider(
         &self,
@@ -292,18 +298,7 @@ impl ConfigResolver {
     ) -> ModelInfo {
         let mut config = self.resolve_base_model_info(slug);
 
-        // Layer 3: Model entry config and options
-        if let Some(model_entry) = provider_config.find_model(slug) {
-            config.merge_from(&model_entry.model_info);
-            if !model_entry.model_options.is_empty() {
-                let opts = config.options.get_or_insert_with(HashMap::new);
-                for (k, v) in &model_entry.model_options {
-                    opts.insert(k.clone(), v.clone());
-                }
-            }
-        }
-
-        // Timeout fallback
+        // Timeout fallback from provider config
         if config.timeout_secs.is_none() {
             config.timeout_secs = Some(provider_config.timeout_secs);
         }

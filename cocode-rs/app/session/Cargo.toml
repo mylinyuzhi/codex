@@ -9,6 +9,7 @@ description = "Session management for cocode multi-provider LLM CLI"
 # Internal - common
 cocode-protocol.workspace = true
 cocode-config.workspace = true
+cocode-error.workspace = true
 
 # Internal - core
 cocode-api.workspace = true
@@ -51,6 +52,8 @@ tokio = { workspace = true, features = ["fs", "sync"] }
 tokio-util.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

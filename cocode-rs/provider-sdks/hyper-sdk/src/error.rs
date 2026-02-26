@@ -103,10 +103,6 @@ pub enum HyperError {
     #[error("previous response not found: {0}")]
     PreviousResponseNotFound(String),
 
-    /// Quota exceeded (different from rate limit, requires billing change).
-    #[error("quota exceeded: {0}")]
-    QuotaExceeded(String),
-
     /// Stream idle timeout (no events received within timeout period).
     #[error("stream idle timeout after {0:?}")]
     StreamIdleTimeout(Duration),
@@ -157,10 +153,17 @@ impl From<serde_json::Error> for HyperError {
     }
 }
 
+/// Maximum retry-after value (30 seconds). Values above this are capped.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+
 /// Parse retry-after delay from an error message.
 ///
-/// Looks for patterns like "try again in Xs" or "try again in Xms" in the message.
-/// This is commonly used by rate-limited APIs to suggest when to retry.
+/// Looks for multiple common patterns:
+/// - `"try again in Xs"` / `"try again in Xms"` / `"try again in X seconds"`
+/// - `"Retry-After: X"` / `"Retry-After X"` (HTTP header format, seconds)
+/// - `"retry_after: X"` / `"retry_after X"` (JSON field format, seconds)
+///
+/// Parsed values are capped at 30 seconds.
 ///
 /// # Examples
 ///
@@ -171,9 +174,25 @@ impl From<serde_json::Error> for HyperError {
 /// assert_eq!(parse_retry_after("try again in 5s"), Some(Duration::from_secs(5)));
 /// assert_eq!(parse_retry_after("try again in 500ms"), Some(Duration::from_millis(500)));
 /// assert_eq!(parse_retry_after("try again in 2.5 seconds"), Some(Duration::from_secs_f64(2.5)));
+/// assert_eq!(parse_retry_after("Retry-After: 5"), Some(Duration::from_secs(5)));
+/// assert_eq!(parse_retry_after("retry_after: 10"), Some(Duration::from_secs(10)));
 /// assert_eq!(parse_retry_after("some error"), None);
 /// ```
 pub fn parse_retry_after(message: &str) -> Option<Duration> {
+    // Try "try again in Xs" pattern first
+    if let Some(duration) = parse_try_again_pattern(message) {
+        return Some(duration.min(MAX_RETRY_AFTER));
+    }
+
+    // Try "Retry-After" header / JSON field patterns
+    if let Some(duration) = parse_retry_after_field(message) {
+        return Some(duration.min(MAX_RETRY_AFTER));
+    }
+
+    None
+}
+
+fn parse_try_again_pattern(message: &str) -> Option<Duration> {
     let re = retry_after_regex();
     let captures = re.captures(message)?;
 
@@ -192,6 +211,14 @@ pub fn parse_retry_after(message: &str) -> Option<Duration> {
     }
 }
 
+fn parse_retry_after_field(message: &str) -> Option<Duration> {
+    let re = retry_after_field_regex();
+    let captures = re.captures(message)?;
+
+    let value: f64 = captures.get(1)?.as_str().parse().ok()?;
+    Some(Duration::from_secs_f64(value))
+}
+
 #[allow(clippy::expect_used)]
 fn retry_after_regex() -> &'static regex_lite::Regex {
     static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
@@ -199,6 +226,111 @@ fn retry_after_regex() -> &'static regex_lite::Regex {
         regex_lite::Regex::new(r"(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)")
             .expect("invalid regex")
     })
+}
+
+#[allow(clippy::expect_used)]
+fn retry_after_field_regex() -> &'static regex_lite::Regex {
+    static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        // Matches: "Retry-After: 5", "Retry-After 5", "retry_after: 10", "retry_after 10"
+        regex_lite::Regex::new(r"(?i)retry[-_]after[:\s]\s*(\d+(?:\.\d+)?)").expect("invalid regex")
+    })
+}
+
+/// Known secret prefixes to scrub from error messages.
+const SECRET_PREFIXES: &[&str] = &[
+    "sk-",
+    "xoxb-",
+    "xoxp-",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "github_pat_",
+];
+
+/// Bearer/token header patterns to scrub.
+const SECRET_HEADER_PREFIXES: &[&str] = &["Bearer ", "token "];
+
+/// Scrub secret patterns from a string.
+///
+/// Replaces any token that starts with known secret prefixes (`sk-`, `ghp_`, etc.)
+/// or authentication headers (`Bearer`, `token`) with `[REDACTED]`.
+///
+/// # Examples
+///
+/// ```
+/// use hyper_sdk::error::scrub_secret_patterns;
+///
+/// assert_eq!(
+///     scrub_secret_patterns("API key sk-abc123xyz is invalid"),
+///     "API key [REDACTED] is invalid"
+/// );
+/// assert_eq!(
+///     scrub_secret_patterns("No secrets here"),
+///     "No secrets here"
+/// );
+/// ```
+pub fn scrub_secret_patterns(input: &str) -> String {
+    let mut result = input.to_string();
+
+    // Scrub Bearer/token headers: "Bearer <token>" → "Bearer [REDACTED]"
+    for prefix in SECRET_HEADER_PREFIXES {
+        while let Some(start) = result.find(prefix) {
+            let token_start = start + prefix.len();
+            let token_end = result[token_start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                .map_or(result.len(), |pos| token_start + pos);
+            if token_end > token_start {
+                result.replace_range(start..token_end, "[REDACTED]");
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Scrub secret key prefixes: "sk-abc123" → "[REDACTED]"
+    for prefix in SECRET_PREFIXES {
+        while let Some(start) = result.find(prefix) {
+            let token_end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                .map_or(result.len(), |pos| start + pos);
+            if token_end > start {
+                result.replace_range(start..token_end, "[REDACTED]");
+            } else {
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+/// Sanitize an API error message by scrubbing secrets and truncating.
+///
+/// Combines [`scrub_secret_patterns`] with length truncation.
+///
+/// # Examples
+///
+/// ```
+/// use hyper_sdk::error::sanitize_api_error;
+///
+/// let msg = sanitize_api_error("Key sk-secret123 failed", 20);
+/// assert!(msg.len() <= 23); // 20 + "..." suffix
+/// assert!(msg.contains("[REDACTED]"));
+/// ```
+pub fn sanitize_api_error(input: &str, max_chars: usize) -> String {
+    let scrubbed = scrub_secret_patterns(input);
+    if scrubbed.chars().count() <= max_chars {
+        scrubbed
+    } else {
+        let byte_end = scrubbed
+            .char_indices()
+            .nth(max_chars)
+            .map_or(scrubbed.len(), |(idx, _)| idx);
+        let mut truncated = scrubbed[..byte_end].to_string();
+        truncated.push_str("...");
+        truncated
+    }
 }
 
 #[cfg(test)]

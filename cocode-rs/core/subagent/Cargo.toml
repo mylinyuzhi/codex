@@ -8,13 +8,15 @@ license.workspace = true
 cocode-config = { path = "../../common/config" }
 cocode-protocol.workspace = true
 cocode-tools.workspace = true
+cocode-error.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yml.workspace = true
-anyhow.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 once_cell.workspace = true
 

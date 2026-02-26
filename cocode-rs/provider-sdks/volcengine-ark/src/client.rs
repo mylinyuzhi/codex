@@ -281,7 +281,7 @@ fn parse_api_error(status: u16, body: &str, request_id: Option<String>) -> ArkEr
             return ArkError::ContextWindowExceeded;
         }
         if code.contains("insufficient_quota") {
-            return ArkError::QuotaExceeded;
+            return ArkError::RateLimited { retry_after: None };
         }
         if code.contains("previous_response_not_found") {
             return ArkError::PreviousResponseNotFound;

@@ -65,6 +65,10 @@ pub enum FinishReason {
     MalformedFunctionCall,
     ImageSafety,
     UnexpectedToolCall,
+    ImageProhibitedContent,
+    NoImage,
+    ImageRecitation,
+    ImageOther,
 }
 
 /// Harm category for safety ratings.
@@ -77,6 +81,11 @@ pub enum HarmCategory {
     HarmCategorySexuallyExplicit,
     HarmCategoryDangerousContent,
     HarmCategoryCivicIntegrity,
+    HarmCategoryImageHate,
+    HarmCategoryImageDangerousContent,
+    HarmCategoryImageHarassment,
+    HarmCategoryImageSexuallyExplicit,
+    HarmCategoryJailbreak,
 }
 
 /// Harm probability levels.
@@ -112,6 +121,8 @@ pub enum BlockedReason {
     Blocklist,
     ProhibitedContent,
     ImageSafety,
+    ModelArmor,
+    Jailbreak,
 }
 
 /// Function calling mode.
@@ -150,6 +161,7 @@ pub enum ThinkingLevel {
     Low,
     Medium,
     High,
+    Minimal,
 }
 
 /// Programming language for code execution.
@@ -209,15 +221,120 @@ pub enum MediaModality {
     Document,
 }
 
-/// Media resolution for parts.
+/// Media resolution level for parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PartMediaResolution {
+pub enum PartMediaResolutionLevel {
     #[default]
     MediaResolutionUnspecified,
     MediaResolutionLow,
     MediaResolutionMedium,
     MediaResolutionHigh,
+    MediaResolutionUltraHigh,
+}
+
+/// Media resolution for parts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PartMediaResolution {
+    /// The resolution level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<PartMediaResolutionLevel>,
+
+    /// Number of tokens for the media.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_tokens: Option<i32>,
+}
+
+/// Harm severity levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HarmSeverity {
+    HarmSeverityUnspecified,
+    HarmSeverityNegligible,
+    HarmSeverityLow,
+    HarmSeverityMedium,
+    HarmSeverityHigh,
+}
+
+/// Harm block method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HarmBlockMethod {
+    HarmBlockMethodUnspecified,
+    Severity,
+    Probability,
+}
+
+/// Traffic type for usage metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TrafficType {
+    TrafficTypeUnspecified,
+    OnDemand,
+    ProvisionedThroughput,
+}
+
+/// URL retrieval status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UrlRetrievalStatus {
+    UrlRetrievalStatusUnspecified,
+    UrlRetrievalStatusSuccess,
+    UrlRetrievalStatusError,
+    UrlRetrievalStatusPaywall,
+    UrlRetrievalStatusUnsafe,
+}
+
+/// Environment for computer use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Environment {
+    EnvironmentUnspecified,
+    EnvironmentBrowser,
+}
+
+/// Dynamic retrieval config mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DynamicRetrievalConfigMode {
+    ModeUnspecified,
+    ModeDynamic,
+}
+
+/// Phish block threshold for Google Search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PhishBlockThreshold {
+    PhishBlockThresholdUnspecified,
+    BlockLowAndAbove,
+    BlockMediumAndAbove,
+    BlockHighAndAbove,
+    BlockHigherAndAbove,
+    BlockVeryHighAndAbove,
+    BlockOnlyExtremelyHigh,
+}
+
+/// Media resolution for generation config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MediaResolution {
+    #[default]
+    MediaResolutionUnspecified,
+    MediaResolutionLow,
+    MediaResolutionMedium,
+    MediaResolutionHigh,
+}
+
+/// Feature selection preference for model selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FeatureSelectionPreference {
+    #[default]
+    FeatureSelectionPreferenceUnspecified,
+    PrioritizeQuality,
+    Balanced,
+    PrioritizeCost,
 }
 
 // ============================================================================
@@ -235,6 +352,10 @@ pub struct Blob {
     /// The IANA standard MIME type of the source data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+
+    /// Display name of the blob.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 impl Blob {
@@ -242,6 +363,7 @@ impl Blob {
         Self {
             data: Some(data.into()),
             mime_type: Some(mime_type.into()),
+            ..Default::default()
         }
     }
 
@@ -251,6 +373,7 @@ impl Blob {
         Self {
             data: Some(base64::engine::general_purpose::STANDARD.encode(data)),
             mime_type: Some(mime_type.into()),
+            ..Default::default()
         }
     }
 }
@@ -266,6 +389,10 @@ pub struct FileData {
     /// The IANA standard MIME type of the source data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+
+    /// Display name of the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 impl FileData {
@@ -273,6 +400,7 @@ impl FileData {
         Self {
             file_uri: Some(file_uri.into()),
             mime_type: Some(mime_type.into()),
+            ..Default::default()
         }
     }
 }
@@ -483,6 +611,10 @@ pub struct VideoMetadata {
     /// End offset (duration string like "10.5s").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_offset: Option<String>,
+
+    /// Frames per second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
 }
 
 /// A datatype containing media content.
@@ -776,6 +908,22 @@ pub struct Schema {
     /// Preferred order of properties in the output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property_ordering: Option<Vec<String>>,
+
+    /// Example value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<serde_json::Value>,
+
+    /// Minimum number of properties for object types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_properties: Option<i32>,
+
+    /// Maximum number of properties for object types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_properties: Option<i32>,
+
+    /// Title of the schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl Schema {
@@ -886,24 +1034,40 @@ impl FunctionDeclaration {
     }
 }
 
+/// Time interval.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Interval {
+    /// End time (ISO 8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<String>,
+
+    /// Start time (ISO 8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+}
+
 /// GoogleSearch tool configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct GoogleSearch {}
+pub struct GoogleSearch {
+    /// Domains to exclude from search results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_domains: Option<Vec<String>>,
+
+    /// Phish blocking confidence threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_confidence: Option<PhishBlockThreshold>,
+
+    /// Time range filter for search results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_range_filter: Option<Interval>,
+}
 
 /// Code execution tool configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeExecution {}
-
-/// RAG filter for retrieval.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RagFilter {
-    /// Metadata filter string.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_filter: Option<String>,
-}
 
 /// RAG retrieval configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -915,7 +1079,15 @@ pub struct RagRetrievalConfig {
 
     /// Filter for retrieval.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub filter: Option<RagFilter>,
+    pub filter: Option<serde_json::Value>,
+
+    /// Hybrid search configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hybrid_search: Option<serde_json::Value>,
+
+    /// Ranking configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranking: Option<serde_json::Value>,
 }
 
 /// Vertex RAG store configuration.
@@ -929,6 +1101,18 @@ pub struct VertexRagStore {
     /// RAG retrieval configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rag_retrieval_config: Option<RagRetrievalConfig>,
+
+    /// RAG resources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_resources: Option<Vec<serde_json::Value>>,
+
+    /// Number of top similar results to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity_top_k: Option<i32>,
+
+    /// Whether to store context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_context: Option<bool>,
 }
 
 /// Vertex AI Search configuration.
@@ -938,6 +1122,18 @@ pub struct VertexAISearch {
     /// Datastore resource name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datastore: Option<String>,
+
+    /// Data store specs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_store_specs: Option<Vec<serde_json::Value>>,
+
+    /// Search engine resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+
+    /// Filter expression.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
 }
 
 /// Retrieval tool configuration (Vertex AI only).
@@ -951,7 +1147,98 @@ pub struct Retrieval {
     /// Vertex RAG store.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertex_rag_store: Option<VertexRagStore>,
+
+    /// Whether to disable attribution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_attribution: Option<bool>,
+
+    /// External API configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_api: Option<serde_json::Value>,
 }
+
+/// Computer use tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUse {
+    /// Environment for computer use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
+
+    /// Excluded predefined functions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_predefined_functions: Option<Vec<String>>,
+}
+
+/// File search tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearch {
+    /// File search store names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_search_store_names: Option<Vec<String>>,
+
+    /// Number of top results to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+
+    /// Metadata filter string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_filter: Option<String>,
+}
+
+/// Enterprise web search tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EnterpriseWebSearch {
+    /// Domains to exclude from search results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_domains: Option<Vec<String>>,
+
+    /// Phish blocking confidence threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_confidence: Option<PhishBlockThreshold>,
+}
+
+/// Google Maps tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleMaps {
+    /// Auth configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_config: Option<serde_json::Value>,
+
+    /// Whether to enable widget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_widget: Option<bool>,
+}
+
+/// Dynamic retrieval configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicRetrievalConfig {
+    /// Dynamic retrieval threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_threshold: Option<f64>,
+
+    /// Dynamic retrieval mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<DynamicRetrievalConfigMode>,
+}
+
+/// Google Search retrieval tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleSearchRetrieval {
+    /// Dynamic retrieval configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_retrieval_config: Option<DynamicRetrievalConfig>,
+}
+
+/// URL context tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlContext {}
 
 /// Tool details that the model may use to generate a response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -972,6 +1259,30 @@ pub struct Tool {
     /// Retrieval tool (Vertex AI only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retrieval: Option<Retrieval>,
+
+    /// Computer use tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_use: Option<ComputerUse>,
+
+    /// File search tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_search: Option<FileSearch>,
+
+    /// Enterprise web search tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enterprise_web_search: Option<EnterpriseWebSearch>,
+
+    /// Google Maps tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_maps: Option<GoogleMaps>,
+
+    /// Google Search retrieval tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_search_retrieval: Option<GoogleSearchRetrieval>,
+
+    /// URL context tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_context: Option<UrlContext>,
 }
 
 impl Tool {
@@ -986,7 +1297,7 @@ impl Tool {
     /// Create a Google Search tool.
     pub fn google_search() -> Self {
         Self {
-            google_search: Some(GoogleSearch {}),
+            google_search: Some(GoogleSearch::default()),
             ..Default::default()
         }
     }
@@ -1017,6 +1328,32 @@ pub struct FunctionCallingConfig {
     pub stream_function_call_arguments: Option<bool>,
 }
 
+/// Latitude/longitude pair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LatLng {
+    /// Latitude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+
+    /// Longitude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
+}
+
+/// Retrieval configuration for tool config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalConfig {
+    /// Location for retrieval.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lat_lng: Option<LatLng>,
+
+    /// Language code for retrieval.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_code: Option<String>,
+}
+
 /// Tool configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1024,6 +1361,10 @@ pub struct ToolConfig {
     /// Function calling config.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_calling_config: Option<FunctionCallingConfig>,
+
+    /// Retrieval configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_config: Option<RetrievalConfig>,
 }
 
 // ============================================================================
@@ -1031,29 +1372,208 @@ pub struct ToolConfig {
 // ============================================================================
 
 /// Safety setting for a harm category.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SafetySetting {
     /// The harm category.
-    pub category: HarmCategory,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<HarmCategory>,
 
     /// The harm block threshold.
-    pub threshold: HarmBlockThreshold,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<HarmBlockThreshold>,
+
+    /// The harm block method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<HarmBlockMethod>,
 }
 
 /// Safety rating for generated content.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SafetyRating {
     /// The harm category.
-    pub category: HarmCategory,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<HarmCategory>,
 
     /// The harm probability.
-    pub probability: HarmProbability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probability: Option<HarmProbability>,
 
     /// Whether the content was blocked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<bool>,
+
+    /// Overwritten threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overwritten_threshold: Option<HarmBlockThreshold>,
+
+    /// Probability score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probability_score: Option<f64>,
+
+    /// Harm severity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<HarmSeverity>,
+
+    /// Severity score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity_score: Option<f64>,
+}
+
+// ============================================================================
+// Speech / Voice Config
+// ============================================================================
+
+/// Prebuilt voice configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrebuiltVoiceConfig {
+    /// The name of the prebuilt voice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_name: Option<String>,
+}
+
+/// Replicated voice configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicatedVoiceConfig {
+    /// The MIME type of the voice sample audio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+
+    /// The voice sample audio bytes.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_bytes_base64",
+        deserialize_with = "deserialize_bytes_base64"
+    )]
+    pub voice_sample_audio: Option<Vec<u8>>,
+}
+
+/// Voice configuration (prebuilt or replicated).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceConfig {
+    /// Replicated voice configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replicated_voice_config: Option<ReplicatedVoiceConfig>,
+
+    /// Prebuilt voice configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prebuilt_voice_config: Option<PrebuiltVoiceConfig>,
+}
+
+/// Speaker voice configuration for multi-speaker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerVoiceConfig {
+    /// The speaker identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+
+    /// The voice configuration for this speaker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_config: Option<VoiceConfig>,
+}
+
+/// Multi-speaker voice configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiSpeakerVoiceConfig {
+    /// Voice configurations for each speaker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_voice_configs: Option<Vec<SpeakerVoiceConfig>>,
+}
+
+/// Speech configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechConfig {
+    /// Voice configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_config: Option<VoiceConfig>,
+
+    /// Language code (BCP-47).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_code: Option<String>,
+
+    /// Multi-speaker voice configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_speaker_voice_config: Option<MultiSpeakerVoiceConfig>,
+}
+
+// ============================================================================
+// Routing / Model Selection Config
+// ============================================================================
+
+/// Model selection configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSelectionConfig {
+    /// Feature selection preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_selection_preference: Option<FeatureSelectionPreference>,
+}
+
+/// Auto routing mode for generation config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationConfigRoutingConfigAutoRoutingMode {
+    /// Model routing preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_routing_preference: Option<String>,
+}
+
+/// Manual routing mode for generation config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationConfigRoutingConfigManualRoutingMode {
+    /// Model name to route to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+}
+
+/// Routing configuration for generation config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationConfigRoutingConfig {
+    /// Auto routing mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_mode: Option<GenerationConfigRoutingConfigAutoRoutingMode>,
+
+    /// Manual routing mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_mode: Option<GenerationConfigRoutingConfigManualRoutingMode>,
+}
+
+// ============================================================================
+// Image Config
+// ============================================================================
+
+/// Image generation configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageConfig {
+    /// Aspect ratio for generated images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+
+    /// Image size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+
+    /// Person generation setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_generation: Option<String>,
+
+    /// Output MIME type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_mime_type: Option<String>,
+
+    /// Output compression quality (0-100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_compression_quality: Option<i32>,
 }
 
 // ============================================================================
@@ -1120,7 +1640,7 @@ pub struct GenerationConfig {
 
     /// Top-k for sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub top_k: Option<f32>,
 
     /// Maximum output tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1150,6 +1670,10 @@ pub struct GenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Schema>,
 
+    /// Response JSON schema (raw JSON Schema format).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_json_schema: Option<serde_json::Value>,
+
     /// Presence penalty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
@@ -1169,6 +1693,38 @@ pub struct GenerationConfig {
     /// Thinking configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
+
+    /// Media resolution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<MediaResolution>,
+
+    /// Whether to include audio timestamps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_timestamp: Option<bool>,
+
+    /// Speech configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech_config: Option<SpeechConfig>,
+
+    /// Routing configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_config: Option<GenerationConfigRoutingConfig>,
+
+    /// Model selection configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_selection_config: Option<ModelSelectionConfig>,
+
+    /// Whether to enable affective dialog.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_affective_dialog: Option<bool>,
+
+    /// Whether to enable enhanced civic answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_enhanced_civic_answers: Option<bool>,
+
+    /// Extra parameters passed through to the generationConfig body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -1193,7 +1749,7 @@ pub struct GenerateContentConfig {
 
     /// Top-k for sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub top_k: Option<f32>,
 
     /// Maximum output tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1263,6 +1819,38 @@ pub struct GenerateContentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_json_schema: Option<serde_json::Value>,
 
+    /// Labels for the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, String>>,
+
+    /// Media resolution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<MediaResolution>,
+
+    /// Speech configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech_config: Option<SpeechConfig>,
+
+    /// Whether to include audio timestamps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_timestamp: Option<bool>,
+
+    /// Routing configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_config: Option<GenerationConfigRoutingConfig>,
+
+    /// Model selection configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_selection_config: Option<ModelSelectionConfig>,
+
+    /// Image generation configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_config: Option<ImageConfig>,
+
+    /// Whether to enable enhanced civic answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_enhanced_civic_answers: Option<bool>,
+
     /// Request extensions (headers, params, body) - not serialized.
     #[serde(skip)]
     pub extensions: Option<RequestExtensions>,
@@ -1285,11 +1873,19 @@ impl GenerateContentConfig {
             || self.logprobs.is_some()
             || self.response_mime_type.is_some()
             || self.response_schema.is_some()
+            || self.response_json_schema.is_some()
             || self.presence_penalty.is_some()
             || self.frequency_penalty.is_some()
             || self.seed.is_some()
             || self.response_modalities.is_some()
             || self.thinking_config.is_some()
+            || self.media_resolution.is_some()
+            || self.audio_timestamp.is_some()
+            || self.speech_config.is_some()
+            || self.routing_config.is_some()
+            || self.model_selection_config.is_some()
+            || self.enable_enhanced_civic_answers.is_some()
+            || !self.extra.is_empty()
     }
 }
 
@@ -1319,6 +1915,10 @@ pub struct GenerateContentRequest {
     /// Tool configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_config: Option<ToolConfig>,
+
+    /// Cached content resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content: Option<String>,
 }
 
 /// Prompt feedback in response.
@@ -1332,6 +1932,10 @@ pub struct PromptFeedback {
     /// Safety ratings for the prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_ratings: Option<Vec<SafetyRating>>,
+
+    /// Human-readable block reason message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_reason_message: Option<String>,
 }
 
 // ============================================================================
@@ -1383,6 +1987,36 @@ pub struct GroundingChunkWeb {
     /// Title of the web source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+
+    /// Domain of the web source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+/// RAG chunk for grounding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunkPageSpan {
+    /// First page number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_page: Option<i32>,
+
+    /// Last page number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_page: Option<i32>,
+}
+
+/// RAG chunk.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunk {
+    /// Page span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_span: Option<RagChunkPageSpan>,
+
+    /// Text content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 /// Retrieved context for grounding.
@@ -1396,6 +2030,43 @@ pub struct GroundingChunkRetrievedContext {
     /// Title of the retrieved context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+
+    /// Document name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_name: Option<String>,
+
+    /// RAG chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_chunk: Option<RagChunk>,
+
+    /// Text content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Grounding chunk from Google Maps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingChunkMaps {
+    /// Place answer sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place_answer_sources: Option<serde_json::Value>,
+
+    /// Place ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place_id: Option<String>,
+
+    /// Text content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+
+    /// Title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// URI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
 }
 
 /// A grounding chunk (web or retrieved context).
@@ -1409,6 +2080,10 @@ pub struct GroundingChunk {
     /// Retrieved context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retrieved_context: Option<GroundingChunkRetrievedContext>,
+
+    /// Google Maps source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maps: Option<GroundingChunkMaps>,
 }
 
 /// A segment of text in the response.
@@ -1471,6 +2146,19 @@ pub struct RetrievalMetadata {
     pub google_search_dynamic_retrieval_score: Option<f64>,
 }
 
+/// Source flagging URI in grounding metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingMetadataSourceFlaggingUri {
+    /// Flag content URI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flag_content_uri: Option<String>,
+
+    /// Source ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+}
+
 /// Grounding metadata for a response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1494,6 +2182,18 @@ pub struct GroundingMetadata {
     /// Retrieval metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retrieval_metadata: Option<RetrievalMetadata>,
+
+    /// Google Maps widget context token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_maps_widget_context_token: Option<String>,
+
+    /// Retrieval queries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_queries: Option<Vec<String>>,
+
+    /// Source flagging URIs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_flagging_uris: Option<Vec<GroundingMetadataSourceFlaggingUri>>,
 }
 
 // ============================================================================
@@ -1595,6 +2295,36 @@ pub struct UsageMetadata {
     /// Token breakdown by modality for candidates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates_tokens_details: Option<Vec<ModalityTokenCount>>,
+
+    /// Token breakdown by modality for tool use prompts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_prompt_tokens_details: Option<Vec<ModalityTokenCount>>,
+
+    /// Traffic type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traffic_type: Option<TrafficType>,
+}
+
+/// URL metadata for URL context.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlMetadata {
+    /// Retrieved URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieved_url: Option<String>,
+
+    /// URL retrieval status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_retrieval_status: Option<UrlRetrievalStatus>,
+}
+
+/// URL context metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlContextMetadata {
+    /// URL metadata entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_metadata: Option<Vec<UrlMetadata>>,
 }
 
 /// A response candidate generated from the model.
@@ -1640,6 +2370,10 @@ pub struct Candidate {
     /// Log probabilities result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs_result: Option<LogprobsResult>,
+
+    /// URL context metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_context_metadata: Option<UrlContextMetadata>,
 }
 
 impl Candidate {

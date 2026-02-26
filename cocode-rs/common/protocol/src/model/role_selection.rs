@@ -95,7 +95,7 @@ impl RoleSelection {
 
     /// Get the model name.
     pub fn model_name(&self) -> &str {
-        &self.model.model
+        &self.model.slug
     }
 }
 

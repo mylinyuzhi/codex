@@ -310,7 +310,8 @@ impl Tool for TaskTool {
                 }
             }
             Err(e) => Ok(ToolOutput::error(format!(
-                "Failed to spawn agent '{subagent_type}': {e}"
+                "Failed to spawn agent '{subagent_type}': {}",
+                e.output_msg()
             ))),
         }
     }

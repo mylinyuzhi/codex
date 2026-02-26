@@ -165,9 +165,8 @@ pub enum HyperError {
     ModelNotFound(String),
     UnsupportedCapability(Capability),
     AuthenticationFailed(String),
-    RateLimitExceeded(String),
+    RateLimitExceeded(String),        // Retryable (all 429s)
     ContextWindowExceeded(String),
-    QuotaExceeded(String),           // NOT retryable
     NetworkError(String),             // Retryable
     ParseError(String),
     StreamError(String),
@@ -204,7 +203,7 @@ impl HyperError {
 }
 ```
 
-**Important**: `QuotaExceeded` is NOT retryable (requires billing change), unlike `RateLimitExceeded` (temporary).
+All 429 errors (rate limit and quota) are retryable, aligned with Python SDK behavior (openai-python, python-genai).
 
 ## Provider Implementation Pattern
 

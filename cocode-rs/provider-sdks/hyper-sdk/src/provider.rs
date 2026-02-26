@@ -31,6 +31,8 @@ pub trait Provider: Send + Sync + Debug {
 pub struct ProviderConfig {
     /// API key for authentication.
     pub api_key: Option<String>,
+    /// Additional API keys for rotation on rate-limit errors.
+    pub extra_api_keys: Vec<String>,
     /// Base URL override.
     pub base_url: Option<String>,
     /// Request timeout in seconds.
@@ -66,12 +68,28 @@ impl ProviderConfig {
         self
     }
 
+    /// Add extra API keys for rotation.
+    pub fn with_extra_api_keys(mut self, keys: Vec<String>) -> Self {
+        self.extra_api_keys = keys;
+        self
+    }
+
     /// Get the API key, returning an error if not set.
     #[must_use = "this returns a Result that must be handled"]
     pub fn require_api_key(&self) -> Result<&str, HyperError> {
         self.api_key
             .as_deref()
             .ok_or_else(|| HyperError::ConfigError("API key is required".to_string()))
+    }
+
+    /// Get all API keys (primary + extras), for use with [`ApiKeyRotator`].
+    pub fn all_api_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        if let Some(ref primary) = self.api_key {
+            keys.push(primary.clone());
+        }
+        keys.extend(self.extra_api_keys.iter().cloned());
+        keys
     }
 }
 

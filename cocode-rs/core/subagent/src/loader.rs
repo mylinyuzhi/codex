@@ -33,13 +33,16 @@
 use std::path::Path;
 
 use serde::Deserialize;
+use snafu::ResultExt;
 
+use crate::Result;
 use crate::definition::AgentDefinition;
 use crate::definition::AgentHookDefinition;
 use crate::definition::AgentSource;
 use crate::definition::IsolationMode;
 use crate::definition::McpServerRef;
 use crate::definition::MemoryScope;
+use crate::error::subagent_error;
 
 /// YAML frontmatter schema for agent definition files.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -162,7 +165,7 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Vec<AgentDefinit
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
-                    error = %e,
+                    error = ?e,
                     "Failed to load agent definition, skipping"
                 );
             }
@@ -173,20 +176,34 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Vec<AgentDefinit
 }
 
 /// Load a single agent definition from a Markdown file.
-fn load_agent_from_file(path: &Path, source: AgentSource) -> anyhow::Result<AgentDefinition> {
-    let content = std::fs::read_to_string(path)?;
-    let (yaml_str, body) =
-        parse_frontmatter(&content).map_err(|e| anyhow::anyhow!("frontmatter parse error: {e}"))?;
+fn load_agent_from_file(path: &Path, source: AgentSource) -> Result<AgentDefinition> {
+    let content = std::fs::read_to_string(path).context(subagent_error::IoReadFileSnafu {
+        path: path.to_path_buf(),
+    })?;
+    let (yaml_str, body) = parse_frontmatter(&content).map_err(|e| {
+        subagent_error::FrontmatterParseSnafu {
+            path: path.to_path_buf(),
+            message: e,
+        }
+        .build()
+    })?;
 
     let fm: AgentFrontmatter =
-        serde_yml::from_str(yaml_str).map_err(|e| anyhow::anyhow!("YAML parse error: {e}"))?;
+        serde_yml::from_str(yaml_str).context(subagent_error::YamlParseSnafu {
+            path: path.to_path_buf(),
+        })?;
 
     // Derive agent_type from the `name` field or the filename stem
     let agent_type = fm
         .name
         .clone()
         .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(String::from))
-        .ok_or_else(|| anyhow::anyhow!("cannot determine agent name from file"))?;
+        .ok_or_else(|| {
+            subagent_error::MissingAgentNameSnafu {
+                path: path.to_path_buf(),
+            }
+            .build()
+        })?;
 
     let description = fm.description.unwrap_or_default();
     let body_trimmed = body.trim();
@@ -228,7 +245,7 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> anyhow::Result<Agen
 /// Parse YAML frontmatter from a markdown string.
 ///
 /// Splits on `---` delimiters at line starts. Returns `(yaml_str, body_str)`.
-fn parse_frontmatter(content: &str) -> Result<(&str, &str), String> {
+fn parse_frontmatter(content: &str) -> std::result::Result<(&str, &str), String> {
     let content = content.trim_start_matches('\u{feff}');
     let rest = if let Some(stripped) = content.strip_prefix("---") {
         stripped

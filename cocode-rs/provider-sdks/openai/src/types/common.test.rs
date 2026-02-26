@@ -76,6 +76,172 @@ fn test_tool_choice_serialization() {
     .unwrap();
     assert!(func.contains(r#""type":"function""#));
     assert!(func.contains(r#""name":"test""#));
+
+    // WebSearch serializes with "web_search_preview" tag
+    let ws = serde_json::to_string(&ToolChoice::WebSearch).unwrap();
+    assert!(ws.contains(r#""type":"web_search_preview""#));
+
+    // Allowed serializes with "allowed_tools" tag
+    let allowed = serde_json::to_string(&ToolChoice::Allowed {
+        mode: "auto".to_string(),
+        tools: vec![serde_json::json!({"type": "function", "name": "foo"})],
+    })
+    .unwrap();
+    assert!(allowed.contains(r#""type":"allowed_tools""#));
+    assert!(allowed.contains(r#""mode":"auto""#));
+
+    // Mcp serializes with optional name
+    let mcp = serde_json::to_string(&ToolChoice::Mcp {
+        server_label: "srv".to_string(),
+        name: None,
+    })
+    .unwrap();
+    assert!(mcp.contains(r#""type":"mcp""#));
+    assert!(mcp.contains(r#""server_label":"srv""#));
+    assert!(!mcp.contains(r#""name""#));
+
+    let mcp_named = serde_json::to_string(&ToolChoice::Mcp {
+        server_label: "srv".to_string(),
+        name: Some("my_tool".to_string()),
+    })
+    .unwrap();
+    assert!(mcp_named.contains(r#""name":"my_tool""#));
+}
+
+#[test]
+fn test_tool_choice_deserialize_plain_strings() {
+    // OpenAI returns plain strings like "auto" in response.created events
+    let auto: ToolChoice = serde_json::from_str(r#""auto""#).unwrap();
+    assert!(matches!(auto, ToolChoice::Auto));
+
+    let none: ToolChoice = serde_json::from_str(r#""none""#).unwrap();
+    assert!(matches!(none, ToolChoice::None));
+
+    let required: ToolChoice = serde_json::from_str(r#""required""#).unwrap();
+    assert!(matches!(required, ToolChoice::Required));
+
+    // Unknown string should error
+    let result = serde_json::from_str::<ToolChoice>(r#""unknown""#);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_tool_choice_deserialize_tagged_objects() {
+    // Object form: {"type":"auto"}
+    let auto: ToolChoice = serde_json::from_str(r#"{"type":"auto"}"#).unwrap();
+    assert!(matches!(auto, ToolChoice::Auto));
+
+    let none: ToolChoice = serde_json::from_str(r#"{"type":"none"}"#).unwrap();
+    assert!(matches!(none, ToolChoice::None));
+
+    let required: ToolChoice = serde_json::from_str(r#"{"type":"required"}"#).unwrap();
+    assert!(matches!(required, ToolChoice::Required));
+
+    // Function
+    let func: ToolChoice =
+        serde_json::from_str(r#"{"type":"function","name":"get_weather"}"#).unwrap();
+    if let ToolChoice::Function { name } = &func {
+        assert_eq!(name, "get_weather");
+    } else {
+        panic!("Expected Function variant");
+    }
+
+    // Allowed
+    let allowed: ToolChoice = serde_json::from_str(
+        r#"{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"x"}]}"#,
+    )
+    .unwrap();
+    if let ToolChoice::Allowed { mode, tools } = &allowed {
+        assert_eq!(mode, "required");
+        assert_eq!(tools.len(), 1);
+    } else {
+        panic!("Expected Allowed variant");
+    }
+
+    // Web search variants
+    let ws: ToolChoice = serde_json::from_str(r#"{"type":"web_search_preview"}"#).unwrap();
+    assert!(matches!(ws, ToolChoice::WebSearch));
+
+    let ws2: ToolChoice =
+        serde_json::from_str(r#"{"type":"web_search_preview_2025_03_11"}"#).unwrap();
+    assert!(matches!(ws2, ToolChoice::WebSearchPreview20250311));
+
+    // Other built-in types
+    let fs: ToolChoice = serde_json::from_str(r#"{"type":"file_search"}"#).unwrap();
+    assert!(matches!(fs, ToolChoice::FileSearch));
+
+    let ci: ToolChoice = serde_json::from_str(r#"{"type":"code_interpreter"}"#).unwrap();
+    assert!(matches!(ci, ToolChoice::CodeInterpreter));
+
+    let cu: ToolChoice = serde_json::from_str(r#"{"type":"computer_use_preview"}"#).unwrap();
+    assert!(matches!(cu, ToolChoice::ComputerUse));
+
+    let ig: ToolChoice = serde_json::from_str(r#"{"type":"image_generation"}"#).unwrap();
+    assert!(matches!(ig, ToolChoice::ImageGeneration));
+
+    let sh: ToolChoice = serde_json::from_str(r#"{"type":"shell"}"#).unwrap();
+    assert!(matches!(sh, ToolChoice::Shell));
+
+    let ap: ToolChoice = serde_json::from_str(r#"{"type":"apply_patch"}"#).unwrap();
+    assert!(matches!(ap, ToolChoice::ApplyPatch));
+
+    // Mcp with and without name
+    let mcp: ToolChoice = serde_json::from_str(r#"{"type":"mcp","server_label":"srv"}"#).unwrap();
+    if let ToolChoice::Mcp { server_label, name } = &mcp {
+        assert_eq!(server_label, "srv");
+        assert!(name.is_none());
+    } else {
+        panic!("Expected Mcp variant");
+    }
+
+    let mcp2: ToolChoice =
+        serde_json::from_str(r#"{"type":"mcp","server_label":"srv","name":"tool1"}"#).unwrap();
+    if let ToolChoice::Mcp { server_label, name } = &mcp2 {
+        assert_eq!(server_label, "srv");
+        assert_eq!(name.as_deref(), Some("tool1"));
+    } else {
+        panic!("Expected Mcp variant");
+    }
+
+    // Custom
+    let custom: ToolChoice =
+        serde_json::from_str(r#"{"type":"custom","name":"my_custom"}"#).unwrap();
+    if let ToolChoice::Custom { name } = &custom {
+        assert_eq!(name, "my_custom");
+    } else {
+        panic!("Expected Custom variant");
+    }
+}
+
+#[test]
+fn test_tool_choice_roundtrip() {
+    // Serialization produces tagged objects, which roundtrip correctly
+    let variants: Vec<ToolChoice> = vec![
+        ToolChoice::Auto,
+        ToolChoice::None,
+        ToolChoice::Required,
+        ToolChoice::Function {
+            name: "f".to_string(),
+        },
+        ToolChoice::WebSearch,
+        ToolChoice::WebSearchPreview20250311,
+        ToolChoice::FileSearch,
+        ToolChoice::Shell,
+        ToolChoice::ApplyPatch,
+        ToolChoice::Custom {
+            name: "c".to_string(),
+        },
+    ];
+
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let parsed: ToolChoice = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            format!("{variant:?}"),
+            format!("{parsed:?}"),
+            "Roundtrip failed for: {json}"
+        );
+    }
 }
 
 #[test]
@@ -114,7 +280,10 @@ fn test_tool_builders() {
     // Code interpreter with container
     let code = Tool::code_interpreter().with_container("container-123");
     if let Tool::CodeInterpreter { container } = code {
-        assert_eq!(container, Some("container-123".to_string()));
+        assert_eq!(
+            container,
+            Some(serde_json::Value::String("container-123".to_string()))
+        );
     } else {
         panic!("Expected CodeInterpreter variant");
     }
@@ -122,7 +291,7 @@ fn test_tool_builders() {
     // MCP with server URL and allowed tools
     let mcp = Tool::mcp("my-server")
         .with_server_url("https://mcp.example.com")
-        .with_allowed_tools(vec!["tool1".to_string(), "tool2".to_string()]);
+        .with_allowed_tools(serde_json::json!(["tool1", "tool2"]));
     if let Tool::Mcp {
         server_url,
         allowed_tools,
@@ -130,7 +299,9 @@ fn test_tool_builders() {
     } = mcp
     {
         assert_eq!(server_url, Some("https://mcp.example.com".to_string()));
-        assert_eq!(allowed_tools.len(), 2);
+        assert!(allowed_tools.is_some());
+        let tools = allowed_tools.unwrap();
+        assert_eq!(tools.as_array().unwrap().len(), 2);
     } else {
         panic!("Expected Mcp variant");
     }

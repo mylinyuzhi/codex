@@ -146,7 +146,7 @@ pub fn is_read_only_command(command: &str) -> bool {
 fn is_plan_mode_safe_binary(name: &str, args: &[String]) -> bool {
     // git: only allow read-only subcommands
     if name == "git" {
-        let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
+        let subcommand = args.first().map(String::as_str).unwrap_or("");
         return PLAN_MODE_GIT_SUBCOMMANDS.contains(&subcommand);
     }
 
@@ -199,7 +199,7 @@ fn is_plan_mode_allowed(command: &str) -> bool {
 
     // Every command in the pipeline must use a safe binary
     commands.iter().all(|cmd| {
-        let name = cmd.first().map(|s| s.as_str()).unwrap_or("");
+        let name = cmd.first().map(String::as_str).unwrap_or("");
         let args: &[String] = if cmd.len() > 1 { &cmd[1..] } else { &[] };
         is_plan_mode_safe_binary(name, args)
     })

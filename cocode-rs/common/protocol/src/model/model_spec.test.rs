@@ -36,7 +36,7 @@ fn test_resolve_provider_type() {
 fn test_parse_valid() {
     let spec: ModelSpec = "anthropic/claude-opus-4".parse().unwrap();
     assert_eq!(spec.provider, "anthropic");
-    assert_eq!(spec.model, "claude-opus-4");
+    assert_eq!(spec.slug, "claude-opus-4");
     assert_eq!(spec.provider_type, ProviderType::Anthropic);
 }
 
@@ -47,7 +47,7 @@ fn test_parse_with_slashes_in_model() {
         .parse()
         .unwrap();
     assert_eq!(spec.provider, "fireworks");
-    assert_eq!(spec.model, "accounts/fireworks/models/llama-v3");
+    assert_eq!(spec.slug, "accounts/fireworks/models/llama-v3");
     // Unknown provider defaults to OpenaiCompat
     assert_eq!(spec.provider_type, ProviderType::OpenaiCompat);
 }
@@ -75,7 +75,7 @@ fn test_parse_invalid_empty_model() {
 fn test_new_auto_resolves_provider_type() {
     let spec = ModelSpec::new("openai", "gpt-5");
     assert_eq!(spec.provider, "openai");
-    assert_eq!(spec.model, "gpt-5");
+    assert_eq!(spec.slug, "gpt-5");
     assert_eq!(spec.provider_type, ProviderType::Openai);
 
     let spec = ModelSpec::new("gemini", "gemini-2.0-flash");
@@ -87,7 +87,7 @@ fn test_with_type_explicit() {
     // Create with explicit provider type (even if it doesn't match the name)
     let spec = ModelSpec::with_type("my-custom-anthropic", ProviderType::Anthropic, "model-x");
     assert_eq!(spec.provider, "my-custom-anthropic");
-    assert_eq!(spec.model, "model-x");
+    assert_eq!(spec.slug, "model-x");
     assert_eq!(spec.provider_type, ProviderType::Anthropic);
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::ProviderModelEntry;
+use crate::types::ProviderModelConfig;
 use cocode_protocol::Capability;
 use cocode_protocol::ProviderType;
 use cocode_protocol::WireApi;
@@ -27,6 +27,15 @@ fn create_test_resolver() -> ConfigResolver {
             ..Default::default()
         },
     );
+    models.insert(
+        "ep-12345".to_string(),
+        ModelInfo {
+            slug: "ep-12345".to_string(),
+            context_window: Some(32000),
+            max_output_tokens: Some(4096),
+            ..Default::default()
+        },
+    );
 
     let mut providers = HashMap::new();
     providers.insert(
@@ -41,25 +50,8 @@ fn create_test_resolver() -> ConfigResolver {
             streaming: true,
             wire_api: WireApi::Responses,
             models: vec![
-                ProviderModelEntry {
-                    model_info: ModelInfo {
-                        slug: "test-model".to_string(),
-                        max_output_tokens: Some(4096), // Override
-                        ..Default::default()
-                    },
-                    model_alias: None,
-                    model_options: HashMap::new(),
-                },
-                ProviderModelEntry {
-                    model_info: ModelInfo {
-                        slug: "ep-12345".to_string(),
-                        context_window: Some(32000),
-                        max_output_tokens: Some(4096),
-                        ..Default::default()
-                    },
-                    model_alias: Some("deepseek-r1".to_string()),
-                    model_options: HashMap::new(),
-                },
+                ProviderModelConfig::new("test-model"),
+                ProviderModelConfig::with_api_model_name("ep-12345", "deepseek-r1"),
             ],
             options: None,
             interceptors: Vec::new(),
@@ -83,8 +75,8 @@ fn test_resolve_model_info_basic() {
     assert_eq!(info.slug, "test-model");
     assert_eq!(info.display_name, Some("Test Model".to_string()));
     assert_eq!(info.context_window, Some(8192));
-    // Provider model entry override applied
-    assert_eq!(info.max_output_tokens, Some(4096));
+    // Resolved from models.json (no per-provider overrides)
+    assert_eq!(info.max_output_tokens, Some(2048));
 }
 
 #[test]
@@ -108,7 +100,7 @@ fn test_resolve_model_with_alias() {
         .unwrap();
 
     assert_eq!(info.slug, "ep-12345");
-    // Model entry override applied
+    // Resolved from models.json
     assert_eq!(info.context_window, Some(32000));
 }
 
@@ -302,8 +294,20 @@ fn test_base_instructions_fallback_to_inline() {
 }
 
 #[test]
-fn test_model_entry_options_merged() {
-    // model_options on ProviderModelEntry are merged into ModelInfo.options
+fn test_model_config_options_not_merged_into_model_info() {
+    // model_options on ProviderModelConfig are NOT merged into ModelInfo.options;
+    // they are carried on ProviderModel separately.
+    let mut models = HashMap::new();
+    models.insert(
+        "test-model".to_string(),
+        ModelInfo {
+            slug: "test-model".to_string(),
+            context_window: Some(4096),
+            max_output_tokens: Some(1024),
+            ..Default::default()
+        },
+    );
+
     let mut providers = HashMap::new();
     let mut model_opts = HashMap::new();
     model_opts.insert("temperature".to_string(), serde_json::json!(0.9));
@@ -320,15 +324,10 @@ fn test_model_entry_options_merged() {
             api_key: Some("test-key".to_string()),
             streaming: true,
             wire_api: WireApi::Responses,
-            models: vec![ProviderModelEntry {
-                model_info: ModelInfo {
-                    slug: "test-model".to_string(),
-                    context_window: Some(4096),
-                    max_output_tokens: Some(1024),
-                    ..Default::default()
-                },
-                model_alias: None,
-                model_options: model_opts,
+            models: vec![ProviderModelConfig {
+                slug: "test-model".to_string(),
+                api_model_name: None,
+                model_options: model_opts.clone(),
             }],
             options: None,
             interceptors: Vec::new(),
@@ -336,20 +335,21 @@ fn test_model_entry_options_merged() {
     );
 
     let resolver = ConfigResolver {
-        models: HashMap::new(),
+        models,
         providers,
         config_dir: None,
     };
 
+    // model_options should NOT appear in resolved ModelInfo.options
     let info = resolver
         .resolve_model_info("test-provider", "test-model")
         .unwrap();
+    assert!(info.options.is_none());
 
-    // model_options are merged into ModelInfo.options
-    assert!(info.options.is_some());
-    let opts = info.options.unwrap();
-    assert_eq!(opts.get("temperature"), Some(&serde_json::json!(0.9)));
-    assert_eq!(opts.get("seed"), Some(&serde_json::json!(42)));
+    // They should be on the ProviderModel instead
+    let provider_info = resolver.resolve_provider("test-provider").unwrap();
+    let pm = provider_info.get_model("test-model").unwrap();
+    assert_eq!(pm.model_options, model_opts);
 }
 
 #[test]
@@ -385,8 +385,11 @@ fn test_resolve_provider_with_models() {
     // Check get_model returns ProviderModel
     let test_model = provider_info.get_model("test-model").unwrap();
     assert_eq!(test_model.slug(), "test-model");
-    assert_eq!(test_model.info.display_name, Some("Test Model".to_string()));
-    assert_eq!(test_model.info.max_output_tokens, Some(4096)); // Override applied
+    assert_eq!(
+        test_model.model_info.display_name,
+        Some("Test Model".to_string())
+    );
+    assert_eq!(test_model.model_info.max_output_tokens, Some(2048)); // From models.json
     assert!(test_model.api_model_name.is_none()); // No alias for this model
 
     // Check ep-12345 has api_model_name
@@ -414,7 +417,7 @@ fn test_resolve_provider_with_models() {
 
 #[test]
 fn test_options_field_propagation() {
-    // Test that options fields are properly merged through resolution layers
+    // Test that options from models.json are preserved through resolution
     let mut models = HashMap::new();
     let mut user_opts = HashMap::new();
     user_opts.insert("user_key".to_string(), serde_json::json!("user_value"));
@@ -435,13 +438,6 @@ fn test_options_field_propagation() {
     );
 
     let mut providers = HashMap::new();
-    let mut model_opts = HashMap::new();
-    model_opts.insert("model_key".to_string(), serde_json::json!("model_value"));
-    model_opts.insert(
-        "override_key".to_string(),
-        serde_json::json!("model_override"),
-    ); // Should override user_override
-
     providers.insert(
         "test-provider".to_string(),
         ProviderConfig {
@@ -453,15 +449,7 @@ fn test_options_field_propagation() {
             api_key: Some("test-key".to_string()),
             streaming: true,
             wire_api: WireApi::Responses,
-            models: vec![ProviderModelEntry {
-                model_info: ModelInfo {
-                    slug: "test-model".to_string(),
-                    options: Some(model_opts),
-                    ..Default::default()
-                },
-                model_alias: None,
-                model_options: HashMap::new(),
-            }],
+            models: vec![ProviderModelConfig::new("test-model")],
             options: None,
             interceptors: Vec::new(),
         },
@@ -477,27 +465,33 @@ fn test_options_field_propagation() {
         .resolve_model_info("test-provider", "test-model")
         .unwrap();
 
-    // Options should be present
+    // Options from models.json should be present
     assert!(info.options.is_some());
     let opts = info.options.unwrap();
 
-    // User key preserved
+    // User keys preserved
     assert_eq!(opts.get("user_key"), Some(&serde_json::json!("user_value")));
-    // Model key added
-    assert_eq!(
-        opts.get("model_key"),
-        Some(&serde_json::json!("model_value"))
-    );
-    // Model override takes precedence over user
     assert_eq!(
         opts.get("override_key"),
-        Some(&serde_json::json!("model_override"))
+        Some(&serde_json::json!("user_override"))
     );
 }
 
 #[test]
-fn test_model_options_go_to_options() {
-    // ProviderModelEntry.model_options are merged into ModelInfo.options
+fn test_model_options_carried_on_provider_model() {
+    // ProviderModelConfig.model_options are NOT merged into ModelInfo.options;
+    // instead they are carried on ProviderModel and merged at SDK call time.
+    let mut models = HashMap::new();
+    models.insert(
+        "test-model".to_string(),
+        ModelInfo {
+            slug: "test-model".to_string(),
+            context_window: Some(4096),
+            max_output_tokens: Some(1024),
+            ..Default::default()
+        },
+    );
+
     let mut providers = HashMap::new();
     let mut model_options = HashMap::new();
     model_options.insert(
@@ -517,15 +511,10 @@ fn test_model_options_go_to_options() {
             api_key: Some("test-key".to_string()),
             streaming: true,
             wire_api: WireApi::Responses,
-            models: vec![ProviderModelEntry {
-                model_info: ModelInfo {
-                    slug: "test-model".to_string(),
-                    context_window: Some(4096),
-                    max_output_tokens: Some(1024),
-                    ..Default::default()
-                },
-                model_alias: None,
-                model_options,
+            models: vec![ProviderModelConfig {
+                slug: "test-model".to_string(),
+                api_model_name: None,
+                model_options: model_options.clone(),
             }],
             options: None,
             interceptors: Vec::new(),
@@ -533,23 +522,28 @@ fn test_model_options_go_to_options() {
     );
 
     let resolver = ConfigResolver {
-        models: HashMap::new(),
+        models,
         providers,
         config_dir: None,
     };
 
+    // resolve_model_info should NOT contain model_options in info.options
     let info = resolver
         .resolve_model_info("test-provider", "test-model")
         .unwrap();
+    assert!(info.options.is_none());
 
-    // model_options go to ModelInfo.options
-    assert!(info.options.is_some());
-    let opts = info.options.unwrap();
+    // Instead, resolve_provider should carry model_options on ProviderModel
+    let provider_info = resolver.resolve_provider("test-provider").unwrap();
+    let pm = provider_info.get_model("test-model").unwrap();
+    assert_eq!(pm.model_options, model_options);
+
+    // model_options should carry the expected keys directly
     assert_eq!(
-        opts.get("response_format"),
+        pm.model_options.get("response_format"),
         Some(&serde_json::json!({"type": "json_object"}))
     );
-    assert_eq!(opts.get("seed"), Some(&serde_json::json!(42)));
+    assert_eq!(pm.model_options.get("seed"), Some(&serde_json::json!(42)));
 }
 
 #[test]

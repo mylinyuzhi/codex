@@ -1,5 +1,9 @@
 mod backup;
+mod error;
 mod snapshot;
+
+pub use error::FileBackupError;
+pub use error::Result;
 
 pub use backup::BackupEntry;
 pub use backup::BackupIndex;

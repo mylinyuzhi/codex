@@ -2,6 +2,7 @@
 
 use cocode_config::ConfigManager;
 use cocode_protocol::all_features;
+use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelSpec;
 
 use crate::ConfigAction;
@@ -17,14 +18,16 @@ pub async fn run(action: ConfigAction, config: &ConfigManager) -> anyhow::Result
 
 /// Show current configuration.
 fn show_config(config: &ConfigManager) -> anyhow::Result<()> {
-    let spec = config.current_spec();
-
     println!("Configuration");
     println!("─────────────");
     println!();
     println!("Current:");
-    println!("  Provider: {}", spec.provider);
-    println!("  Model:    {}", spec.model);
+    if let Some(spec) = config.current_spec_for_role(ModelRole::Main) {
+        println!("  Provider: {}", spec.provider);
+        println!("  Model:    {}", spec.slug);
+    } else {
+        println!("  Model:    (not configured)");
+    }
     println!();
     println!("Config Path: {}", config.config_path().display());
     println!();
@@ -86,7 +89,9 @@ fn set_config(key: &str, value: &str, config: &ConfigManager) -> anyhow::Result<
                 println!("Switched to {provider}/{model}");
             } else {
                 // Just model name, use current provider
-                let current_spec = config.current_spec();
+                let current_spec = config
+                    .current_spec_for_role(ModelRole::Main)
+                    .ok_or_else(|| anyhow::anyhow!("No main model configured"))?;
                 let spec = ModelSpec::new(&current_spec.provider, value);
                 config.switch_spec(&spec)?;
                 println!("Switched to {}/{value}", current_spec.provider);

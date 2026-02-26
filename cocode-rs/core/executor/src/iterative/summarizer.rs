@@ -41,6 +41,8 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::Result;
+use crate::error::executor_error;
 use crate::iterative::context::IterationRecord;
 
 /// Type alias for async summarization callback.
@@ -49,7 +51,7 @@ pub type SummarizeFn = Arc<
             i32,         // iteration
             Vec<String>, // changed_files
             String,      // task description
-        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
         + Send
         + Sync,
 >;
@@ -61,7 +63,7 @@ pub type CommitMessageFn = Arc<
             String,      // task
             Vec<String>, // changed_files
             String,      // summary
-        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
         + Send
         + Sync,
 >;
@@ -177,7 +179,7 @@ pub async fn generate_summary(
                 return summary;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "LLM summary failed, using fallback");
+                tracing::warn!(error = ?e, "LLM summary failed, using fallback");
             }
             _ => {}
         }
@@ -213,7 +215,7 @@ pub async fn generate_commit_message(
                 return msg;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "LLM commit message failed, using fallback");
+                tracing::warn!(error = ?e, "LLM commit message failed, using fallback");
             }
             _ => {}
         }
@@ -258,14 +260,19 @@ where
                 hyper_sdk::Message::user(&user_prompt),
             ]);
 
-            let response = model
-                .generate(request)
-                .await
-                .map_err(|e| anyhow::anyhow!("LLM summary generation failed: {e}"))?;
+            let response = model.generate(request).await.map_err(|e| {
+                executor_error::SummarizationSnafu {
+                    message: format!("LLM summary generation failed: {e}"),
+                }
+                .build()
+            })?;
 
             let text = response.text().trim().to_string();
             if text.is_empty() {
-                return Err(anyhow::anyhow!("LLM returned empty summary"));
+                return executor_error::SummarizationSnafu {
+                    message: "LLM returned empty summary".to_string(),
+                }
+                .fail();
             }
 
             tracing::debug!(iteration, len = text.len(), "Generated LLM summary");
@@ -310,14 +317,19 @@ where
                 hyper_sdk::Message::user(&user_prompt),
             ]);
 
-            let response = model
-                .generate(request)
-                .await
-                .map_err(|e| anyhow::anyhow!("LLM commit message generation failed: {e}"))?;
+            let response = model.generate(request).await.map_err(|e| {
+                executor_error::SummarizationSnafu {
+                    message: format!("LLM commit message generation failed: {e}"),
+                }
+                .build()
+            })?;
 
             let text = response.text().trim().to_string();
             if text.is_empty() {
-                return Err(anyhow::anyhow!("LLM returned empty commit message"));
+                return executor_error::SummarizationSnafu {
+                    message: "LLM returned empty commit message".to_string(),
+                }
+                .fail();
             }
 
             tracing::debug!(iteration, len = text.len(), "Generated LLM commit message");

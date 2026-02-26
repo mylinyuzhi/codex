@@ -446,7 +446,7 @@ fn parse_api_error(status: u16, body: &str, request_id: Option<String>) -> OpenA
             return OpenAIError::ContextWindowExceeded;
         }
         if code.contains("insufficient_quota") {
-            return OpenAIError::QuotaExceeded;
+            return OpenAIError::RateLimited { retry_after: None };
         }
         if code.contains("previous_response_not_found") {
             return OpenAIError::PreviousResponseNotFound;

@@ -6,6 +6,7 @@ use cocode_api::ApiClient;
 use cocode_api::ModelHub;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
+use cocode_error::boxed_err;
 use cocode_hooks::HookRegistry;
 use cocode_loop::AgentLoop;
 use cocode_loop::CompactionConfig;
@@ -14,11 +15,16 @@ use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::ModelSpec;
+use cocode_protocol::RoleSelections;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::ToolRegistry;
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+use crate::Result;
+use crate::error::executor_error;
 
 /// Configuration for the agent executor.
 #[derive(Debug, Clone)]
@@ -73,6 +79,9 @@ pub struct AgentExecutor {
     /// Model hub for model resolution.
     model_hub: Arc<ModelHub>,
 
+    /// Role selections for model role mappings.
+    selections: RoleSelections,
+
     /// Tool registry for tool execution.
     tool_registry: Arc<ToolRegistry>,
 
@@ -96,10 +105,11 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
-    /// Create a new executor with the given API client, model hub, and tool registry.
+    /// Create a new executor with the given API client, model hub, selections, and tool registry.
     pub fn new(
         api_client: ApiClient,
         model_hub: Arc<ModelHub>,
+        selections: RoleSelections,
         tool_registry: Arc<ToolRegistry>,
         config: ExecutorConfig,
     ) -> Self {
@@ -107,6 +117,7 @@ impl AgentExecutor {
             session_id: uuid::Uuid::new_v4().to_string(),
             api_client,
             model_hub,
+            selections,
             tool_registry,
             hooks: Arc::new(HookRegistry::new()),
             config,
@@ -153,7 +164,7 @@ impl AgentExecutor {
     /// Execute the agent with the given prompt.
     ///
     /// Returns the final output text from the agent.
-    pub async fn execute(&self, prompt: &str) -> anyhow::Result<String> {
+    pub async fn execute(&self, prompt: &str) -> Result<String> {
         info!(
             session_id = %self.session_id,
             model = %self.config.model,
@@ -199,14 +210,20 @@ impl AgentExecutor {
             .context_window(self.config.context_window)
             .max_output_tokens(self.config.max_output_tokens)
             .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
+            .map_err(boxed_err)
+            .context(executor_error::ContextSnafu {
+                message: "Failed to build environment".to_string(),
+            })?;
 
         // Build conversation context
         let context = ConversationContext::builder()
             .environment(environment)
             .tool_names(self.tool_registry.tool_names())
             .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
+            .map_err(boxed_err)
+            .context(executor_error::ContextSnafu {
+                message: "Failed to build conversation context".to_string(),
+            })?;
 
         // Build loop config
         let loop_config = LoopConfig {
@@ -217,22 +234,24 @@ impl AgentExecutor {
         };
 
         // Build and run the agent loop
-        let mut builder = AgentLoop::builder()
-            .api_client(self.api_client.clone())
-            .model_hub(self.model_hub.clone())
-            .tool_registry(self.tool_registry.clone())
-            .context(context)
-            .config(loop_config)
-            .fallback_config(FallbackConfig::default())
-            .compaction_config(CompactionConfig::default())
-            .hooks(self.hooks.clone())
-            .event_tx(event_tx)
-            .cancel_token(self.cancel_token.clone())
-            .features(self.config.features.clone())
-            .web_search_config(self.config.web_search_config.clone())
-            .web_fetch_config(self.config.web_fetch_config.clone())
-            .permission_rules(self.permission_rules.clone())
-            .otel_manager(self.otel_manager.clone());
+        let mut builder = AgentLoop::builder(
+            self.api_client.clone(),
+            self.model_hub.clone(),
+            self.selections.clone(),
+            self.tool_registry.clone(),
+            context,
+            event_tx,
+        )
+        .config(loop_config)
+        .fallback_config(FallbackConfig::default())
+        .compaction_config(CompactionConfig::default())
+        .hooks(self.hooks.clone())
+        .cancel_token(self.cancel_token.clone())
+        .features(self.config.features.clone())
+        .web_search_config(self.config.web_search_config.clone())
+        .web_fetch_config(self.config.web_fetch_config.clone())
+        .permission_rules(self.permission_rules.clone())
+        .otel_manager(self.otel_manager.clone());
 
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
@@ -241,13 +260,17 @@ impl AgentExecutor {
 
         let mut loop_instance = builder.build();
 
-        let result = loop_instance.run(prompt).await?;
+        let result = loop_instance
+            .run(prompt)
+            .await
+            .map_err(boxed_err)
+            .context(executor_error::LoopSnafu)?;
 
         self.format_result(&result)
     }
 
     /// Format the loop result as a string.
-    fn format_result(&self, result: &LoopResult) -> anyhow::Result<String> {
+    fn format_result(&self, result: &LoopResult) -> Result<String> {
         // Return the final text from the model
         if result.final_text.is_empty() {
             // If no text, provide a summary
@@ -270,6 +293,7 @@ impl AgentExecutor {
 pub struct ExecutorBuilder {
     api_client: Option<ApiClient>,
     model_hub: Option<Arc<ModelHub>>,
+    selections: Option<RoleSelections>,
     tool_registry: Option<Arc<ToolRegistry>>,
     hooks: Option<Arc<HookRegistry>>,
     config: ExecutorConfig,
@@ -286,6 +310,7 @@ impl ExecutorBuilder {
         Self {
             api_client: None,
             model_hub: None,
+            selections: None,
             tool_registry: None,
             hooks: None,
             config: ExecutorConfig::default(),
@@ -306,6 +331,12 @@ impl ExecutorBuilder {
     /// Set the API client.
     pub fn api_client(mut self, client: ApiClient) -> Self {
         self.api_client = Some(client);
+        self
+    }
+
+    /// Set the role selections.
+    pub fn selections(mut self, selections: RoleSelections) -> Self {
+        self.selections = Some(selections);
         self
     }
 
@@ -399,6 +430,7 @@ impl ExecutorBuilder {
         let mut executor = AgentExecutor::new(
             self.api_client.expect("api_client is required"),
             self.model_hub.expect("model_hub is required"),
+            self.selections.unwrap_or_default(),
             self.tool_registry.expect("tool_registry is required"),
             config,
         );

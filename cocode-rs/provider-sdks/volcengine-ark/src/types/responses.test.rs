@@ -74,14 +74,15 @@ fn test_store_and_caching() {
 #[test]
 fn test_reasoning_output_item() {
     let item = OutputItem::Reasoning {
-        id: Some("r-1".to_string()),
-        content: "Let me think...".to_string(),
-        summary: Some(vec![ReasoningSummary::new("Summary")]),
+        id: "r-1".to_string(),
+        content: Some(vec![ReasoningContent::new("Let me think...")]),
+        summary: vec![ReasoningSummary::new("Summary")],
+        encrypted_content: None,
         status: Some(ReasoningStatus::Completed),
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(json.contains(r#""type":"reasoning""#));
-    assert!(json.contains(r#""content":"Let me think...""#));
+    assert!(json.contains(r#""text":"Let me think...""#));
     assert!(json.contains(r#""status":"completed""#));
 }
 

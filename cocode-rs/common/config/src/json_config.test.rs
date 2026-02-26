@@ -20,8 +20,7 @@ fn test_app_config_parse_minimal() {
     }"#;
     let config: AppConfig = serde_json::from_str(json_str).unwrap();
     let models = config.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().provider, "openai");
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5"));
 }
 
 #[test]
@@ -43,8 +42,7 @@ fn test_app_config_parse_full() {
     }"#;
     let config: AppConfig = serde_json::from_str(json_str).unwrap();
     let models = config.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().provider, "genai");
-    assert_eq!(models.main.as_ref().unwrap().model, "gemini-3-pro");
+    assert_eq!(models.main.as_deref(), Some("genai/gemini-3-pro"));
     assert_eq!(config.profile, Some("coding".to_string()));
 
     let logging = config.logging.unwrap();
@@ -95,7 +93,7 @@ fn test_app_config_parse_with_profiles() {
 
     // Verify top-level
     let models = config.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5"));
     assert_eq!(config.profile, Some("fast".to_string()));
 
     // Verify profiles parsed
@@ -108,18 +106,14 @@ fn test_app_config_parse_with_profiles() {
     let anthropic = &config.profiles["anthropic"];
     let anthropic_models = anthropic.models.as_ref().unwrap();
     assert_eq!(
-        anthropic_models.main.as_ref().unwrap().provider,
-        "anthropic"
-    );
-    assert_eq!(
-        anthropic_models.main.as_ref().unwrap().model,
-        "claude-opus-4"
+        anthropic_models.main.as_deref(),
+        Some("anthropic/claude-opus-4")
     );
 
     let fast = &config.profiles["fast"];
     assert!(fast.features.is_some());
     let fast_models = fast.models.as_ref().unwrap();
-    assert_eq!(fast_models.main.as_ref().unwrap().model, "gpt-5-mini");
+    assert_eq!(fast_models.main.as_deref(), Some("openai/gpt-5-mini"));
 
     let debug = &config.profiles["debug"];
     assert!(debug.logging.is_some());
@@ -144,7 +138,7 @@ fn test_resolve_with_no_profile() {
 
     let main = resolved.models.main().unwrap();
     assert_eq!(main.provider, "openai");
-    assert_eq!(main.model, "gpt-5");
+    assert_eq!(main.slug, "gpt-5");
     assert!(resolved.features.enabled(Feature::WebFetch));
 }
 
@@ -174,7 +168,7 @@ fn test_resolve_with_profile_override() {
 
     // main model from profile
     let main = resolved.models.main().unwrap();
-    assert_eq!(main.model, "gpt-5-mini");
+    assert_eq!(main.slug, "gpt-5-mini");
     // features: profile overrides web_fetch to false
     assert!(!resolved.features.enabled(Feature::WebFetch));
 }
@@ -199,7 +193,7 @@ fn test_resolve_provider_override() {
 
     let main = resolved.models.main().unwrap();
     assert_eq!(main.provider, "anthropic");
-    assert_eq!(main.model, "claude-opus-4");
+    assert_eq!(main.slug, "claude-opus-4");
 }
 
 #[test]
@@ -248,7 +242,7 @@ fn test_resolve_nonexistent_profile() {
     // Falls back to top-level
     let main = resolved.models.main().unwrap();
     assert_eq!(main.provider, "openai");
-    assert_eq!(main.model, "gpt-5");
+    assert_eq!(main.slug, "gpt-5");
 }
 
 #[test]
@@ -358,7 +352,7 @@ fn test_selected_profile() {
 
     assert!(profile.is_some());
     let models = profile.unwrap().models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5-mini");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5-mini"));
 }
 
 #[test]
@@ -402,15 +396,15 @@ fn test_resolve_with_models_field() {
     // models field should be populated
     let main = resolved.models.main().unwrap();
     assert_eq!(main.provider, "anthropic");
-    assert_eq!(main.model, "claude-opus-4");
+    assert_eq!(main.slug, "claude-opus-4");
 
     let fast = resolved.models.fast.as_ref().unwrap();
     assert_eq!(fast.provider, "anthropic");
-    assert_eq!(fast.model, "claude-haiku");
+    assert_eq!(fast.slug, "claude-haiku");
 
     let vision = resolved.models.vision.as_ref().unwrap();
     assert_eq!(vision.provider, "openai");
-    assert_eq!(vision.model, "gpt-4o");
+    assert_eq!(vision.slug, "gpt-4o");
 }
 
 #[test]
@@ -436,15 +430,15 @@ fn test_resolve_profile_models_override() {
     // main overridden by profile
     let main = resolved.models.main().unwrap();
     assert_eq!(main.provider, "openai");
-    assert_eq!(main.model, "gpt-5");
+    assert_eq!(main.slug, "gpt-5");
 
     // fast NOT overridden (kept from base)
     let fast = resolved.models.fast.as_ref().unwrap();
-    assert_eq!(fast.model, "claude-haiku");
+    assert_eq!(fast.slug, "claude-haiku");
 
     // vision added by profile
     let vision = resolved.models.vision.as_ref().unwrap();
-    assert_eq!(vision.model, "gpt-4o");
+    assert_eq!(vision.slug, "gpt-4o");
 }
 
 #[test]
@@ -479,7 +473,7 @@ fn test_config_profile_with_models() {
     let profile = &config.profiles["test"];
     assert!(profile.models.is_some());
     let models = profile.models.as_ref().unwrap();
-    assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+    assert_eq!(models.main.as_deref(), Some("openai/gpt-5"));
 }
 
 #[test]

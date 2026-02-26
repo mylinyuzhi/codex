@@ -53,10 +53,6 @@ pub enum ArkError {
     #[error("context window exceeded")]
     ContextWindowExceeded,
 
-    /// Quota exceeded.
-    #[error("quota exceeded")]
-    QuotaExceeded,
-
     /// Previous response not found.
     #[error("previous response not found")]
     PreviousResponseNotFound,

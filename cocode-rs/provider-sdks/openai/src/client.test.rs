@@ -49,7 +49,7 @@ fn test_parse_api_error_context_exceeded() {
 fn test_parse_api_error_quota_exceeded() {
     let body = r#"{"error":{"code":"insufficient_quota","message":"You exceeded your quota"}}"#;
     let error = parse_api_error(429, body, None);
-    assert!(matches!(error, OpenAIError::QuotaExceeded));
+    assert!(matches!(error, OpenAIError::RateLimited { .. }));
 }
 
 fn make_client(base_url: &str) -> Client {
@@ -98,9 +98,10 @@ async fn test_responses_create_success() {
     let response = client.responses().create(params).await.unwrap();
 
     assert_eq!(response.id, "resp-123");
-    assert_eq!(response.status, ResponseStatus::Completed);
+    assert_eq!(response.status, Some(ResponseStatus::Completed));
     assert_eq!(response.text(), "Hello! How can I help?");
-    assert_eq!(response.usage.total_tokens, 18);
+    let usage = response.usage_opt().expect("usage should be present");
+    assert_eq!(usage.total_tokens, 18);
 }
 
 #[tokio::test]
@@ -220,7 +221,7 @@ async fn test_responses_cancel() {
     let response = client.responses().cancel("resp-cancel-123").await.unwrap();
 
     assert_eq!(response.id, "resp-cancel-123");
-    assert_eq!(response.status, ResponseStatus::Cancelled);
+    assert_eq!(response.status, Some(ResponseStatus::Cancelled));
 }
 
 #[tokio::test]
@@ -427,5 +428,5 @@ async fn test_quota_exceeded_error() {
 
     let result = client.responses().create(params).await;
 
-    assert!(matches!(result, Err(OpenAIError::QuotaExceeded)));
+    assert!(matches!(result, Err(OpenAIError::RateLimited { .. })));
 }

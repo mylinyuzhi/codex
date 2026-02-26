@@ -73,7 +73,10 @@
       "Skill(update-claude-md)",
       "Skill(wt-del)",
       "WebFetch(domain:)",
-      "Bash(done)"
+      "Bash(done)",
+      "WebFetch(domain:serde.rs)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:docs.cloud.google.com)"
     ],
     "deny": [],
     "ask": []

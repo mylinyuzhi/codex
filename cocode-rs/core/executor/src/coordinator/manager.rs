@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use cocode_error::BoxedError;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
+use crate::Result;
 use crate::coordinator::lifecycle::AgentLifecycleStatus;
 use crate::coordinator::lifecycle::ThreadId;
+use crate::error::executor_error;
 
 /// Callback type for executing an agent.
 ///
@@ -22,8 +25,9 @@ pub type CoordinatorExecuteFn = Arc<
             String,      // model
             String,      // prompt
             Vec<String>, // tools
-        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = std::result::Result<String, BoxedError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -87,7 +91,7 @@ impl AgentCoordinator {
     /// Spawn a new coordinated agent.
     ///
     /// Returns the unique agent ID.
-    pub async fn spawn_agent(&mut self, config: SpawnConfig) -> anyhow::Result<String> {
+    pub async fn spawn_agent(&mut self, config: SpawnConfig) -> Result<String> {
         let agent_id = uuid::Uuid::new_v4().to_string();
         let thread_id = ThreadId::new();
 
@@ -129,8 +133,13 @@ impl AgentCoordinator {
                 let output = match result {
                     Ok(o) => o,
                     Err(e) => {
-                        tracing::error!(agent_id = %agent_id_clone, error = %e, "Agent execution failed");
-                        format!("Agent failed: {e}")
+                        tracing::error!(
+                            agent_id = %agent_id_clone,
+                            status = ?e.status_code(),
+                            error = ?e,
+                            "Agent execution failed"
+                        );
+                        format!("Agent failed: {}", e.output_msg())
                     }
                 };
                 // Send completion signal
@@ -142,19 +151,22 @@ impl AgentCoordinator {
     }
 
     /// Send input to a running agent.
-    pub async fn send_input(&self, agent_id: &str, input: &str) -> anyhow::Result<()> {
-        let agent = self
-            .agents
-            .get(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found: {agent_id}"))?;
+    pub async fn send_input(&self, agent_id: &str, input: &str) -> Result<()> {
+        let agent = self.agents.get(agent_id).ok_or_else(|| {
+            executor_error::AgentNotFoundSnafu {
+                agent_id: agent_id.to_string(),
+            }
+            .build()
+        })?;
 
         if agent.status != AgentLifecycleStatus::Running
             && agent.status != AgentLifecycleStatus::Waiting
         {
-            anyhow::bail!(
-                "Agent {agent_id} is not in a state that accepts input (status: {:?})",
-                agent.status
-            );
+            return executor_error::AgentInvalidStateSnafu {
+                agent_id: agent_id.to_string(),
+                status: agent.status.clone(),
+            }
+            .fail();
         }
 
         tracing::debug!(agent_id, input_len = input.len(), "Sending input to agent");
@@ -165,7 +177,7 @@ impl AgentCoordinator {
     }
 
     /// Wait for an agent to complete and return its output.
-    pub async fn wait_for(&mut self, agent_id: &str) -> anyhow::Result<String> {
+    pub async fn wait_for(&mut self, agent_id: &str) -> Result<String> {
         // First check if we already have output
         if let Some(agent) = self.agents.get(agent_id)
             && let Some(output) = &agent.output
@@ -174,10 +186,12 @@ impl AgentCoordinator {
         }
 
         // Try to await the completion channel
-        let agent = self
-            .agents
-            .get_mut(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found: {agent_id}"))?;
+        let agent = self.agents.get_mut(agent_id).ok_or_else(|| {
+            executor_error::AgentNotFoundSnafu {
+                agent_id: agent_id.to_string(),
+            }
+            .build()
+        })?;
 
         tracing::debug!(agent_id, status = ?agent.status, "Waiting for agent");
 
@@ -190,7 +204,10 @@ impl AgentCoordinator {
                 }
                 Err(_) => {
                     agent.status = AgentLifecycleStatus::Failed;
-                    anyhow::bail!("Agent completion channel closed unexpectedly")
+                    executor_error::AgentCompletionChannelClosedSnafu {
+                        agent_id: agent_id.to_string(),
+                    }
+                    .fail()
                 }
             }
         } else {
@@ -200,11 +217,13 @@ impl AgentCoordinator {
     }
 
     /// Close and clean up an agent.
-    pub async fn close_agent(&mut self, agent_id: &str) -> anyhow::Result<()> {
-        let agent = self
-            .agents
-            .get_mut(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent not found: {agent_id}"))?;
+    pub async fn close_agent(&mut self, agent_id: &str) -> Result<()> {
+        let agent = self.agents.get_mut(agent_id).ok_or_else(|| {
+            executor_error::AgentNotFoundSnafu {
+                agent_id: agent_id.to_string(),
+            }
+            .build()
+        })?;
 
         tracing::info!(agent_id, "Closing agent");
         agent.status = AgentLifecycleStatus::Completed;

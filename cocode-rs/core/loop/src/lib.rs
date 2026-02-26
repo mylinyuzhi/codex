@@ -2,6 +2,7 @@
 
 mod compaction;
 mod driver;
+mod error;
 mod fallback;
 mod result;
 mod session_memory_agent;
@@ -57,6 +58,7 @@ pub use compaction::MIN_MICRO_COMPACT_SAVINGS;
 pub use compaction::RECENT_TOOL_RESULTS_TO_KEEP;
 pub use driver::AgentLoop;
 pub use driver::AgentLoopBuilder;
+pub use error::AgentLoopError;
 pub use fallback::FallbackAttempt;
 pub use fallback::FallbackConfig;
 pub use fallback::FallbackState;

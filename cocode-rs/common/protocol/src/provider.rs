@@ -82,28 +82,40 @@ fn default_true() -> bool {
 pub struct ProviderModel {
     /// Resolved model info with all layers merged.
     #[serde(flatten)]
-    pub info: ModelInfo,
+    pub model_info: ModelInfo,
 
     /// API model name if different from slug (e.g., endpoint ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_model_name: Option<String>,
+
+    /// Per-provider model options that override `info.options` at SDK call time.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_options: HashMap<String, serde_json::Value>,
 }
 
 impl ProviderModel {
     /// Create from ModelInfo (no alias).
     pub fn new(info: ModelInfo) -> Self {
         Self {
-            info,
+            model_info: info,
             api_model_name: None,
+            model_options: HashMap::new(),
         }
     }
 
     /// Create with an alias.
     pub fn with_api_model_name(info: ModelInfo, api_model_name: impl Into<String>) -> Self {
         Self {
-            info,
+            model_info: info,
             api_model_name: Some(api_model_name.into()),
+            model_options: HashMap::new(),
         }
+    }
+
+    /// Builder: set per-provider model options.
+    pub fn with_model_options(mut self, opts: HashMap<String, serde_json::Value>) -> Self {
+        self.model_options = opts;
+        self
     }
 
     /// Get the API model name (alias if set and non-empty, otherwise slug).
@@ -111,12 +123,12 @@ impl ProviderModel {
         self.api_model_name
             .as_deref()
             .filter(|s| !s.is_empty())
-            .unwrap_or(&self.info.slug)
+            .unwrap_or(&self.model_info.slug)
     }
 
     /// Get the slug (model identifier).
     pub fn slug(&self) -> &str {
-        &self.info.slug
+        &self.model_info.slug
     }
 }
 
@@ -227,8 +239,10 @@ impl ProviderInfo {
         model: ModelInfo,
         alias: impl Into<String>,
     ) -> Self {
-        self.models
-            .insert(slug.into(), ProviderModel::with_api_model_name(model, alias));
+        self.models.insert(
+            slug.into(),
+            ProviderModel::with_api_model_name(model, alias),
+        );
         self
     }
 
@@ -269,7 +283,7 @@ impl ProviderInfo {
     pub fn effective_timeout(&self, slug: &str) -> i64 {
         self.models
             .get(slug)
-            .and_then(|m| m.info.timeout_secs)
+            .and_then(|m| m.model_info.timeout_secs)
             .unwrap_or(self.timeout_secs)
     }
 

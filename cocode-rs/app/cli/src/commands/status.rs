@@ -2,15 +2,18 @@
 
 use cocode_config::ConfigManager;
 use cocode_protocol::all_features;
+use cocode_protocol::model::ModelRole;
 
 /// Run the status command.
 pub async fn run(config: &ConfigManager) -> anyhow::Result<()> {
-    let spec = config.current_spec();
-
     println!("Current Configuration");
     println!("─────────────────────");
-    println!("Provider: {}", spec.provider);
-    println!("Model:    {}", spec.model);
+    if let Some(spec) = config.current_spec_for_role(ModelRole::Main) {
+        println!("Provider: {}", spec.provider);
+        println!("Model:    {}", spec.slug);
+    } else {
+        println!("Model:    (not configured)");
+    }
 
     // Show config path
     let config_path = config.config_path();

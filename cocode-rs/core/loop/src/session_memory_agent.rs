@@ -36,12 +36,15 @@ use hyper_sdk::ContentBlock;
 use hyper_sdk::GenerateRequest;
 use hyper_sdk::Message;
 use hyper_sdk::Model;
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 use crate::compaction::write_session_memory;
+use crate::error::AgentLoopError;
+use crate::error::agent_loop_error;
 
 /// Result of a session memory extraction operation.
 #[derive(Debug, Clone)]
@@ -183,7 +186,7 @@ impl SessionMemoryExtractionAgent {
         tool_calls_since: i32,
         last_message_id: &str,
         message_count: i32,
-    ) -> Result<ExtractionResult, anyhow::Error> {
+    ) -> Result<ExtractionResult, AgentLoopError> {
         // Emit started event
         self.emit(LoopEvent::SessionMemoryExtractionStarted {
             current_tokens,
@@ -216,7 +219,7 @@ impl SessionMemoryExtractionAgent {
                     attempts: 1,
                 })
                 .await;
-                return Err(anyhow::anyhow!(error));
+                return Err(e).context(agent_loop_error::ExtractionLlmFailedSnafu);
             }
         };
 
@@ -238,7 +241,7 @@ impl SessionMemoryExtractionAgent {
                 attempts: 1,
             })
             .await;
-            return Err(anyhow::anyhow!(error));
+            return agent_loop_error::ExtractionEmptySummarySnafu.fail();
         }
 
         // Estimate summary tokens (~4 chars per token)
@@ -253,7 +256,7 @@ impl SessionMemoryExtractionAgent {
                 attempts: 1,
             })
             .await;
-            return Err(anyhow::anyhow!(error));
+            return agent_loop_error::ExtractionWriteFailedSnafu { message: error }.fail();
         }
 
         info!(

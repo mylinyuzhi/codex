@@ -102,7 +102,7 @@ fn test_temperature_checked() {
 fn test_reasoning_config() {
     let config = ReasoningConfig::with_effort(ReasoningEffort::High).with_summary("auto");
 
-    assert_eq!(config.effort, ReasoningEffort::High);
+    assert_eq!(config.effort, Some(ReasoningEffort::High));
     assert_eq!(config.generate_summary, Some("auto".to_string()));
 }
 
@@ -228,17 +228,17 @@ fn test_new_request_params() {
 fn make_test_response(output: Vec<OutputItem>) -> Response {
     Response {
         id: "resp-test".to_string(),
-        status: ResponseStatus::Completed,
+        status: Some(ResponseStatus::Completed),
         output,
-        usage: Usage::default(),
+        usage: Some(Usage::default()),
         created_at: None,
         model: Some("gpt-4o".to_string()),
         object: Some("response".to_string()),
         error: None,
-        stop_reason: None,
         completed_at: None,
         incomplete_details: None,
         instructions: None,
+        metadata: None,
         service_tier: None,
         temperature: None,
         parallel_tool_calls: None,
@@ -255,6 +255,10 @@ fn make_test_response(output: Vec<OutputItem>) -> Response {
         prompt_cache_key: None,
         prompt_cache_retention: None,
         safety_identifier: None,
+        previous_response_id: None,
+        background: None,
+        conversation: None,
+        user: None,
         sdk_http_response: None,
     }
 }
@@ -269,6 +273,7 @@ fn test_response_text_single_message() {
             annotations: vec![],
             logprobs: None,
         }],
+        status: None,
     }]);
     assert_eq!(response.text(), "Hello, world!");
 }
@@ -284,6 +289,7 @@ fn test_response_text_multiple_messages() {
                 annotations: vec![],
                 logprobs: None,
             }],
+            status: None,
         },
         OutputItem::Message {
             id: Some("msg-2".to_string()),
@@ -293,6 +299,7 @@ fn test_response_text_multiple_messages() {
                 annotations: vec![],
                 logprobs: None,
             }],
+            status: None,
         },
     ]);
     assert_eq!(response.text(), "Hello world!");
@@ -312,12 +319,14 @@ fn test_response_function_calls() {
             call_id: "call-123".to_string(),
             name: "get_weather".to_string(),
             arguments: r#"{"city":"London"}"#.to_string(),
+            status: None,
         },
         OutputItem::FunctionCall {
             id: Some("fc-2".to_string()),
             call_id: "call-456".to_string(),
             name: "get_time".to_string(),
             arguments: r#"{"timezone":"UTC"}"#.to_string(),
+            status: None,
         },
     ]);
     let calls = response.function_calls();
@@ -336,6 +345,7 @@ fn test_response_has_function_calls_true() {
         call_id: "call-123".to_string(),
         name: "test_func".to_string(),
         arguments: "{}".to_string(),
+        status: None,
     }]);
     assert!(response.has_function_calls());
 }
@@ -346,6 +356,7 @@ fn test_response_has_function_calls_false() {
         id: Some("msg-1".to_string()),
         role: "assistant".to_string(),
         content: vec![],
+        status: None,
     }]);
     assert!(!response.has_function_calls());
 }
@@ -354,9 +365,7 @@ fn test_response_has_function_calls_false() {
 fn test_response_has_tool_calls_with_web_search() {
     let response = make_test_response(vec![OutputItem::WebSearchCall {
         id: Some("ws-1".to_string()),
-        call_id: "call-ws".to_string(),
-        query: Some("test query".to_string()),
-        results: None,
+        action: None,
         status: Some("completed".to_string()),
     }]);
     assert!(response.has_tool_calls());
@@ -366,13 +375,13 @@ fn test_response_has_tool_calls_with_web_search() {
 fn test_response_has_tool_calls_with_mcp() {
     let response = make_test_response(vec![OutputItem::McpCall {
         id: Some("mcp-1".to_string()),
-        call_id: "call-mcp".to_string(),
         server_label: Some("my-server".to_string()),
-        tool_name: Some("my-tool".to_string()),
+        name: Some("my-tool".to_string()),
         arguments: None,
         output: None,
         error: None,
         status: Some("completed".to_string()),
+        approval_request_id: None,
     }]);
     assert!(response.has_tool_calls());
 }
@@ -383,6 +392,7 @@ fn test_response_has_tool_calls_false() {
         id: Some("msg-1".to_string()),
         role: "assistant".to_string(),
         content: vec![],
+        status: None,
     }]);
     assert!(!response.has_tool_calls());
 }
@@ -390,11 +400,16 @@ fn test_response_has_tool_calls_false() {
 #[test]
 fn test_response_reasoning_present() {
     let response = make_test_response(vec![OutputItem::Reasoning {
-        id: Some("r-1".to_string()),
-        content: "Let me think about this...".to_string(),
-        summary: None,
+        id: "r-1".to_string(),
+        content: Some(vec![ReasoningContent::new("Let me think about this...")]),
+        summary: vec![],
+        encrypted_content: None,
+        status: None,
     }]);
-    assert_eq!(response.reasoning(), Some("Let me think about this..."));
+    assert_eq!(
+        response.reasoning(),
+        Some("Let me think about this...".to_string())
+    );
 }
 
 #[test]
@@ -403,6 +418,7 @@ fn test_response_reasoning_absent() {
         id: Some("msg-1".to_string()),
         role: "assistant".to_string(),
         content: vec![],
+        status: None,
     }]);
     assert_eq!(response.reasoning(), None);
 }
@@ -410,46 +426,34 @@ fn test_response_reasoning_absent() {
 #[test]
 fn test_response_cached_tokens() {
     let mut response = make_test_response(vec![]);
-    response.usage = Usage {
+    response.usage = Some(Usage {
         input_tokens: 100,
         output_tokens: 50,
         total_tokens: 150,
-        input_tokens_details: InputTokensDetails {
-            cached_tokens: 75,
-            text_tokens: 25,
-            image_tokens: 0,
-            audio_tokens: 0,
-        },
+        input_tokens_details: InputTokensDetails { cached_tokens: 75 },
         output_tokens_details: OutputTokensDetails::default(),
-    };
+    });
     assert_eq!(response.cached_tokens(), 75);
 }
 
 #[test]
 fn test_response_web_search_calls() {
+    let action = serde_json::json!({"type": "search", "query": "Rust programming"});
     let response = make_test_response(vec![OutputItem::WebSearchCall {
         id: Some("ws-1".to_string()),
-        call_id: "call-ws".to_string(),
-        query: Some("Rust programming".to_string()),
-        results: Some(vec![WebSearchResult {
-            title: Some("Rust Lang".to_string()),
-            url: Some("https://rust-lang.org".to_string()),
-            snippet: Some("A language...".to_string()),
-        }]),
+        action: Some(action.clone()),
         status: Some("completed".to_string()),
     }]);
     let calls = response.web_search_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "call-ws");
-    assert_eq!(calls[0].1, Some("Rust programming"));
-    assert!(calls[0].2.is_some());
+    assert_eq!(calls[0].0, Some("ws-1"));
+    assert_eq!(calls[0].1, Some(&action));
 }
 
 #[test]
 fn test_response_file_search_calls() {
     let response = make_test_response(vec![OutputItem::FileSearchCall {
         id: Some("fs-1".to_string()),
-        call_id: "call-fs".to_string(),
         queries: vec!["config".to_string(), "settings".to_string()],
         results: Some(vec![FileSearchResult {
             file_id: Some("file-123".to_string()),
@@ -461,7 +465,7 @@ fn test_response_file_search_calls() {
     }]);
     let calls = response.file_search_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "call-fs");
+    assert_eq!(calls[0].0, Some("fs-1"));
     assert_eq!(calls[0].1, &["config".to_string(), "settings".to_string()]);
 }
 
@@ -493,7 +497,7 @@ fn test_response_computer_calls() {
 fn test_response_code_interpreter_calls() {
     let response = make_test_response(vec![OutputItem::CodeInterpreterCall {
         id: Some("ci-1".to_string()),
-        call_id: "call-ci".to_string(),
+        container_id: None,
         code: Some("print('Hello')".to_string()),
         outputs: Some(vec![CodeInterpreterOutput::Logs {
             logs: "Hello".to_string(),
@@ -502,7 +506,7 @@ fn test_response_code_interpreter_calls() {
     }]);
     let calls = response.code_interpreter_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "call-ci");
+    assert_eq!(calls[0].0, Some("ci-1"));
     assert_eq!(calls[0].1, Some("print('Hello')"));
 }
 
@@ -510,19 +514,19 @@ fn test_response_code_interpreter_calls() {
 fn test_response_mcp_calls() {
     let response = make_test_response(vec![OutputItem::McpCall {
         id: Some("mcp-1".to_string()),
-        call_id: "call-mcp".to_string(),
         server_label: Some("my-server".to_string()),
-        tool_name: Some("my-tool".to_string()),
-        arguments: Some(serde_json::json!({"key": "value"})),
+        name: Some("my-tool".to_string()),
+        arguments: Some(r#"{"key": "value"}"#.to_string()),
         output: Some("result".to_string()),
         error: None,
         status: Some("completed".to_string()),
+        approval_request_id: None,
     }]);
     let calls = response.mcp_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].call_id, "call-mcp");
+    assert_eq!(calls[0].id, Some("mcp-1"));
     assert_eq!(calls[0].server_label, Some("my-server"));
-    assert_eq!(calls[0].tool_name, Some("my-tool"));
+    assert_eq!(calls[0].name, Some("my-tool"));
     assert_eq!(calls[0].output, Some("result"));
 }
 
@@ -530,36 +534,28 @@ fn test_response_mcp_calls() {
 fn test_response_image_generation_calls() {
     let response = make_test_response(vec![OutputItem::ImageGenerationCall {
         id: Some("ig-1".to_string()),
-        call_id: "call-ig".to_string(),
-        prompt: Some("A sunset over mountains".to_string()),
-        result: Some(ImageGenerationResult {
-            url: Some("https://example.com/image.png".to_string()),
-            b64_json: None,
-            revised_prompt: Some("A beautiful sunset...".to_string()),
-        }),
+        result: Some("https://example.com/image.png".to_string()),
         status: Some("completed".to_string()),
     }]);
     let calls = response.image_generation_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "call-ig");
-    assert_eq!(calls[0].1, Some("A sunset over mountains"));
-    assert!(calls[0].2.is_some());
+    assert_eq!(calls[0].0, Some("ig-1"));
+    assert_eq!(calls[0].1, Some("https://example.com/image.png"));
 }
 
 #[test]
 fn test_response_local_shell_calls() {
+    let action = serde_json::json!({"type": "exec", "command": ["ls", "-la"]});
     let response = make_test_response(vec![OutputItem::LocalShellCall {
         id: Some("ls-1".to_string()),
         call_id: "call-ls".to_string(),
-        command: Some("ls -la".to_string()),
-        output: Some("file1.txt\nfile2.txt".to_string()),
+        action: Some(action.clone()),
         status: Some("completed".to_string()),
     }]);
     let calls = response.local_shell_calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "call-ls");
-    assert_eq!(calls[0].1, Some("ls -la"));
-    assert_eq!(calls[0].2, Some("file1.txt\nfile2.txt"));
+    assert_eq!(calls[0].1, Some(&action));
 }
 
 #[test]
@@ -589,10 +585,11 @@ fn test_deserialize_response_completed_with_message() {
     }"#;
     let response: Response = serde_json::from_str(json).unwrap();
     assert_eq!(response.id, "resp-abc123");
-    assert_eq!(response.status, ResponseStatus::Completed);
+    assert_eq!(response.status, Some(ResponseStatus::Completed));
     assert_eq!(response.text(), "Hello from the API!");
-    assert_eq!(response.usage.input_tokens, 10);
-    assert_eq!(response.usage.output_tokens, 5);
+    let usage = response.usage_opt().expect("usage should be present");
+    assert_eq!(usage.input_tokens, 10);
+    assert_eq!(usage.output_tokens, 5);
 }
 
 #[test]
@@ -633,7 +630,13 @@ fn test_deserialize_response_with_reasoning() {
             {
                 "type": "reasoning",
                 "id": "r-1",
-                "content": "Let me analyze this step by step..."
+                "content": [
+                    {
+                        "type": "reasoning_text",
+                        "text": "Let me analyze this step by step..."
+                    }
+                ],
+                "summary": []
             },
             {
                 "type": "message",
@@ -660,10 +663,11 @@ fn test_deserialize_response_with_reasoning() {
     let response: Response = serde_json::from_str(json).unwrap();
     assert_eq!(
         response.reasoning(),
-        Some("Let me analyze this step by step...")
+        Some("Let me analyze this step by step...".to_string())
     );
     assert_eq!(response.text(), "The answer is 42.");
-    assert_eq!(response.usage.reasoning_tokens(), 80);
+    let usage = response.usage_opt().expect("usage should be present");
+    assert_eq!(usage.reasoning_tokens(), 80);
 }
 
 #[test]
@@ -675,15 +679,10 @@ fn test_deserialize_response_with_web_search() {
             {
                 "type": "web_search_call",
                 "id": "ws-1",
-                "call_id": "call-ws",
-                "query": "Rust programming language",
-                "results": [
-                    {
-                        "title": "Rust Programming Language",
-                        "url": "https://rust-lang.org",
-                        "snippet": "A language empowering..."
-                    }
-                ],
+                "action": {
+                    "type": "search",
+                    "query": "Rust programming language"
+                },
                 "status": "completed"
             }
         ],
@@ -697,7 +696,7 @@ fn test_deserialize_response_with_web_search() {
     assert!(response.has_tool_calls());
     let calls = response.web_search_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1, Some("Rust programming language"));
+    assert!(calls[0].1.is_some());
 }
 
 #[test]
@@ -717,9 +716,55 @@ fn test_deserialize_response_failed() {
         }
     }"#;
     let response: Response = serde_json::from_str(json).unwrap();
-    assert_eq!(response.status, ResponseStatus::Failed);
+    assert_eq!(response.status, Some(ResponseStatus::Failed));
     assert!(response.error.is_some());
-    assert_eq!(response.error.as_ref().unwrap().code, "content_filter");
+    let error = response.error.as_ref().unwrap();
+    assert_eq!(error.code_opt(), Some("content_filter"));
+}
+
+#[test]
+fn test_deserialize_response_failed_without_code() {
+    let json = r#"{
+        "id": "resp-failed-no-code",
+        "status": "failed",
+        "output": [],
+        "usage": {
+            "input_tokens": 5,
+            "output_tokens": 0,
+            "total_tokens": 5
+        },
+        "error": {
+            "message": "Something went wrong without a code"
+        }
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.status, Some(ResponseStatus::Failed));
+    let error = response.error.as_ref().expect("error should be present");
+    assert!(error.code_opt().is_none());
+}
+
+#[test]
+fn test_deserialize_response_failed_with_null_code() {
+    let json = r#"{
+        "id": "resp-failed-null-code",
+        "status": "failed",
+        "output": [],
+        "usage": {
+            "input_tokens": 5,
+            "output_tokens": 0,
+            "total_tokens": 5
+        },
+        "error": {
+            "code": null,
+            "message": "Something went wrong with null code"
+        }
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.status, Some(ResponseStatus::Failed));
+    let error = response.error.as_ref().expect("error should be present");
+    assert!(error.code_opt().is_none());
 }
 
 #[test]
@@ -750,7 +795,7 @@ fn test_deserialize_response_incomplete() {
         }
     }"#;
     let response: Response = serde_json::from_str(json).unwrap();
-    assert_eq!(response.status, ResponseStatus::Incomplete);
+    assert_eq!(response.status, Some(ResponseStatus::Incomplete));
     assert!(response.incomplete_details.is_some());
     assert_eq!(
         response.incomplete_details.as_ref().unwrap().reason,
@@ -781,12 +826,140 @@ fn test_deserialize_response_with_cached_tokens() {
             "output_tokens": 50,
             "total_tokens": 1050,
             "input_tokens_details": {
-                "cached_tokens": 950,
-                "text_tokens": 50
+                "cached_tokens": 950
             }
         }
     }"#;
     let response: Response = serde_json::from_str(json).unwrap();
     assert_eq!(response.cached_tokens(), 950);
-    assert_eq!(response.usage.input_text_tokens(), 50);
+    let usage = response.usage_opt().expect("usage should be present");
+    assert_eq!(usage.cached_tokens(), 950);
+}
+
+#[test]
+fn test_deserialize_response_missing_usage_is_none() {
+    let json = r#"{
+        "id": "resp-no-usage",
+        "status": "completed",
+        "output": [],
+        "model": "gpt-4o"
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.id, "resp-no-usage");
+    assert_eq!(response.status, Some(ResponseStatus::Completed));
+    assert!(response.usage_opt().is_none());
+}
+
+#[test]
+fn test_deserialize_response_null_usage_is_none() {
+    let json = r#"{
+        "id": "resp-null-usage",
+        "status": "completed",
+        "output": [],
+        "usage": null
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.id, "resp-null-usage");
+    assert_eq!(response.status, Some(ResponseStatus::Completed));
+    assert!(response.usage_opt().is_none());
+}
+
+#[test]
+fn test_deserialize_response_missing_status_uses_default_helper() {
+    let json = r#"{
+        "id": "resp-no-status",
+        "output": [],
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+        }
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    // Status field is absent in JSON, so the raw value is None.
+    assert_eq!(response.status_opt(), None);
+    // Helper falls back to Completed to avoid panics in callers that
+    // expect a concrete status for successful responses.
+    assert_eq!(response.status_or_completed(), ResponseStatus::Completed);
+}
+
+#[test]
+fn test_deserialize_response_null_status_uses_default_helper() {
+    let json = r#"{
+        "id": "resp-null-status",
+        "status": null,
+        "output": [],
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+        }
+    }"#;
+
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.status_opt(), None);
+    assert_eq!(response.status_or_completed(), ResponseStatus::Completed);
+}
+
+#[test]
+fn test_conversation_param_from_output_items() {
+    let output = OutputItem::Message {
+        id: Some("msg-1".to_string()),
+        role: "assistant".to_string(),
+        content: vec![OutputContentBlock::OutputText {
+            text: "Hi".to_string(),
+            annotations: vec![],
+            logprobs: None,
+        }],
+        status: None,
+    };
+
+    let conv = ConversationParam::from_output_items(&[output]);
+    let json = serde_json::to_string(&conv).unwrap();
+
+    // 检查生成的 JSON 至少包含我们期望的结构片段
+    assert!(json.contains("\"type\":\"message\""));
+    assert!(json.contains("\"role\":\"assistant\""));
+}
+
+#[test]
+fn test_deserialize_reasoning_with_encrypted_content() {
+    let json = r#"{
+        "id": "resp-enc123",
+        "status": "completed",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_05a273",
+                "encrypted_content": "gAAAAA_encrypted_token_here",
+                "summary": []
+            },
+            {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Here is the answer."
+                    }
+                ]
+            }
+        ],
+        "usage": {
+            "input_tokens": 20,
+            "output_tokens": 30,
+            "total_tokens": 50
+        }
+    }"#;
+    let response: Response = serde_json::from_str(json).unwrap();
+    assert_eq!(response.reasoning(), None);
+    assert_eq!(
+        response.encrypted_reasoning(),
+        Some("gAAAAA_encrypted_token_here")
+    );
+    assert_eq!(response.text(), "Here is the answer.");
 }

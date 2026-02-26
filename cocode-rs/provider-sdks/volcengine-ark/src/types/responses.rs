@@ -161,6 +161,26 @@ pub enum ReasoningStatus {
     Incomplete,
 }
 
+/// A content item in reasoning output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningContent {
+    /// The reasoning text.
+    pub text: String,
+    /// The type of content (always "reasoning_text").
+    #[serde(rename = "type")]
+    pub content_type: String,
+}
+
+impl ReasoningContent {
+    /// Create a new reasoning content item.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            content_type: "reasoning_text".to_string(),
+        }
+    }
+}
+
 /// A summary item in reasoning output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReasoningSummary {
@@ -228,13 +248,16 @@ pub enum OutputItem {
     /// Reasoning output from reasoning models.
     Reasoning {
         /// Unique ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        /// Reasoning content.
-        content: String,
+        id: String,
+        /// Reasoning content items.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<ReasoningContent>>,
         /// Reasoning summaries.
+        #[serde(default)]
+        summary: Vec<ReasoningSummary>,
+        /// Encrypted reasoning content (opaque token).
         #[serde(skip_serializing_if = "Option::is_none")]
-        summary: Option<Vec<ReasoningSummary>>,
+        encrypted_content: Option<String>,
         /// Status of the reasoning.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<ReasoningStatus>,
@@ -573,11 +596,13 @@ impl Response {
         })
     }
 
-    /// Get reasoning content if present.
-    pub fn reasoning(&self) -> Option<&str> {
+    /// Get reasoning content if present, concatenating all content items.
+    pub fn reasoning(&self) -> Option<String> {
         self.output.iter().find_map(|item| {
             if let OutputItem::Reasoning { content, .. } = item {
-                Some(content.as_str())
+                content
+                    .as_ref()
+                    .map(|items| items.iter().map(|c| c.text.as_str()).collect::<String>())
             } else {
                 None
             }

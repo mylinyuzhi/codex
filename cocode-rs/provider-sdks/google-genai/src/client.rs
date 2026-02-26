@@ -415,7 +415,7 @@ impl Client {
         debug!(url = %url, "Sending generate content request");
 
         // Build request body
-        let config = config.unwrap_or_default();
+        let mut config = config.unwrap_or_default();
 
         // Build generation config only if there are any generation parameters
         let generation_config = if config.has_generation_params() {
@@ -430,11 +430,20 @@ impl Client {
                 logprobs: config.logprobs,
                 response_mime_type: config.response_mime_type,
                 response_schema: config.response_schema,
+                response_json_schema: config.response_json_schema,
                 presence_penalty: config.presence_penalty,
                 frequency_penalty: config.frequency_penalty,
                 seed: config.seed,
                 response_modalities: config.response_modalities,
                 thinking_config: config.thinking_config,
+                media_resolution: config.media_resolution,
+                audio_timestamp: config.audio_timestamp,
+                speech_config: config.speech_config,
+                routing_config: config.routing_config,
+                model_selection_config: config.model_selection_config,
+                enable_affective_dialog: None,
+                enable_enhanced_civic_answers: config.enable_enhanced_civic_answers,
+                extra: std::mem::take(&mut config.extra),
             })
         } else {
             None
@@ -447,6 +456,7 @@ impl Client {
             safety_settings: config.safety_settings,
             tools: config.tools,
             tool_config: config.tool_config,
+            cached_content: config.cached_content,
         };
 
         // Build headers with extensions
@@ -736,7 +746,7 @@ impl Client {
         contents: Vec<Content>,
         config: Option<GenerateContentConfig>,
     ) -> (GenerateContentRequest, Option<RequestExtensions>) {
-        let config = config.unwrap_or_default();
+        let mut config = config.unwrap_or_default();
 
         // Build generation config only if there are any generation parameters
         let generation_config = if config.has_generation_params() {
@@ -751,11 +761,20 @@ impl Client {
                 logprobs: config.logprobs,
                 response_mime_type: config.response_mime_type.clone(),
                 response_schema: config.response_schema.clone(),
+                response_json_schema: config.response_json_schema.clone(),
                 presence_penalty: config.presence_penalty,
                 frequency_penalty: config.frequency_penalty,
                 seed: config.seed,
                 response_modalities: config.response_modalities.clone(),
                 thinking_config: config.thinking_config.clone(),
+                media_resolution: config.media_resolution,
+                audio_timestamp: config.audio_timestamp,
+                speech_config: config.speech_config.clone(),
+                routing_config: config.routing_config.clone(),
+                model_selection_config: config.model_selection_config.clone(),
+                enable_affective_dialog: None,
+                enable_enhanced_civic_answers: config.enable_enhanced_civic_answers,
+                extra: std::mem::take(&mut config.extra),
             })
         } else {
             None
@@ -768,6 +787,7 @@ impl Client {
             safety_settings: config.safety_settings,
             tools: config.tools,
             tool_config: config.tool_config,
+            cached_content: config.cached_content,
         };
 
         (request, config.extensions)

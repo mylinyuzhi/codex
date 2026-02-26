@@ -3,13 +3,15 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::Context;
-use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use snafu::ResultExt;
 use tokio::sync::Mutex;
+
+use crate::Result;
+use crate::error::file_backup_error;
 
 /// Maximum file size to backup (10 MiB).
 const MAX_BACKUP_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -62,7 +64,9 @@ impl FileBackupStore {
         let backup_dir = session_dir.join(session_id).join("file-backups");
         tokio::fs::create_dir_all(&backup_dir)
             .await
-            .context("creating file-backup directory")?;
+            .context(file_backup_error::IoSnafu {
+                message: "creating file-backup directory".to_string(),
+            })?;
 
         let index = Self::load_index(&backup_dir).await;
 
@@ -78,7 +82,9 @@ impl FileBackupStore {
     pub async fn with_dir(backup_dir: PathBuf) -> Result<Self> {
         tokio::fs::create_dir_all(&backup_dir)
             .await
-            .context("creating file-backup directory")?;
+            .context(file_backup_error::IoSnafu {
+                message: "creating file-backup directory".to_string(),
+            })?;
 
         let index = Self::load_index(&backup_dir).await;
 
@@ -106,7 +112,11 @@ impl FileBackupStore {
         let abs_path = if path.is_absolute() {
             path.to_path_buf()
         } else {
-            std::env::current_dir()?.join(path)
+            std::env::current_dir()
+                .context(file_backup_error::IoSnafu {
+                    message: "getting current_dir".to_string(),
+                })?
+                .join(path)
         };
 
         let turn_id = self.current_turn_id.lock().await.clone();
@@ -144,7 +154,12 @@ impl FileBackupStore {
         }
 
         // Check file size and capture permissions
-        let metadata = tokio::fs::metadata(&abs_path).await?;
+        let metadata =
+            tokio::fs::metadata(&abs_path)
+                .await
+                .context(file_backup_error::IoSnafu {
+                    message: "reading file metadata".to_string(),
+                })?;
         #[cfg(unix)]
         let file_mode = {
             use std::os::unix::fs::PermissionsExt;
@@ -163,7 +178,11 @@ impl FileBackupStore {
         }
 
         // Read and hash content
-        let content = tokio::fs::read(&abs_path).await?;
+        let content = tokio::fs::read(&abs_path)
+            .await
+            .context(file_backup_error::IoSnafu {
+                message: "reading file content for backup".to_string(),
+            })?;
         let content_hash = hex_sha256(&content);
 
         let mut idx = self.index.lock().await;
@@ -180,7 +199,11 @@ impl FileBackupStore {
 
             // Write backup blob
             let blob_path = self.backup_dir.join(&filename);
-            tokio::fs::write(&blob_path, &content).await?;
+            tokio::fs::write(&blob_path, &content)
+                .await
+                .context(file_backup_error::IoSnafu {
+                    message: "writing backup blob".to_string(),
+                })?;
 
             idx.content_map
                 .insert(content_hash.clone(), filename.clone());
@@ -216,8 +239,17 @@ impl FileBackupStore {
                 // Restore from backup blob
                 let blob_path = self.backup_dir.join(&entry.backup_filename);
                 if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
-                    tokio::fs::write(&entry.original_path, tokio::fs::read(&blob_path).await?)
-                        .await?;
+                    let blob_content =
+                        tokio::fs::read(&blob_path)
+                            .await
+                            .context(file_backup_error::IoSnafu {
+                                message: "reading backup blob".to_string(),
+                            })?;
+                    tokio::fs::write(&entry.original_path, blob_content)
+                        .await
+                        .context(file_backup_error::IoSnafu {
+                            message: "restoring file from backup".to_string(),
+                        })?;
                     // Restore file permissions if stored
                     #[cfg(unix)]
                     if let Some(mode) = entry.file_mode {

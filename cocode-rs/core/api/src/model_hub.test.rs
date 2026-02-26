@@ -1,17 +1,21 @@
 use super::*;
 
 #[test]
-fn test_hub_error_no_model_configured() {
-    let err = HubError::NoModelConfigured {
-        identity: "role:main".to_string(),
-    };
+fn test_api_error_no_model_configured() {
+    let err = InvalidRequestSnafu {
+        message: "No model configured for role:main".to_string(),
+    }
+    .build();
     assert!(err.is_no_model_configured());
     assert!(err.to_string().contains("No model configured"));
 }
 
 #[test]
-fn test_hub_error_inherit_without_parent() {
-    let err = HubError::InheritWithoutParent;
+fn test_api_error_inherit_without_parent() {
+    let err = InvalidRequestSnafu {
+        message: "Inherit identity requires parent_spec but none was provided".to_string(),
+    }
+    .build();
     assert!(!err.is_no_model_configured());
     assert!(err.to_string().contains("parent_spec"));
 }
@@ -54,7 +58,7 @@ fn test_resolve_identity_role() {
 
     let (spec, selection) = result.unwrap();
     assert_eq!(spec.provider, "anthropic");
-    assert_eq!(spec.model, "claude-opus-4");
+    assert_eq!(spec.slug, "claude-opus-4");
     assert!(selection.is_some());
     assert!(selection.unwrap().thinking_level.is_some());
 }
@@ -95,7 +99,8 @@ fn test_resolve_identity_inherit_without_parent_returns_error() {
     let result = resolve_identity(&ExecutionIdentity::Inherit, &selections, None);
 
     assert!(result.is_err());
-    matches!(result.unwrap_err(), HubError::InheritWithoutParent);
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("parent_spec"));
 }
 
 #[test]
@@ -122,7 +127,7 @@ fn test_resolve_identity_role_fallback_to_main() {
     assert!(result.is_ok());
 
     let (spec, _) = result.unwrap();
-    assert_eq!(spec.model, "claude-opus-4"); // Got Main's model
+    assert_eq!(spec.slug, "claude-opus-4"); // Got Main's model
 }
 
 // ========================================================================

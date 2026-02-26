@@ -117,9 +117,11 @@ impl EmbeddingCreateParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingUsage {
     /// Number of tokens in the prompt.
+    #[serde(default)]
     pub prompt_tokens: i32,
 
     /// Total number of tokens used.
+    #[serde(default)]
     pub total_tokens: i32,
 }
 

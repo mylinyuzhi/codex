@@ -92,11 +92,6 @@ pub enum ToolError {
 }
 
 impl ToolError {
-    /// Check if this is a retriable error.
-    pub fn is_retriable(&self) -> bool {
-        matches!(self, ToolError::Timeout { .. } | ToolError::Io { .. })
-    }
-
     /// Check if this error is a cancellation.
     pub fn is_cancelled(&self) -> bool {
         matches!(self, ToolError::Cancelled { .. })
@@ -122,6 +117,10 @@ impl ErrorExt for ToolError {
             ToolError::HookRejected { .. } => StatusCode::PermissionDenied, // Hook rejection is a form of denial
             ToolError::Cancelled { .. } => StatusCode::Cancelled,
         }
+    }
+
+    fn is_retryable(&self) -> bool {
+        matches!(self, ToolError::Timeout { .. } | ToolError::Io { .. })
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

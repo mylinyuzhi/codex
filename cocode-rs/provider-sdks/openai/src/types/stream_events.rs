@@ -36,46 +36,6 @@ pub struct StreamLogprob {
     pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
-// ============================================================================
-// Content part types for streaming
-// ============================================================================
-
-/// Output text content part.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputTextPart {
-    /// Part type (always "output_text").
-    #[serde(rename = "type")]
-    pub part_type: String,
-    /// Text content.
-    #[serde(default)]
-    pub text: String,
-    /// Annotations.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub annotations: Vec<serde_json::Value>,
-}
-
-/// Refusal content part.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefusalPart {
-    /// Part type (always "refusal").
-    #[serde(rename = "type")]
-    pub part_type: String,
-    /// Refusal text.
-    #[serde(default)]
-    pub refusal: String,
-}
-
-/// Reasoning text content part.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReasoningTextPart {
-    /// Part type (always "reasoning_text").
-    #[serde(rename = "type")]
-    pub part_type: String,
-    /// Reasoning text.
-    #[serde(default)]
-    pub text: String,
-}
-
 /// Content part in stream events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

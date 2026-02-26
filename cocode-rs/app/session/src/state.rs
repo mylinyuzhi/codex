@@ -54,7 +54,39 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::info;
 
+use cocode_error::StatusCode;
+use cocode_error::boxed_err;
+use cocode_error::stack_trace_debug;
+use snafu::ResultExt;
+use snafu::Snafu;
+
 use crate::session::Session;
+
+#[stack_trace_debug]
+#[derive(Snafu)]
+#[snafu(visibility(pub(crate)), module)]
+enum SessionStateError {
+    #[snafu(display("Invalid model spec '{model_name}'"))]
+    InvalidModelSpec {
+        model_name: String,
+        #[snafu(source)]
+        source: cocode_protocol::ModelSpecParseError,
+        #[snafu(implicit)]
+        location: cocode_error::Location,
+    },
+}
+
+impl cocode_error::ErrorExt for SessionStateError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            SessionStateError::InvalidModelSpec { .. } => StatusCode::InvalidArguments,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 
 /// Result of a single turn in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,15 +329,7 @@ impl SessionState {
 
         // Create API client
         let api_client = ApiClient::new();
-
-        // Ensure main model is set in session selections
         let mut session = session;
-        let main_spec = cocode_protocol::model::ModelSpec::new(&provider_name, &model_name);
-        if session.selections.get(ModelRole::Main).is_none() {
-            session
-                .selections
-                .set(ModelRole::Main, RoleSelection::new(main_spec));
-        }
 
         // Create ModelHub with Config snapshot (role-agnostic, just for model caching)
         let model_hub = Arc::new(ModelHub::new(config.clone()));
@@ -769,31 +793,32 @@ impl SessionState {
 
         // Build and run the agent loop
         // Clone selections so the loop has its own copy (isolation)
-        let mut builder = AgentLoop::builder()
-            .api_client(self.api_client.clone())
-            .model_hub(self.model_hub.clone())
-            .selections(self.session.selections.clone())
-            .tool_registry(self.tool_registry.clone())
-            .context(context)
-            .config(self.loop_config.clone())
-            .fallback_config(FallbackConfig::default())
-            .compaction_config(CompactionConfig::default())
-            .hooks(self.hook_registry.clone())
-            .event_tx(event_tx)
-            .cancel_token(self.cancel_token.clone())
-            .queued_commands(self.queued_commands.clone())
-            .features(self.config.features.clone())
-            .web_search_config(self.config.web_search_config.clone())
-            .web_fetch_config(self.config.web_fetch_config.clone())
-            .permission_rules(self.permission_rules.clone())
-            .shell_executor(self.shell_executor.clone())
-            .skill_manager(self.skill_manager.clone())
-            .otel_manager(self.otel_manager.clone())
-            .lsp_manager(self.lsp_manager.clone())
-            .spawn_agent_fn(self.build_spawn_agent_fn())
-            .plan_mode_state(self.plan_mode_state.clone())
-            .question_responder(self.question_responder.clone())
-            .approval_store(self.shared_approval_store.clone());
+        let mut builder = AgentLoop::builder(
+            self.api_client.clone(),
+            self.model_hub.clone(),
+            self.session.selections.clone(),
+            self.tool_registry.clone(),
+            context,
+            event_tx,
+        )
+        .config(self.loop_config.clone())
+        .fallback_config(FallbackConfig::default())
+        .compaction_config(CompactionConfig::default())
+        .hooks(self.hook_registry.clone())
+        .cancel_token(self.cancel_token.clone())
+        .queued_commands(self.queued_commands.clone())
+        .features(self.config.features.clone())
+        .web_search_config(self.config.web_search_config.clone())
+        .web_fetch_config(self.config.web_fetch_config.clone())
+        .permission_rules(self.permission_rules.clone())
+        .shell_executor(self.shell_executor.clone())
+        .skill_manager(self.skill_manager.clone())
+        .otel_manager(self.otel_manager.clone())
+        .lsp_manager(self.lsp_manager.clone())
+        .spawn_agent_fn(self.build_spawn_agent_fn())
+        .plan_mode_state(self.plan_mode_state.clone())
+        .question_responder(self.question_responder.clone())
+        .approval_store(self.shared_approval_store.clone());
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -897,13 +922,16 @@ impl SessionState {
         prompt: &str,
         model_override: Option<&str>,
         event_tx: mpsc::Sender<LoopEvent>,
-    ) -> anyhow::Result<TurnResult> {
+    ) -> Result<TurnResult, cocode_error::BoxedError> {
         let saved_selection = if let Some(model_name) = model_override {
             let current = self.session.selections.get(ModelRole::Main).cloned();
             let spec = if model_name.contains('/') {
                 model_name
                     .parse::<cocode_protocol::model::ModelSpec>()
-                    .map_err(|e| anyhow::anyhow!("Invalid model spec '{model_name}': {e}"))?
+                    .context(session_state_error::InvalidModelSpecSnafu {
+                        model_name: model_name.to_string(),
+                    })
+                    .map_err(boxed_err)?
             } else {
                 let provider = self.provider().to_string();
                 cocode_protocol::model::ModelSpec::new(provider, model_name)
@@ -1742,7 +1770,7 @@ impl SessionState {
                     .context_window(context_window)
                     .max_output_tokens(16_384)
                     .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build child environment: {e}"))?;
+                    .map_err(cocode_error::boxed_err)?;
 
                 // GAP-3: Resolve preloaded skills into context injections
                 let mut injections = Vec::new();
@@ -1775,9 +1803,7 @@ impl SessionState {
                 if !injections.is_empty() {
                     ctx_builder = ctx_builder.injections(injections);
                 }
-                let context = ctx_builder
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build child context: {e}"))?;
+                let context = ctx_builder.build().map_err(cocode_error::boxed_err)?;
 
                 // ── G1: Memory injection ───────────────────────────────
                 let mut effective_prompt = params.prompt.clone();
@@ -1958,27 +1984,28 @@ impl SessionState {
 
                 // Build the child loop — forward parent event_tx so the TUI
                 // sees subagent progress, text deltas, and tool activity.
-                let mut builder = AgentLoop::builder()
-                    .api_client(api_client)
-                    .model_hub(model_hub)
-                    .selections(child_selections)
-                    .tool_registry(tool_registry)
-                    .context(context)
-                    .config(child_config)
-                    .fallback_config(FallbackConfig::default())
-                    .compaction_config(CompactionConfig::default())
-                    .hooks(hook_registry.clone())
-                    .event_tx(parent_event_tx)
-                    .cancel_token(params.cancel_token)
-                    .features(features)
-                    .web_search_config(web_search_config)
-                    .web_fetch_config(web_fetch_config)
-                    .permission_rules(permission_rules)
-                    .shell_executor(forked_shell)
-                    .skill_manager(skill_manager)
-                    .lsp_manager(lsp_manager)
-                    .is_subagent(true)
-                    .task_type_restrictions(params.task_type_restrictions);
+                let mut builder = AgentLoop::builder(
+                    api_client,
+                    model_hub,
+                    child_selections,
+                    tool_registry,
+                    context,
+                    parent_event_tx,
+                )
+                .config(child_config)
+                .fallback_config(FallbackConfig::default())
+                .compaction_config(CompactionConfig::default())
+                .hooks(hook_registry.clone())
+                .cancel_token(params.cancel_token)
+                .features(features)
+                .web_search_config(web_search_config)
+                .web_fetch_config(web_fetch_config)
+                .permission_rules(permission_rules)
+                .shell_executor(forked_shell)
+                .skill_manager(skill_manager)
+                .lsp_manager(lsp_manager)
+                .is_subagent(true)
+                .task_type_restrictions(params.task_type_restrictions);
                 // NO .spawn_agent_fn() — prevents infinite recursion
 
                 // Apply custom system prompt if the agent definition requested it
@@ -2034,7 +2061,7 @@ impl SessionState {
                     }
                 }
 
-                let result = result?;
+                let result = result.map_err(cocode_error::boxed_err)?;
                 Ok(result.final_text)
             })
         })
@@ -2112,7 +2139,10 @@ impl SessionState {
                 };
 
                 let mut mgr = subagent_manager.lock().await;
-                let result = mgr.spawn_full(spawn_input).await?;
+                let result = mgr
+                    .spawn_full(spawn_input)
+                    .await
+                    .map_err(cocode_error::boxed_err)?;
 
                 Ok(cocode_tools::SpawnAgentResult {
                     agent_id: result.agent_id,
@@ -2156,7 +2186,7 @@ impl SessionState {
         &mut self,
         user_input: &str,
         event_tx: mpsc::Sender<LoopEvent>,
-    ) -> anyhow::Result<TurnResult> {
+    ) -> Result<TurnResult, cocode_error::BoxedError> {
         info!(
             session_id = %self.session.id,
             input_len = user_input.len(),
@@ -2172,7 +2202,7 @@ impl SessionState {
             .context_window(self.context_window)
             .max_output_tokens(16_384)
             .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
+            .map_err(boxed_err)?;
 
         // Build conversation context
         let mut ctx_builder = ConversationContext::builder()
@@ -2184,9 +2214,7 @@ impl SessionState {
             ctx_builder = ctx_builder.output_style(style_config);
         }
 
-        let context = ctx_builder
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
+        let context = ctx_builder.build().map_err(boxed_err)?;
 
         // Set the execute_fn, tool list, and event_tx on the subagent manager (fresh per-turn)
         {
@@ -2201,31 +2229,32 @@ impl SessionState {
         // Build and run the agent loop with the provided event channel
         // Clone selections so the loop has its own copy (isolation)
         // Pass queued commands for consume-then-remove steering injection
-        let mut builder = AgentLoop::builder()
-            .api_client(self.api_client.clone())
-            .model_hub(self.model_hub.clone())
-            .selections(self.session.selections.clone())
-            .tool_registry(self.tool_registry.clone())
-            .context(context)
-            .config(self.loop_config.clone())
-            .fallback_config(FallbackConfig::default())
-            .compaction_config(CompactionConfig::default())
-            .hooks(self.hook_registry.clone())
-            .event_tx(event_tx)
-            .cancel_token(self.cancel_token.clone())
-            .queued_commands(self.queued_commands.clone())
-            .features(self.config.features.clone())
-            .web_search_config(self.config.web_search_config.clone())
-            .web_fetch_config(self.config.web_fetch_config.clone())
-            .permission_rules(self.permission_rules.clone())
-            .shell_executor(self.shell_executor.clone())
-            .skill_manager(self.skill_manager.clone())
-            .otel_manager(self.otel_manager.clone())
-            .lsp_manager(self.lsp_manager.clone())
-            .spawn_agent_fn(self.build_spawn_agent_fn())
-            .plan_mode_state(self.plan_mode_state.clone())
-            .question_responder(self.question_responder.clone())
-            .approval_store(self.shared_approval_store.clone());
+        let mut builder = AgentLoop::builder(
+            self.api_client.clone(),
+            self.model_hub.clone(),
+            self.session.selections.clone(),
+            self.tool_registry.clone(),
+            context,
+            event_tx,
+        )
+        .config(self.loop_config.clone())
+        .fallback_config(FallbackConfig::default())
+        .compaction_config(CompactionConfig::default())
+        .hooks(self.hook_registry.clone())
+        .cancel_token(self.cancel_token.clone())
+        .queued_commands(self.queued_commands.clone())
+        .features(self.config.features.clone())
+        .web_search_config(self.config.web_search_config.clone())
+        .web_fetch_config(self.config.web_fetch_config.clone())
+        .permission_rules(self.permission_rules.clone())
+        .shell_executor(self.shell_executor.clone())
+        .skill_manager(self.skill_manager.clone())
+        .otel_manager(self.otel_manager.clone())
+        .lsp_manager(self.lsp_manager.clone())
+        .spawn_agent_fn(self.build_spawn_agent_fn())
+        .plan_mode_state(self.plan_mode_state.clone())
+        .question_responder(self.question_responder.clone())
+        .approval_store(self.shared_approval_store.clone());
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
@@ -2239,7 +2268,10 @@ impl SessionState {
         // each message ("Please address this message and continue").
         // The shared Arc<Mutex> means any commands queued by the TUI driver during
         // the turn are visible to the loop immediately — no take-back needed.
-        let result = loop_instance.run_and_process_queue(user_input).await?;
+        let result = loop_instance
+            .run_and_process_queue(user_input)
+            .await
+            .map_err(boxed_err)?;
 
         // Extract todos state from the loop
         if let Some(todos) = loop_instance.take_todos() {

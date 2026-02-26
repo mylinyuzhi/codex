@@ -20,22 +20,6 @@ pub enum Role {
     Developer,
 }
 
-/// Reason the model stopped generating.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StopReason {
-    /// Natural end of turn.
-    EndTurn,
-    /// Maximum tokens reached.
-    MaxTokens,
-    /// Stop sequence matched.
-    StopSequence,
-    /// Tool use requested.
-    ToolUse,
-    /// Content was filtered.
-    ContentFilter,
-}
-
 /// Response status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +71,9 @@ pub enum Tool {
         /// User location for search.
         #[serde(skip_serializing_if = "Option::is_none")]
         user_location: Option<UserLocation>,
+        /// Search filters.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filters: Option<serde_json::Value>,
     },
     /// File search tool.
     FileSearch {
@@ -99,12 +86,15 @@ pub enum Tool {
         /// Ranking options.
         #[serde(skip_serializing_if = "Option::is_none")]
         ranking_options: Option<RankingOptions>,
+        /// Search filters.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filters: Option<serde_json::Value>,
     },
     /// Code interpreter tool.
     CodeInterpreter {
-        /// Container for code execution.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        container: Option<String>,
+        /// Container for code execution (string ID or auto object).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        container: Option<serde_json::Value>,
     },
     /// Computer use tool.
     #[serde(rename = "computer_use_preview")]
@@ -131,13 +121,27 @@ pub enum Tool {
         /// Response format.
         #[serde(skip_serializing_if = "Option::is_none")]
         output_format: Option<String>,
+        /// Background type.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        background: Option<String>,
+        /// Fidelity control.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_fidelity: Option<String>,
+        /// Inpainting mask.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_image_mask: Option<serde_json::Value>,
+        /// Moderation level.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        moderation: Option<String>,
+        /// Compression level.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_compression: Option<i32>,
+        /// Partial images count.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial_images: Option<i32>,
     },
     /// Local shell tool.
-    LocalShell {
-        /// Allowed commands.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        allowed_commands: Vec<String>,
-    },
+    LocalShell,
     /// MCP tool.
     Mcp {
         /// MCP server label.
@@ -146,21 +150,29 @@ pub enum Tool {
         #[serde(skip_serializing_if = "Option::is_none")]
         server_url: Option<String>,
         /// Allowed tools.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        allowed_tools: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allowed_tools: Option<serde_json::Value>,
         /// Require approval.
         #[serde(skip_serializing_if = "Option::is_none")]
         require_approval: Option<String>,
+        /// Authorization token.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authorization: Option<String>,
+        /// Connector ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        connector_id: Option<String>,
+        /// Custom headers.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        headers: Option<std::collections::HashMap<String, String>>,
+        /// Server description.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_description: Option<String>,
     },
     /// Apply patch tool.
     ApplyPatch,
-    /// Function shell tool.
-    #[serde(rename = "function_shell")]
-    FunctionShell {
-        /// Shell command template.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-    },
+    /// Shell tool (function shell).
+    #[serde(rename = "shell")]
+    FunctionShell,
     /// Custom tool.
     Custom {
         /// Custom tool name.
@@ -185,7 +197,8 @@ pub struct FunctionDefinition {
     pub description: Option<String>,
 
     /// JSON Schema for the function parameters.
-    pub parameters: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
 
     /// Whether to enable strict schema adherence.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +217,12 @@ pub struct UserLocation {
     /// City.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub city: Option<String>,
+    /// Timezone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Location type (e.g., "approximate").
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
 }
 
 /// Ranking options for file search.
@@ -215,6 +234,9 @@ pub struct RankingOptions {
     /// Score threshold.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score_threshold: Option<f64>,
+    /// Hybrid search configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hybrid_search: Option<serde_json::Value>,
 }
 
 impl Tool {
@@ -234,7 +256,7 @@ impl Tool {
             function: FunctionDefinition {
                 name,
                 description,
-                parameters,
+                parameters: Some(parameters),
                 strict: None,
             },
         })
@@ -245,6 +267,7 @@ impl Tool {
         Self::WebSearch {
             search_context_size: None,
             user_location: None,
+            filters: None,
         }
     }
 
@@ -254,6 +277,7 @@ impl Tool {
             vector_store_ids,
             max_num_results: None,
             ranking_options: None,
+            filters: None,
         }
     }
 
@@ -278,14 +302,18 @@ impl Tool {
             size: None,
             quality: None,
             output_format: None,
+            background: None,
+            input_fidelity: None,
+            input_image_mask: None,
+            moderation: None,
+            output_compression: None,
+            partial_images: None,
         }
     }
 
     /// Create a local shell tool.
     pub fn local_shell() -> Self {
-        Self::LocalShell {
-            allowed_commands: vec![],
-        }
+        Self::LocalShell
     }
 
     /// Create an MCP tool.
@@ -293,8 +321,12 @@ impl Tool {
         Self::Mcp {
             server_label: server_label.into(),
             server_url: None,
-            allowed_tools: vec![],
+            allowed_tools: None,
             require_approval: None,
+            authorization: None,
+            connector_id: None,
+            headers: None,
+            server_description: None,
         }
     }
 
@@ -397,7 +429,7 @@ impl Tool {
     /// Set container for code interpreter tool.
     pub fn with_container(mut self, container_id: impl Into<String>) -> Self {
         if let Self::CodeInterpreter { ref mut container } = self {
-            *container = Some(container_id.into());
+            *container = Some(serde_json::Value::String(container_id.into()));
         }
         self
     }
@@ -441,17 +473,6 @@ impl Tool {
         self
     }
 
-    /// Set allowed commands for local shell tool.
-    pub fn with_allowed_commands(mut self, commands: Vec<String>) -> Self {
-        if let Self::LocalShell {
-            ref mut allowed_commands,
-        } = self
-        {
-            *allowed_commands = commands;
-        }
-        self
-    }
-
     /// Set server URL for MCP tool.
     pub fn with_server_url(mut self, url: impl Into<String>) -> Self {
         if let Self::Mcp {
@@ -464,13 +485,13 @@ impl Tool {
     }
 
     /// Set allowed tools for MCP tool.
-    pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
+    pub fn with_allowed_tools(mut self, tools: serde_json::Value) -> Self {
         if let Self::Mcp {
             ref mut allowed_tools,
             ..
         } = self
         {
-            *allowed_tools = tools;
+            *allowed_tools = Some(tools);
         }
         self
     }
@@ -489,7 +510,11 @@ impl Tool {
 }
 
 /// Tool choice configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Aligns with the Python SDK's `ToolChoice` union type.
+/// Serializes tagged objects (`{"type":"auto"}`), deserializes both plain strings
+/// (`"auto"`) and tagged objects.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolChoice {
     /// Let the model decide whether to use tools.
@@ -504,17 +529,19 @@ pub enum ToolChoice {
         name: String,
     },
     /// Constrain to a set of allowed tools.
+    #[serde(rename = "allowed_tools")]
     Allowed {
-        /// List of allowed tool names.
-        #[serde(default)]
-        tools: Vec<String>,
-        /// Mode: auto or required.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mode: Option<String>,
+        /// Mode: "auto" or "required".
+        mode: String,
+        /// List of allowed tools (opaque objects from the API).
+        tools: Vec<serde_json::Value>,
     },
-    /// Force a specific built-in tool type.
-    #[serde(rename = "web_search")]
+    /// Force web search tool.
+    #[serde(rename = "web_search_preview")]
     WebSearch,
+    /// Force web search tool (2025-03-11 version).
+    #[serde(rename = "web_search_preview_2025_03_11")]
+    WebSearchPreview20250311,
     /// Force file search tool.
     #[serde(rename = "file_search")]
     FileSearch,
@@ -531,8 +558,9 @@ pub enum ToolChoice {
     Mcp {
         /// MCP server label.
         server_label: String,
-        /// Tool name.
-        tool_name: String,
+        /// Optional tool name.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     /// Force shell tool.
     Shell,
@@ -544,6 +572,109 @@ pub enum ToolChoice {
         /// Custom tool name.
         name: String,
     },
+}
+
+impl<'de> serde::Deserialize<'de> for ToolChoice {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match &value {
+            // Plain string form: "auto", "none", "required"
+            serde_json::Value::String(s) => match s.as_str() {
+                "auto" => Ok(ToolChoice::Auto),
+                "none" => Ok(ToolChoice::None),
+                "required" => Ok(ToolChoice::Required),
+                other => Err(serde::de::Error::unknown_variant(
+                    other,
+                    &["auto", "none", "required"],
+                )),
+            },
+            // Object form: discriminated by "type" field
+            serde_json::Value::Object(map) => {
+                let type_str = map
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| serde::de::Error::missing_field("type"))?;
+                match type_str {
+                    "auto" => Ok(ToolChoice::Auto),
+                    "none" => Ok(ToolChoice::None),
+                    "required" => Ok(ToolChoice::Required),
+                    "function" => {
+                        let name = map
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| serde::de::Error::missing_field("name"))?
+                            .to_string();
+                        Ok(ToolChoice::Function { name })
+                    }
+                    "allowed_tools" => {
+                        let mode = map
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| serde::de::Error::missing_field("mode"))?
+                            .to_string();
+                        let tools = map
+                            .get("tools")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        Ok(ToolChoice::Allowed { mode, tools })
+                    }
+                    "web_search_preview" => Ok(ToolChoice::WebSearch),
+                    "web_search_preview_2025_03_11" => Ok(ToolChoice::WebSearchPreview20250311),
+                    "file_search" => Ok(ToolChoice::FileSearch),
+                    "code_interpreter" => Ok(ToolChoice::CodeInterpreter),
+                    "computer_use_preview" => Ok(ToolChoice::ComputerUse),
+                    "image_generation" => Ok(ToolChoice::ImageGeneration),
+                    "mcp" => {
+                        let server_label = map
+                            .get("server_label")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| serde::de::Error::missing_field("server_label"))?
+                            .to_string();
+                        let name = map
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(std::string::ToString::to_string);
+                        Ok(ToolChoice::Mcp { server_label, name })
+                    }
+                    "shell" => Ok(ToolChoice::Shell),
+                    "apply_patch" => Ok(ToolChoice::ApplyPatch),
+                    "custom" => {
+                        let name = map
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| serde::de::Error::missing_field("name"))?
+                            .to_string();
+                        Ok(ToolChoice::Custom { name })
+                    }
+                    other => Err(serde::de::Error::unknown_variant(
+                        other,
+                        &[
+                            "auto",
+                            "none",
+                            "required",
+                            "function",
+                            "allowed_tools",
+                            "web_search_preview",
+                            "web_search_preview_2025_03_11",
+                            "file_search",
+                            "code_interpreter",
+                            "computer_use_preview",
+                            "image_generation",
+                            "mcp",
+                            "shell",
+                            "apply_patch",
+                            "custom",
+                        ],
+                    )),
+                }
+            }
+            _ => Err(serde::de::Error::custom("expected string or object")),
+        }
+    }
 }
 
 /// Metadata for requests and responses.

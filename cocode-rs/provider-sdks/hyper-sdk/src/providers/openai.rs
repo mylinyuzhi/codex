@@ -236,8 +236,8 @@ impl Model for OpenAIModel {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
                             content,
-                            is_error,
                             is_custom,
+                            ..
                         } = block
                         {
                             let output = content.to_text();
@@ -247,11 +247,7 @@ impl Model for OpenAIModel {
                                     &output,
                                 )
                             } else {
-                                oai::InputContentBlock::function_call_output(
-                                    tool_use_id,
-                                    &output,
-                                    Some(*is_error),
-                                )
+                                oai::InputContentBlock::function_call_output(tool_use_id, &output)
                             };
                             input_messages.push(oai::InputMessage::user(vec![content_block]));
                         }
@@ -364,8 +360,8 @@ impl Model for OpenAIModel {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
                             content,
-                            is_error,
                             is_custom,
+                            ..
                         } = block
                         {
                             let output = content.to_text();
@@ -375,11 +371,7 @@ impl Model for OpenAIModel {
                                     &output,
                                 )
                             } else {
-                                oai::InputContentBlock::function_call_output(
-                                    tool_use_id,
-                                    &output,
-                                    Some(*is_error),
-                                )
+                                oai::InputContentBlock::function_call_output(tool_use_id, &output)
                             };
                             input_messages.push(oai::InputMessage::user(vec![content_block]));
                         }
@@ -464,7 +456,10 @@ impl Model for OpenAIModel {
                         let hyper_event = convert_stream_event_stateful(event, &mut state);
                         Some((hyper_event, state))
                     }
-                    Some(Err(e)) => Some((Err(map_openai_error(&e)), state)),
+                    Some(Err(e)) => {
+                        tracing::warn!("OpenAI stream error: {e}");
+                        Some((Err(map_openai_error(&e)), state))
+                    }
                     None => None,
                 }
             },
@@ -617,10 +612,17 @@ fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, Hyp
                 ));
             }
             oai::OutputItem::Reasoning {
-                content: reasoning, ..
+                content: reasoning_content,
+                encrypted_content,
+                ..
             } => {
+                let text = reasoning_content
+                    .as_ref()
+                    .map(|items| items.iter().map(|c| c.text.as_str()).collect::<String>())
+                    .or_else(|| encrypted_content.as_ref().map(|_| String::new()))
+                    .unwrap_or_default();
                 content.push(ContentBlock::Thinking {
-                    content: reasoning.clone(),
+                    content: text,
                     signature: None,
                 });
             }
@@ -628,40 +630,43 @@ fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, Hyp
         }
     }
 
-    let finish_reason = match response.stop_reason {
-        Some(oai::StopReason::EndTurn) => FinishReason::Stop,
-        Some(oai::StopReason::MaxTokens) => FinishReason::MaxTokens,
-        Some(oai::StopReason::ToolUse) => FinishReason::ToolCalls,
-        Some(oai::StopReason::StopSequence) => FinishReason::Stop,
-        Some(oai::StopReason::ContentFilter) => FinishReason::ContentFilter,
-        None => FinishReason::Stop,
+    let finish_reason = match response.status {
+        Some(oai::ResponseStatus::Completed) => {
+            if content
+                .iter()
+                .any(|c| matches!(c, ContentBlock::ToolUse { .. }))
+            {
+                FinishReason::ToolCalls
+            } else {
+                FinishReason::Stop
+            }
+        }
+        Some(oai::ResponseStatus::Incomplete) => FinishReason::MaxTokens,
+        Some(oai::ResponseStatus::Failed) | Some(oai::ResponseStatus::Cancelled) => {
+            FinishReason::Stop
+        }
+        _ => FinishReason::Stop,
     };
 
-    let cached_tokens = response.usage.cached_tokens();
-    let reasoning_tokens = response.usage.reasoning_tokens();
+    let usage = response.usage.as_ref().map(|usage| {
+        let cached_tokens = usage.cached_tokens();
+        let reasoning_tokens = usage.reasoning_tokens();
 
-    let usage = TokenUsage {
-        prompt_tokens: response.usage.input_tokens as i64,
-        completion_tokens: response.usage.output_tokens as i64,
-        total_tokens: response.usage.total_tokens as i64,
-        cache_read_tokens: if cached_tokens > 0 {
-            Some(cached_tokens as i64)
-        } else {
-            None
-        },
-        cache_creation_tokens: None,
-        reasoning_tokens: if reasoning_tokens > 0 {
-            Some(reasoning_tokens as i64)
-        } else {
-            None
-        },
-    };
+        TokenUsage {
+            prompt_tokens: usage.input_tokens as i64,
+            completion_tokens: usage.output_tokens as i64,
+            total_tokens: usage.total_tokens as i64,
+            cache_read_tokens: (cached_tokens > 0).then_some(cached_tokens as i64),
+            cache_creation_tokens: None,
+            reasoning_tokens: (reasoning_tokens > 0).then_some(reasoning_tokens as i64),
+        }
+    });
 
     Ok(GenerateResponse {
         id: response.id,
         content,
         finish_reason,
-        usage: Some(usage),
+        usage,
         model: response.model.unwrap_or_default(),
     })
 }
@@ -755,39 +760,40 @@ fn convert_stream_event_stateful(
             _ => Ok(StreamEvent::Ignored),
         },
         oai::ResponseStreamEvent::ResponseCompleted { response, .. } => {
-            let finish_reason = match response.stop_reason {
-                Some(oai::StopReason::EndTurn) => FinishReason::Stop,
-                Some(oai::StopReason::MaxTokens) => FinishReason::MaxTokens,
-                Some(oai::StopReason::ToolUse) => FinishReason::ToolCalls,
-                Some(oai::StopReason::StopSequence) => FinishReason::Stop,
-                Some(oai::StopReason::ContentFilter) => FinishReason::ContentFilter,
-                None => FinishReason::Stop,
+            let has_tool_calls = !state.tool_calls.is_empty();
+            let finish_reason = match response.status {
+                Some(oai::ResponseStatus::Completed) => {
+                    if has_tool_calls {
+                        FinishReason::ToolCalls
+                    } else {
+                        FinishReason::Stop
+                    }
+                }
+                Some(oai::ResponseStatus::Incomplete) => FinishReason::MaxTokens,
+                Some(oai::ResponseStatus::Failed) | Some(oai::ResponseStatus::Cancelled) => {
+                    FinishReason::Stop
+                }
+                _ => FinishReason::Stop,
             };
 
-            let cached_tokens = response.usage.cached_tokens();
-            let reasoning_tokens = response.usage.reasoning_tokens();
+            let usage = response.usage.as_ref().map(|usage| {
+                let cached_tokens = usage.cached_tokens();
+                let reasoning_tokens = usage.reasoning_tokens();
 
-            let usage = TokenUsage {
-                prompt_tokens: response.usage.input_tokens as i64,
-                completion_tokens: response.usage.output_tokens as i64,
-                total_tokens: response.usage.total_tokens as i64,
-                cache_read_tokens: if cached_tokens > 0 {
-                    Some(cached_tokens as i64)
-                } else {
-                    None
-                },
-                cache_creation_tokens: None,
-                reasoning_tokens: if reasoning_tokens > 0 {
-                    Some(reasoning_tokens as i64)
-                } else {
-                    None
-                },
-            };
+                TokenUsage {
+                    prompt_tokens: usage.input_tokens as i64,
+                    completion_tokens: usage.output_tokens as i64,
+                    total_tokens: usage.total_tokens as i64,
+                    cache_read_tokens: (cached_tokens > 0).then_some(cached_tokens as i64),
+                    cache_creation_tokens: None,
+                    reasoning_tokens: (reasoning_tokens > 0).then_some(reasoning_tokens as i64),
+                }
+            });
 
             Ok(StreamEvent::response_done_full(
                 response.id,
                 response.model.unwrap_or_default(),
-                Some(usage),
+                usage,
                 finish_reason,
             ))
         }
@@ -821,6 +827,31 @@ fn convert_stream_event_stateful(
                 ),
             })
         }
+        oai::ResponseStreamEvent::RefusalDelta {
+            delta,
+            content_index,
+            ..
+        } => Ok(StreamEvent::text_delta(content_index as i64, delta)),
+        oai::ResponseStreamEvent::RefusalDone {
+            refusal,
+            content_index,
+            ..
+        } => Ok(StreamEvent::text_done(
+            content_index as i64,
+            format!("[Refusal: {refusal}]"),
+        )),
+        oai::ResponseStreamEvent::ResponseFailed { response, .. } => {
+            let (code, message) = response
+                .error
+                .map(|e| {
+                    (
+                        e.code.unwrap_or_else(|| "response_failed".to_string()),
+                        e.message,
+                    )
+                })
+                .unwrap_or_else(|| ("response_failed".to_string(), "Response failed".to_string()));
+            Err(HyperError::ProviderError { code, message })
+        }
         oai::ResponseStreamEvent::Error { code, message, .. } => Err(HyperError::ProviderError {
             code: code.unwrap_or_else(|| "unknown".to_string()),
             message,
@@ -833,11 +864,6 @@ fn map_openai_error(e: &oai::OpenAIError) -> HyperError {
     match e {
         oai::OpenAIError::ContextWindowExceeded => {
             HyperError::ContextWindowExceeded("Context window exceeded".to_string())
-        }
-        oai::OpenAIError::QuotaExceeded => {
-            // QuotaExceeded is NOT retryable (requires billing change)
-            // This is different from RateLimitExceeded which is retryable
-            HyperError::QuotaExceeded("Quota exceeded - check your billing settings".to_string())
         }
         oai::OpenAIError::RateLimited { retry_after } => {
             // Use the retry_after value from the SDK if available
@@ -854,15 +880,25 @@ fn map_openai_error(e: &oai::OpenAIError) -> HyperError {
             }
         }
         oai::OpenAIError::Authentication(msg) => HyperError::AuthenticationFailed(msg.clone()),
+        oai::OpenAIError::Parse(msg) => {
+            tracing::warn!("OpenAI parse error: {msg}");
+            HyperError::StreamError(msg.clone())
+        }
+        oai::OpenAIError::Serialization(e) => {
+            tracing::warn!("OpenAI serialization error: {e}");
+            HyperError::StreamError(e.to_string())
+        }
         oai::OpenAIError::Api {
             status, message, ..
         } => {
-            // Check for 5xx errors first - these are retryable
             if *status >= 500 {
                 return HyperError::Retryable {
                     message: format!("Server error ({status}): {message}"),
                     delay: None,
                 };
+            }
+            if *status == 429 {
+                return HyperError::RateLimitExceeded(message.clone());
             }
             HyperError::ProviderError {
                 code: "api_error".to_string(),

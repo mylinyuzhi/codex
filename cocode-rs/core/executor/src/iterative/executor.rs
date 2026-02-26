@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use cocode_error::BoxedError;
+
+use crate::Result;
 use crate::iterative::condition::IterationCondition;
 use crate::iterative::context::IterationContext;
 use crate::iterative::context::IterationRecord;
@@ -47,9 +50,12 @@ pub struct IterationOutput {
 pub type IterationExecuteFn = Arc<
     dyn Fn(
             IterationInput,
-        )
-            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<IterationOutput>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = std::result::Result<IterationOutput, BoxedError>>
+                    + Send,
+            >,
+        > + Send
         + Sync,
 >;
 
@@ -60,8 +66,9 @@ pub type SimpleIterationExecuteFn = Arc<
     dyn Fn(
             i32,    // iteration
             String, // prompt
-        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = std::result::Result<String, BoxedError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -212,7 +219,7 @@ impl IterativeExecutor {
     /// Execute the prompt iteratively according to the configured condition.
     ///
     /// Returns a record of each iteration including its result and duration.
-    pub async fn execute(&mut self, prompt: &str) -> anyhow::Result<Vec<IterationRecord>> {
+    pub async fn execute(&mut self, prompt: &str) -> Result<Vec<IterationRecord>> {
         tracing::info!(
             condition = ?self.condition,
             max_iterations = self.max_iterations,
@@ -391,8 +398,11 @@ impl IterativeExecutor {
             match execute_fn(input).await {
                 Ok(output) => return (output.result, output.success),
                 Err(e) => {
-                    tracing::error!(iteration, error = %e, "Iteration failed");
-                    return (format!("Iteration {iteration} failed: {e}"), false);
+                    tracing::error!(iteration, status = ?e.status_code(), error = ?e, "Iteration failed");
+                    return (
+                        format!("Iteration {iteration} failed: {}", e.output_msg()),
+                        false,
+                    );
                 }
             }
         }
@@ -402,8 +412,11 @@ impl IterativeExecutor {
             match simple_fn(iteration, prompt).await {
                 Ok(result) => return (result, true),
                 Err(e) => {
-                    tracing::error!(iteration, error = %e, "Iteration failed");
-                    return (format!("Iteration {iteration} failed: {e}"), false);
+                    tracing::error!(iteration, status = ?e.status_code(), error = ?e, "Iteration failed");
+                    return (
+                        format!("Iteration {iteration} failed: {}", e.output_msg()),
+                        false,
+                    );
                 }
             }
         }

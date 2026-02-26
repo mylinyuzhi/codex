@@ -78,7 +78,6 @@ pub use client::FallbackConfig;
 pub use client::StreamOptions;
 pub use error::ApiError;
 pub use error::Result;
-pub use model_hub::HubError;
 pub use model_hub::ModelHub;
 pub use model_hub::resolve_identity;
 pub use provider_factory::create_model;

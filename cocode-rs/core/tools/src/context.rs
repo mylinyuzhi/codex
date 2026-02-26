@@ -57,7 +57,7 @@ impl QuestionResponder {
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(request_id, tx);
         rx
     }
@@ -69,7 +69,7 @@ impl QuestionResponder {
         if let Some(tx) = self
             .pending
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(request_id)
         {
             tx.send(answers).is_ok()
@@ -168,9 +168,13 @@ pub struct ModelCallResult {
 pub type ModelCallFn = Arc<
     dyn Fn(
             ModelCallInput,
-        )
-            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<ModelCallResult>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = std::result::Result<ModelCallResult, cocode_error::BoxedError>,
+                    > + Send,
+            >,
+        > + Send
         + Sync,
 >;
 
@@ -188,9 +192,13 @@ pub type AgentCancelTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 pub type SpawnAgentFn = Arc<
     dyn Fn(
             SpawnAgentInput,
-        )
-            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<SpawnAgentResult>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = std::result::Result<SpawnAgentResult, cocode_error::BoxedError>,
+                    > + Send,
+            >,
+        > + Send
         + Sync,
 >;
 
@@ -717,11 +725,18 @@ impl ToolContext {
     /// Spawn a subagent using the configured callback.
     ///
     /// Returns an error if no spawn callback is configured.
-    pub async fn spawn_agent(&self, input: SpawnAgentInput) -> anyhow::Result<SpawnAgentResult> {
-        let spawn_fn = self
-            .spawn_agent_fn
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No spawn_agent_fn configured"))?;
+    pub async fn spawn_agent(
+        &self,
+        input: SpawnAgentInput,
+    ) -> std::result::Result<SpawnAgentResult, cocode_error::BoxedError> {
+        let spawn_fn = self.spawn_agent_fn.as_ref().ok_or_else(|| {
+            cocode_error::boxed_err(
+                crate::error::tool_error::InternalSnafu {
+                    message: "No spawn_agent_fn configured".to_string(),
+                }
+                .build(),
+            )
+        })?;
         spawn_fn(input).await
     }
 

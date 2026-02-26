@@ -26,6 +26,7 @@ pub use responses::CachingConfig;
 pub use responses::InputMessage;
 pub use responses::MIN_THINKING_BUDGET_TOKENS;
 pub use responses::OutputItem;
+pub use responses::ReasoningContent;
 pub use responses::ReasoningEffort;
 pub use responses::ReasoningStatus;
 pub use responses::ReasoningSummary;
