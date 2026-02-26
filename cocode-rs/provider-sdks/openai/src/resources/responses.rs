@@ -30,11 +30,11 @@ impl<'a> Responses<'a> {
     /// # Example
     ///
     /// ```ignore
-    /// use openai_sdk::{Client, ResponseCreateParams, InputMessage};
+    /// use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem};
     ///
     /// let client = Client::from_env()?;
     /// let params = ResponseCreateParams::new("gpt-4o", vec![
-    ///     InputMessage::user_text("Hello!")
+    ///     ResponseInputItem::user_text("Hello!")
     /// ]);
     ///
     /// let response = client.responses().create(params).await?;
@@ -117,11 +117,11 @@ impl<'a> Responses<'a> {
     /// # Example
     ///
     /// ```ignore
-    /// use openai_sdk::{Client, ResponseCreateParams, InputMessage, ResponseStreamEvent};
+    /// use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem, ResponseStreamEvent};
     ///
     /// let client = Client::from_env()?;
     /// let params = ResponseCreateParams::new("gpt-4o", vec![
-    ///     InputMessage::user_text("Hello!")
+    ///     ResponseInputItem::user_text("Hello!")
     /// ]);
     ///
     /// let mut stream = client.responses().stream(params).await?;

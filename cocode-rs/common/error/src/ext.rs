@@ -1,39 +1,34 @@
 //! Error extension traits.
 //!
-//! This module provides the [`ErrorExt`] trait for unified error handling with:
-//! - Status code classification
-//! - Retry semantics
-//! - User-friendly error messages
-//!
-//! # Integration with snafu-virtstack
-//!
-//! For errors using `#[stack_trace_debug]`, the virtual stack trace is
-//! automatically available via the `VirtualStackTrace` trait.
+//! This module provides:
+//! - [`StackError`] — virtual stack trace walking (auto-implemented by `#[stack_trace_debug]`)
+//! - [`ErrorExt`] — unified error handling with status codes, retry semantics,
+//!   and user-friendly messages
 //!
 //! # Example
 //!
 //! ```ignore
-//! use common_error::{ErrorExt, StatusCode, stack_trace_debug};
+//! use cocode_error::{ErrorExt, StatusCode, stack_trace_debug};
 //! use snafu::Snafu;
 //!
 //! #[stack_trace_debug]
 //! #[derive(Snafu)]
 //! pub enum MyError {
 //!     #[snafu(display("Network error"))]
-//!     Network { source: reqwest::Error },
-//!
-//!     #[snafu(display("Rate limited"))]
-//!     RateLimited { retry_after: std::time::Duration },
+//!     Network {
+//!         #[snafu(source)]
+//!         error: reqwest::Error,
+//!         #[snafu(implicit)]
+//!         location: Location,
+//!     },
 //! }
 //!
 //! impl ErrorExt for MyError {
 //!     fn status_code(&self) -> StatusCode {
 //!         match self {
 //!             Self::Network { .. } => StatusCode::NetworkError,
-//!             Self::RateLimited { .. } => StatusCode::RateLimited,
 //!         }
 //!     }
-//!
 //!     fn as_any(&self) -> &dyn std::any::Any { self }
 //! }
 //! ```
@@ -41,6 +36,34 @@
 use crate::StatusCode;
 use std::any::Any;
 use std::time::Duration;
+
+/// Trait for errors that support virtual stack trace walking.
+///
+/// Automatically implemented by `#[stack_trace_debug]` proc macro.
+/// Each error layer records its own `Location` (captured at creation time via
+/// `#[snafu(implicit)]`), so the resulting trace shows the *actual* call site
+/// for every frame.
+pub trait StackError: std::error::Error {
+    /// Format this error as a stack trace frame and recurse into sources.
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>);
+
+    /// Return the next error in the StackError chain (internal sources only).
+    fn next(&self) -> Option<&dyn StackError>;
+
+    /// Walk to the last (innermost) error in the StackError chain.
+    fn last(&self) -> &dyn StackError
+    where
+        Self: Sized,
+    {
+        let Some(mut result) = self.next() else {
+            return self;
+        };
+        while let Some(err) = result.next() {
+            result = err;
+        }
+        result
+    }
+}
 
 /// Extension trait for errors with status code and retryability.
 ///
@@ -62,7 +85,7 @@ use std::time::Duration;
 ///     }
 /// }
 /// ```
-pub trait ErrorExt: std::error::Error {
+pub trait ErrorExt: StackError {
     /// Returns the status code for this error.
     ///
     /// Override this to provide appropriate classification.
@@ -168,6 +191,16 @@ impl std::error::Error for BoxedErrorSource {
     }
 }
 
+impl StackError for BoxedErrorSource {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        self.inner.debug_fmt(layer, buf)
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        self.inner.next()
+    }
+}
+
 /// Box an internal error that already implements [`ErrorExt`].
 ///
 /// This is the preferred boundary conversion: it preserves the concrete error
@@ -222,6 +255,16 @@ impl std::error::Error for PlainError {
         self.source
             .as_ref()
             .map(|e| e.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
+
+impl StackError for PlainError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {}", self.message));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
     }
 }
 

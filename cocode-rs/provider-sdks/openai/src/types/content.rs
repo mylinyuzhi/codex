@@ -71,6 +71,11 @@ pub enum InputContentBlock {
         /// The text content.
         text: String,
     },
+    /// Assistant output text from a previous turn (for conversation history).
+    OutputText {
+        /// The text content.
+        text: String,
+    },
     /// Image content.
     InputImage {
         /// Image source (base64, URL, or file ID).
@@ -247,6 +252,11 @@ impl InputContentBlock {
     /// Create a text content block.
     pub fn text(text: impl Into<String>) -> Self {
         Self::InputText { text: text.into() }
+    }
+
+    /// Create an output text content block (for assistant messages in conversation history).
+    pub fn output_text(text: impl Into<String>) -> Self {
+        Self::OutputText { text: text.into() }
     }
 
     /// Create an image content block from base64 data.

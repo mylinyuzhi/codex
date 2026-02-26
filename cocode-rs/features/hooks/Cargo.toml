@@ -13,7 +13,6 @@ tokio = { workspace = true, features = ["sync", "process", "time", "io-util"] }
 tracing.workspace = true
 regex.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }

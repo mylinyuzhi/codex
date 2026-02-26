@@ -51,17 +51,17 @@ pub enum ConfigError {
     Io {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
 
     /// Configuration parsing error (wraps serde_json::Error).
-    #[snafu(display("Config error in {file}: {source}"))]
+    #[snafu(display("Config error in {file}: {error}"))]
     JsonParse {
         file: String,
         #[snafu(source)]
-        source: serde_json::Error,
+        error: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },

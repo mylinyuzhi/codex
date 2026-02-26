@@ -17,7 +17,6 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "sync", "rt"] }
 tracing.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

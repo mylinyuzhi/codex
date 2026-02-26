@@ -27,13 +27,43 @@ fn test_thinking_config_checked() {
 }
 
 #[test]
-fn test_input_message() {
-    let msg = InputMessage::user_text("Hello");
-    assert_eq!(msg.role, Role::User);
-    assert_eq!(msg.content.len(), 1);
+fn test_response_input_item_message() {
+    let item = ResponseInputItem::user_text("Hello");
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""type":"message""#));
+    assert!(json.contains(r#""role":"user""#));
 
-    let msg = InputMessage::system("You are helpful");
-    assert_eq!(msg.role, Role::System);
+    let item = ResponseInputItem::system_message("You are helpful");
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""type":"message""#));
+    assert!(json.contains(r#""role":"system""#));
+}
+
+#[test]
+fn test_response_input_item_function_call() {
+    let item = ResponseInputItem::function_call("call-123", "get_weather", r#"{"city":"London"}"#);
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""type":"function_call""#));
+    assert!(json.contains(r#""call_id":"call-123""#));
+    assert!(json.contains(r#""name":"get_weather""#));
+}
+
+#[test]
+fn test_response_input_item_function_call_output() {
+    let item = ResponseInputItem::function_call_output("call-123", "sunny");
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""type":"function_call_output""#));
+    assert!(json.contains(r#""call_id":"call-123""#));
+    assert!(json.contains(r#""output":"sunny""#));
+}
+
+#[test]
+fn test_response_input_item_custom_tool_call_output() {
+    let item = ResponseInputItem::custom_tool_call_output("call-456", "result data");
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""type":"custom_tool_call_output""#));
+    assert!(json.contains(r#""call_id":"call-456""#));
+    assert!(json.contains(r#""output":"result data""#));
 }
 
 #[test]
@@ -44,15 +74,16 @@ fn test_response_input_text() {
 }
 
 #[test]
-fn test_response_input_messages() {
-    let input = ResponseInput::from(vec![InputMessage::user_text("Hello")]);
+fn test_response_input_items() {
+    let input = ResponseInput::from(vec![ResponseInputItem::user_text("Hello")]);
     let json = serde_json::to_string(&input).unwrap();
+    assert!(json.contains(r#""type":"message""#));
     assert!(json.contains(r#""role":"user""#));
 }
 
 #[test]
 fn test_response_create_params_builder() {
-    let params = ResponseCreateParams::new("gpt-4o", vec![InputMessage::user_text("Hello")])
+    let params = ResponseCreateParams::new("gpt-4o", vec![ResponseInputItem::user_text("Hello")])
         .instructions("Be helpful")
         .max_output_tokens(1024)
         .temperature(0.7)

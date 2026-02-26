@@ -313,66 +313,205 @@ pub struct IncompleteDetails {
 }
 
 // ============================================================================
-// Input message
+// Response input item (flat item list for multi-turn conversations)
 // ============================================================================
 
-/// Input message for the conversation.
+/// A single item in the flat input list for the Responses API.
+///
+/// The OpenAI Responses API `input` field accepts a flat list of heterogeneous
+/// items (messages, function calls, function call outputs, etc.). This enum
+/// models the `ResponseInputItemParam` discriminated union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputMessage {
-    /// Role of the message author.
-    pub role: Role,
-
-    /// Content blocks of the message.
-    pub content: Vec<InputContentBlock>,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseInputItem {
+    /// A message (user, assistant, system, or developer).
+    Message {
+        /// Role of the message author.
+        role: Role,
+        /// Content blocks of the message.
+        content: Vec<InputContentBlock>,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional status (e.g. "completed" for assistant messages).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// A function call from a previous assistant turn.
+    FunctionCall {
+        /// Call ID to correlate with the function call output.
+        call_id: String,
+        /// Function name.
+        name: String,
+        /// Arguments as JSON string.
+        arguments: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Output from a function call (tool result).
+    FunctionCallOutput {
+        /// Call ID of the function call this responds to.
+        call_id: String,
+        /// Output of the function call.
+        output: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Optional status.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// A custom tool call from a previous assistant turn.
+    #[serde(rename = "custom_tool_call")]
+    CustomToolCall {
+        /// Call ID to correlate with the custom tool call output.
+        call_id: String,
+        /// Tool name.
+        name: String,
+        /// Tool input (free-form text).
+        input: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// Output from a custom tool call.
+    #[serde(rename = "custom_tool_call_output")]
+    CustomToolCallOutput {
+        /// Call ID of the custom tool call this responds to.
+        call_id: String,
+        /// Output from the custom tool.
+        output: String,
+        /// Optional item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// Item reference (reference a previous conversation item by ID).
+    ItemReference {
+        /// ID of the item to reference.
+        id: String,
+    },
 }
 
-impl InputMessage {
+impl ResponseInputItem {
     /// Create a user message with content blocks.
-    pub fn user(content: Vec<InputContentBlock>) -> Self {
-        Self {
+    pub fn user_message(content: Vec<InputContentBlock>) -> Self {
+        Self::Message {
             role: Role::User,
             content,
+            id: None,
+            status: None,
         }
     }
 
     /// Create a user message with a single text block.
     pub fn user_text(text: impl Into<String>) -> Self {
-        Self {
+        Self::Message {
             role: Role::User,
             content: vec![InputContentBlock::text(text)],
+            id: None,
+            status: None,
         }
     }
 
     /// Create an assistant message with content blocks.
-    pub fn assistant(content: Vec<InputContentBlock>) -> Self {
-        Self {
+    pub fn assistant_message(
+        content: Vec<InputContentBlock>,
+        id: Option<String>,
+        status: Option<String>,
+    ) -> Self {
+        Self::Message {
             role: Role::Assistant,
             content,
+            id,
+            status,
         }
     }
 
     /// Create an assistant message with a single text block.
     pub fn assistant_text(text: impl Into<String>) -> Self {
-        Self {
+        Self::Message {
             role: Role::Assistant,
-            content: vec![InputContentBlock::text(text)],
+            content: vec![InputContentBlock::output_text(text)],
+            id: None,
+            status: Some("completed".to_string()),
         }
     }
 
     /// Create a system message with a single text block.
-    pub fn system(text: impl Into<String>) -> Self {
-        Self {
+    pub fn system_message(text: impl Into<String>) -> Self {
+        Self::Message {
             role: Role::System,
             content: vec![InputContentBlock::text(text)],
+            id: None,
+            status: None,
         }
     }
 
     /// Create a developer message with a single text block.
-    pub fn developer(text: impl Into<String>) -> Self {
-        Self {
+    pub fn developer_message(text: impl Into<String>) -> Self {
+        Self::Message {
             role: Role::Developer,
             content: vec![InputContentBlock::text(text)],
+            id: None,
+            status: None,
         }
+    }
+
+    /// Create a function call item (from a previous assistant turn).
+    pub fn function_call(
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self::FunctionCall {
+            call_id: call_id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create a function call output item (tool result).
+    pub fn function_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::FunctionCallOutput {
+            call_id: call_id.into(),
+            output: output.into(),
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create a custom tool call item (from a previous assistant turn).
+    pub fn custom_tool_call(
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> Self {
+        Self::CustomToolCall {
+            call_id: call_id.into(),
+            name: name.into(),
+            input: input.into(),
+            id: None,
+        }
+    }
+
+    /// Create a custom tool call output item (tool result).
+    pub fn custom_tool_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::CustomToolCallOutput {
+            call_id: call_id.into(),
+            output: output.into(),
+            id: None,
+        }
+    }
+
+    /// Create an item reference.
+    pub fn item_reference(id: impl Into<String>) -> Self {
+        Self::ItemReference { id: id.into() }
     }
 }
 
@@ -380,14 +519,14 @@ impl InputMessage {
 // Response input (text or messages)
 // ============================================================================
 
-/// Input for response creation - can be simple text or messages.
+/// Input for response creation - can be simple text or a flat item list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponseInput {
     /// Simple text input.
     Text(String),
-    /// Array of input messages.
-    Messages(Vec<InputMessage>),
+    /// Flat list of input items (messages, function calls, outputs, etc.).
+    Items(Vec<ResponseInputItem>),
 }
 
 impl From<String> for ResponseInput {
@@ -402,9 +541,9 @@ impl From<&str> for ResponseInput {
     }
 }
 
-impl From<Vec<InputMessage>> for ResponseInput {
-    fn from(messages: Vec<InputMessage>) -> Self {
-        Self::Messages(messages)
+impl From<Vec<ResponseInputItem>> for ResponseInput {
+    fn from(items: Vec<ResponseInputItem>) -> Self {
+        Self::Items(items)
     }
 }
 
@@ -1099,11 +1238,11 @@ pub struct PromptParam {
 }
 
 impl ResponseCreateParams {
-    /// Create new response parameters with message input.
-    pub fn new(model: impl Into<String>, input: Vec<InputMessage>) -> Self {
+    /// Create new response parameters with item input.
+    pub fn new(model: impl Into<String>, input: Vec<ResponseInputItem>) -> Self {
         Self {
             model: model.into(),
-            input: ResponseInput::Messages(input),
+            input: ResponseInput::Items(input),
             instructions: None,
             max_output_tokens: None,
             tools: None,

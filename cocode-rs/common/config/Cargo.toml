@@ -15,7 +15,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 jsonc-parser = { version = "0.24", features = ["serde"] }
 snafu.workspace = true
-snafu-virtstack.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]

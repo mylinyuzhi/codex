@@ -65,6 +65,16 @@ impl std::error::Error for RetryableError {
     }
 }
 
+impl StackError for RetryableError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: retryable error"));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
+    }
+}
+
 impl ErrorExt for RetryableError {
     fn status_code(&self) -> StatusCode {
         self.status

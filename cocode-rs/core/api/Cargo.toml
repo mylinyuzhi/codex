@@ -16,7 +16,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 humantime-serde = "1.1"
 snafu.workspace = true
-snafu-virtstack.workspace = true
 async-trait.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

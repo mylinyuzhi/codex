@@ -19,7 +19,7 @@ pub enum PlanModeError {
     CreateDir {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -29,7 +29,7 @@ pub enum PlanModeError {
     ReadFile {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -39,7 +39,7 @@ pub enum PlanModeError {
     WriteFile {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },

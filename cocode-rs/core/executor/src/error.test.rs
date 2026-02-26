@@ -15,6 +15,16 @@ impl std::fmt::Display for DummyError {
 
 impl std::error::Error for DummyError {}
 
+impl cocode_error::ext::StackError for DummyError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: dummy"));
+    }
+
+    fn next(&self) -> Option<&dyn cocode_error::ext::StackError> {
+        None
+    }
+}
+
 impl ErrorExt for DummyError {
     fn status_code(&self) -> StatusCode {
         self.code

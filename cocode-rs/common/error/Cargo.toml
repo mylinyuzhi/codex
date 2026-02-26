@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cocode-stack-trace-macro.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 strum.workspace = true
 
 [lints]

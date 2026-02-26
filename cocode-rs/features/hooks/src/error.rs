@@ -42,7 +42,7 @@ pub enum HookError {
     Io {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },

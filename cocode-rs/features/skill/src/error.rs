@@ -29,17 +29,17 @@ pub enum SkillError {
     Io {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
 
     /// YAML parse error (wraps serde_yml::Error).
-    #[snafu(display("YAML parse error in {file}: {source}"))]
+    #[snafu(display("YAML parse error in {file}: {error}"))]
     YamlParse {
         file: String,
         #[snafu(source)]
-        source: serde_yml::Error,
+        error: serde_yml::Error,
         #[snafu(implicit)]
         location: Location,
     },

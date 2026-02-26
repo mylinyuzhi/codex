@@ -20,7 +20,6 @@ futures.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 tokio = { workspace = true, features = ["process", "fs"] }
 tracing.workspace = true
 walkdir.workspace = true

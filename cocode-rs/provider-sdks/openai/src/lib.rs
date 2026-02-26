@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use openai_sdk::{Client, ResponseCreateParams, InputMessage, ThinkingConfig};
+//! use openai_sdk::{Client, ResponseCreateParams, ResponseInputItem, ThinkingConfig};
 //!
 //! #[tokio::main]
 //! async fn main() -> openai_sdk::Result<()> {
@@ -25,7 +25,7 @@
 //!
 //!     // Build request parameters
 //!     let params = ResponseCreateParams::new("gpt-4o", vec![
-//!         InputMessage::user_text("Hello, what is 2 + 2?")
+//!         ResponseInputItem::user_text("Hello, what is 2 + 2?")
 //!     ])
 //!     .max_output_tokens(1024)
 //!     .thinking(ThinkingConfig::enabled(2048));
@@ -117,7 +117,6 @@ pub use types::DragPathPoint;
 pub use types::FileSearchResult;
 pub use types::IncompleteDetails;
 pub use types::IncompleteReason;
-pub use types::InputMessage;
 pub use types::InputTokensDetails;
 pub use types::MIN_THINKING_BUDGET_TOKENS;
 pub use types::McpToolInfo;
@@ -135,6 +134,7 @@ pub use types::ResponseCreateParams;
 pub use types::ResponseError;
 pub use types::ResponseIncludable;
 pub use types::ResponseInput;
+pub use types::ResponseInputItem;
 pub use types::ResponsePrompt;
 pub use types::SafetyCheck;
 pub use types::SdkHttpResponse;

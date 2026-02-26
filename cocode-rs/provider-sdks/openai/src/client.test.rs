@@ -7,8 +7,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use crate::types::EmbeddingCreateParams;
-use crate::types::InputMessage;
 use crate::types::ResponseCreateParams;
+use crate::types::ResponseInputItem;
 use crate::types::ResponseStatus;
 use crate::types::Tool;
 
@@ -93,7 +93,7 @@ async fn test_responses_create_success() {
         .await;
 
     let client = make_client(&mock_server.uri());
-    let params = ResponseCreateParams::new("gpt-4o", vec![InputMessage::user_text("Hello!")]);
+    let params = ResponseCreateParams::new("gpt-4o", vec![ResponseInputItem::user_text("Hello!")]);
 
     let response = client.responses().create(params).await.unwrap();
 
@@ -141,8 +141,9 @@ async fn test_responses_create_with_tools() {
     )
     .unwrap();
 
-    let params = ResponseCreateParams::new("gpt-4o", vec![InputMessage::user_text("Weather?")])
-        .tools(vec![tool]);
+    let params =
+        ResponseCreateParams::new("gpt-4o", vec![ResponseInputItem::user_text("Weather?")])
+            .tools(vec![tool]);
 
     let response = client.responses().create(params).await.unwrap();
 

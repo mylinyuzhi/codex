@@ -16,7 +16,7 @@ pub enum FileBackupError {
     Io {
         message: String,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -25,7 +25,7 @@ pub enum FileBackupError {
     Json {
         message: String,
         #[snafu(source)]
-        source: serde_json::Error,
+        error: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -52,7 +52,7 @@ pub enum FileBackupError {
     TaskJoin {
         message: String,
         #[snafu(source)]
-        source: tokio::task::JoinError,
+        error: tokio::task::JoinError,
         #[snafu(implicit)]
         location: Location,
     },

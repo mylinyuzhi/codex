@@ -70,7 +70,7 @@ enum SessionStateError {
     InvalidModelSpec {
         model_name: String,
         #[snafu(source)]
-        source: cocode_protocol::ModelSpecParseError,
+        error: cocode_protocol::ModelSpecParseError,
         #[snafu(implicit)]
         location: cocode_error::Location,
     },

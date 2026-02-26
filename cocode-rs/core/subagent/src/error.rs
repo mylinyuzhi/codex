@@ -18,7 +18,7 @@ pub enum SubagentError {
     IoReadFile {
         path: PathBuf,
         #[snafu(source)]
-        source: std::io::Error,
+        error: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -35,7 +35,7 @@ pub enum SubagentError {
     YamlParse {
         path: PathBuf,
         #[snafu(source)]
-        source: serde_yml::Error,
+        error: serde_yml::Error,
         #[snafu(implicit)]
         location: Location,
     },

@@ -4,6 +4,7 @@ members = [
     "common/protocol",
     "common/config",
     "common/otel",
+    "common/stack-trace-macro",
     "core/api",
     "core/message",
     "core/tools",
@@ -72,6 +73,7 @@ cocode-error = { path = "common/error" }
 cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
 cocode-otel = { path = "common/otel" }
+cocode-stack-trace-macro = { path = "common/stack-trace-macro" }
 
 # Internal - core
 cocode-api = { path = "core/api" }
@@ -184,7 +186,6 @@ serde_json = "1"
 serde_yml = "0.0.12"
 similar = "2"
 snafu = "0.8"
-snafu-virtstack = "0.1"
 streaming-iterator = "0.1"
 strum = { version = "0.27", features = ["derive"] }
 sha1 = "0.10.6"

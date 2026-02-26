@@ -53,7 +53,6 @@ tokio-util.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

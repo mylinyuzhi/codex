@@ -10,7 +10,6 @@ cocode-error.workspace = true
 cocode-config.workspace = true
 cocode-context.workspace = true
 snafu.workspace = true
-snafu-virtstack.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true

@@ -213,8 +213,8 @@ impl Model for OpenAIModel {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
         request.sanitize_for_target(self.provider(), self.model_name());
 
-        // Convert messages
-        let mut input_messages = Vec::new();
+        // Convert messages to flat input items
+        let mut input_items: Vec<oai::ResponseInputItem> = Vec::new();
         let mut system_instruction = None;
 
         for msg in &request.messages {
@@ -223,15 +223,32 @@ impl Model for OpenAIModel {
                     system_instruction = Some(msg.text());
                 }
                 Role::User => {
-                    let content_blocks = convert_content_to_oai(&msg.content);
-                    input_messages.push(oai::InputMessage::user(content_blocks));
+                    let content_blocks = convert_content_to_oai(&msg.content, Role::User);
+                    input_items.push(oai::ResponseInputItem::user_message(content_blocks));
                 }
                 Role::Assistant => {
-                    let content_blocks = convert_content_to_oai(&msg.content);
-                    input_messages.push(oai::InputMessage::assistant(content_blocks));
+                    // 1) Text content → assistant message item
+                    let content_blocks = convert_content_to_oai(&msg.content, Role::Assistant);
+                    if !content_blocks.is_empty() {
+                        input_items.push(oai::ResponseInputItem::assistant_message(
+                            content_blocks,
+                            None,
+                            Some("completed".to_string()),
+                        ));
+                    }
+                    // 2) Tool calls → top-level function_call items
+                    for block in &msg.content {
+                        if let ContentBlock::ToolUse { id, name, input } = block {
+                            let args = match input {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            };
+                            input_items.push(oai::ResponseInputItem::function_call(id, name, args));
+                        }
+                    }
                 }
                 Role::Tool => {
-                    // Extract tool result — route custom vs function tools
+                    // Tool results → top-level items (NOT wrapped in messages)
                     for block in &msg.content {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
@@ -241,15 +258,17 @@ impl Model for OpenAIModel {
                         } = block
                         {
                             let output = content.to_text();
-                            let content_block = if *is_custom {
-                                oai::InputContentBlock::custom_tool_call_output(
+                            if *is_custom {
+                                input_items.push(oai::ResponseInputItem::custom_tool_call_output(
                                     tool_use_id,
                                     &output,
-                                )
+                                ));
                             } else {
-                                oai::InputContentBlock::function_call_output(tool_use_id, &output)
-                            };
-                            input_messages.push(oai::InputMessage::user(vec![content_block]));
+                                input_items.push(oai::ResponseInputItem::function_call_output(
+                                    tool_use_id,
+                                    &output,
+                                ));
+                            }
                         }
                     }
                 }
@@ -257,7 +276,7 @@ impl Model for OpenAIModel {
         }
 
         // Build request params
-        let mut params = oai::ResponseCreateParams::new(&self.model_id, input_messages);
+        let mut params = oai::ResponseCreateParams::new(&self.model_id, input_items);
 
         if let Some(instructions) = system_instruction {
             params = params.instructions(instructions);
@@ -338,8 +357,8 @@ impl Model for OpenAIModel {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
         request.sanitize_for_target(self.provider(), self.model_name());
 
-        // Convert messages (same as generate)
-        let mut input_messages = Vec::new();
+        // Convert messages to flat input items (same as generate)
+        let mut input_items: Vec<oai::ResponseInputItem> = Vec::new();
         let mut system_instruction = None;
 
         for msg in &request.messages {
@@ -348,14 +367,32 @@ impl Model for OpenAIModel {
                     system_instruction = Some(msg.text());
                 }
                 Role::User => {
-                    let content_blocks = convert_content_to_oai(&msg.content);
-                    input_messages.push(oai::InputMessage::user(content_blocks));
+                    let content_blocks = convert_content_to_oai(&msg.content, Role::User);
+                    input_items.push(oai::ResponseInputItem::user_message(content_blocks));
                 }
                 Role::Assistant => {
-                    let content_blocks = convert_content_to_oai(&msg.content);
-                    input_messages.push(oai::InputMessage::assistant(content_blocks));
+                    // 1) Text content → assistant message item
+                    let content_blocks = convert_content_to_oai(&msg.content, Role::Assistant);
+                    if !content_blocks.is_empty() {
+                        input_items.push(oai::ResponseInputItem::assistant_message(
+                            content_blocks,
+                            None,
+                            Some("completed".to_string()),
+                        ));
+                    }
+                    // 2) Tool calls → top-level function_call items
+                    for block in &msg.content {
+                        if let ContentBlock::ToolUse { id, name, input } = block {
+                            let args = match input {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            };
+                            input_items.push(oai::ResponseInputItem::function_call(id, name, args));
+                        }
+                    }
                 }
                 Role::Tool => {
+                    // Tool results → top-level items (NOT wrapped in messages)
                     for block in &msg.content {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
@@ -365,15 +402,17 @@ impl Model for OpenAIModel {
                         } = block
                         {
                             let output = content.to_text();
-                            let content_block = if *is_custom {
-                                oai::InputContentBlock::custom_tool_call_output(
+                            if *is_custom {
+                                input_items.push(oai::ResponseInputItem::custom_tool_call_output(
                                     tool_use_id,
                                     &output,
-                                )
+                                ));
                             } else {
-                                oai::InputContentBlock::function_call_output(tool_use_id, &output)
-                            };
-                            input_messages.push(oai::InputMessage::user(vec![content_block]));
+                                input_items.push(oai::ResponseInputItem::function_call_output(
+                                    tool_use_id,
+                                    &output,
+                                ));
+                            }
                         }
                     }
                 }
@@ -381,7 +420,7 @@ impl Model for OpenAIModel {
         }
 
         // Build request params
-        let mut params = oai::ResponseCreateParams::new(&self.model_id, input_messages);
+        let mut params = oai::ResponseCreateParams::new(&self.model_id, input_items);
 
         if let Some(instructions) = system_instruction {
             params = params.instructions(instructions);
@@ -497,11 +536,17 @@ impl OpenAIStreamState {
 // Conversion helpers
 // ============================================================================
 
-fn convert_content_to_oai(content: &[ContentBlock]) -> Vec<oai::InputContentBlock> {
+fn convert_content_to_oai(content: &[ContentBlock], role: Role) -> Vec<oai::InputContentBlock> {
     content
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text { text } => Some(oai::InputContentBlock::text(text)),
+            ContentBlock::Text { text } => {
+                if role == Role::Assistant {
+                    Some(oai::InputContentBlock::output_text(text))
+                } else {
+                    Some(oai::InputContentBlock::text(text))
+                }
+            }
             ContentBlock::Image { source, .. } => match source {
                 ImageSource::Base64 { data, media_type } => {
                     let data_url = format!("data:{media_type};base64,{data}");
