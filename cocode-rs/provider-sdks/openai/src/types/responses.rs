@@ -25,6 +25,7 @@ use crate::error::Result;
 #[serde(rename_all = "snake_case")]
 pub enum PromptCacheRetention {
     /// Session-based cache (in-memory).
+    #[serde(rename = "in-memory")]
     InMemory,
     /// Extended retention up to 24 hours.
     #[serde(rename = "24h")]
@@ -527,8 +528,7 @@ pub enum ResponseInputItem {
         id: String,
         /// Status.
         status: String,
-        /// Generated result (URL or base64).
-        #[serde(skip_serializing_if = "Option::is_none")]
+        /// Generated result (URL or base64). Always serialized (may be null).
         result: Option<String>,
     },
     /// Reasoning item (from a previous assistant turn).
@@ -552,10 +552,77 @@ pub enum ResponseInputItem {
     /// Compaction item (from a previous assistant turn).
     #[serde(rename = "compaction")]
     Compaction {
-        /// Unique ID.
-        id: String,
+        /// Unique ID (optional per Python SDK `Optional[str]`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         /// Encrypted content.
         encrypted_content: String,
+    },
+    /// File search tool call (from a previous assistant turn).
+    #[serde(rename = "file_search_call")]
+    FileSearchCall {
+        /// Unique ID.
+        id: String,
+        /// Search queries.
+        queries: Vec<String>,
+        /// Status of the call.
+        status: String,
+        /// Search results.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        results: Option<Vec<FileSearchResult>>,
+    },
+    /// Computer tool call (from a previous assistant turn).
+    #[serde(rename = "computer_call")]
+    ComputerCall {
+        /// Unique ID.
+        id: String,
+        /// Call ID.
+        call_id: String,
+        /// Action to perform.
+        action: ComputerAction,
+        /// Pending safety checks.
+        pending_safety_checks: Vec<SafetyCheck>,
+        /// Status of the call.
+        status: String,
+    },
+    /// Web search tool call (from a previous assistant turn).
+    #[serde(rename = "web_search_call")]
+    WebSearchCall {
+        /// Unique ID.
+        id: String,
+        /// Status of the call.
+        status: String,
+        /// Action details.
+        action: serde_json::Value,
+    },
+    /// Code interpreter tool call (from a previous assistant turn).
+    #[serde(rename = "code_interpreter_call")]
+    CodeInterpreterCall {
+        /// Unique ID.
+        id: String,
+        /// Container ID.
+        container_id: String,
+        /// Status of the call.
+        status: String,
+        /// Code to execute.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        /// Execution outputs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outputs: Option<Vec<CodeInterpreterOutput>>,
+    },
+    /// MCP list tools response (from a previous assistant turn).
+    #[serde(rename = "mcp_list_tools")]
+    McpListTools {
+        /// Unique ID.
+        id: String,
+        /// MCP server label.
+        server_label: String,
+        /// Available tools.
+        tools: Vec<McpToolInfo>,
+        /// Error if any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 }
 
@@ -837,8 +904,81 @@ impl ResponseInputItem {
     /// Create a compaction input item.
     pub fn compaction(id: impl Into<String>, encrypted_content: impl Into<String>) -> Self {
         Self::Compaction {
-            id: id.into(),
+            id: Some(id.into()),
             encrypted_content: encrypted_content.into(),
+        }
+    }
+
+    /// Create a file search call input item.
+    pub fn file_search_call(
+        id: impl Into<String>,
+        queries: Vec<String>,
+        status: impl Into<String>,
+    ) -> Self {
+        Self::FileSearchCall {
+            id: id.into(),
+            queries,
+            status: status.into(),
+            results: None,
+        }
+    }
+
+    /// Create a computer call input item.
+    pub fn computer_call(
+        id: impl Into<String>,
+        call_id: impl Into<String>,
+        action: ComputerAction,
+        pending_safety_checks: Vec<SafetyCheck>,
+        status: impl Into<String>,
+    ) -> Self {
+        Self::ComputerCall {
+            id: id.into(),
+            call_id: call_id.into(),
+            action,
+            pending_safety_checks,
+            status: status.into(),
+        }
+    }
+
+    /// Create a web search call input item.
+    pub fn web_search_call(
+        id: impl Into<String>,
+        status: impl Into<String>,
+        action: serde_json::Value,
+    ) -> Self {
+        Self::WebSearchCall {
+            id: id.into(),
+            status: status.into(),
+            action,
+        }
+    }
+
+    /// Create a code interpreter call input item.
+    pub fn code_interpreter_call(
+        id: impl Into<String>,
+        container_id: impl Into<String>,
+        status: impl Into<String>,
+    ) -> Self {
+        Self::CodeInterpreterCall {
+            id: id.into(),
+            container_id: container_id.into(),
+            status: status.into(),
+            code: None,
+            outputs: None,
+        }
+    }
+
+    /// Create an MCP list tools input item.
+    pub fn mcp_list_tools(
+        id: impl Into<String>,
+        server_label: impl Into<String>,
+        tools: Vec<McpToolInfo>,
+    ) -> Self {
+        Self::McpListTools {
+            id: id.into(),
+            server_label: server_label.into(),
+            tools,
+            error: None,
         }
     }
 }
