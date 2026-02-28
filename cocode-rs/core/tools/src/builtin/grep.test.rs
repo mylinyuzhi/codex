@@ -133,7 +133,7 @@ async fn test_grep_no_matches() {
 #[test]
 fn test_tool_properties() {
     let tool = GrepTool::new();
-    assert_eq!(tool.name(), "Grep");
+    assert_eq!(tool.name(), cocode_protocol::tools::GREP);
     assert!(tool.is_concurrent_safe());
 }
 

@@ -38,7 +38,7 @@ impl Default for ExitPlanModeTool {
 #[async_trait]
 impl Tool for ExitPlanModeTool {
     fn name(&self) -> &str {
-        "ExitPlanMode"
+        cocode_protocol::tools::EXIT_PLAN_MODE
     }
 
     fn description(&self) -> &str {

@@ -49,7 +49,7 @@ impl Default for EnterPlanModeTool {
 #[async_trait]
 impl Tool for EnterPlanModeTool {
     fn name(&self) -> &str {
-        "EnterPlanMode"
+        cocode_protocol::tools::ENTER_PLAN_MODE
     }
 
     fn description(&self) -> &str {

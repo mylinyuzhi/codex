@@ -23,6 +23,6 @@ async fn test_task_tool() {
 #[test]
 fn test_tool_properties() {
     let tool = TaskTool::new();
-    assert_eq!(tool.name(), "Task");
+    assert_eq!(tool.name(), cocode_protocol::tools::TASK);
     assert!(tool.is_concurrent_safe());
 }

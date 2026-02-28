@@ -37,7 +37,7 @@ impl McpSearchTool {
 #[async_trait]
 impl Tool for McpSearchTool {
     fn name(&self) -> &str {
-        "MCPSearch"
+        cocode_protocol::tools::MCP_SEARCH
     }
 
     fn description(&self) -> &str {

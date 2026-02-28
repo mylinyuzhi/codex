@@ -78,7 +78,7 @@ impl ApplyPatchTool {
 #[async_trait]
 impl Tool for ApplyPatchTool {
     fn name(&self) -> &str {
-        "apply_patch"
+        cocode_protocol::tools::APPLY_PATCH
     }
 
     fn description(&self) -> &str {

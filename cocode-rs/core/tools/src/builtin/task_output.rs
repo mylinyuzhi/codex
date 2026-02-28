@@ -28,7 +28,7 @@ impl Default for TaskOutputTool {
 #[async_trait]
 impl Tool for TaskOutputTool {
     fn name(&self) -> &str {
-        "TaskOutput"
+        cocode_protocol::tools::TASK_OUTPUT
     }
 
     fn description(&self) -> &str {

@@ -133,7 +133,7 @@ impl Default for EditTool {
 #[async_trait]
 impl Tool for EditTool {
     fn name(&self) -> &str {
-        "Edit"
+        cocode_protocol::tools::EDIT
     }
 
     fn description(&self) -> &str {

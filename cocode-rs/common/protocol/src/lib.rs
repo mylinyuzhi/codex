@@ -32,6 +32,7 @@ pub mod sandbox;
 pub mod thinking;
 pub mod tool_config;
 pub mod tool_types;
+pub mod tools;
 pub mod tracking;
 pub mod web_fetch_config;
 pub mod web_search_config;
@@ -222,3 +223,6 @@ pub use web_search_config::WebSearchProvider;
 // Correlation types
 pub use correlation::CorrelatedEvent;
 pub use correlation::SubmissionId;
+
+// Tool name constants
+pub use tools::*;

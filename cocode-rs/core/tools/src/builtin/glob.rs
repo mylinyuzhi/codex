@@ -56,7 +56,7 @@ impl Default for GlobTool {
 #[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &str {
-        "Glob"
+        cocode_protocol::tools::GLOB
     }
 
     fn description(&self) -> &str {

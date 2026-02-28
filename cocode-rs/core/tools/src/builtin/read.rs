@@ -57,7 +57,7 @@ impl Default for ReadTool {
 #[async_trait]
 impl Tool for ReadTool {
     fn name(&self) -> &str {
-        "Read"
+        cocode_protocol::tools::READ
     }
 
     fn description(&self) -> &str {

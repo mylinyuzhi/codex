@@ -1421,7 +1421,7 @@ fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
 /// For Bash commands, extracts the first word as a prefix pattern.
 /// E.g. `"git push origin main"` → `Some("git *")`.
 fn extract_prefix_pattern(tool_name: &str, input: &Value) -> Option<String> {
-    if tool_name != "Bash" {
+    if tool_name != cocode_protocol::tools::BASH {
         return None;
     }
     let command = input.get("command").and_then(|v| v.as_str())?;

@@ -76,6 +76,6 @@ async fn test_read_nonexistent_file() {
 #[test]
 fn test_tool_properties() {
     let tool = ReadTool::new();
-    assert_eq!(tool.name(), "Read");
+    assert_eq!(tool.name(), cocode_protocol::tools::READ);
     assert!(tool.is_concurrent_safe());
 }

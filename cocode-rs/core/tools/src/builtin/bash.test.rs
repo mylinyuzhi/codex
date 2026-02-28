@@ -75,7 +75,7 @@ fn test_git_write_commands_not_read_only() {
 #[test]
 fn test_tool_properties() {
     let tool = BashTool::new();
-    assert_eq!(tool.name(), "Bash");
+    assert_eq!(tool.name(), cocode_protocol::tools::BASH);
     assert!(!tool.is_concurrent_safe());
 }
 

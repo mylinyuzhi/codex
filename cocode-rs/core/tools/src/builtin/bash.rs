@@ -208,7 +208,7 @@ fn is_plan_mode_allowed(command: &str) -> bool {
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
-        "Bash"
+        cocode_protocol::tools::BASH
     }
 
     fn description(&self) -> &str {
@@ -359,7 +359,7 @@ impl Tool for BashTool {
                                 .map(|d| d.as_nanos())
                                 .unwrap_or(0)
                         ),
-                        tool_name: "Bash".to_string(),
+                        tool_name: cocode_protocol::tools::BASH.to_string(),
                         description,
                         risks,
                         allow_remember: true,
@@ -379,7 +379,7 @@ impl Tool for BashTool {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 ),
-                tool_name: "Bash".to_string(),
+                tool_name: cocode_protocol::tools::BASH.to_string(),
                 description: if command.len() > 120 {
                     format!("{}...", &command[..120])
                 } else {

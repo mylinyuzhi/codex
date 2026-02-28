@@ -36,7 +36,7 @@ impl Default for LspTool {
 #[async_trait]
 impl Tool for LspTool {
     fn name(&self) -> &str {
-        "Lsp"
+        cocode_protocol::tools::LSP
     }
 
     fn description(&self) -> &str {

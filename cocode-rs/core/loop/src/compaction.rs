@@ -903,7 +903,7 @@ pub fn execute_micro_compact(
 
         // Phase 6 prep: Track file paths from Read tool results for readFileState cleanup
         // The caller can use these paths to update their file state tracking
-        if candidate.tool_name.as_deref() == Some("Read") {
+        if candidate.tool_name.as_deref() == Some(cocode_protocol::tools::READ) {
             // Try to extract file path from the tool input or from the message
             // Messages may have path in different locations depending on format
             if let Some(path) = msg

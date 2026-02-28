@@ -51,7 +51,7 @@ impl Default for WebFetchTool {
 #[async_trait]
 impl Tool for WebFetchTool {
     fn name(&self) -> &str {
-        "WebFetch"
+        cocode_protocol::tools::WEB_FETCH
     }
 
     fn description(&self) -> &str {

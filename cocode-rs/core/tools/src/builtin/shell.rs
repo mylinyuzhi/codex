@@ -41,7 +41,7 @@ impl Default for ShellTool {
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
-        "shell"
+        cocode_protocol::tools::SHELL
     }
 
     fn description(&self) -> &str {

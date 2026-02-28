@@ -154,7 +154,7 @@ impl Default for WebSearchTool {
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str {
-        "WebSearch"
+        cocode_protocol::tools::WEB_SEARCH
     }
 
     fn description(&self) -> &str {

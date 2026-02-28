@@ -208,7 +208,7 @@ async fn test_skill_base_dir_injection() {
 #[test]
 fn test_tool_properties() {
     let tool = SkillTool::new();
-    assert_eq!(tool.name(), "Skill");
+    assert_eq!(tool.name(), cocode_protocol::tools::SKILL);
     assert!(!tool.is_concurrent_safe());
     assert!(!tool.is_read_only());
 }

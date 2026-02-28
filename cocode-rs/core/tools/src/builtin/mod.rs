@@ -124,29 +124,5 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) 
 
 /// Get a list of built-in tool names.
 pub fn builtin_tool_names() -> Vec<&'static str> {
-    vec![
-        "Read",
-        "ReadManyFiles",
-        "Glob",
-        "Grep",
-        "Edit",
-        "Write",
-        "Bash",
-        "Task",
-        "TaskOutput",
-        "TaskStop",
-        "TodoWrite",
-        "EnterPlanMode",
-        "ExitPlanMode",
-        "AskUserQuestion",
-        "WebFetch",
-        "WebSearch",
-        "Skill",
-        "LS",
-        "Lsp",
-        "NotebookEdit",
-        "apply_patch",
-        "shell",
-        "SmartEdit",
-    ]
+    cocode_protocol::tools::BUILTIN_TOOL_NAMES.to_vec()
 }

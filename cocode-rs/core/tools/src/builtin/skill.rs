@@ -36,7 +36,7 @@ impl Default for SkillTool {
 #[async_trait]
 impl Tool for SkillTool {
     fn name(&self) -> &str {
-        "Skill"
+        cocode_protocol::tools::SKILL
     }
 
     fn description(&self) -> &str {
