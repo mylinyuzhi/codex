@@ -10,7 +10,7 @@ pub fn bash_agent() -> AgentDefinition {
                       operations, command execution, and terminal tasks."
             .to_string(),
         agent_type: "bash".to_string(),
-        tools: vec!["Bash".to_string()],
+        tools: vec![cocode_protocol::tools::BASH.to_string()],
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(10),

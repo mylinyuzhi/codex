@@ -2,27 +2,27 @@ use crate::definition::AgentDefinition;
 
 /// Tools that are never available to any subagent, regardless of configuration.
 const SYSTEM_BLOCKED: &[&str] = &[
-    "Task",
-    "EnterPlanMode",
-    "ExitPlanMode",
-    "TaskStop",
-    "AskUserQuestion",
+    cocode_protocol::tools::TASK,
+    cocode_protocol::tools::ENTER_PLAN_MODE,
+    cocode_protocol::tools::EXIT_PLAN_MODE,
+    cocode_protocol::tools::TASK_STOP,
+    cocode_protocol::tools::ASK_USER_QUESTION,
     "EnterWorktree",
 ];
 
 /// Tools safe for async/background execution (no user interaction required).
 const ASYNC_SAFE_TOOLS: &[&str] = &[
-    "Read",
-    "Edit",
-    "Write",
-    "Glob",
-    "Grep",
-    "Bash",
-    "WebFetch",
-    "WebSearch",
-    "NotebookEdit",
-    "TaskOutput",
-    "Task", // Task is async-safe when explicitly allowed via Task(type) syntax
+    cocode_protocol::tools::READ,
+    cocode_protocol::tools::EDIT,
+    cocode_protocol::tools::WRITE,
+    cocode_protocol::tools::GLOB,
+    cocode_protocol::tools::GREP,
+    cocode_protocol::tools::BASH,
+    cocode_protocol::tools::WEB_FETCH,
+    cocode_protocol::tools::WEB_SEARCH,
+    cocode_protocol::tools::NOTEBOOK_EDIT,
+    cocode_protocol::tools::TASK_OUTPUT,
+    cocode_protocol::tools::TASK, // Task is async-safe when explicitly allowed via Task(type) syntax
 ];
 
 /// Result of tool filtering, including any `Task(type)` restrictions.
@@ -64,7 +64,7 @@ pub fn filter_tools_for_agent(
         .iter()
         .filter(|t| {
             let name = t.as_str();
-            if name == "Task" && has_task_override {
+            if name == cocode_protocol::tools::TASK && has_task_override {
                 return true; // Task explicitly allowed via Task(type) syntax
             }
             !SYSTEM_BLOCKED.contains(&name)
@@ -120,10 +120,11 @@ pub fn extract_task_restrictions(tools: &[String]) -> Option<Vec<String>> {
 /// Returns `Some(vec!["type1", "type2"])` if the entry matches, `None` otherwise.
 fn parse_task_restriction(tool: &str) -> Option<Vec<String>> {
     let trimmed = tool.trim();
-    if !trimmed.starts_with("Task(") || !trimmed.ends_with(')') {
+    let prefix = format!("{}(", cocode_protocol::tools::TASK);
+    if !trimmed.starts_with(&prefix) || !trimmed.ends_with(')') {
         return None;
     }
-    let inner = &trimmed[5..trimmed.len() - 1];
+    let inner = &trimmed[prefix.len()..trimmed.len() - 1];
     let types: Vec<String> = inner
         .split(',')
         .map(|s| s.trim().to_string())
@@ -135,7 +136,7 @@ fn parse_task_restriction(tool: &str) -> Option<Vec<String>> {
 /// Normalize a tool name by stripping `Task(...)` to just `Task`.
 fn normalize_tool_name(tool: &str) -> String {
     if tool.trim().starts_with("Task(") && tool.trim().ends_with(')') {
-        "Task".to_string()
+        cocode_protocol::tools::TASK.to_string()
     } else {
         tool.to_string()
     }

@@ -103,7 +103,7 @@ impl Tool for ExitPlanModeTool {
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
                 request_id: ctx.call_id.clone(),
-                tool_name: "ExitPlanMode".to_string(),
+                tool_name: cocode_protocol::tools::EXIT_PLAN_MODE.to_string(),
                 description,
                 risks: Vec::new(),
                 allow_remember: false,

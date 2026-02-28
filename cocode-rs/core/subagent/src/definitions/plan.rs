@@ -16,9 +16,9 @@ pub fn plan_agent() -> AgentDefinition {
         agent_type: "plan".to_string(),
         tools: vec![],
         disallowed_tools: vec![
-            "Edit".to_string(),
-            "Write".to_string(),
-            "NotebookEdit".to_string(),
+            cocode_protocol::tools::EDIT.to_string(),
+            cocode_protocol::tools::WRITE.to_string(),
+            cocode_protocol::tools::NOTEBOOK_EDIT.to_string(),
         ],
         identity: Some(ExecutionIdentity::Role(ModelRole::Plan)),
         max_turns: None,

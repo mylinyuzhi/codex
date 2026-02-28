@@ -1361,7 +1361,7 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // ========== Permission ==========
         LoopEvent::ApprovalRequired { request } => {
-            if request.tool_name == "ExitPlanMode" {
+            if request.tool_name == cocode_protocol::tools::EXIT_PLAN_MODE {
                 // Use the 4-option plan exit overlay for ExitPlanMode
                 state.ui.set_overlay(Overlay::PlanExitApproval(
                     crate::state::PlanExitOverlay::new(request),

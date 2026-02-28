@@ -1380,7 +1380,7 @@ async fn execute_tool(
 fn is_edit_tool(name: &str) -> bool {
     matches!(
         name,
-        "Edit" | "SmartEdit" | "Write" | "NotebookEdit" | "ApplyPatch"
+        cocode_protocol::tools::EDIT | cocode_protocol::tools::SMART_EDIT | cocode_protocol::tools::WRITE | cocode_protocol::tools::NOTEBOOK_EDIT | "ApplyPatch"
     )
 }
 
@@ -1388,22 +1388,22 @@ fn is_edit_tool(name: &str) -> bool {
 fn is_read_only_or_plan_tool(name: &str) -> bool {
     matches!(
         name,
-        "Read"
-            | "ReadManyFiles"
-            | "Glob"
-            | "Grep"
-            | "LS"
-            | "Task"
-            | "TaskOutput"
-            | "TaskStop"
-            | "WebFetch"
-            | "WebSearch"
-            | "EnterPlanMode"
-            | "ExitPlanMode"
-            | "AskUserQuestion"
-            | "Lsp"
-            | "MCPSearch"
-            | "TodoWrite"
+        cocode_protocol::tools::READ
+            | cocode_protocol::tools::READ_MANY_FILES
+            | cocode_protocol::tools::GLOB
+            | cocode_protocol::tools::GREP
+            | cocode_protocol::tools::LS
+            | cocode_protocol::tools::TASK
+            | cocode_protocol::tools::TASK_OUTPUT
+            | cocode_protocol::tools::TASK_STOP
+            | cocode_protocol::tools::WEB_FETCH
+            | cocode_protocol::tools::WEB_SEARCH
+            | cocode_protocol::tools::ENTER_PLAN_MODE
+            | cocode_protocol::tools::EXIT_PLAN_MODE
+            | cocode_protocol::tools::ASK_USER_QUESTION
+            | cocode_protocol::tools::LSP
+            | cocode_protocol::tools::MCP_SEARCH
+            | cocode_protocol::tools::TODO_WRITE
     )
 }
 
@@ -1468,11 +1468,11 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
 /// Extract command string from shell tool input.
 fn extract_command_input(name: &str, input: &Value) -> Option<String> {
     match name {
-        "Bash" => input
+        cocode_protocol::tools::BASH => input
             .get("command")
             .and_then(|v| v.as_str())
             .map(String::from),
-        "shell" => input.get("command").and_then(|v| v.as_array()).map(|arr| {
+        cocode_protocol::tools::SHELL => input.get("command").and_then(|v| v.as_array()).map(|arr| {
             arr.iter()
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()

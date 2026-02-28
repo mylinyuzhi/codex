@@ -65,14 +65,14 @@ pub use cocode_protocol::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP as RECENT_TOOL_RESU
 /// persisted to disk without losing critical conversation context.
 pub static COMPACTABLE_TOOLS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     HashSet::from([
-        "Read",      // File content - can be re-read
-        "Bash",      // Command output - typically verbose
-        "Grep",      // Search results - can be re-run
-        "Glob",      // File listings - can be re-run
-        "WebSearch", // Search results - ephemeral
-        "WebFetch",  // Web content - can be re-fetched
-        "Edit",      // Edit confirmation - minimal info loss
-        "Write",     // Write confirmation - minimal info loss
+        cocode_protocol::tools::READ,      // File content - can be re-read
+        cocode_protocol::tools::BASH,      // Command output - typically verbose
+        cocode_protocol::tools::GREP,      // Search results - can be re-run
+        cocode_protocol::tools::GLOB,      // File listings - can be re-run
+        cocode_protocol::tools::WEB_SEARCH, // Search results - ephemeral
+        cocode_protocol::tools::WEB_FETCH,  // Web content - can be re-fetched
+        cocode_protocol::tools::EDIT,      // Edit confirmation - minimal info loss
+        cocode_protocol::tools::WRITE,     // Write confirmation - minimal info loss
     ])
 });
 
@@ -316,7 +316,7 @@ impl TaskStatusRestoration {
     pub fn from_tool_calls(tool_calls: &[(String, serde_json::Value)]) -> Self {
         // Find the most recent TodoWrite call (scan from end)
         for (name, input) in tool_calls.iter().rev() {
-            if name == "TodoWrite"
+            if name == cocode_protocol::tools::TODO_WRITE
                 && let Some(todos) = input.get("todos").and_then(|t| t.as_array())
             {
                 let tasks: Vec<TaskInfo> = todos
@@ -376,7 +376,7 @@ impl InvokedSkillRestoration {
         let mut skills: HashMap<String, Self> = HashMap::new();
 
         for (name, input, turn_number) in tool_calls {
-            if name == "Skill" {
+            if name == cocode_protocol::tools::SKILL {
                 // Extract skill name from input
                 if let Some(skill_name) = input.get("skill").and_then(|v| v.as_str()) {
                     let args = input.get("args").and_then(|v| v.as_str()).map(String::from);

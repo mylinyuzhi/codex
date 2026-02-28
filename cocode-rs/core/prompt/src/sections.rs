@@ -98,15 +98,15 @@ pub fn generate_tool_policy_lines(tool_names: &[String]) -> String {
     let tools: std::collections::HashSet<&str> =
         tool_names.iter().map(std::string::String::as_str).collect();
     let rules: Vec<&str> = [
-        ("Read", "Use Read for reading files (not cat/head/tail)"),
-        ("Edit", "Use Edit for modifying files (not sed/awk)"),
-        ("Write", "Use Write for creating files (not echo/heredoc)"),
-        ("Grep", "Use Grep for searching file contents (not grep/rg)"),
+        (cocode_protocol::tools::READ, "Use Read for reading files (not cat/head/tail)"),
+        (cocode_protocol::tools::EDIT, "Use Edit for modifying files (not sed/awk)"),
+        (cocode_protocol::tools::WRITE, "Use Write for creating files (not echo/heredoc)"),
+        (cocode_protocol::tools::GREP, "Use Grep for searching file contents (not grep/rg)"),
         (
-            "Glob",
+            cocode_protocol::tools::GLOB,
             "Use Glob for finding files by pattern (not find/ls)",
         ),
-        ("LS", "Use LS for directory listing (not Bash ls)"),
+        (cocode_protocol::tools::LS, "Use LS for directory listing (not Bash ls)"),
     ]
     .iter()
     .filter(|(name, _)| tools.contains(name))

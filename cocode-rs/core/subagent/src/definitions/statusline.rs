@@ -10,7 +10,7 @@ pub fn statusline_agent() -> AgentDefinition {
         name: "statusline".to_string(),
         description: "Use this agent to configure the user's status line setting.".to_string(),
         agent_type: "statusline".to_string(),
-        tools: vec!["Read".to_string(), "Edit".to_string()],
+        tools: vec![cocode_protocol::tools::READ.to_string(), cocode_protocol::tools::EDIT.to_string()],
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Role(ModelRole::Fast)),
         max_turns: Some(5),

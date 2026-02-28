@@ -124,7 +124,7 @@ impl Tool for ShellTool {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 ),
-                tool_name: "shell".to_string(),
+                tool_name: cocode_protocol::tools::SHELL.to_string(),
                 description: if command_str.len() > 120 {
                     format!("{}...", &command_str[..120])
                 } else {
