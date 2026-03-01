@@ -24,8 +24,8 @@ async fn test_exit_plan_mode_with_prompts() {
 
     let input = serde_json::json!({
         "allowedPrompts": [
-            {"tool": cocode_protocol::tools::BASH, "prompt": "run tests"},
-            {"tool": cocode_protocol::tools::BASH, "prompt": "install dependencies"}
+            {"tool": cocode_protocol::ToolName::Bash.as_str(), "prompt": "run tests"},
+            {"tool": cocode_protocol::ToolName::Bash.as_str(), "prompt": "install dependencies"}
         ]
     });
     let result = tool.execute(input, &mut ctx).await.unwrap();

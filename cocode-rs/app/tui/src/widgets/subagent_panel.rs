@@ -84,7 +84,7 @@ impl Widget for SubagentPanel<'_> {
                 .unwrap_or(self.theme.text_dim);
 
             // Agent type icon based on type name
-            let type_icon = match subagent.agent_type.to_lowercase().as_str() {
+            let type_icon = match subagent.agent_type.as_str() {
                 "explore" => "~ ",
                 "plan" => "# ",
                 "bash" => "> ",

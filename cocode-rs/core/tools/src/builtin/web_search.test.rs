@@ -109,7 +109,7 @@ fn test_html_entities_decode() {
 #[test]
 fn test_tool_properties() {
     let tool = WebSearchTool::new();
-    assert_eq!(tool.name(), cocode_protocol::tools::WEB_SEARCH);
+    assert_eq!(tool.name(), cocode_protocol::ToolName::WebSearch.as_str());
     assert!(tool.is_concurrent_safe());
     assert!(tool.is_read_only());
 }

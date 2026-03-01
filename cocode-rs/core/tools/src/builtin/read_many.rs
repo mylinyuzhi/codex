@@ -48,7 +48,7 @@ impl Default for ReadManyFilesTool {
 #[async_trait]
 impl Tool for ReadManyFilesTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::READ_MANY_FILES
+        cocode_protocol::ToolName::ReadManyFiles.as_str()
     }
 
     fn description(&self) -> &str {

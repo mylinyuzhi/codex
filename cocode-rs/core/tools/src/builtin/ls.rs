@@ -181,7 +181,7 @@ fn format_entry_line(entry: &DirEntry) -> String {
 #[async_trait]
 impl Tool for LsTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::LS
+        cocode_protocol::ToolName::LS.as_str()
     }
 
     fn description(&self) -> &str {

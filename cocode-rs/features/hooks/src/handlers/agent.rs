@@ -64,7 +64,11 @@ impl Default for AgentVerificationConfig {
                  After analysis, output a JSON response: { \"ok\": true } to approve or \
                  { \"ok\": false, \"reason\": \"...\" } to reject.",
             ),
-            allowed_tools: vec![cocode_protocol::tools::READ.to_string(), cocode_protocol::tools::GREP.to_string(), cocode_protocol::tools::GLOB.to_string()],
+            allowed_tools: vec![
+                cocode_protocol::ToolName::Read.as_str().to_string(),
+                cocode_protocol::ToolName::Grep.as_str().to_string(),
+                cocode_protocol::ToolName::Glob.as_str().to_string(),
+            ],
         }
     }
 }

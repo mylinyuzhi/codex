@@ -31,7 +31,7 @@ impl Default for TaskTool {
 #[async_trait]
 impl Tool for TaskTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::TASK
+        cocode_protocol::ToolName::Task.as_str()
     }
 
     fn description(&self) -> &str {

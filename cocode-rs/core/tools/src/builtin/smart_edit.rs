@@ -254,7 +254,7 @@ async fn write_edit_result(
 #[async_trait]
 impl Tool for SmartEditTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::SMART_EDIT
+        cocode_protocol::ToolName::SmartEdit.as_str()
     }
 
     fn description(&self) -> &str {

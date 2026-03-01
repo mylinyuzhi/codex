@@ -95,18 +95,34 @@ pub fn render_memory_files(ctx: &ConversationContext) -> String {
 /// Only includes policy lines for tools that are actually registered,
 /// avoiding wasted tokens for disabled tools.
 pub fn generate_tool_policy_lines(tool_names: &[String]) -> String {
+    use cocode_protocol::ToolName;
     let tools: std::collections::HashSet<&str> =
         tool_names.iter().map(std::string::String::as_str).collect();
     let rules: Vec<&str> = [
-        (cocode_protocol::tools::READ, "Use Read for reading files (not cat/head/tail)"),
-        (cocode_protocol::tools::EDIT, "Use Edit for modifying files (not sed/awk)"),
-        (cocode_protocol::tools::WRITE, "Use Write for creating files (not echo/heredoc)"),
-        (cocode_protocol::tools::GREP, "Use Grep for searching file contents (not grep/rg)"),
         (
-            cocode_protocol::tools::GLOB,
+            ToolName::Read.as_str(),
+            "Use Read for reading files (not cat/head/tail)",
+        ),
+        (
+            ToolName::Edit.as_str(),
+            "Use Edit for modifying files (not sed/awk)",
+        ),
+        (
+            ToolName::Write.as_str(),
+            "Use Write for creating files (not echo/heredoc)",
+        ),
+        (
+            ToolName::Grep.as_str(),
+            "Use Grep for searching file contents (not grep/rg)",
+        ),
+        (
+            ToolName::Glob.as_str(),
             "Use Glob for finding files by pattern (not find/ls)",
         ),
-        (cocode_protocol::tools::LS, "Use LS for directory listing (not Bash ls)"),
+        (
+            ToolName::LS.as_str(),
+            "Use LS for directory listing (not Bash ls)",
+        ),
     ]
     .iter()
     .filter(|(name, _)| tools.contains(name))

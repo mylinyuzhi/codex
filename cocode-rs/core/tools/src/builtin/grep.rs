@@ -161,7 +161,7 @@ impl Default for GrepTool {
 #[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::GREP
+        cocode_protocol::ToolName::Grep.as_str()
     }
 
     fn description(&self) -> &str {

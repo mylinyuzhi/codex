@@ -124,5 +124,8 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) 
 
 /// Get a list of built-in tool names.
 pub fn builtin_tool_names() -> Vec<&'static str> {
-    cocode_protocol::tools::BUILTIN_TOOL_NAMES.to_vec()
+    cocode_protocol::ToolName::ALL
+        .iter()
+        .map(|t| t.as_str())
+        .collect()
 }

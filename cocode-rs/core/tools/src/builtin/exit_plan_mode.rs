@@ -38,7 +38,7 @@ impl Default for ExitPlanModeTool {
 #[async_trait]
 impl Tool for ExitPlanModeTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::EXIT_PLAN_MODE
+        cocode_protocol::ToolName::ExitPlanMode.as_str()
     }
 
     fn description(&self) -> &str {
@@ -103,7 +103,7 @@ impl Tool for ExitPlanModeTool {
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
                 request_id: ctx.call_id.clone(),
-                tool_name: cocode_protocol::tools::EXIT_PLAN_MODE.to_string(),
+                tool_name: cocode_protocol::ToolName::ExitPlanMode.as_str().to_string(),
                 description,
                 risks: Vec::new(),
                 allow_remember: false,

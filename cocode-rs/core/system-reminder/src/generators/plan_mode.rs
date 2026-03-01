@@ -495,7 +495,7 @@ Begin implementing your plan now."#;
 // ---------------------------------------------------------------------------
 
 /// Subagent tool name (cocode-rs's Task tool).
-const SUB_AGENT_TOOL_NAME: &str = cocode_protocol::tools::TASK;
+const SUB_AGENT_TOOL_NAME: &str = cocode_protocol::ToolName::Task.as_str();
 
 /// Generator for plan verification reminders.
 ///

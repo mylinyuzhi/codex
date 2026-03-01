@@ -1,5 +1,6 @@
 use crate::definition::AgentDefinition;
 use crate::definition::AgentSource;
+use cocode_protocol::SubagentType;
 use cocode_protocol::execution::ExecutionIdentity;
 
 /// General-purpose agent with access to all tools.
@@ -8,11 +9,11 @@ use cocode_protocol::execution::ExecutionIdentity;
 /// conversation history from the parent agent.
 pub fn general_agent() -> AgentDefinition {
     AgentDefinition {
-        name: "general".to_string(),
+        name: SubagentType::General.as_str().to_string(),
         description: "General-purpose agent for researching complex questions, searching for \
                       code, and executing multi-step tasks."
             .to_string(),
-        agent_type: "general".to_string(),
+        agent_type: SubagentType::General.as_str().to_string(),
         tools: vec![],
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),

@@ -196,7 +196,7 @@ impl Notebook {
 #[async_trait]
 impl Tool for NotebookEditTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::NOTEBOOK_EDIT
+        cocode_protocol::ToolName::NotebookEdit.as_str()
     }
 
     fn description(&self) -> &str {

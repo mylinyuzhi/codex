@@ -1289,7 +1289,7 @@ fn reconstruct_todos_from_history(state: &cocode_session::SessionState) -> serde
     // Walk turns in reverse to find the most recent TodoWrite result
     for turn in state.message_history.turns().iter().rev() {
         for tc in &turn.tool_calls {
-            if tc.name == cocode_protocol::tools::TODO_WRITE || tc.name == "TodoUpdate" {
+            if tc.name == cocode_protocol::ToolName::TodoWrite.as_str() || tc.name == "TodoUpdate" {
                 if let Some(ref output) = tc.output {
                     match output {
                         ToolResultContent::Text(text) => {

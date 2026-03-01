@@ -1459,8 +1459,9 @@ impl AgentLoop {
             // ── Handle plan mode transitions ──
             // Check if EnterPlanMode or ExitPlanMode was called
             for tc in &tool_calls {
-                match tc.name.as_str() {
-                    cocode_protocol::tools::ENTER_PLAN_MODE => {
+                let tc_name = tc.name.as_str();
+                match tc_name {
+                    name if name == cocode_protocol::ToolName::EnterPlanMode.as_str() => {
                         // Skip if already in plan mode (prevents pre_plan_mode corruption)
                         if self.plan_mode_state.is_active {
                             tracing::warn!(
@@ -1493,7 +1494,7 @@ impl AgentLoop {
                             }
                         }
                     }
-                    cocode_protocol::tools::EXIT_PLAN_MODE => {
+                    name if name == cocode_protocol::ToolName::ExitPlanMode.as_str() => {
                         // Skip if not in plan mode (prevents spurious state changes)
                         if !self.plan_mode_state.is_active {
                             tracing::warn!("ExitPlanMode called while not in plan mode, ignoring");
@@ -2912,7 +2913,7 @@ impl AgentLoop {
                     // Always include "Skill" itself so nested skill invocations work.
                     let mut allowed: std::collections::HashSet<String> =
                         allowed_tools.iter().cloned().collect();
-                    allowed.insert(cocode_protocol::tools::SKILL.to_string());
+                    allowed.insert(cocode_protocol::ToolName::Skill.as_str().to_string());
                     self.active_skill_allowed_tools = Some(allowed);
                     debug!(
                         skill = %skill_name,
@@ -3043,25 +3044,27 @@ fn select_tools_for_model(
     // 1. Handle shell_type
     match model_info.shell_type {
         Some(ConfigShellToolType::Disabled) => {
+            use cocode_protocol::ToolName;
             defs.retain(|d| {
-                !matches!(
-                    d.name.as_str(),
-                    cocode_protocol::tools::BASH | cocode_protocol::tools::SHELL | cocode_protocol::tools::TASK_OUTPUT | cocode_protocol::tools::TASK_STOP
-                )
+                let name = d.name.as_str();
+                name != ToolName::Bash.as_str()
+                    && name != ToolName::Shell.as_str()
+                    && name != ToolName::TaskOutput.as_str()
+                    && name != ToolName::TaskStop.as_str()
             });
         }
         Some(ConfigShellToolType::Shell) => {
             // Shell mode: remove Bash, keep shell tool
-            defs.retain(|d| d.name != cocode_protocol::tools::BASH);
+            defs.retain(|d| d.name != cocode_protocol::ToolName::Bash.as_str());
         }
         Some(ConfigShellToolType::ShellCommand) | None => {
             // ShellCommand (default): remove shell tool, keep Bash
-            defs.retain(|d| d.name != cocode_protocol::tools::SHELL);
+            defs.retain(|d| d.name != cocode_protocol::ToolName::Shell.as_str());
         }
     }
 
     // 2. Handle apply_patch: remove registry default, add model-specific variant
-    defs.retain(|d| d.name != cocode_protocol::tools::APPLY_PATCH);
+    defs.retain(|d| d.name != cocode_protocol::ToolName::ApplyPatch.as_str());
     match model_info.apply_patch_tool_type {
         Some(ApplyPatchToolType::Function) => {
             defs.push(ApplyPatchTool::function_definition());

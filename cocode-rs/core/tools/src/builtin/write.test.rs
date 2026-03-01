@@ -90,7 +90,7 @@ async fn test_write_existing_after_read() {
 #[test]
 fn test_tool_properties() {
     let tool = WriteTool::new();
-    assert_eq!(tool.name(), cocode_protocol::tools::WRITE);
+    assert_eq!(tool.name(), cocode_protocol::ToolName::Write.as_str());
     assert!(!tool.is_concurrent_safe());
 }
 

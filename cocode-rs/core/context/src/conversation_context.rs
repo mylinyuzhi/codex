@@ -6,6 +6,7 @@
 use cocode_protocol::CompactConfig;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::SessionMemoryConfig;
+use cocode_protocol::SubagentType;
 use cocode_protocol::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
@@ -62,32 +63,6 @@ pub enum InjectionPosition {
     AfterTools,
     /// At the end of the prompt.
     EndOfPrompt,
-}
-
-/// Type of subagent for specialized prompt generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentType {
-    /// Codebase exploration subagent.
-    Explore,
-    /// Implementation planning subagent.
-    Plan,
-}
-
-impl SubagentType {
-    /// Get the string representation.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SubagentType::Explore => "explore",
-            SubagentType::Plan => "plan",
-        }
-    }
-}
-
-impl std::fmt::Display for SubagentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }
 
 /// Aggregate conversation context for prompt generation.

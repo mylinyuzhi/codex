@@ -30,7 +30,7 @@ impl Default for TodoWriteTool {
 #[async_trait]
 impl Tool for TodoWriteTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::TODO_WRITE
+        cocode_protocol::ToolName::TodoWrite.as_str()
     }
 
     fn description(&self) -> &str {

@@ -125,22 +125,29 @@ impl SystemPromptBuilder {
 
     /// Build system prompt for a subagent (explore/plan).
     pub fn build_for_subagent(ctx: &ConversationContext, subagent_type: SubagentType) -> String {
+        // Only Explore and Plan have custom templates; others use default
         let template_name = match subagent_type {
-            SubagentType::Explore => "explore_subagent",
-            SubagentType::Plan => "plan_subagent",
+            SubagentType::Explore => Some("explore_subagent"),
+            SubagentType::Plan => Some("plan_subagent"),
+            _ => None,
         };
 
-        let mut sections = vec![
-            (
-                PromptSection::Identity,
-                engine::render(template_name, minijinja::context! {}),
-            ),
-            (PromptSection::Security, templates::SECURITY.to_string()),
-            (
-                PromptSection::Environment,
-                sections::render_environment(ctx),
-            ),
-        ];
+        let mut sections = if let Some(template) = template_name {
+            vec![
+                (
+                    PromptSection::Identity,
+                    engine::render(template, minijinja::context! {}),
+                ),
+                (PromptSection::Security, templates::SECURITY.to_string()),
+                (
+                    PromptSection::Environment,
+                    sections::render_environment(ctx),
+                ),
+            ]
+        } else {
+            // Default: use the main agent prompt
+            return Self::build(ctx);
+        };
 
         // Include memory files for subagents too
         let memory = render_memory_files(ctx);

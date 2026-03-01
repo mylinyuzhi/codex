@@ -1,28 +1,29 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::ToolName;
 
 /// Tools that are never available to any subagent, regardless of configuration.
 const SYSTEM_BLOCKED: &[&str] = &[
-    cocode_protocol::tools::TASK,
-    cocode_protocol::tools::ENTER_PLAN_MODE,
-    cocode_protocol::tools::EXIT_PLAN_MODE,
-    cocode_protocol::tools::TASK_STOP,
-    cocode_protocol::tools::ASK_USER_QUESTION,
+    ToolName::Task.as_str(),
+    ToolName::EnterPlanMode.as_str(),
+    ToolName::ExitPlanMode.as_str(),
+    ToolName::TaskStop.as_str(),
+    ToolName::AskUserQuestion.as_str(),
     "EnterWorktree",
 ];
 
 /// Tools safe for async/background execution (no user interaction required).
 const ASYNC_SAFE_TOOLS: &[&str] = &[
-    cocode_protocol::tools::READ,
-    cocode_protocol::tools::EDIT,
-    cocode_protocol::tools::WRITE,
-    cocode_protocol::tools::GLOB,
-    cocode_protocol::tools::GREP,
-    cocode_protocol::tools::BASH,
-    cocode_protocol::tools::WEB_FETCH,
-    cocode_protocol::tools::WEB_SEARCH,
-    cocode_protocol::tools::NOTEBOOK_EDIT,
-    cocode_protocol::tools::TASK_OUTPUT,
-    cocode_protocol::tools::TASK, // Task is async-safe when explicitly allowed via Task(type) syntax
+    ToolName::Read.as_str(),
+    ToolName::Edit.as_str(),
+    ToolName::Write.as_str(),
+    ToolName::Glob.as_str(),
+    ToolName::Grep.as_str(),
+    ToolName::Bash.as_str(),
+    ToolName::WebFetch.as_str(),
+    ToolName::WebSearch.as_str(),
+    ToolName::NotebookEdit.as_str(),
+    ToolName::TaskOutput.as_str(),
+    ToolName::Task.as_str(), // Task is async-safe when explicitly allowed via Task(type) syntax
 ];
 
 /// Result of tool filtering, including any `Task(type)` restrictions.
@@ -64,7 +65,7 @@ pub fn filter_tools_for_agent(
         .iter()
         .filter(|t| {
             let name = t.as_str();
-            if name == cocode_protocol::tools::TASK && has_task_override {
+            if name == ToolName::Task.as_str() && has_task_override {
                 return true; // Task explicitly allowed via Task(type) syntax
             }
             !SYSTEM_BLOCKED.contains(&name)
@@ -120,7 +121,7 @@ pub fn extract_task_restrictions(tools: &[String]) -> Option<Vec<String>> {
 /// Returns `Some(vec!["type1", "type2"])` if the entry matches, `None` otherwise.
 fn parse_task_restriction(tool: &str) -> Option<Vec<String>> {
     let trimmed = tool.trim();
-    let prefix = format!("{}(", cocode_protocol::tools::TASK);
+    let prefix = format!("{}(", ToolName::Task.as_str());
     if !trimmed.starts_with(&prefix) || !trimmed.ends_with(')') {
         return None;
     }
@@ -136,7 +137,7 @@ fn parse_task_restriction(tool: &str) -> Option<Vec<String>> {
 /// Normalize a tool name by stripping `Task(...)` to just `Task`.
 fn normalize_tool_name(tool: &str) -> String {
     if tool.trim().starts_with("Task(") && tool.trim().ends_with(')') {
-        cocode_protocol::tools::TASK.to_string()
+        ToolName::Task.as_str().to_string()
     } else {
         tool.to_string()
     }

@@ -68,7 +68,7 @@ impl Default for WriteTool {
 #[async_trait]
 impl Tool for WriteTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::WRITE
+        cocode_protocol::ToolName::Write.as_str()
     }
 
     fn description(&self) -> &str {

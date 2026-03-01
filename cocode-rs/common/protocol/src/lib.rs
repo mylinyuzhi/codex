@@ -29,6 +29,7 @@ pub mod protocol;
 pub mod provider;
 pub mod queue;
 pub mod sandbox;
+pub mod subagent;
 pub mod thinking;
 pub mod tool_config;
 pub mod tool_types;
@@ -224,5 +225,8 @@ pub use web_search_config::WebSearchProvider;
 pub use correlation::CorrelatedEvent;
 pub use correlation::SubmissionId;
 
-// Tool name constants
-pub use tools::*;
+// Tool name types
+pub use tools::ToolName;
+
+// Subagent types
+pub use subagent::SubagentType;

@@ -134,7 +134,7 @@ fn test_html_to_text_plain_text() {
 #[test]
 fn test_tool_properties() {
     let tool = WebFetchTool::new();
-    assert_eq!(tool.name(), cocode_protocol::tools::WEB_FETCH);
+    assert_eq!(tool.name(), cocode_protocol::ToolName::WebFetch.as_str());
     assert!(tool.is_concurrent_safe());
     assert!(tool.is_read_only());
     assert_eq!(tool.max_result_size_chars(), 100_000);

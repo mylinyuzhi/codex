@@ -103,7 +103,7 @@ async fn test_glob_invalid_pattern() {
 #[test]
 fn test_tool_properties() {
     let tool = GlobTool::new();
-    assert_eq!(tool.name(), cocode_protocol::tools::GLOB);
+    assert_eq!(tool.name(), cocode_protocol::ToolName::Glob.as_str());
     assert!(tool.is_concurrent_safe());
 }
 

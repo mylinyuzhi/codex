@@ -1378,33 +1378,33 @@ async fn execute_tool(
 
 /// Check if a tool name is an edit/write tool (for AcceptEdits mode).
 fn is_edit_tool(name: &str) -> bool {
-    matches!(
-        name,
-        cocode_protocol::tools::EDIT | cocode_protocol::tools::SMART_EDIT | cocode_protocol::tools::WRITE | cocode_protocol::tools::NOTEBOOK_EDIT | "ApplyPatch"
-    )
+    use cocode_protocol::ToolName;
+    name == ToolName::Edit.as_str()
+        || name == ToolName::SmartEdit.as_str()
+        || name == ToolName::Write.as_str()
+        || name == ToolName::NotebookEdit.as_str()
+        || name == "ApplyPatch"
 }
 
 /// Check if a tool name is read-only or a plan mode control tool.
 fn is_read_only_or_plan_tool(name: &str) -> bool {
-    matches!(
-        name,
-        cocode_protocol::tools::READ
-            | cocode_protocol::tools::READ_MANY_FILES
-            | cocode_protocol::tools::GLOB
-            | cocode_protocol::tools::GREP
-            | cocode_protocol::tools::LS
-            | cocode_protocol::tools::TASK
-            | cocode_protocol::tools::TASK_OUTPUT
-            | cocode_protocol::tools::TASK_STOP
-            | cocode_protocol::tools::WEB_FETCH
-            | cocode_protocol::tools::WEB_SEARCH
-            | cocode_protocol::tools::ENTER_PLAN_MODE
-            | cocode_protocol::tools::EXIT_PLAN_MODE
-            | cocode_protocol::tools::ASK_USER_QUESTION
-            | cocode_protocol::tools::LSP
-            | cocode_protocol::tools::MCP_SEARCH
-            | cocode_protocol::tools::TODO_WRITE
-    )
+    use cocode_protocol::ToolName;
+    name == ToolName::Read.as_str()
+        || name == ToolName::ReadManyFiles.as_str()
+        || name == ToolName::Glob.as_str()
+        || name == ToolName::Grep.as_str()
+        || name == ToolName::LS.as_str()
+        || name == ToolName::Task.as_str()
+        || name == ToolName::TaskOutput.as_str()
+        || name == ToolName::TaskStop.as_str()
+        || name == ToolName::WebFetch.as_str()
+        || name == ToolName::WebSearch.as_str()
+        || name == ToolName::EnterPlanMode.as_str()
+        || name == ToolName::ExitPlanMode.as_str()
+        || name == ToolName::AskUserQuestion.as_str()
+        || name == ToolName::Lsp.as_str()
+        || name == ToolName::McpSearch.as_str()
+        || name == ToolName::TodoWrite.as_str()
 }
 
 /// Extract file_path from tool input if present.
@@ -1421,7 +1421,7 @@ fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
 /// For Bash commands, extracts the first word as a prefix pattern.
 /// E.g. `"git push origin main"` → `Some("git *")`.
 fn extract_prefix_pattern(tool_name: &str, input: &Value) -> Option<String> {
-    if tool_name != cocode_protocol::tools::BASH {
+    if tool_name != cocode_protocol::ToolName::Bash.as_str() {
         return None;
     }
     let command = input.get("command").and_then(|v| v.as_str())?;
@@ -1467,17 +1467,20 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
 
 /// Extract command string from shell tool input.
 fn extract_command_input(name: &str, input: &Value) -> Option<String> {
+    use cocode_protocol::ToolName;
     match name {
-        cocode_protocol::tools::BASH => input
+        n if n == ToolName::Bash.as_str() => input
             .get("command")
             .and_then(|v| v.as_str())
             .map(String::from),
-        cocode_protocol::tools::SHELL => input.get("command").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        }),
+        n if n == ToolName::Shell.as_str() => {
+            input.get("command").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+        }
         _ => None,
     }
 }

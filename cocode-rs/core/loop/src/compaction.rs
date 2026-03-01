@@ -64,15 +64,16 @@ pub use cocode_protocol::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP as RECENT_TOOL_RESU
 /// These tools produce output that can be replaced with a placeholder or
 /// persisted to disk without losing critical conversation context.
 pub static COMPACTABLE_TOOLS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    use cocode_protocol::ToolName;
     HashSet::from([
-        cocode_protocol::tools::READ,      // File content - can be re-read
-        cocode_protocol::tools::BASH,      // Command output - typically verbose
-        cocode_protocol::tools::GREP,      // Search results - can be re-run
-        cocode_protocol::tools::GLOB,      // File listings - can be re-run
-        cocode_protocol::tools::WEB_SEARCH, // Search results - ephemeral
-        cocode_protocol::tools::WEB_FETCH,  // Web content - can be re-fetched
-        cocode_protocol::tools::EDIT,      // Edit confirmation - minimal info loss
-        cocode_protocol::tools::WRITE,     // Write confirmation - minimal info loss
+        ToolName::Read.as_str(),      // File content - can be re-read
+        ToolName::Bash.as_str(),      // Command output - typically verbose
+        ToolName::Grep.as_str(),      // Search results - can be re-run
+        ToolName::Glob.as_str(),      // File listings - can be re-run
+        ToolName::WebSearch.as_str(), // Search results - ephemeral
+        ToolName::WebFetch.as_str(),  // Web content - can be re-fetched
+        ToolName::Edit.as_str(),      // Edit confirmation - minimal info loss
+        ToolName::Write.as_str(),     // Write confirmation - minimal info loss
     ])
 });
 
@@ -316,7 +317,7 @@ impl TaskStatusRestoration {
     pub fn from_tool_calls(tool_calls: &[(String, serde_json::Value)]) -> Self {
         // Find the most recent TodoWrite call (scan from end)
         for (name, input) in tool_calls.iter().rev() {
-            if name == cocode_protocol::tools::TODO_WRITE
+            if name == cocode_protocol::ToolName::TodoWrite.as_str()
                 && let Some(todos) = input.get("todos").and_then(|t| t.as_array())
             {
                 let tasks: Vec<TaskInfo> = todos
@@ -376,7 +377,7 @@ impl InvokedSkillRestoration {
         let mut skills: HashMap<String, Self> = HashMap::new();
 
         for (name, input, turn_number) in tool_calls {
-            if name == cocode_protocol::tools::SKILL {
+            if name == cocode_protocol::ToolName::Skill.as_str() {
                 // Extract skill name from input
                 if let Some(skill_name) = input.get("skill").and_then(|v| v.as_str()) {
                     let args = input.get("args").and_then(|v| v.as_str()).map(String::from);
@@ -903,7 +904,7 @@ pub fn execute_micro_compact(
 
         // Phase 6 prep: Track file paths from Read tool results for readFileState cleanup
         // The caller can use these paths to update their file state tracking
-        if candidate.tool_name.as_deref() == Some(cocode_protocol::tools::READ) {
+        if candidate.tool_name.as_deref() == Some(cocode_protocol::ToolName::Read.as_str()) {
             // Try to extract file path from the tool input or from the message
             // Messages may have path in different locations depending on format
             if let Some(path) = msg

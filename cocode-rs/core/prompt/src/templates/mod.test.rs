@@ -27,11 +27,11 @@ fn test_rendered_templates_non_empty() {
 fn test_tool_names_in_templates() {
     // Verify tool name constants are correctly substituted
     let tool_policy = engine::render("tool_policy", minijinja::context! {});
-    assert!(tool_policy.contains(cocode_protocol::tools::BASH));
-    assert!(tool_policy.contains(cocode_protocol::tools::READ));
+    assert!(tool_policy.contains(cocode_protocol::ToolName::Bash.as_str()));
+    assert!(tool_policy.contains(cocode_protocol::ToolName::Read.as_str()));
 
     let explore = engine::render("explore_subagent", minijinja::context! {});
-    assert!(explore.contains(cocode_protocol::tools::GLOB));
-    assert!(explore.contains(cocode_protocol::tools::GREP));
-    assert!(explore.contains(cocode_protocol::tools::READ));
+    assert!(explore.contains(cocode_protocol::ToolName::Glob.as_str()));
+    assert!(explore.contains(cocode_protocol::ToolName::Grep.as_str()));
+    assert!(explore.contains(cocode_protocol::ToolName::Read.as_str()));
 }

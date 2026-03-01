@@ -29,6 +29,7 @@ use cocode_protocol::PermissionMode;
 use cocode_protocol::ProviderType;
 use cocode_protocol::RoleSelection;
 use cocode_protocol::RoleSelections;
+use cocode_protocol::SubagentType;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::execution::ExecutionIdentity;
@@ -751,7 +752,7 @@ impl SessionState {
                     Box::pin(async move {
                         let combined = format!("{system_prompt}\n\n{user_message}");
                         let input = cocode_tools::SpawnAgentInput {
-                            agent_type: "explore".to_string(),
+                            agent_type: SubagentType::Explore.as_str().to_string(),
                             prompt: combined,
                             model: None,
                             max_turns: Some(1),
@@ -774,7 +775,7 @@ impl SessionState {
                     let spawn_fn = spawn_fn_for_agent.clone();
                     Box::pin(async move {
                         let input = cocode_tools::SpawnAgentInput {
-                            agent_type: "explore".to_string(),
+                            agent_type: SubagentType::Explore.as_str().to_string(),
                             prompt,
                             model: None,
                             max_turns: Some(max_turns),

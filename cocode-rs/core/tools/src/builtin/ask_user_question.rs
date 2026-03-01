@@ -40,7 +40,7 @@ impl Default for AskUserQuestionTool {
 #[async_trait]
 impl Tool for AskUserQuestionTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::ASK_USER_QUESTION
+        cocode_protocol::ToolName::AskUserQuestion.as_str()
     }
 
     fn description(&self) -> &str {

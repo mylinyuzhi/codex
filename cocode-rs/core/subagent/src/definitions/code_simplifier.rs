@@ -1,5 +1,6 @@
 use crate::definition::AgentDefinition;
 use crate::definition::AgentSource;
+use cocode_protocol::SubagentType;
 
 /// Code-simplifier agent - simplifies and refines code for clarity.
 ///
@@ -8,12 +9,12 @@ use crate::definition::AgentSource;
 /// readability and maintainability.
 pub fn code_simplifier_agent() -> AgentDefinition {
     AgentDefinition {
-        name: "code-simplifier".to_string(),
+        name: SubagentType::CodeSimplifier.as_str().to_string(),
         description: "Simplifies and refines code for clarity, consistency, and maintainability \
                       while preserving all functionality. Focuses on recently modified code \
                       unless instructed otherwise."
             .to_string(),
-        agent_type: "code-simplifier".to_string(),
+        agent_type: SubagentType::CodeSimplifier.as_str().to_string(),
         tools: vec![],
         disallowed_tools: vec![],
         identity: None,

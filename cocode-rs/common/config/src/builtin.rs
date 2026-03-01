@@ -460,11 +460,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
             excluded_tools: Some(vec![
-                cocode_protocol::tools::EDIT.to_string(),
-                cocode_protocol::tools::WRITE.to_string(),
-                cocode_protocol::tools::READ_MANY_FILES.to_string(),
-                cocode_protocol::tools::NOTEBOOK_EDIT.to_string(),
-                cocode_protocol::tools::SMART_EDIT.to_string(),
+                cocode_protocol::ToolName::Edit.as_str().to_string(),
+                cocode_protocol::ToolName::Write.as_str().to_string(),
+                cocode_protocol::ToolName::ReadManyFiles
+                    .as_str()
+                    .to_string(),
+                cocode_protocol::ToolName::NotebookEdit.as_str().to_string(),
+                cocode_protocol::ToolName::SmartEdit.as_str().to_string(),
             ]),
             ..Default::default()
         },
@@ -499,11 +501,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             shell_type: Some(ConfigShellToolType::ShellCommand),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             excluded_tools: Some(vec![
-                cocode_protocol::tools::EDIT.to_string(),
-                cocode_protocol::tools::WRITE.to_string(),
-                cocode_protocol::tools::READ_MANY_FILES.to_string(),
-                cocode_protocol::tools::NOTEBOOK_EDIT.to_string(),
-                cocode_protocol::tools::SMART_EDIT.to_string(),
+                cocode_protocol::ToolName::Edit.as_str().to_string(),
+                cocode_protocol::ToolName::Write.as_str().to_string(),
+                cocode_protocol::ToolName::ReadManyFiles
+                    .as_str()
+                    .to_string(),
+                cocode_protocol::ToolName::NotebookEdit.as_str().to_string(),
+                cocode_protocol::ToolName::SmartEdit.as_str().to_string(),
             ]),
             ..Default::default()
         },
@@ -539,11 +543,13 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             shell_type: Some(ConfigShellToolType::ShellCommand),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             excluded_tools: Some(vec![
-                cocode_protocol::tools::EDIT.to_string(),
-                cocode_protocol::tools::WRITE.to_string(),
-                cocode_protocol::tools::READ_MANY_FILES.to_string(),
-                cocode_protocol::tools::NOTEBOOK_EDIT.to_string(),
-                cocode_protocol::tools::SMART_EDIT.to_string(),
+                cocode_protocol::ToolName::Edit.as_str().to_string(),
+                cocode_protocol::ToolName::Write.as_str().to_string(),
+                cocode_protocol::ToolName::ReadManyFiles
+                    .as_str()
+                    .to_string(),
+                cocode_protocol::ToolName::NotebookEdit.as_str().to_string(),
+                cocode_protocol::ToolName::SmartEdit.as_str().to_string(),
             ]),
             ..Default::default()
         },

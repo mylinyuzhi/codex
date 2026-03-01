@@ -74,8 +74,11 @@ impl AttachmentGenerator for AlreadyReadFilesGenerator {
             let path_str = path.display().to_string();
 
             // Create tool_use message (assistant role)
-            let tool_use_block =
-                ContentBlock::tool_use(id.clone(), cocode_protocol::tools::READ, json!({ "file_path": path_str }));
+            let tool_use_block = ContentBlock::tool_use(
+                id.clone(),
+                cocode_protocol::ToolName::Read.as_str(),
+                json!({ "file_path": path_str }),
+            );
             messages.push(ReminderMessage {
                 role: MessageRole::Assistant,
                 blocks: vec![tool_use_block],
@@ -117,7 +120,7 @@ impl AttachmentGenerator for AlreadyReadFilesGenerator {
                 role: MessageRole::Assistant,
                 blocks: vec![ContentBlock::tool_use(
                     id.clone(),
-                    cocode_protocol::tools::READ,
+                    cocode_protocol::ToolName::Read.as_str(),
                     json!({ "note": format!("...and {} more files", remaining) }),
                 )],
                 is_meta: true,

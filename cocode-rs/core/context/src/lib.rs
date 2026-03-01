@@ -27,8 +27,10 @@ pub use conversation_context::ConversationContextBuilder;
 pub use conversation_context::InjectionPosition;
 pub use conversation_context::MemoryFile;
 pub use conversation_context::OutputStylePromptConfig;
-pub use conversation_context::SubagentType;
 pub use environment::EnvironmentInfo;
 pub use environment::EnvironmentInfoBuilder;
 pub use error::ContextError;
 pub use error::Result;
+
+// Re-export SubagentType from protocol for convenience
+pub use cocode_protocol::SubagentType;

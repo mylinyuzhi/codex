@@ -41,7 +41,7 @@ impl Default for ShellTool {
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::SHELL
+        cocode_protocol::ToolName::Shell.as_str()
     }
 
     fn description(&self) -> &str {
@@ -124,7 +124,7 @@ impl Tool for ShellTool {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 ),
-                tool_name: cocode_protocol::tools::SHELL.to_string(),
+                tool_name: cocode_protocol::ToolName::Shell.as_str().to_string(),
                 description: if command_str.len() > 120 {
                     format!("{}...", &command_str[..120])
                 } else {

@@ -28,7 +28,7 @@ impl Default for KillShellTool {
 #[async_trait]
 impl Tool for KillShellTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::TASK_STOP
+        cocode_protocol::ToolName::TaskStop.as_str()
     }
 
     fn description(&self) -> &str {

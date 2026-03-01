@@ -45,7 +45,7 @@ impl ApplyPatchTool {
     /// Get the Function variant tool definition (JSON schema with "input" field).
     pub fn function_definition() -> ToolDefinition {
         ToolDefinition::full(
-            cocode_protocol::tools::APPLY_PATCH,
+            cocode_protocol::ToolName::ApplyPatch.as_str(),
             prompts::APPLY_PATCH_DESCRIPTION,
             serde_json::json!({
                 "type": "object",
@@ -64,7 +64,7 @@ impl ApplyPatchTool {
     pub fn freeform_definition() -> ToolDefinition {
         let lark_grammar = include_str!("tool_apply_patch.lark");
         ToolDefinition::custom(
-            cocode_protocol::tools::APPLY_PATCH,
+            cocode_protocol::ToolName::ApplyPatch.as_str(),
             prompts::APPLY_PATCH_FREEFORM_DESCRIPTION,
             serde_json::json!({
                 "type": "grammar",
@@ -78,7 +78,7 @@ impl ApplyPatchTool {
 #[async_trait]
 impl Tool for ApplyPatchTool {
     fn name(&self) -> &str {
-        cocode_protocol::tools::APPLY_PATCH
+        cocode_protocol::ToolName::ApplyPatch.as_str()
     }
 
     fn description(&self) -> &str {

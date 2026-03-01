@@ -1,16 +1,18 @@
 use crate::definition::AgentDefinition;
 use crate::definition::AgentSource;
+use cocode_protocol::SubagentType;
+use cocode_protocol::ToolName;
 use cocode_protocol::execution::ExecutionIdentity;
 
 /// Bash agent - executes shell commands.
 pub fn bash_agent() -> AgentDefinition {
     AgentDefinition {
-        name: "bash".to_string(),
+        name: SubagentType::Bash.as_str().to_string(),
         description: "Command execution specialist for running bash commands. Use for git \
                       operations, command execution, and terminal tasks."
             .to_string(),
-        agent_type: "bash".to_string(),
-        tools: vec![cocode_protocol::tools::BASH.to_string()],
+        agent_type: SubagentType::Bash.as_str().to_string(),
+        tools: vec![ToolName::Bash.as_str().to_string()],
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(10),

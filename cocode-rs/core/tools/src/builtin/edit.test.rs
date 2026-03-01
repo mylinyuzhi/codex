@@ -97,7 +97,7 @@ async fn test_edit_replace_all() {
 #[test]
 fn test_tool_properties() {
     let tool = EditTool::new();
-    assert_eq!(tool.name(), cocode_protocol::tools::EDIT);
+    assert_eq!(tool.name(), cocode_protocol::ToolName::Edit.as_str());
     assert!(!tool.is_concurrent_safe());
 }
 
