@@ -6,6 +6,7 @@ use cocode_context::ConversationContext;
 use cocode_context::InjectionPosition;
 use cocode_context::SubagentType;
 
+use crate::engine;
 use crate::sections::PromptSection;
 use crate::sections::assemble_sections;
 use crate::sections::permission_section;
@@ -42,7 +43,7 @@ impl SystemPromptBuilder {
 
         // 2. Tool policy (if tools present) — skipped when output style has keep_coding=false
         if ctx.has_tools() && keep_coding {
-            let mut policy = templates::TOOL_POLICY.to_string();
+            let mut policy = engine::render("tool_policy", minijinja::context! {});
             let tool_lines = sections::generate_tool_policy_lines(&ctx.tool_names);
             if !tool_lines.is_empty() {
                 policy.push('\n');
@@ -124,13 +125,16 @@ impl SystemPromptBuilder {
 
     /// Build system prompt for a subagent (explore/plan).
     pub fn build_for_subagent(ctx: &ConversationContext, subagent_type: SubagentType) -> String {
-        let subagent_template = match subagent_type {
-            SubagentType::Explore => templates::EXPLORE_SUBAGENT,
-            SubagentType::Plan => templates::PLAN_SUBAGENT,
+        let template_name = match subagent_type {
+            SubagentType::Explore => "explore_subagent",
+            SubagentType::Plan => "plan_subagent",
         };
 
         let mut sections = vec![
-            (PromptSection::Identity, subagent_template.to_string()),
+            (
+                PromptSection::Identity,
+                engine::render(template_name, minijinja::context! {}),
+            ),
             (PromptSection::Security, templates::SECURITY.to_string()),
             (
                 PromptSection::Environment,
