@@ -42,6 +42,14 @@ pub use compaction::create_invoked_skills_attachment;
 pub use compaction::format_summary_with_transcript;
 pub use compaction::wrap_hook_additional_context;
 
+// Phase 4: File state rebuild and cleanup
+pub use compaction::LRU_MAX_ENTRIES;
+pub use compaction::LRU_MAX_SIZE_BYTES;
+pub use compaction::build_file_read_state;
+pub use compaction::build_file_restoration_from_tracker;
+pub use compaction::collect_files_to_restore;
+pub use compaction::is_internal_file;
+
 // Re-export protocol types used in compaction
 pub use compaction::CompactBoundaryMetadata;
 pub use compaction::CompactTelemetry;

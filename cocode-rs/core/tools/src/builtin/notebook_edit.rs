@@ -447,10 +447,15 @@ impl Tool for NotebookEditTool {
             .await
             .ok()
             .and_then(|m| m.modified().ok());
+        let new_mtime_ms = new_mtime.and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        });
         use crate::context::FileReadState;
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete(new_content.clone(), new_mtime),
+            FileReadState::complete_with_turn(new_content.clone(), new_mtime, ctx.turn_number),
         )
         .await;
 
@@ -461,10 +466,9 @@ impl Tool for NotebookEditTool {
         };
 
         let mut result = ToolOutput::text(format!("Successfully {action} {}", path.display()));
-        result.modifiers.push(ContextModifier::FileRead {
-            path: path.clone(),
-            content: new_content,
-        });
+        result
+            .modifiers
+            .push(ContextModifier::file_read(path, new_content, new_mtime_ms));
 
         Ok(result)
     }

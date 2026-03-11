@@ -135,6 +135,7 @@ pub use loop_event::ToolResultContent;
 // Tool types
 pub use tool_types::ConcurrencySafety;
 pub use tool_types::ContextModifier;
+pub use tool_types::FileReadKind;
 pub use tool_types::ImageData;
 pub use tool_types::ToolOutput;
 pub use tool_types::ValidationError;
@@ -145,6 +146,7 @@ pub use queue::UserQueuedCommand;
 
 // Tracking types
 pub use tracking::AutoCompactTracking;
+pub use tracking::CompactedLargeFileRef;
 pub use tracking::FileChange;
 pub use tracking::FileChangeType;
 pub use tracking::FileReadInfo;

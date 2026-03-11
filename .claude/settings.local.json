@@ -76,7 +76,11 @@
       "Bash(done)",
       "WebFetch(domain:serde.rs)",
       "WebFetch(domain:ai.google.dev)",
-      "WebFetch(domain:docs.cloud.google.com)"
+      "WebFetch(domain:docs.cloud.google.com)",
+      "Skill(squash)",
+      "Bash(for f in ask_user_question enter_plan_mode kill_shell ls lsp mcp_search notebook_edit read_many shell smart_edit task_output todo_write)",
+      "Bash(do echo \"=== $f.rs ===\")",
+      "Read(//Users/bytedance/codespace/myapp/codex/cocode-rs/core/tools/src/builtin/**)"
     ],
     "deny": [],
     "ask": []

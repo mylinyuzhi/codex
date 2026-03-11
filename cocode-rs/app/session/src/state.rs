@@ -290,6 +290,16 @@ pub struct SessionState {
     /// Pre-declared permissions from `ExitPlanMode`'s `allowedPrompts` are
     /// injected here so they survive across `AgentLoop` instances.
     shared_approval_store: Arc<tokio::sync::Mutex<cocode_tools::ApprovalStore>>,
+
+    /// Reminder file tracker state persisted across AgentLoop runs.
+    ///
+    /// Each `run_turn_streaming()` creates a new `AgentLoop`, so the file tracker
+    /// state must be extracted after each run and passed to the next one.
+    /// This enables proper already-read detection across turns.
+    ///
+    /// The state is a list of (path, read_state) tuples representing files that
+    /// have been read and their content/modification state.
+    reminder_file_tracker_state: Vec<(std::path::PathBuf, cocode_tools::FileReadState)>,
 }
 
 impl SessionState {
@@ -678,6 +688,7 @@ impl SessionState {
             shared_approval_store: Arc::new(tokio::sync::Mutex::new(
                 cocode_tools::ApprovalStore::new(),
             )),
+            reminder_file_tracker_state: Vec::new(),
         })
     }
 
@@ -819,7 +830,9 @@ impl SessionState {
         .spawn_agent_fn(self.build_spawn_agent_fn())
         .plan_mode_state(self.plan_mode_state.clone())
         .question_responder(self.question_responder.clone())
-        .approval_store(self.shared_approval_store.clone());
+        .approval_store(self.shared_approval_store.clone())
+        .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
+        .message_history(self.message_history.clone());
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -835,10 +848,16 @@ impl SessionState {
             self.todos = todos;
         }
 
+        // Sync message history back from loop (persists across turns)
+        self.message_history = loop_instance.message_history().clone();
+
         // Extract plan mode state from the loop (persists across turns)
         if let Some(plan_state) = loop_instance.take_plan_mode_state() {
             self.plan_mode_state = plan_state;
         }
+
+        // Extract file tracker state from the loop (persists across turns)
+        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_state();
 
         // Inject allowed prompts from plan exit into the shared approval store
         if let StopReason::PlanModeExit {
@@ -1672,6 +1691,262 @@ impl SessionState {
     }
 
     // ==========================================================
+    // Reminder File Tracker State
+    // ==========================================================
+
+    /// Get the reminder file tracker state.
+    ///
+    /// This state is persisted across AgentLoop runs to maintain file read
+    /// tracking for already-read detection.
+    pub fn reminder_file_tracker_state(
+        &self,
+    ) -> &[(std::path::PathBuf, cocode_tools::FileReadState)] {
+        &self.reminder_file_tracker_state
+    }
+
+    /// Set the reminder file tracker state.
+    ///
+    /// Called after each AgentLoop turn to persist file tracker state.
+    pub fn set_reminder_file_tracker_state(
+        &mut self,
+        state: Vec<(std::path::PathBuf, cocode_tools::FileReadState)>,
+    ) {
+        self.reminder_file_tracker_state = state;
+    }
+
+    /// Apply rewind mode to conversation state.
+    ///
+    /// Handles the three rewind modes:
+    /// - `CodeAndConversation`: Truncate history, restore files, rebuild todos/tracker
+    /// - `ConversationOnly`: Truncate history, keep files, rebuild todos/tracker
+    /// - `CodeOnly`: Keep history, restore files, rebuild tracker from retained history
+    ///
+    /// # Arguments
+    ///
+    /// * `rewound_turn` - The turn number to rewind to
+    /// * `mode` - The rewind mode
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (messages_removed, restored_prompt). The restored_prompt is the
+    /// user message text from the rewound turn, which can be used to restore the
+    /// UI input field after rewind.
+    pub fn apply_rewind_mode_for_turn(
+        &mut self,
+        rewound_turn: i32,
+        mode: cocode_protocol::RewindMode,
+    ) -> (i32, Option<String>) {
+        match mode {
+            cocode_protocol::RewindMode::CodeAndConversation => {
+                // Truncate history and restore files
+                let restored_files = self.restore_files_from_turn(rewound_turn);
+                let (messages_removed, restored_prompt) =
+                    self.rewind_conversation_state_from_turn(rewound_turn);
+                tracing::debug!(
+                    rewound_turn,
+                    messages_removed,
+                    restored_files,
+                    has_prompt = restored_prompt.is_some(),
+                    "Applied CodeAndConversation rewind"
+                );
+                (messages_removed, restored_prompt)
+            }
+            cocode_protocol::RewindMode::ConversationOnly => {
+                // Truncate history but keep files
+                let (messages_removed, restored_prompt) =
+                    self.rewind_conversation_state_from_turn(rewound_turn);
+                tracing::debug!(
+                    rewound_turn,
+                    messages_removed,
+                    has_prompt = restored_prompt.is_some(),
+                    "Applied ConversationOnly rewind"
+                );
+                (messages_removed, restored_prompt)
+            }
+            cocode_protocol::RewindMode::CodeOnly => {
+                // Keep history but restore files and rebuild tracker
+                let _restored_files = self.restore_files_from_turn(rewound_turn);
+                self.rebuild_reminder_file_tracker_from_history();
+                tracing::debug!(rewound_turn, "Applied CodeOnly rewind");
+                (0, None)
+            }
+        }
+    }
+
+    /// Truncate message history from a specific turn.
+    ///
+    /// Removes all turns at or after the given turn number.
+    fn truncate_history_from_turn(&mut self, from_turn: i32) -> i32 {
+        let before = self.message_history.turn_count();
+        self.message_history.truncate_from_turn(from_turn);
+        before - self.message_history.turn_count()
+    }
+
+    /// Restore files from a specific turn using snapshot manager.
+    ///
+    /// Returns the number of files restored.
+    fn restore_files_from_turn(&mut self, _from_turn: i32) -> i32 {
+        // File restoration is handled by the snapshot manager in tui_runner
+        // This method is a placeholder for session-level restoration logic
+        0
+    }
+
+    /// Rebuild todos from retained message history.
+    ///
+    /// Scans through the message history for TodoWrite/TodoUpdate tool calls
+    /// in reverse order to find the most recent todo state.
+    fn rebuild_todos_from_history(&mut self) {
+        let todos = self.reconstruct_todos_from_history();
+        self.set_todos(todos);
+    }
+
+    /// Reconstruct todos from message history by finding the most recent TodoWrite result.
+    ///
+    /// Walks turns in reverse to find the most recent TodoWrite/TodoUpdate tool call
+    /// with a successful output, then parses and returns the todo list.
+    fn reconstruct_todos_from_history(&self) -> serde_json::Value {
+        use cocode_protocol::ToolResultContent;
+
+        // Walk turns in reverse to find the most recent TodoWrite/TodoUpdate result
+        for turn in self.message_history.turns().iter().rev() {
+            for tc in &turn.tool_calls {
+                if tc.name == "TodoWrite" || tc.name == "TodoUpdate" {
+                    if let Some(ref output) = tc.output {
+                        match output {
+                            ToolResultContent::Text(text) => {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text)
+                                {
+                                    return parsed;
+                                }
+                            }
+                            ToolResultContent::Structured(value) => {
+                                return value.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // No todos found, return empty array
+        serde_json::Value::Array(vec![])
+    }
+
+    /// Rebuild reminder file tracker from retained history.
+    ///
+    /// Extracts `ContextModifier::FileRead` entries from tool calls in the
+    /// message history to reconstruct the file tracker state.
+    fn rebuild_reminder_file_tracker_from_history(&mut self) {
+        use cocode_system_reminder::build_file_read_state_from_modifiers;
+
+        // Build iterator of (tool_name, modifiers, turn_number, is_completed)
+        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
+            .message_history
+            .turns()
+            .iter()
+            .flat_map(|turn| {
+                turn.tool_calls.iter().map(move |tc| {
+                    (
+                        tc.name.as_str(),
+                        tc.modifiers.as_slice(),
+                        turn.number,
+                        tc.status.is_terminal(),
+                    )
+                })
+            })
+            .collect();
+
+        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+        self.reminder_file_tracker_state = state;
+    }
+
+    /// Rewind conversation state from a specific turn.
+    ///
+    /// This is a unified method for conversation state rollback that handles:
+    /// - History truncation
+    /// - Todos rebuilding
+    /// - File tracker state rebuilding
+    /// - Prompt capture for UI restoration
+    ///
+    /// # Arguments
+    ///
+    /// * `from_turn` - The turn number to rewind from (turns >= from_turn are removed)
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (messages_removed, restored_prompt). The restored_prompt is the
+    /// user message text from the rewound turn, which can be used to restore the
+    /// UI input field after rewind.
+    pub fn rewind_conversation_state_from_turn(&mut self, from_turn: i32) -> (i32, Option<String>) {
+        // Capture prompt at the rewind turn BEFORE truncating
+        let restored_prompt = self
+            .message_history
+            .turns()
+            .iter()
+            .find(|t| t.number == from_turn)
+            .map(|t| t.user_message.text());
+
+        let messages_removed = self.truncate_history_from_turn(from_turn);
+        self.rebuild_todos_from_history();
+        self.prune_reminder_file_tracker_for_turn_boundary(from_turn);
+        (messages_removed, restored_prompt)
+    }
+
+    /// Prune reminder file tracker for turn boundary.
+    ///
+    /// Removes entries from the file tracker state that were read at or after
+    /// the specified turn. This is used during rewind to ensure the tracker
+    /// reflects only the files read before the rewound turn.
+    ///
+    /// # Arguments
+    ///
+    /// * `boundary_turn` - The turn boundary; entries at or after this turn are removed
+    pub fn prune_reminder_file_tracker_for_turn_boundary(&mut self, boundary_turn: i32) {
+        self.reminder_file_tracker_state
+            .retain(|(_, state)| state.read_turn < boundary_turn);
+    }
+
+    /// Rebuild reminder file tracker with session memory exclusion.
+    ///
+    /// Similar to `rebuild_reminder_file_tracker_from_history`, but excludes
+    /// file reads that occurred within session memory (summarization) turns.
+    /// This is used after session memory compaction to ensure the tracker
+    /// reflects the actual conversation context, not the summarization process.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_memory_turns` - Set of turn numbers that were session memory turns
+    ///   and should be excluded from the rebuild
+    pub fn rebuild_reminder_file_tracker_with_session_memory(
+        &mut self,
+        session_memory_turns: &std::collections::HashSet<i32>,
+    ) {
+        use cocode_system_reminder::build_file_read_state_from_modifiers;
+
+        // Build iterator of (tool_name, modifiers, turn_number, is_completed)
+        // excluding session memory turns
+        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
+            .message_history
+            .turns()
+            .iter()
+            .filter(|turn| !session_memory_turns.contains(&turn.number))
+            .flat_map(|turn| {
+                turn.tool_calls.iter().map(move |tc| {
+                    (
+                        tc.name.as_str(),
+                        tc.modifiers.as_slice(),
+                        turn.number,
+                        tc.status.is_terminal(),
+                    )
+                })
+            })
+            .collect();
+
+        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+        self.reminder_file_tracker_state = state;
+    }
+
+    // ==========================================================
     // Subagent Wiring
     // ==========================================================
 
@@ -2255,7 +2530,9 @@ impl SessionState {
         .spawn_agent_fn(self.build_spawn_agent_fn())
         .plan_mode_state(self.plan_mode_state.clone())
         .question_responder(self.question_responder.clone())
-        .approval_store(self.shared_approval_store.clone());
+        .approval_store(self.shared_approval_store.clone())
+        .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
+        .message_history(self.message_history.clone());
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
@@ -2279,10 +2556,16 @@ impl SessionState {
             self.todos = todos;
         }
 
+        // Sync message history back from loop (persists across turns)
+        self.message_history = loop_instance.message_history().clone();
+
         // Extract plan mode state from the loop (persists across turns)
         if let Some(plan_state) = loop_instance.take_plan_mode_state() {
             self.plan_mode_state = plan_state;
         }
+
+        // Extract file tracker state from the loop (persists across turns)
+        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_state();
 
         // Update totals
         self.total_turns += result.turns_completed;
@@ -2442,6 +2725,11 @@ impl SessionState {
                 summary_tokens: post_tokens,
             })
             .await;
+
+        // Rebuild todos and file tracker after partial compaction
+        // This ensures state consistency with the retained history
+        self.rebuild_todos_from_history();
+        self.rebuild_reminder_file_tracker_from_history();
 
         info!(
             from_turn_number,

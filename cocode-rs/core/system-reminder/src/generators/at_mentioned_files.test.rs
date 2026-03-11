@@ -137,3 +137,136 @@ fn test_generator_properties() {
         AttachmentType::AtMentionedFiles
     );
 }
+
+#[tokio::test]
+async fn test_file_with_line_range_still_reads_when_tracked_unchanged() {
+    // When a file has a line range specified, it should be re-read even if
+    // the full file was previously tracked as unchanged. This is because
+    // line ranges represent different "views" of the file.
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let file_path = temp_dir.path().join("test.txt");
+    {
+        let mut file = fs::File::create(&file_path).expect("create file");
+        for i in 1..=6 {
+            writeln!(file, "line {i}").expect("write");
+        }
+    }
+
+    // Track the file as already read (full content)
+    let mtime = fs::metadata(&file_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let tracker = crate::FileTracker::new();
+    tracker.track_read(
+        &file_path,
+        crate::FileReadState::complete_with_turn(
+            fs::read_to_string(&file_path).expect("read file"),
+            mtime,
+            1,
+        ),
+    );
+
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(2)
+        .is_main_agent(true)
+        .has_user_input(true)
+        .user_prompt("Check @test.txt:3-4 please")
+        .cwd(temp_dir.path().to_path_buf())
+        .file_tracker(&tracker)
+        .build();
+
+    let generator = AtMentionedFilesGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+
+    // Should return content, not already-read
+    assert!(result.is_some());
+    let reminder = result.expect("reminder");
+    let content = reminder.content().expect("content");
+    assert!(content.contains("line 3"));
+    assert!(content.contains("line 4"));
+    assert!(!content.contains("line 1"));
+}
+
+#[tokio::test]
+async fn test_duplicate_mentions_same_normalized_path_are_deduped() {
+    // When the same file is mentioned multiple times via different paths
+    // (e.g., @dup.txt and @./dup.txt), it should only be processed once.
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let file_path = temp_dir.path().join("dup.txt");
+    fs::write(&file_path, "line 1\n").expect("write");
+
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(1)
+        .is_main_agent(true)
+        .has_user_input(true)
+        .user_prompt("Check @dup.txt and @./dup.txt")
+        .cwd(temp_dir.path().to_path_buf())
+        .build();
+
+    let generator = AtMentionedFilesGenerator;
+    let reminder = generator
+        .generate(&ctx)
+        .await
+        .expect("generate")
+        .expect("reminder");
+
+    // Should only appear once in the content (deduplicated)
+    let content = reminder.content().expect("content");
+    // The file path appears once in the input, once in the result
+    // Count the number of "dup.txt" occurrences in "file_path" sections
+    let file_path_occurrences = content.matches("\"file_path\"").count();
+    assert_eq!(file_path_occurrences, 1, "Should only read the file once");
+    // Content should only appear once
+    assert_eq!(
+        content.matches("line 1").count(),
+        1,
+        "Content should appear once"
+    );
+}
+
+#[tokio::test]
+async fn test_already_read_file_returns_silent_reminder() {
+    // When a file was already read and is unchanged, it should return
+    // a silent AlreadyReadFile reminder (zero tokens).
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let file_path = temp_dir.path().join("cached.txt");
+    fs::write(&file_path, "cached content\n").expect("write");
+
+    // Track the file as already read
+    let mtime = fs::metadata(&file_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let tracker = crate::FileTracker::new();
+    tracker.track_read(
+        &file_path,
+        crate::FileReadState::complete_with_turn(
+            fs::read_to_string(&file_path).expect("read file"),
+            mtime,
+            1,
+        ),
+    );
+
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(2)
+        .is_main_agent(true)
+        .has_user_input(true)
+        .user_prompt("Check @cached.txt")
+        .cwd(temp_dir.path().to_path_buf())
+        .file_tracker(&tracker)
+        .build();
+
+    let generator = AtMentionedFilesGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+
+    // Should return a silent already-read reminder
+    assert!(result.is_some());
+    let reminder = result.expect("reminder");
+    // AlreadyReadFile type should be silent (no content)
+    assert_eq!(reminder.attachment_type, AttachmentType::AlreadyReadFile);
+}

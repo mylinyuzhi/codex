@@ -283,13 +283,57 @@ impl std::fmt::Display for AttachmentType {
 ///
 /// This enum allows generators to produce either simple text content
 /// or multiple messages (used for tool_use/tool_result pairs).
+///
+/// # Silent vs Model-Visible Outputs
+///
+/// Outputs are categorized into two types:
+///
+/// **Model-visible** (sent to API):
+/// - `Text` - Simple text content wrapped in XML tags
+/// - `Messages` - Multi-message content (tool_use/tool_result pairs)
+/// - `ModelAttachment` - Structured payload visible to model
+///
+/// **Silent** (zero tokens to API, UI-only):
+/// - `Silent` - No content, just state tracking
+/// - `SilentText` - Display-only text
+/// - `SilentMessages` - Display-only messages
+/// - `SilentAttachment` - Structured silent payload
+///
+/// Silent outputs are filtered out during message injection, reducing token
+/// usage while still being visible in UI logs. Used for already-read files
+/// to inform the model without consuming context window space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReminderOutput {
+    // === Model-visible outputs ===
     /// Single text content (most common case).
     Text(String),
     /// Multiple messages (used for tool_use/tool_result pairs).
     Messages(Vec<ReminderMessage>),
+    /// Structured payload visible to model.
+    ModelAttachment {
+        /// The payload data.
+        payload: serde_json::Value,
+    },
+
+    // === Silent outputs (zero tokens to API) ===
+    /// No content, just state tracking.
+    Silent,
+    /// Display-only text (not sent to model).
+    SilentText {
+        /// The text content for UI display only.
+        content: String,
+    },
+    /// Display-only messages (not sent to model).
+    SilentMessages {
+        /// Messages for UI display only.
+        messages: Vec<ReminderMessage>,
+    },
+    /// Structured silent payload (not sent to model).
+    SilentAttachment {
+        /// The payload data for UI display only.
+        payload: serde_json::Value,
+    },
 }
 
 impl ReminderOutput {
@@ -297,15 +341,24 @@ impl ReminderOutput {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ReminderOutput::Text(s) => Some(s),
-            ReminderOutput::Messages(_) => None,
+            _ => None,
         }
     }
 
     /// Get the messages if this is a Messages variant.
     pub fn as_messages(&self) -> Option<&[ReminderMessage]> {
         match self {
-            ReminderOutput::Text(_) => None,
             ReminderOutput::Messages(msgs) => Some(msgs),
+            _ => None,
+        }
+    }
+
+    /// Get the payload if this is a ModelAttachment or SilentAttachment variant.
+    pub fn as_attachment(&self) -> Option<&serde_json::Value> {
+        match self {
+            ReminderOutput::ModelAttachment { payload }
+            | ReminderOutput::SilentAttachment { payload } => Some(payload),
+            _ => None,
         }
     }
 
@@ -317,6 +370,44 @@ impl ReminderOutput {
     /// Check if this is a messages output.
     pub fn is_messages(&self) -> bool {
         matches!(self, ReminderOutput::Messages(_))
+    }
+
+    /// Check if this is a model attachment output.
+    pub fn is_model_attachment(&self) -> bool {
+        matches!(self, ReminderOutput::ModelAttachment { .. })
+    }
+
+    /// Check if this output is silent (zero tokens to API).
+    ///
+    /// Silent outputs are filtered out during message injection,
+    /// reducing token usage for already-read files.
+    pub fn is_silent(&self) -> bool {
+        matches!(
+            self,
+            ReminderOutput::Silent
+                | ReminderOutput::SilentText { .. }
+                | ReminderOutput::SilentMessages { .. }
+                | ReminderOutput::SilentAttachment { .. }
+        )
+    }
+
+    /// Check if this output should be sent to the model.
+    ///
+    /// This is the inverse of `is_silent()`.
+    pub fn is_model_visible(&self) -> bool {
+        !self.is_silent()
+    }
+
+    /// Create a silent text output for UI display only.
+    pub fn silent_text(content: impl Into<String>) -> Self {
+        ReminderOutput::SilentText {
+            content: content.into(),
+        }
+    }
+
+    /// Create a silent attachment output for UI display only.
+    pub fn silent_attachment(payload: serde_json::Value) -> Self {
+        ReminderOutput::SilentAttachment { payload }
     }
 }
 
@@ -411,8 +502,59 @@ impl ContentBlock {
 }
 
 // ============================================================================
+// Metadata Types for Specific Attachments
+// ============================================================================
+
+/// Metadata for AlreadyReadFile attachments.
+///
+/// Contains information about files that were already read and unchanged.
+/// This metadata allows the UI to display "Read <filename>" notifications
+/// while the API receives zero tokens (silent reminder).
+///
+/// Claude Code v2.1.38 alignment: already_read_file type is SILENT.
+/// The normalizer returns [] for this type, meaning zero tokens to API.
+/// The UI uses this metadata to show the notification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlreadyReadFileMeta {
+    /// Paths of files that were already read and unchanged.
+    pub paths: Vec<std::path::PathBuf>,
+}
+
+// ============================================================================
 // SystemReminder
 // ============================================================================
+
+/// Information about a file read during reminder generation.
+///
+/// Used by the @mention generator to track files that were read
+/// so the driver can update FileTracker after generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileReadInfo {
+    /// Path to the file that was read.
+    pub path: std::path::PathBuf,
+    /// Content of the file (for FileTracker state).
+    pub content: String,
+    /// File modification time (for change detection).
+    pub mtime: Option<std::time::SystemTime>,
+    /// Turn number when the file was read.
+    pub turn_number: i32,
+    /// Kind of read operation.
+    #[serde(default)]
+    pub read_kind: FileReadKind,
+    /// Line offset of the read (1-based, None if from start).
+    /// Uses i64 for large file support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    /// Line limit of the read.
+    /// Uses i64 for large file support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+}
+
+/// Kind of file read operation.
+///
+/// Re-exported from protocol for use in system reminders.
+pub use cocode_protocol::FileReadKind;
 
 /// A generated system reminder ready for injection.
 ///
@@ -428,6 +570,38 @@ pub struct SystemReminder {
     pub tier: ReminderTier,
     /// Whether this is metadata (hidden from user, visible to model).
     pub is_meta: bool,
+    /// Whether this reminder is silent (zero tokens in API, UI-only).
+    ///
+    /// Silent reminders are filtered out during message injection,
+    /// reducing token usage while still being visible in UI logs.
+    /// Used for already-read files to inform the model without
+    /// consuming context window space.
+    #[serde(default)]
+    pub is_silent: bool,
+    /// Optional metadata for specific attachment types.
+    ///
+    /// Used by silent reminders to provide UI-visible information
+    /// without sending tokens to the API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ReminderMetadata>,
+    /// Files that were read during generation (for FileTracker updates).
+    ///
+    /// Used by the @mention generator to track files that need to be
+    /// recorded in FileTracker. The driver processes this list after
+    /// generate_all() to update the shared FileTracker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_reads: Vec<FileReadInfo>,
+}
+
+/// Type-specific metadata for reminders.
+///
+/// Allows silent reminders to carry information for UI display
+/// without sending content to the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReminderMetadata {
+    /// Metadata for already-read file reminders.
+    AlreadyReadFile(AlreadyReadFileMeta),
 }
 
 impl SystemReminder {
@@ -440,6 +614,9 @@ impl SystemReminder {
             attachment_type,
             output: ReminderOutput::Text(content.into()),
             is_meta: true,
+            is_silent: false,
+            metadata: None,
+            file_reads: Vec::new(),
         }
     }
 
@@ -453,6 +630,71 @@ impl SystemReminder {
             attachment_type,
             output: ReminderOutput::Messages(messages),
             is_meta: true,
+            is_silent: false,
+            metadata: None,
+            file_reads: Vec::new(),
+        }
+    }
+
+    /// Create a new model attachment reminder.
+    ///
+    /// Used for structured payloads that should be visible to the model.
+    pub fn model_attachment(attachment_type: AttachmentType, payload: serde_json::Value) -> Self {
+        Self {
+            tier: attachment_type.tier(),
+            attachment_type,
+            output: ReminderOutput::ModelAttachment { payload },
+            is_meta: true,
+            is_silent: false,
+            metadata: None,
+            file_reads: Vec::new(),
+        }
+    }
+
+    /// Create a silent reminder with no content.
+    ///
+    /// Used for state tracking only, no tokens sent to API.
+    pub fn silent(attachment_type: AttachmentType) -> Self {
+        Self {
+            tier: attachment_type.tier(),
+            attachment_type,
+            output: ReminderOutput::Silent,
+            is_meta: true,
+            is_silent: true,
+            metadata: None,
+            file_reads: Vec::new(),
+        }
+    }
+
+    /// Create a silent text reminder (UI display only).
+    ///
+    /// The text is visible in UI logs but not sent to the model.
+    pub fn silent_text(attachment_type: AttachmentType, content: impl Into<String>) -> Self {
+        Self {
+            tier: attachment_type.tier(),
+            attachment_type,
+            output: ReminderOutput::SilentText {
+                content: content.into(),
+            },
+            is_meta: true,
+            is_silent: true,
+            metadata: None,
+            file_reads: Vec::new(),
+        }
+    }
+
+    /// Create a silent attachment reminder (UI display only).
+    ///
+    /// The payload is visible in UI logs but not sent to the model.
+    pub fn silent_attachment(attachment_type: AttachmentType, payload: serde_json::Value) -> Self {
+        Self {
+            tier: attachment_type.tier(),
+            attachment_type,
+            output: ReminderOutput::SilentAttachment { payload },
+            is_meta: true,
+            is_silent: true,
+            metadata: None,
+            file_reads: Vec::new(),
         }
     }
 
@@ -461,6 +703,59 @@ impl SystemReminder {
     /// For backwards compatibility. Prefer `SystemReminder::text()` for new code.
     pub fn new(attachment_type: AttachmentType, content: impl Into<String>) -> Self {
         Self::text(attachment_type, content)
+    }
+
+    /// Set whether this reminder is silent (zero tokens in API).
+    ///
+    /// Silent reminders are filtered out during message injection,
+    /// reducing token usage for already-read files.
+    pub fn with_silent(mut self, is_silent: bool) -> Self {
+        self.is_silent = is_silent;
+        self
+    }
+
+    /// Set the metadata for this reminder.
+    ///
+    /// Used by silent reminders to provide UI-visible information.
+    pub fn with_metadata(mut self, metadata: ReminderMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Set the file reads for this reminder.
+    ///
+    /// Used by the @mention generator to track files that need to be
+    /// recorded in FileTracker.
+    pub fn with_file_reads(mut self, file_reads: Vec<FileReadInfo>) -> Self {
+        self.file_reads = file_reads;
+        self
+    }
+
+    /// Create an AlreadyReadFile silent reminder with metadata.
+    ///
+    /// This is a convenience constructor for the common case of creating
+    /// an already-read-file reminder that is silent (zero tokens) but
+    /// carries path information for UI display.
+    ///
+    /// Uses `SilentAttachment` variant for structured payload that is
+    /// visible in UI logs but not sent to the API.
+    pub fn already_read_files(paths: Vec<std::path::PathBuf>) -> Self {
+        let payload = serde_json::to_value(AlreadyReadFileMeta {
+            paths: paths.clone(),
+        })
+        .unwrap_or(serde_json::Value::Null);
+
+        Self {
+            tier: AttachmentType::AlreadyReadFile.tier(),
+            attachment_type: AttachmentType::AlreadyReadFile,
+            output: ReminderOutput::SilentAttachment { payload },
+            is_meta: true,
+            is_silent: true,
+            metadata: Some(ReminderMetadata::AlreadyReadFile(AlreadyReadFileMeta {
+                paths,
+            })),
+            file_reads: Vec::new(),
+        }
     }
 
     /// Get the XML tag for this reminder.
@@ -475,13 +770,19 @@ impl SystemReminder {
 
     /// Get the wrapped content with XML tags.
     ///
-    /// Returns `None` for multi-message reminders (they don't use XML wrapping).
+    /// Returns `None` for multi-message reminders or silent reminders
+    /// (they don't use XML wrapping).
     pub fn wrapped_content(&self) -> Option<String> {
         match &self.output {
             ReminderOutput::Text(content) => {
                 Some(crate::xml::wrap_with_tag(content, self.xml_tag()))
             }
-            ReminderOutput::Messages(_) => None,
+            ReminderOutput::Messages(_)
+            | ReminderOutput::ModelAttachment { .. }
+            | ReminderOutput::Silent
+            | ReminderOutput::SilentText { .. }
+            | ReminderOutput::SilentMessages { .. }
+            | ReminderOutput::SilentAttachment { .. } => None,
         }
     }
 
@@ -493,6 +794,11 @@ impl SystemReminder {
     /// Check if this is a multi-message reminder.
     pub fn is_messages(&self) -> bool {
         self.output.is_messages()
+    }
+
+    /// Check if this reminder is silent (zero tokens to API).
+    pub fn is_silent_output(&self) -> bool {
+        self.output.is_silent() || self.is_silent
     }
 }
 

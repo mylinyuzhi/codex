@@ -140,3 +140,25 @@ fn test_already_read_file_type() {
     assert_eq!(AttachmentType::AlreadyReadFile.xml_tag(), XmlTag::None);
     assert_eq!(AttachmentType::AlreadyReadFile.name(), "already_read_file");
 }
+
+#[test]
+fn test_with_silent() {
+    let reminder = SystemReminder::text(AttachmentType::ChangedFiles, "test");
+    assert!(!reminder.is_silent);
+
+    let silent = reminder.with_silent(true);
+    assert!(silent.is_silent);
+
+    let not_silent = silent.with_silent(false);
+    assert!(!not_silent.is_silent);
+}
+
+#[test]
+fn test_messages_with_silent() {
+    let messages = vec![ReminderMessage::assistant(vec![ContentBlock::text("test")])];
+    let reminder =
+        SystemReminder::messages(AttachmentType::AlreadyReadFile, messages).with_silent(true);
+
+    assert!(reminder.is_silent);
+    assert!(reminder.is_messages());
+}

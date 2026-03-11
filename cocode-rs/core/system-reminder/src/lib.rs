@@ -57,9 +57,11 @@
 
 pub mod config;
 pub mod error;
-pub mod file_tracker;
+pub mod file_context_resolver;
+pub mod file_read_tracking_policy;
 pub mod generator;
 pub mod generators;
+pub mod history_file_read_state;
 pub mod inject;
 pub mod orchestrator;
 pub mod parsing;
@@ -71,8 +73,36 @@ pub mod xml;
 pub use config::SystemReminderConfig;
 pub use error::Result;
 pub use error::SystemReminderError;
-pub use file_tracker::FileTracker;
-pub use file_tracker::ReadFileState;
+// Re-export file context resolver types
+pub use file_context_resolver::FileReadConfig;
+pub use file_context_resolver::ReadFileResult;
+pub use file_context_resolver::ResolvedFile;
+pub use file_context_resolver::estimate_tokens;
+pub use file_context_resolver::is_cacheable_file;
+pub use file_context_resolver::read_file_with_limits;
+// Re-export file read tracking policy
+pub use file_read_tracking_policy::MentionReadDecision;
+pub use file_read_tracking_policy::categorize_read_kind;
+pub use file_read_tracking_policy::is_cacheable_read;
+pub use file_read_tracking_policy::is_full_content_read_tool;
+pub use file_read_tracking_policy::is_read_state_source_tool;
+pub use file_read_tracking_policy::is_stronger_kind;
+pub use file_read_tracking_policy::resolve_mention_read_decision;
+pub use file_read_tracking_policy::should_skip_tracked_file;
+// Re-export history file read state
+pub use history_file_read_state::BUILD_STATE_DEFAULT_MAX_ENTRIES;
+pub use history_file_read_state::FileReadStateEntry;
+pub use history_file_read_state::build_file_read_state_from_modifiers;
+pub use history_file_read_state::build_file_read_state_from_turns;
+pub use history_file_read_state::build_read_state_from_modifier;
+pub use history_file_read_state::file_read_infos_to_states;
+pub use history_file_read_state::merge_file_read_state;
+// Type aliases for API compatibility with reference branch
+pub use history_file_read_state::ReadFileState;
+pub use history_file_read_state::ReadStateKind;
+// Re-export FileTracker from cocode-tools (unified file tracking)
+pub use cocode_tools::FileReadState;
+pub use cocode_tools::FileTracker;
 pub use generator::ApprovedPlanInfo;
 pub use generator::AsyncHookResponseInfo;
 pub use generator::AttachmentGenerator;
@@ -89,14 +119,18 @@ pub use generator::RewindContextInfo;
 pub use generator::SkillInfo;
 pub use inject::InjectedBlock;
 pub use inject::InjectedMessage;
+pub use inject::NormalizedMessages;
 pub use inject::combine_reminders;
 pub use inject::create_injected_messages;
 pub use inject::inject_reminders;
+pub use inject::normalize_injected_messages;
 pub use orchestrator::SystemReminderOrchestrator;
 pub use throttle::ThrottleConfig;
 pub use throttle::ThrottleManager;
 pub use types::AttachmentType;
 pub use types::ContentBlock;
+pub use types::FileReadInfo;
+pub use types::FileReadKind;
 pub use types::MessageRole;
 pub use types::ReminderMessage;
 pub use types::ReminderOutput;
@@ -118,7 +152,6 @@ pub use parsing::parse_mentions;
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::config::SystemReminderConfig;
-    pub use crate::file_tracker::FileTracker;
     pub use crate::generator::AttachmentGenerator;
     pub use crate::generator::GeneratorContext;
     pub use crate::inject::InjectedBlock;
@@ -135,4 +168,6 @@ pub mod prelude {
     pub use crate::types::SystemReminder;
     pub use crate::types::XmlTag;
     pub use crate::xml::wrap_system_reminder;
+    // Re-export FileTracker from cocode-tools
+    pub use cocode_tools::FileTracker;
 }

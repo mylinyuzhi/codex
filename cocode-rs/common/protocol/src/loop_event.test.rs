@@ -502,3 +502,199 @@ fn test_speculative_execution_events() {
         _ => panic!("Wrong event type"),
     }
 }
+
+// ============================================================================
+// Rewind/Summarize Event Serde Tests
+// ============================================================================
+
+#[test]
+fn test_rewind_mode_serde() {
+    // Test all RewindMode variants
+    let modes = vec![
+        RewindMode::CodeAndConversation,
+        RewindMode::ConversationOnly,
+        RewindMode::CodeOnly,
+    ];
+
+    for mode in modes {
+        let json = serde_json::to_string(&mode).unwrap();
+        let parsed: RewindMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, parsed);
+    }
+}
+
+#[test]
+fn test_rewind_completed_event() {
+    let event = LoopEvent::RewindCompleted {
+        rewound_turn: 5,
+        restored_files: 3,
+        messages_removed: 12,
+        mode: RewindMode::CodeAndConversation,
+        restored_prompt: Some("Original user prompt".to_string()),
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("rewind_completed"));
+    // RewindMode serializes as PascalCase (no rename_all attribute)
+    assert!(json.contains("CodeAndConversation"));
+    assert!(json.contains("rewound_turn"));
+    assert!(json.contains("restored_files"));
+    assert!(json.contains("messages_removed"));
+    assert!(json.contains("restored_prompt"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::RewindCompleted {
+            rewound_turn,
+            restored_files,
+            messages_removed,
+            mode,
+            restored_prompt,
+        } => {
+            assert_eq!(rewound_turn, 5);
+            assert_eq!(restored_files, 3);
+            assert_eq!(messages_removed, 12);
+            assert_eq!(mode, RewindMode::CodeAndConversation);
+            assert_eq!(restored_prompt, Some("Original user prompt".to_string()));
+        }
+        _ => panic!("Wrong event type"),
+    }
+}
+
+#[test]
+fn test_rewind_failed_event() {
+    let event = LoopEvent::RewindFailed {
+        error: "No ghost commit available".to_string(),
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("rewind_failed"));
+    assert!(json.contains("No ghost commit available"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::RewindFailed { error } => {
+            assert_eq!(error, "No ghost commit available");
+        }
+        _ => panic!("Wrong event type"),
+    }
+}
+
+#[test]
+fn test_rewind_checkpoints_ready_event() {
+    let event = LoopEvent::RewindCheckpointsReady {
+        checkpoints: vec![
+            RewindCheckpointItem {
+                turn_number: 1,
+                file_count: 0,
+                user_message_preview: "Hello".to_string(),
+                has_ghost_commit: false,
+                modified_files: vec![],
+            },
+            RewindCheckpointItem {
+                turn_number: 2,
+                file_count: 2,
+                user_message_preview: "Fix the bug".to_string(),
+                has_ghost_commit: true,
+                modified_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
+            },
+        ],
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("rewind_checkpoints_ready"));
+    assert!(json.contains("turn_number"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::RewindCheckpointsReady { checkpoints } => {
+            assert_eq!(checkpoints.len(), 2);
+            assert_eq!(checkpoints[0].turn_number, 1);
+            assert_eq!(checkpoints[1].file_count, 2);
+            assert!(checkpoints[1].has_ghost_commit);
+        }
+        _ => panic!("Wrong event type"),
+    }
+}
+
+#[test]
+fn test_summarize_completed_event() {
+    let event = LoopEvent::SummarizeCompleted {
+        from_turn: 3,
+        summary_tokens: 1500,
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("summarize_completed"));
+    assert!(json.contains("from_turn"));
+    assert!(json.contains("summary_tokens"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::SummarizeCompleted {
+            from_turn,
+            summary_tokens,
+        } => {
+            assert_eq!(from_turn, 3);
+            assert_eq!(summary_tokens, 1500);
+        }
+        _ => panic!("Wrong event type"),
+    }
+}
+
+#[test]
+fn test_summarize_failed_event() {
+    let event = LoopEvent::SummarizeFailed {
+        error: "Context window too small".to_string(),
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("summarize_failed"));
+    assert!(json.contains("Context window too small"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::SummarizeFailed { error } => {
+            assert_eq!(error, "Context window too small");
+        }
+        _ => panic!("Wrong event type"),
+    }
+}
+
+#[test]
+fn test_rewind_mode_variants() {
+    // Test ConversationOnly mode
+    let event = LoopEvent::RewindCompleted {
+        rewound_turn: 2,
+        restored_files: 0,
+        messages_removed: 5,
+        mode: RewindMode::ConversationOnly,
+        restored_prompt: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    // RewindMode serializes as PascalCase (no rename_all attribute)
+    assert!(json.contains("ConversationOnly"));
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    if let LoopEvent::RewindCompleted { mode, .. } = parsed {
+        assert_eq!(mode, RewindMode::ConversationOnly);
+    } else {
+        panic!("Wrong event type");
+    }
+
+    // Test CodeOnly mode
+    let event = LoopEvent::RewindCompleted {
+        rewound_turn: 3,
+        restored_files: 5,
+        messages_removed: 0,
+        mode: RewindMode::CodeOnly,
+        restored_prompt: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("CodeOnly"));
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    if let LoopEvent::RewindCompleted { mode, .. } = parsed {
+        assert_eq!(mode, RewindMode::CodeOnly);
+    } else {
+        panic!("Wrong event type");
+    }
+}

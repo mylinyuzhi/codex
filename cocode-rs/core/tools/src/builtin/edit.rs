@@ -109,17 +109,23 @@ impl EditTool {
             .await
             .ok()
             .and_then(|m| m.modified().ok());
+        let new_mtime_ms = new_mtime.and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        });
         ctx.record_file_read_with_state(
             path,
-            FileReadState::complete(normalized.clone(), new_mtime),
+            FileReadState::complete_with_turn(normalized.clone(), new_mtime, ctx.turn_number),
         )
         .await;
 
         let mut result = ToolOutput::text(format!("Created new file: {}", path.display()));
-        result.modifiers.push(ContextModifier::FileRead {
-            path: path.to_path_buf(),
-            content: normalized,
-        });
+        result.modifiers.push(ContextModifier::file_read(
+            path.to_path_buf(),
+            normalized,
+            new_mtime_ms,
+        ));
         Ok(result)
     }
 }
@@ -428,9 +434,18 @@ impl Tool for EditTool {
             .await
             .ok()
             .and_then(|m| m.modified().ok());
+        let new_mtime_ms = new_mtime.and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        });
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete(normalized_content.clone(), new_mtime),
+            FileReadState::complete_with_turn(
+                normalized_content.clone(),
+                new_mtime,
+                ctx.turn_number,
+            ),
         )
         .await;
 
@@ -443,10 +458,11 @@ impl Tool for EditTool {
             "Successfully edited {}{stats}{strategy_note}",
             path.display()
         ));
-        result.modifiers.push(ContextModifier::FileRead {
-            path: path.clone(),
-            content: normalized_content,
-        });
+        result.modifiers.push(ContextModifier::file_read(
+            path,
+            normalized_content,
+            new_mtime_ms,
+        ));
 
         Ok(result)
     }

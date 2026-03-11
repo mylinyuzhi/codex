@@ -30,7 +30,6 @@ use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::ApprovedPlanInfo;
 use cocode_system_reminder::AsyncHookResponseInfo;
-use cocode_system_reminder::FileTracker;
 use cocode_system_reminder::GeneratorContext;
 use cocode_system_reminder::HookBlockingInfo;
 use cocode_system_reminder::HookContextInfo;
@@ -46,7 +45,7 @@ use cocode_system_reminder::create_injected_messages;
 use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
-use cocode_tools::FileTracker as ToolsFileTracker;
+use cocode_tools::FileTracker;
 use cocode_tools::ModelCallFn;
 use cocode_tools::ModelCallInput;
 use cocode_tools::ModelCallResult;
@@ -73,13 +72,16 @@ use tracing::warn;
 use crate::compaction::CompactionConfig;
 use crate::compaction::FileRestoration;
 use crate::compaction::InvokedSkillRestoration;
+use crate::compaction::LRU_MAX_ENTRIES;
 use crate::compaction::SessionMemorySummary;
 use crate::compaction::TaskStatusRestoration;
 use crate::compaction::ThresholdStatus;
 use crate::compaction::build_compact_instructions;
 use crate::compaction::build_context_restoration_with_config;
+use crate::compaction::build_file_read_state;
 use crate::compaction::calculate_keep_start_index;
 use crate::compaction::format_restoration_message;
+use crate::compaction::is_internal_file;
 use crate::compaction::map_message_index_to_keep_turns;
 use crate::compaction::try_session_memory_compact;
 use crate::compaction::write_session_memory;
@@ -129,11 +131,10 @@ pub struct AgentLoop {
 
     // System reminders
     reminder_orchestrator: SystemReminderOrchestrator,
-    /// FileTracker for system reminders (change detection).
-    file_tracker: FileTracker,
-    /// Shared FileTracker for tool execution (persists across turns).
-    /// This is synced to `file_tracker` before generating reminders.
-    shared_tools_file_tracker: Arc<tokio::sync::Mutex<ToolsFileTracker>>,
+    /// Shared FileTracker for tool execution and change detection (persists across turns).
+    /// Named to clarify this is the shared tools-level tracker, distinct from the
+    /// reminder-level file tracker state snapshot.
+    shared_tools_file_tracker: Arc<tokio::sync::Mutex<FileTracker>>,
     /// Shared ApprovalStore for tool execution (persists across turns).
     shared_approval_store: Arc<tokio::sync::Mutex<ApprovalStore>>,
 
@@ -286,6 +287,11 @@ pub struct AgentLoopBuilder {
     snapshot_manager: Option<Arc<cocode_file_backup::SnapshotManager>>,
     question_responder: Option<Arc<cocode_tools::QuestionResponder>>,
     approval_store: Option<Arc<tokio::sync::Mutex<ApprovalStore>>>,
+    /// Initial file tracker state for session resumption.
+    /// Vector of (path, read_state) pairs to restore into the FileTracker.
+    /// Named to clarify this is the reminder-level snapshot, distinct from the
+    /// shared tools-level tracker.
+    reminder_file_tracker_state: Vec<(std::path::PathBuf, FileReadState)>,
 }
 
 impl AgentLoopBuilder {
@@ -334,6 +340,7 @@ impl AgentLoopBuilder {
             snapshot_manager: None,
             question_responder: None,
             approval_store: None,
+            reminder_file_tracker_state: Vec::new(),
         }
     }
 
@@ -523,6 +530,18 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the initial file tracker state for session resumption.
+    ///
+    /// This state is used to initialize the FileTracker with previously tracked
+    /// file reads, enabling proper already-read detection across session restarts.
+    pub fn reminder_file_tracker_state(
+        mut self,
+        state: Vec<(std::path::PathBuf, FileReadState)>,
+    ) -> Self {
+        self.reminder_file_tracker_state = state;
+        self
+    }
+
     /// Build the [`AgentLoop`].
     pub fn build(self) -> AgentLoop {
         let model_name = self
@@ -533,9 +552,17 @@ impl AgentLoopBuilder {
 
         // Create system reminder components
         let reminder_orchestrator = SystemReminderOrchestrator::new(self.system_reminder_config);
-        let file_tracker = FileTracker::new();
-        // Create shared file tracker for tool execution (persists across turns)
-        let shared_tools_file_tracker = Arc::new(tokio::sync::Mutex::new(ToolsFileTracker::new()));
+        // Create shared file tracker for tool execution and change detection (persists across turns)
+        // Initialize with persisted state if available
+        let shared_tools_file_tracker = if !self.reminder_file_tracker_state.is_empty() {
+            let tracker = FileTracker::new();
+            for (path, state) in self.reminder_file_tracker_state {
+                tracker.record_read_with_state(path, state);
+            }
+            Arc::new(tokio::sync::Mutex::new(tracker))
+        } else {
+            Arc::new(tokio::sync::Mutex::new(FileTracker::new()))
+        };
         // Use provided approval store or create a fresh one
         let shared_approval_store = self
             .approval_store
@@ -563,7 +590,6 @@ impl AgentLoopBuilder {
             compaction_config: self.compaction_config,
             compact_config: self.compact_config,
             reminder_orchestrator,
-            file_tracker,
             shared_tools_file_tracker,
             shared_approval_store,
             hooks: self.hooks.unwrap_or_else(|| Arc::new(HookRegistry::new())),
@@ -673,6 +699,20 @@ impl AgentLoop {
     /// state (is_active, has_exited, needs_exit_attachment, etc.) for the next turn.
     pub fn take_plan_mode_state(&mut self) -> Option<PlanModeState> {
         Some(std::mem::take(&mut self.plan_mode_state))
+    }
+
+    /// Get the current file tracker state for persistence.
+    ///
+    /// Returns a snapshot of all tracked files and their read state.
+    /// Called by `SessionState` after the loop finishes to preserve file tracker
+    /// state for already-read detection across turns.
+    pub fn reminder_file_tracker_state(&self) -> Vec<(std::path::PathBuf, FileReadState)> {
+        let tracker = self.shared_tools_file_tracker.blocking_lock();
+        tracker
+            .read_files_with_state()
+            .into_iter()
+            .map(|(p, s)| (p, s.clone()))
+            .collect()
     }
 
     /// Subscribe to status updates.
@@ -890,7 +930,7 @@ impl AgentLoop {
 
         // ── STEP 4: Micro-compaction (PRE-API) ──
         if self.config.enable_micro_compaction {
-            let (removed, tokens_saved) = self.micro_compact();
+            let (removed, tokens_saved) = self.micro_compact().await;
             if removed > 0 {
                 self.emit(LoopEvent::MicroCompactionApplied {
                     removed_results: removed,
@@ -996,11 +1036,7 @@ impl AgentLoop {
         // ── STEP 6.5: Generate system reminders ──
         // System reminders provide dynamic context (file changes, plan mode, etc.)
         // that is visible to the model but hidden from the user.
-        //
-        // First, sync file read state from tools' FileTracker to system-reminder's FileTracker.
-        // This ensures the ChangedFilesGenerator can detect files that have been modified
-        // since they were last read by tools (Read, Glob, etc.).
-        self.sync_file_trackers().await;
+        // The unified FileTracker is shared between tools and system-reminder generators.
 
         // Collect completed async hooks from previous turns
         let completed_hooks = self.async_hook_tracker.take_completed();
@@ -1041,149 +1077,220 @@ impl AgentLoop {
             })
             .collect();
 
-        let reminder_config = self.reminder_orchestrator.config();
+        let reminder_config = self.reminder_orchestrator.config().clone();
 
         // Extract user prompt text for @mention parsing
-        let user_prompt_text = self
+        let user_prompt_text: Option<String> = self
             .message_history
             .current_turn()
-            .map(|turn| turn.user_message.text());
+            .map(|turn| turn.user_message.text().to_string());
 
-        let mut gen_ctx_builder = GeneratorContext::builder()
-            .config(reminder_config)
-            .turn_number(self.turn_number)
-            .is_main_agent(!self.is_subagent)
-            .has_user_input(self.current_turn_has_user_input)
-            .context_window(self.context.environment.context_window)
-            .cwd(self.context.environment.cwd.clone())
-            .file_tracker(&self.file_tracker)
-            .is_plan_mode(self.plan_mode_state.is_active)
-            .is_plan_reentry(self.plan_mode_state.is_reentry())
-            .is_plan_interview_phase(
-                self.plan_mode_state.is_active
-                    && self
-                        .features
-                        .enabled(cocode_protocol::Feature::PlanModeInterview),
-            );
+        // Capture data needed for GeneratorContext before locking
+        let is_main_agent = !self.is_subagent;
+        let has_user_input = self.current_turn_has_user_input;
+        let context_window = self.context.environment.context_window;
+        let cwd = self.context.environment.cwd.clone();
+        let is_plan_mode = self.plan_mode_state.is_active;
+        let is_plan_reentry = self.plan_mode_state.is_reentry();
+        let is_plan_interview_phase = self.plan_mode_state.is_active
+            && self
+                .features
+                .enabled(cocode_protocol::Feature::PlanModeInterview);
+        let plan_file_path = self.plan_mode_state.plan_file_path.clone();
+        let needs_plan_reference = self.plan_mode_state.needs_plan_reference;
+        let needs_exit_attachment = self.plan_mode_state.needs_exit_attachment;
+        let exited_at_turn = self.plan_mode_state.exited_at_turn;
+        let turn_number = self.turn_number;
 
-        // Pass user prompt for @mention file injection
-        if let Some(ref prompt) = user_prompt_text {
-            gen_ctx_builder = gen_ctx_builder.user_prompt(prompt);
+        // Handle rewind info BEFORE acquiring file_tracker lock
+        // This restores FileTracker state to match the target turn
+        // Get rewind info from snapshot manager
+        let rewind_info_value = if let Some(ref sm) = self.snapshot_manager {
+            sm.take_rewind_info().await
+        } else {
+            None
+        };
+
+        // Extract the turn number and context info (copy values to avoid borrow issues)
+        let rewind_turn_number = rewind_info_value
+            .as_ref()
+            .map(|info| info.rewound_turn_number);
+        let rewind_context_for_builder =
+            rewind_info_value
+                .as_ref()
+                .map(|info| cocode_system_reminder::RewindContextInfo {
+                    rewound_turn_number: info.rewound_turn_number,
+                    restored_file_count: info.restored_file_count,
+                    used_git_restore: info.restored_commit_id.is_some(),
+                    rewind_mode: info.mode,
+                });
+
+        // Drop the original value to release the borrow
+        drop(rewind_info_value);
+
+        // Now restore FileTracker state (requires mutable borrow of self)
+        if let Some(to_turn) = rewind_turn_number {
+            self.restore_file_tracker_for_rewind(to_turn).await;
         }
 
-        // Add plan file path if available (even after exit, for reference)
-        if let Some(path) = self.plan_mode_state.plan_file_path.clone() {
-            gen_ctx_builder = gen_ctx_builder.plan_file_path(path);
-        }
+        // Generate system reminders with file tracker lock
+        let (injected_messages, at_mention_file_reads) = {
+            let file_tracker = self.shared_tools_file_tracker.lock().await;
 
-        // Inject plan file reference after compaction (one-shot)
-        if self.plan_mode_state.needs_plan_reference {
-            if let Some(ref plan_path) = self.plan_mode_state.plan_file_path {
-                if let Ok(content) = std::fs::read_to_string(plan_path) {
-                    gen_ctx_builder =
-                        gen_ctx_builder.restored_plan(cocode_system_reminder::RestoredPlanInfo {
+            let mut builder = GeneratorContext::builder()
+                .config(&reminder_config)
+                .turn_number(turn_number)
+                .is_main_agent(is_main_agent)
+                .has_user_input(has_user_input)
+                .context_window(context_window)
+                .cwd(cwd.clone())
+                .file_tracker(&*file_tracker)
+                .is_plan_mode(is_plan_mode)
+                .is_plan_reentry(is_plan_reentry)
+                .is_plan_interview_phase(is_plan_interview_phase)
+                .hook_state(HookState {
+                    async_responses,
+                    contexts: context_hooks,
+                    blocking: blocking_hooks,
+                });
+
+            // Pass user prompt for @mention file injection
+            if let Some(ref prompt) = user_prompt_text {
+                builder = builder.user_prompt(prompt.as_str());
+            }
+
+            // Add plan file path if available
+            if let Some(ref path) = plan_file_path {
+                builder = builder.plan_file_path(path.clone());
+            }
+
+            // Inject plan file reference after compaction (one-shot)
+            if needs_plan_reference {
+                if let Some(ref plan_path) = plan_file_path {
+                    if let Ok(content) = std::fs::read_to_string(plan_path) {
+                        builder = builder.restored_plan(cocode_system_reminder::RestoredPlanInfo {
                             content,
                             file_path: plan_path.clone(),
                         });
+                    }
                 }
             }
-            // Consume the flag so it's only injected once
-            self.plan_mode_state.needs_plan_reference = false;
-        }
 
-        // Inject approved plan content after ExitPlanMode (one-shot)
-        if self.plan_mode_state.needs_exit_attachment {
-            gen_ctx_builder = gen_ctx_builder.plan_mode_exit_pending(true);
-            // Read plan content from disk for the approved plan injection
-            if let Some(ref plan_path) = self.plan_mode_state.plan_file_path {
-                if let Ok(content) = std::fs::read_to_string(plan_path) {
-                    gen_ctx_builder = gen_ctx_builder.approved_plan(ApprovedPlanInfo {
-                        content,
-                        approved_turn: self
-                            .plan_mode_state
-                            .exited_at_turn
-                            .unwrap_or(self.turn_number),
-                    });
+            // Inject approved plan content after ExitPlanMode (one-shot)
+            if needs_exit_attachment {
+                builder = builder.plan_mode_exit_pending(true);
+                if let Some(ref plan_path) = plan_file_path {
+                    if let Ok(content) = std::fs::read_to_string(plan_path) {
+                        builder = builder.approved_plan(ApprovedPlanInfo {
+                            content,
+                            approved_turn: exited_at_turn.unwrap_or(turn_number),
+                        });
+                    }
                 }
             }
-            // Consume the flag so it's only injected once
-            self.plan_mode_state.clear_exit_attachment();
-        }
 
-        // Add hook state to generator context
-        gen_ctx_builder = gen_ctx_builder.hook_state(HookState {
-            async_responses,
-            contexts: context_hooks,
-            blocking: blocking_hooks,
-        });
-
-        // Add available skills to generator context for system reminders
-        // Use llm_invocable_skills() to filter out hidden and disable_model_invocation skills
-        if let Some(ref sm) = self.skill_manager {
-            let skill_infos: Vec<SkillInfo> = sm
-                .llm_invocable_skills()
-                .into_iter()
-                .map(|skill| SkillInfo {
-                    name: skill.name.clone(),
-                    description: skill.description.clone(),
-                    when_to_use: skill.when_to_use.clone(),
-                })
-                .collect();
-
-            if !skill_infos.is_empty() {
-                gen_ctx_builder = gen_ctx_builder.available_skills(skill_infos);
-            }
-        }
-
-        // Add invoked skills to generator context for system reminders.
-        // Skills are tracked by the Skill tool via the shared invoked_skills_tracker.
-        {
-            let invoked = self.invoked_skills_tracker.lock().await;
-            if !invoked.is_empty() {
-                let skill_infos: Vec<InvokedSkillInfo> = invoked
-                    .iter()
-                    .map(|skill| InvokedSkillInfo {
+            // Add available skills to generator context
+            if let Some(ref sm) = self.skill_manager {
+                let skill_infos: Vec<SkillInfo> = sm
+                    .llm_invocable_skills()
+                    .into_iter()
+                    .map(|skill| SkillInfo {
                         name: skill.name.clone(),
-                        // The prompt content was already injected as a tool result;
-                        // here we just note which skills are active for the system reminder.
-                        prompt_content: String::new(),
+                        description: skill.description.clone(),
+                        when_to_use: skill.when_to_use.clone(),
                     })
                     .collect();
-                gen_ctx_builder = gen_ctx_builder.invoked_skills(skill_infos);
+                if !skill_infos.is_empty() {
+                    builder = builder.available_skills(skill_infos);
+                }
+            }
+
+            // Add invoked skills to generator context
+            {
+                let invoked = self.invoked_skills_tracker.lock().await;
+                if !invoked.is_empty() {
+                    let skill_infos: Vec<InvokedSkillInfo> = invoked
+                        .iter()
+                        .map(|skill| InvokedSkillInfo {
+                            name: skill.name.clone(),
+                            prompt_content: String::new(),
+                        })
+                        .collect();
+                    builder = builder.invoked_skills(skill_infos);
+                }
+            }
+
+            // Consume queued commands for steering injection
+            {
+                #[allow(clippy::unwrap_used)]
+                let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
+                if !drained.is_empty() {
+                    builder = builder.queued_commands(drained);
+                }
+            }
+
+            // Get rewind info if available (already extracted earlier)
+            if let Some(rewind_info) = rewind_context_for_builder.clone() {
+                builder = builder.rewind_info(rewind_info);
+            }
+
+            let gen_ctx = builder.build();
+            let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
+
+            // Extract file_reads from reminders to update FileTracker
+            // This aligns with Claude Code's transparent hijack pattern where
+            // @mention reads update the file state (just like Read tool does)
+            let file_reads: Vec<_> = reminders
+                .iter()
+                .flat_map(|r| r.file_reads.iter())
+                .cloned()
+                .collect();
+
+            let injected_messages = create_injected_messages(reminders);
+            (injected_messages, file_reads)
+        };
+        // File tracker lock is now released
+
+        // Update FileTracker with files read during @mention generation
+        // This ensures subsequent @mentions of the same file use the cache
+        if !at_mention_file_reads.is_empty() {
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            for read_info in at_mention_file_reads {
+                // Build FileReadState based on read_kind
+                let state = match read_info.read_kind {
+                    cocode_system_reminder::FileReadKind::FullContent => {
+                        cocode_tools::FileReadState::complete_with_turn(
+                            read_info.content,
+                            read_info.mtime,
+                            read_info.turn_number,
+                        )
+                    }
+                    cocode_system_reminder::FileReadKind::PartialContent => {
+                        cocode_tools::FileReadState::partial_with_turn(
+                            read_info.offset.unwrap_or(0),
+                            read_info.limit.unwrap_or(0),
+                            read_info.mtime,
+                            read_info.turn_number,
+                        )
+                    }
+                    cocode_system_reminder::FileReadKind::MetadataOnly => {
+                        cocode_tools::FileReadState::metadata_only(
+                            read_info.mtime,
+                            read_info.turn_number,
+                        )
+                    }
+                };
+                tracker.record_read_with_state(read_info.path, state);
             }
         }
 
-        // Consume queued commands for steering injection (consume-then-remove pattern).
-        // Commands are drained here so they are only injected once, not on every
-        // recursive tool-call iteration. The steering prompt asks the model to
-        // "address this message and continue", so no post-idle re-execution is needed.
-        // The shared Mutex allows the TUI driver to push new commands while the
-        // loop is running; they will be picked up on the next iteration.
-        {
-            #[allow(clippy::unwrap_used)]
-            let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
-            if !drained.is_empty() {
-                gen_ctx_builder = gen_ctx_builder.queued_commands(drained);
-            }
+        // Consume one-shot flags after generating reminders
+        if needs_plan_reference {
+            self.plan_mode_state.needs_plan_reference = false;
         }
-
-        // Inject rewind info from snapshot manager (one-shot consumption).
-        if let Some(ref sm) = self.snapshot_manager {
-            if let Some(info) = sm.take_rewind_info().await {
-                gen_ctx_builder =
-                    gen_ctx_builder.rewind_info(cocode_system_reminder::RewindContextInfo {
-                        rewound_turn_number: info.rewound_turn_number,
-                        restored_file_count: info.restored_file_count,
-                        used_git_restore: info.restored_commit_id.is_some(),
-                        rewind_mode: info.mode,
-                    });
-            }
+        if needs_exit_attachment {
+            self.plan_mode_state.clear_exit_attachment();
         }
-
-        let gen_ctx = gen_ctx_builder.build();
-
-        let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
-        let injected_messages = create_injected_messages(reminders);
 
         // ── STEP 7: Resolve model (permissions checked externally) ──
         // In this implementation, model selection is handled by ApiClient.
@@ -1223,6 +1330,8 @@ impl AgentLoop {
 
         let executor_config = ExecutorConfig {
             session_id: query_tracking.chain_id.clone(),
+            turn_id: turn_id.clone(),
+            turn_number: self.turn_number,
             permission_mode: self.config.permission_mode,
             cwd: self.context.environment.cwd.clone(),
             is_plan_mode: self.plan_mode_state.is_active,
@@ -2076,8 +2185,11 @@ impl AgentLoop {
     /// Uses `ThresholdStatus` to determine if micro-compaction is needed based on
     /// current context usage relative to the warning threshold.
     ///
+    /// Also cleans up FileTracker entries for compacted Read tool results,
+    /// while preserving files from recent turns using `collect_files_to_keep`.
+    ///
     /// Returns a tuple of (removed_count, tokens_saved).
-    fn micro_compact(&mut self) -> (i32, i32) {
+    async fn micro_compact(&mut self) -> (i32, i32) {
         // Check if micro-compact is enabled
         if !self.compact_config.is_micro_compact_enabled() {
             return (0, 0);
@@ -2100,19 +2212,122 @@ impl AgentLoop {
         }
 
         // Apply micro-compaction using configured recent_tool_results_to_keep
+        // Get paths from ContextModifier::FileRead for FileTracker cleanup
         let keep_count = self.compact_config.recent_tool_results_to_keep;
-        let removed = self.message_history.micro_compact(keep_count);
+        let outcome = self.message_history.micro_compact_outcome(keep_count);
+
+        // Clean up FileTracker entries for compacted reads using paths from modifiers
+        // This is more accurate than tool_id mapping since it uses actual file paths
+        if !outcome.cleared_read_paths.is_empty() {
+            // Determine how many recent turns to preserve files from
+            // This matches Claude Code's collectFilesToKeep behavior
+            let keep_recent_turns = 3; // Keep files from last 3 turns
+            let files_to_keep =
+                crate::compaction::collect_files_to_keep(&self.message_history, keep_recent_turns);
+
+            let tracker = self.shared_tools_file_tracker.lock().await;
+
+            // Collect paths to remove (excluding preserved files)
+            let paths_to_remove: Vec<_> = outcome
+                .cleared_read_paths
+                .iter()
+                .filter(|p| !files_to_keep.contains(*p))
+                .cloned()
+                .collect();
+
+            if !paths_to_remove.is_empty() {
+                tracker.remove_paths(&paths_to_remove);
+            }
+
+            debug!(
+                cleared_paths = outcome.cleared_read_paths.len(),
+                removed_paths = paths_to_remove.len(),
+                files_preserved = files_to_keep.len(),
+                "Cleaned up FileTracker entries for compacted reads (preserved recent files)"
+            );
+        }
 
         // Calculate tokens saved
         let tokens_after = self.message_history.estimate_tokens();
         let tokens_saved = tokens_before - tokens_after;
 
         debug!(
-            removed,
+            removed = outcome.compacted_count,
             tokens_before, tokens_after, tokens_saved, "Micro-compaction complete"
         );
 
-        (removed, tokens_saved)
+        (outcome.compacted_count, tokens_saved)
+    }
+
+    /// Restore FileTracker state for rewind.
+    ///
+    /// When a rewind occurs, the FileTracker needs to be restored to match
+    /// the state at the target turn. This extracts all file reads from
+    /// historical tool calls up to that turn and rebuilds the tracker state.
+    ///
+    /// # Claude Code Alignment
+    ///
+    /// This matches Claude Code v2.1.38's rewind file state restoration:
+    /// - Extract file reads from ContextModifier::FileRead in tool calls
+    /// - Clear current FileTracker state
+    /// - Rebuild state from historical reads
+    async fn restore_file_tracker_for_rewind(&mut self, to_turn: i32) {
+        // Extract file reads from history up to the target turn
+        let extractions = self.message_history.extract_file_reads_up_to_turn(to_turn);
+
+        if extractions.is_empty() {
+            debug!(to_turn, "No file reads to restore for rewind");
+            return;
+        }
+
+        // Clear current FileTracker state and rebuild
+        let tracker = self.shared_tools_file_tracker.lock().await;
+        tracker.clear_reads();
+
+        // Convert mtime from ms if provided
+        let convert_mtime = |ms: Option<i64>| -> Option<std::time::SystemTime> {
+            ms.and_then(|ms| {
+                std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(ms as u64))
+            })
+        };
+
+        for extraction in extractions {
+            let file_mtime = convert_mtime(extraction.file_mtime_ms);
+
+            let state = match extraction.kind {
+                cocode_protocol::FileReadKind::FullContent => {
+                    if let Some(content) = extraction.content {
+                        cocode_tools::FileReadState::complete_with_turn(
+                            content,
+                            file_mtime,
+                            extraction.read_turn,
+                        )
+                    } else {
+                        // Content was compacted, just track metadata
+                        cocode_tools::FileReadState::metadata_only(file_mtime, extraction.read_turn)
+                    }
+                }
+                cocode_protocol::FileReadKind::PartialContent => {
+                    cocode_tools::FileReadState::partial_with_turn(
+                        extraction.offset.unwrap_or(0),
+                        extraction.limit.unwrap_or(0),
+                        file_mtime,
+                        extraction.read_turn,
+                    )
+                }
+                cocode_protocol::FileReadKind::MetadataOnly => {
+                    cocode_tools::FileReadState::metadata_only(file_mtime, extraction.read_turn)
+                }
+            };
+
+            tracker.track_read(extraction.path.clone(), state);
+        }
+
+        debug!(
+            to_turn,
+            restored_count = tracker.read_count(),
+            "Restored FileTracker state for rewind"
+        );
     }
 
     /// Run auto-compaction (LLM-based summarization).
@@ -2368,6 +2583,27 @@ impl AgentLoop {
             true, // Recent messages are preserved
         );
 
+        // Rebuild FileTracker from remaining messages after compaction
+        // This ensures file state is consistent with the compacted history
+        {
+            let cwd = self.context.environment.cwd.clone();
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            tracker.clear();
+
+            // Rebuild from remaining messages
+            let new_tracker = build_file_read_state(&self.message_history, &cwd, LRU_MAX_ENTRIES);
+
+            // Copy state from new tracker
+            for (path, state) in new_tracker.read_files_with_state() {
+                tracker.record_read_with_state(path, state.clone());
+            }
+
+            debug!(
+                tracked_files = tracker.len(),
+                "FileTracker rebuilt after compaction"
+            );
+        }
+
         // Update tracking
         tracking.mark_compacted(turn_id, self.turn_number);
 
@@ -2592,7 +2828,10 @@ impl AgentLoop {
         let file_config = &self.compact_config.file_restoration;
 
         // Collect files from the file tracker (Layer 2)
-        let tracked_files = self.file_tracker.tracked_files();
+        let tracker = self.shared_tools_file_tracker.lock().await;
+        let tracked_files = tracker.tracked_files();
+        drop(tracker); // Release lock before async operations
+
         let mut files_for_restoration: Vec<FileRestoration> = Vec::new();
 
         for path in tracked_files {
@@ -2602,25 +2841,55 @@ impl AgentLoop {
                 continue;
             }
 
-            // Try to read the file content
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                let tokens = (content.len() / 4) as i32; // Rough estimate
+            // Skip internal files (session memory, plan files, auto memory)
+            if is_internal_file(&path, "") {
+                debug!(path = %path.display(), "Skipping internal file for restoration");
+                continue;
+            }
 
-                // Get last access time from file tracker
-                let last_accessed = if let Some(state) = self.file_tracker.get_state(&path) {
-                    // Use read_turn as a proxy for access time
-                    state.read_turn as i64
-                } else {
-                    0
-                };
+            // Try to read the file content (re-read at compact time for current content)
+            // Truncate to max_tokens_per_file limit to avoid large file overhead
+            let max_chars = (file_config.max_tokens_per_file * 4) as usize;
+            match tokio::fs::read_to_string(&path).await {
+                Ok(content) => {
+                    // Truncate content if it exceeds per-file limit
+                    let (content, truncated) = if content.len() > max_chars {
+                        (content[..max_chars].to_string(), true)
+                    } else {
+                        (content, false)
+                    };
+                    let tokens = (content.len() / 4) as i32; // Rough estimate
 
-                files_for_restoration.push(FileRestoration {
-                    path,
-                    content,
-                    priority: 1, // Default priority
-                    tokens,
-                    last_accessed,
-                });
+                    // Get last access time from file tracker
+                    let tracker = self.shared_tools_file_tracker.lock().await;
+                    let last_accessed = if let Some(state) = tracker.read_state(&path) {
+                        // Use read_turn as a proxy for access time
+                        state.read_turn as i64
+                    } else {
+                        0
+                    };
+                    drop(tracker); // Release lock
+
+                    if truncated {
+                        debug!(
+                            path = %path.display(),
+                            tokens = tokens,
+                            max_tokens = file_config.max_tokens_per_file,
+                            "File truncated to per-file token limit"
+                        );
+                    }
+
+                    files_for_restoration.push(FileRestoration {
+                        path,
+                        content,
+                        priority: 1, // Default priority
+                        tokens,
+                        last_accessed,
+                    });
+                }
+                Err(e) => {
+                    debug!(path = %path.display(), error = %e, "Failed to read file for restoration");
+                }
             }
         }
 
@@ -2879,19 +3148,62 @@ impl AgentLoop {
     async fn apply_modifiers(&mut self, modifiers: &[ContextModifier]) {
         for modifier in modifiers {
             match modifier {
-                ContextModifier::FileRead { path, content } => {
+                ContextModifier::FileRead {
+                    path,
+                    content,
+                    file_mtime_ms,
+                    offset,
+                    limit,
+                    read_kind,
+                } => {
                     // Update the shared file tracker with the file read state
-                    let mut tracker = self.shared_tools_file_tracker.lock().await;
-                    // Get file mtime for change detection
-                    let file_mtime = tokio::fs::metadata(path)
-                        .await
-                        .ok()
-                        .and_then(|m| m.modified().ok());
-                    let state = FileReadState::complete(content.clone(), file_mtime);
-                    tracker.record_read_with_state(path.clone(), state);
+                    let tracker = self.shared_tools_file_tracker.lock().await;
+                    // Convert mtime from ms if provided, otherwise get from filesystem
+                    let file_mtime = if let Some(ms) = file_mtime_ms {
+                        std::time::UNIX_EPOCH
+                            .checked_add(std::time::Duration::from_millis(*ms as u64))
+                    } else {
+                        tokio::fs::metadata(path)
+                            .await
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                    };
+                    let state = match read_kind {
+                        cocode_protocol::FileReadKind::FullContent => {
+                            FileReadState::complete_with_turn(
+                                content.clone(),
+                                file_mtime,
+                                self.turn_number,
+                            )
+                        }
+                        cocode_protocol::FileReadKind::PartialContent => {
+                            FileReadState::partial_with_turn(
+                                offset.unwrap_or(0),
+                                limit.unwrap_or(0),
+                                file_mtime,
+                                self.turn_number,
+                            )
+                        }
+                        cocode_protocol::FileReadKind::MetadataOnly => {
+                            // For metadata-only, we just record that the file was touched
+                            FileReadState {
+                                content: None,
+                                timestamp: std::time::SystemTime::now(),
+                                file_mtime,
+                                content_hash: None,
+                                offset: None,
+                                limit: None,
+                                kind: cocode_protocol::FileReadKind::MetadataOnly,
+                                access_count: 1,
+                                read_turn: self.turn_number,
+                            }
+                        }
+                    };
+                    tracker.track_read(path.clone(), state);
                     debug!(
                         path = %path.display(),
                         content_len = content.len(),
+                        read_kind = ?read_kind,
                         "Applied FileRead modifier"
                     );
                 }
@@ -2977,50 +3289,6 @@ impl AgentLoop {
     /// Returns the cancellation token.
     pub fn cancel_token(&self) -> &CancellationToken {
         &self.cancel_token
-    }
-
-    /// Sync file read state from tools' FileTracker to system-reminder's FileTracker.
-    ///
-    /// This bridges the gap between the two FileTracker implementations:
-    /// - `cocode_tools::FileTracker`: Tracks file reads during tool execution
-    /// - `cocode_system_reminder::FileTracker`: Detects file changes for reminders
-    ///
-    /// By syncing data from tools to system-reminder, the `ChangedFilesGenerator`
-    /// can accurately detect files that have been modified since they were read.
-    async fn sync_file_trackers(&mut self) {
-        let tools_tracker = self.shared_tools_file_tracker.lock().await;
-
-        for (path, state) in tools_tracker.read_files_with_state() {
-            // Convert tools::FileReadState to system_reminder::ReadFileState
-            // Only sync if we have content (complete reads)
-            if let Some(content) = &state.content {
-                if state.is_complete_read {
-                    self.file_tracker.sync_read(
-                        &path,
-                        content.clone(),
-                        state.file_mtime,
-                        self.turn_number,
-                    );
-                } else if let (Some(offset), Some(limit)) = (state.offset, state.limit) {
-                    self.file_tracker.sync_partial_read(
-                        &path,
-                        content.clone(),
-                        state.file_mtime,
-                        self.turn_number,
-                        offset as i64,
-                        limit as i64,
-                    );
-                }
-            } else {
-                // For reads without content (simple record_read calls), sync with minimal info
-                self.file_tracker.sync_read(
-                    &path,
-                    String::new(),
-                    state.file_mtime,
-                    self.turn_number,
-                );
-            }
-        }
     }
 }
 

@@ -123,6 +123,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) 
 }
 
 /// Get a list of built-in tool names.
+#[allow(clippy::redundant_closure_for_method_calls)]
 pub fn builtin_tool_names() -> Vec<&'static str> {
     cocode_protocol::ToolName::ALL
         .iter()

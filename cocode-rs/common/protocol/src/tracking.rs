@@ -191,11 +191,13 @@ pub struct FileReadInfo {
     #[serde(with = "humantime_serde")]
     pub timestamp: SystemTime,
     /// Offset from which reading started (if partial read).
+    /// Uses i64 for large file support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<i32>,
+    pub offset: Option<i64>,
     /// Number of lines read (if limited).
+    /// Uses i64 for large file support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<i32>,
+    pub limit: Option<i64>,
     /// File modification time at read time.
     #[serde(with = "humantime_serde")]
     pub file_mtime: SystemTime,
@@ -225,8 +227,8 @@ impl FileReadInfo {
     pub fn partial(
         content: impl Into<String>,
         file_mtime: SystemTime,
-        offset: i32,
-        limit: i32,
+        offset: i64,
+        limit: i64,
     ) -> Self {
         Self {
             content: content.into(),
@@ -315,6 +317,51 @@ impl FileChangeType {
 impl std::fmt::Display for FileChangeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// Reference to a large file that was compacted.
+///
+/// When files exceed a size threshold during compaction, their content is
+/// removed but a reference is kept so the model knows the file was read.
+/// This enables the model to re-read the file if needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactedLargeFileRef {
+    /// Path to the file that was compacted.
+    pub path: PathBuf,
+    /// Original file size in bytes.
+    pub original_size: i64,
+    /// Original token count estimate.
+    pub original_tokens: i32,
+    /// Reason for compacting (e.g., "exceeded_max_size").
+    pub reason: String,
+}
+
+impl CompactedLargeFileRef {
+    /// Create a new compacted large file reference.
+    pub fn new(
+        path: impl Into<PathBuf>,
+        original_size: i64,
+        original_tokens: i32,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            original_size,
+            original_tokens,
+            reason: reason.into(),
+        }
+    }
+
+    /// Format as XML reference for injection into messages.
+    pub fn to_xml_reference(&self) -> String {
+        format!(
+            "<compacted-file path=\"{}\" original_size=\"{}\" original_tokens=\"{}\" reason=\"{}\" />",
+            self.path.display(),
+            self.original_size,
+            self.original_tokens,
+            self.reason
+        )
     }
 }
 

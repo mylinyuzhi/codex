@@ -109,3 +109,64 @@ async fn test_context_builder() {
     assert_eq!(ctx.cwd, PathBuf::from("/tmp"));
     assert_eq!(ctx.permission_mode, PermissionMode::Plan);
 }
+
+#[test]
+fn test_file_tracker_is_unchanged() {
+    let mut tracker = FileTracker::new();
+
+    // Create a temp file for testing
+    let temp_dir = std::env::temp_dir();
+    let test_file = temp_dir.join("cocode_test_unchanged.txt");
+
+    // Write initial content
+    std::fs::write(&test_file, "initial content").unwrap();
+    let metadata = std::fs::metadata(&test_file).unwrap();
+    let mtime = metadata.modified().ok();
+
+    // Track the file read
+    let state = FileReadState::complete("initial content".to_string(), mtime);
+    tracker.track_read(&test_file, state);
+
+    // File should be unchanged immediately after reading
+    assert_eq!(tracker.is_unchanged(&test_file), Some(true));
+
+    // Modify the file
+    std::fs::write(&test_file, "modified content").unwrap();
+
+    // File should now show as changed (is_unchanged = false)
+    assert_eq!(tracker.is_unchanged(&test_file), Some(false));
+
+    // Cleanup
+    let _ = std::fs::remove_file(&test_file);
+}
+
+#[test]
+fn test_file_tracker_is_unchanged_partial_read() {
+    let mut tracker = FileTracker::new();
+
+    // Create a temp file for testing
+    let temp_dir = std::env::temp_dir();
+    let test_file = temp_dir.join("cocode_test_partial.txt");
+
+    std::fs::write(&test_file, "content").unwrap();
+
+    // Track a partial read - partial reads should NOT be cacheable
+    let state = FileReadState::partial(0, 10, None);
+    tracker.track_read(&test_file, state);
+
+    // Partial reads should return None for is_unchanged (not cacheable)
+    // This ensures @mentioned files with partial reads are always re-read
+    assert_eq!(tracker.is_unchanged(&test_file), None);
+
+    // Cleanup
+    let _ = std::fs::remove_file(&test_file);
+}
+
+#[test]
+fn test_file_tracker_is_unchanged_untracked() {
+    let tracker = FileTracker::new();
+
+    // Untracked file should return None
+    let path = PathBuf::from("/nonexistent/file.txt");
+    assert_eq!(tracker.is_unchanged(&path), None);
+}

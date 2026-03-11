@@ -197,17 +197,27 @@ impl Tool for ApplyPatchTool {
                                         .await
                                         .ok()
                                         .and_then(|m| m.modified().ok());
+                                    let mtime_ms = mtime.and_then(|t| {
+                                        t.duration_since(std::time::UNIX_EPOCH)
+                                            .ok()
+                                            .map(|d| d.as_millis() as i64)
+                                    });
                                     ctx.record_file_read_with_state(
                                         path,
-                                        FileReadState::complete(content.clone(), mtime),
+                                        FileReadState::complete_with_turn(
+                                            content.clone(),
+                                            mtime,
+                                            ctx.turn_number,
+                                        ),
                                     )
                                     .await;
 
                                     // Add context modifier for the updated content
-                                    result_modifiers.push(ContextModifier::FileRead {
-                                        path: path.clone(),
-                                        content: content.clone(),
-                                    });
+                                    result_modifiers.push(ContextModifier::file_read(
+                                        path.clone(),
+                                        content.clone(),
+                                        mtime_ms,
+                                    ));
                                 }
                                 ApplyPatchFileChange::Delete { .. } => {
                                     // File was deleted, no content to track

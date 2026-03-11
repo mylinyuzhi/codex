@@ -115,17 +115,29 @@ impl AttachmentGenerator for ChangedFilesGenerator {
             content.push_str(&format!("### {display_path}\n"));
 
             // Try to generate diff if we have the old content and can read the new content
-            if let Some(old_state) = tracker.get_state(path) {
+            if let Some(old_state) = tracker.read_state(path) {
                 // Skip partial reads - can't generate meaningful diff
                 if old_state.is_partial() {
                     content.push_str("(partial read - cannot show diff)\n\n");
                     continue;
                 }
 
+                // Skip metadata-only reads (Glob/Grep) - they have no content to diff
+                if old_state.is_metadata_only() {
+                    content.push_str("(metadata-only read - no content available)\n\n");
+                    continue;
+                }
+
+                // Get the old content if available
+                let Some(old_content) = &old_state.content else {
+                    content.push_str("(no previous content available for diff)\n\n");
+                    continue;
+                };
+
                 if let Some(new_content) = Self::read_current_content(path).await {
                     // Check if we have room for more diff content
                     if total_diff_size < MAX_TOTAL_DIFF_SIZE {
-                        let diff = Self::generate_diff(&old_state.content, &new_content, path);
+                        let diff = Self::generate_diff(old_content, &new_content, path);
                         let diff_size = diff.len();
 
                         // Truncate if needed

@@ -318,10 +318,19 @@ impl Tool for WriteTool {
             .await
             .ok()
             .and_then(|m| m.modified().ok());
+        let new_mtime_ms = new_mtime.and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        });
         use crate::context::FileReadState;
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete(normalized_content.clone(), new_mtime),
+            FileReadState::complete_with_turn(
+                normalized_content.clone(),
+                new_mtime,
+                ctx.turn_number,
+            ),
         )
         .await;
 
@@ -336,10 +345,11 @@ impl Tool for WriteTool {
             format!("Successfully created {}", path.display())
         };
         let mut result = ToolOutput::text(msg);
-        result.modifiers.push(ContextModifier::FileRead {
-            path: path.clone(),
-            content: normalized_content,
-        });
+        result.modifiers.push(ContextModifier::file_read(
+            path,
+            normalized_content,
+            new_mtime_ms,
+        ));
 
         Ok(result)
     }

@@ -1,17 +1,59 @@
 //! Message history management for conversations.
 //!
 //! This module provides [`MessageHistory`] which manages the conversation
-//! history for the agent loop, including turn tracking and compaction.
+//!//! history for the agent loop, including turn tracking and compaction.
 
 use crate::normalization::NormalizationOptions;
 use crate::normalization::estimate_tokens;
 use crate::normalization::normalize_messages_for_api;
+use crate::read_tracking_policy::is_read_state_source_tool;
 use crate::tracked::TrackedMessage;
 use crate::turn::Turn;
+use cocode_protocol::FileReadKind;
 use cocode_protocol::TokenUsage;
 use hyper_sdk::Message;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::PathBuf;
+
+/// Outcome of a micro-compact operation.
+///
+/// Contains information about what was compacted, including the file paths
+/// that were cleared from read tracking state.
+#[derive(Debug, Clone, Default)]
+pub struct MicroCompactOutcome {
+    /// Number of tool results that were compacted.
+    pub compacted_count: i32,
+    /// IDs of compacted tool calls.
+    pub compacted_call_ids: Vec<String>,
+    /// Paths of files that were read in compacted tool calls.
+    /// These should be removed from FileTracker.
+    pub cleared_read_paths: Vec<PathBuf>,
+}
+
+/// Extracted file read information from a turn.
+///
+/// Used for rewind recovery - extracts file read state from historical
+/// tool calls to restore FileTracker state.
+#[derive(Debug, Clone)]
+pub struct FileReadExtraction {
+    /// Path to the file that was read.
+    pub path: PathBuf,
+    /// Content of the file at read time (may be None if compacted).
+    pub content: Option<String>,
+    /// Turn number when the file was read.
+    pub read_turn: i32,
+    /// Kind of read operation.
+    pub kind: FileReadKind,
+    /// File modification time at read time (Unix timestamp in ms).
+    pub file_mtime_ms: Option<i64>,
+    /// Line offset (for partial reads).
+    /// Uses i64 for large file support.
+    pub offset: Option<i64>,
+    /// Line limit (for partial reads).
+    /// Uses i64 for large file support.
+    pub limit: Option<i64>,
+}
 
 /// Configuration for message history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,14 +429,38 @@ impl MessageHistory {
     ///
     /// Returns the number of tool results that were compacted.
     pub fn micro_compact(&mut self, keep_recent: i32) -> i32 {
-        let mut compacted_count = 0;
+        self.micro_compact_outcome(keep_recent).compacted_count
+    }
+
+    /// Micro-compact with tool call ID tracking.
+    ///
+    /// Like `micro_compact`, but also returns the IDs of compacted tool calls.
+    /// This is useful for cleaning up associated state (e.g., FileTracker entries).
+    ///
+    /// Returns a tuple of (compacted_count, compacted_call_ids).
+    pub fn micro_compact_with_ids(&mut self, keep_recent: i32) -> (i32, Vec<String>) {
+        let outcome = self.micro_compact_outcome(keep_recent);
+        (outcome.compacted_count, outcome.compacted_call_ids)
+    }
+
+    /// Micro-compact with full outcome tracking.
+    ///
+    /// Returns detailed information about what was compacted, including
+    /// file paths that should be removed from FileTracker.
+    ///
+    /// # Claude Code Alignment
+    ///
+    /// This matches Claude Code v2.1.38's behavior of extracting paths from
+    /// `ContextModifier::FileRead` in compacted tool calls for cleanup.
+    pub fn micro_compact_outcome(&mut self, keep_recent: i32) -> MicroCompactOutcome {
+        let mut outcome = MicroCompactOutcome::default();
         let total_turns = self.turns.len();
 
         // Count total tool calls across all turns
         let total_tool_calls: i32 = self.turns.iter().map(|t| t.tool_calls.len() as i32).sum();
 
         if total_tool_calls <= keep_recent {
-            return 0; // Nothing to compact
+            return outcome; // Nothing to compact
         }
 
         // Process turns from oldest to newest, clearing tool outputs
@@ -411,7 +477,19 @@ impl MessageHistory {
                         tool_call.output = Some(cocode_protocol::ToolResultContent::Text(
                             "[micro-compacted]".to_string(),
                         ));
-                        compacted_count += 1;
+                        outcome.compacted_count += 1;
+                        outcome.compacted_call_ids.push(tool_call.call_id.clone());
+
+                        // Extract file paths from ContextModifier::FileRead
+                        if is_read_state_source_tool(&tool_call.name) {
+                            for modifier in &tool_call.modifiers {
+                                if let cocode_protocol::ContextModifier::FileRead { path, .. } =
+                                    modifier
+                                {
+                                    outcome.cleared_read_paths.push(path.clone());
+                                }
+                            }
+                        }
                     }
                     processed += 1;
                 } else {
@@ -423,12 +501,70 @@ impl MessageHistory {
         tracing::debug!(
             total_turns,
             total_tool_calls,
-            compacted_count,
+            compacted_count = outcome.compacted_count,
+            cleared_paths = outcome.cleared_read_paths.len(),
             kept,
             "Micro-compaction complete"
         );
 
-        compacted_count
+        outcome
+    }
+
+    /// Extract file reads up to a specific turn.
+    ///
+    /// Used for rewind recovery - extracts all file read information from
+    /// tool calls up to (and including) the specified turn number.
+    ///
+    /// # Claude Code Alignment
+    ///
+    /// This matches Claude Code v2.1.38's summary from turn behavior:
+    /// Extract file state from ContextModifier::FileRead in historical tool calls.
+    pub fn extract_file_reads_up_to_turn(&self, to_turn: i32) -> Vec<FileReadExtraction> {
+        let mut extractions = Vec::new();
+
+        for turn in self.turns.iter().take(to_turn as usize) {
+            for tool_call in &turn.tool_calls {
+                // Only process tools that contribute to file-read state
+                if !is_read_state_source_tool(&tool_call.name) {
+                    continue;
+                }
+
+                // Extract file info from ContextModifier::FileRead
+                for modifier in &tool_call.modifiers {
+                    if let cocode_protocol::ContextModifier::FileRead {
+                        path,
+                        content,
+                        file_mtime_ms,
+                        offset,
+                        limit,
+                        read_kind,
+                    } = modifier
+                    {
+                        extractions.push(FileReadExtraction {
+                            path: path.clone(),
+                            content: if content.is_empty() {
+                                None
+                            } else {
+                                Some(content.clone())
+                            },
+                            read_turn: turn.number,
+                            kind: *read_kind,
+                            file_mtime_ms: *file_mtime_ms,
+                            offset: *offset,
+                            limit: *limit,
+                        });
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            to_turn,
+            extraction_count = extractions.len(),
+            "Extracted file reads for rewind recovery"
+        );
+
+        extractions
     }
 
     /// Add a tool result to the current turn.
@@ -534,6 +670,8 @@ impl Default for HistoryBuilder {
         Self::new()
     }
 }
+
+// Use the shared is_read_state_source_tool from read_tracking_policy module
 
 #[cfg(test)]
 #[path = "history.test.rs"]

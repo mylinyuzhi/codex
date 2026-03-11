@@ -71,6 +71,9 @@ pub struct TrackedToolCall {
     /// Tool output (once completed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<ToolResultContent>,
+    /// Context modifiers from tool execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modifiers: Vec<cocode_protocol::ContextModifier>,
     /// Execution status.
     pub status: ToolCallStatus,
     /// When the tool call started.
@@ -93,6 +96,7 @@ impl TrackedToolCall {
             name: tool_call.name.clone(),
             input: tool_call.arguments.clone(),
             output: None,
+            modifiers: Vec::new(),
             status: ToolCallStatus::Pending,
             started_at: Utc::now(),
             completed_at: None,
@@ -106,6 +110,7 @@ impl TrackedToolCall {
             name: name.into(),
             input,
             output: None,
+            modifiers: Vec::new(),
             status: ToolCallStatus::Pending,
             started_at: Utc::now(),
             completed_at: None,
@@ -120,6 +125,18 @@ impl TrackedToolCall {
     /// Mark as completed with output.
     pub fn complete(&mut self, output: ToolResultContent) {
         self.output = Some(output);
+        self.status = ToolCallStatus::Completed;
+        self.completed_at = Some(Utc::now());
+    }
+
+    /// Mark as completed with output and modifiers.
+    pub fn complete_with_modifiers(
+        &mut self,
+        output: ToolResultContent,
+        modifiers: Vec<cocode_protocol::ContextModifier>,
+    ) {
+        self.output = Some(output);
+        self.modifiers = modifiers;
         self.status = ToolCallStatus::Completed;
         self.completed_at = Some(Utc::now());
     }

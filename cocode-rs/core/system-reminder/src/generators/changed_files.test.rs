@@ -1,6 +1,6 @@
 use super::*;
-use crate::file_tracker::FileTracker;
-use crate::file_tracker::ReadFileState;
+use crate::FileReadState;
+use crate::FileTracker;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
@@ -106,11 +106,11 @@ async fn test_changed_file_with_diff() {
     std::fs::write(&path, "initial\ncontent\nhere\n").expect("write initial");
 
     // Track the file read
-    let tracker = FileTracker::new();
+    let mut tracker = FileTracker::new();
     let old_mtime = std::fs::metadata(&path)
         .ok()
         .and_then(|m| m.modified().ok());
-    let state = ReadFileState::new("old\ncontent\nhere\n".to_string(), old_mtime, 1);
+    let state = FileReadState::complete_with_turn("old\ncontent\nhere\n".to_string(), old_mtime, 1);
     tracker.track_read(&path, state);
 
     // Modify the file (content differs from tracked)

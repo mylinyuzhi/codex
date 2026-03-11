@@ -15,7 +15,6 @@ use crate::config::SystemReminderConfig;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
 use crate::generators::AgentMentionsGenerator;
-use crate::generators::AlreadyReadFilesGenerator;
 use crate::generators::AtMentionedFilesGenerator;
 use crate::generators::AvailableSkillsGenerator;
 use crate::generators::BudgetUsdGenerator;
@@ -112,7 +111,6 @@ impl SystemReminderOrchestrator {
             Arc::new(TokenUsageGenerator),
             Arc::new(QueuedCommandsGenerator),
             // New generators for enhanced features
-            Arc::new(AlreadyReadFilesGenerator),
             Arc::new(BudgetUsdGenerator),
             Arc::new(CompactFileReferenceGenerator),
             Arc::new(RewindReminderGenerator),

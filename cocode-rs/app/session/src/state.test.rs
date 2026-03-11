@@ -151,3 +151,160 @@ fn test_marketplace_source_display() {
         ("url".to_string(), "https://example.com/m.json".to_string())
     );
 }
+
+// ============================================================================
+// File Tracker State Tests
+// ============================================================================
+
+#[test]
+fn test_prune_reminder_file_tracker_for_turn_boundary() {
+    use cocode_protocol::FileReadKind;
+    use cocode_tools::FileReadState;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    // Create some file tracker state entries with different turn numbers
+    let mut state: Vec<(PathBuf, FileReadState)> = vec![
+        (
+            PathBuf::from("/file1.txt"),
+            FileReadState {
+                content: Some("content1".to_string()),
+                timestamp: SystemTime::now(),
+                file_mtime: None,
+                content_hash: None,
+                offset: None,
+                limit: None,
+                kind: FileReadKind::FullContent,
+                access_count: 1,
+                read_turn: 1,
+            },
+        ),
+        (
+            PathBuf::from("/file2.txt"),
+            FileReadState {
+                content: Some("content2".to_string()),
+                timestamp: SystemTime::now(),
+                file_mtime: None,
+                content_hash: None,
+                offset: None,
+                limit: None,
+                kind: FileReadKind::FullContent,
+                access_count: 1,
+                read_turn: 2,
+            },
+        ),
+        (
+            PathBuf::from("/file3.txt"),
+            FileReadState {
+                content: Some("content3".to_string()),
+                timestamp: SystemTime::now(),
+                file_mtime: None,
+                content_hash: None,
+                offset: None,
+                limit: None,
+                kind: FileReadKind::FullContent,
+                access_count: 1,
+                read_turn: 3,
+            },
+        ),
+    ];
+
+    // Prune entries at or after turn 2
+    state.retain(|(_, s)| s.read_turn < 2);
+
+    // Should only have file1.txt left (turn 1 < 2)
+    assert_eq!(state.len(), 1);
+    assert_eq!(state[0].0, PathBuf::from("/file1.txt"));
+}
+
+#[test]
+fn test_rebuild_file_tracker_from_modifiers() {
+    use cocode_protocol::ContextModifier;
+    use cocode_protocol::FileReadKind;
+    use cocode_system_reminder::build_file_read_state_from_modifiers;
+    use std::path::PathBuf;
+
+    // Create tool call modifiers
+    let modifiers: Vec<ContextModifier> = vec![
+        ContextModifier::FileRead {
+            path: PathBuf::from("/file1.txt"),
+            content: "content1".to_string(),
+            file_mtime_ms: None,
+            offset: None,
+            limit: None,
+            read_kind: FileReadKind::FullContent,
+        },
+        ContextModifier::FileRead {
+            path: PathBuf::from("/file2.txt"),
+            content: "partial".to_string(),
+            file_mtime_ms: Some(1000),
+            offset: Some(10),
+            limit: Some(20),
+            read_kind: FileReadKind::PartialContent,
+        },
+    ];
+
+    // Build from modifiers
+    let tool_calls = vec![("Read", modifiers.as_slice(), 1, true)];
+    let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
+
+    assert_eq!(state.len(), 2);
+
+    // Find file1 (full content)
+    let file1 = state
+        .iter()
+        .find(|(p, _)| *p == PathBuf::from("/file1.txt"));
+    assert!(file1.is_some());
+    let (_, state1) = file1.unwrap();
+    assert!(!state1.is_partial());
+    assert_eq!(state1.content.as_deref(), Some("content1"));
+
+    // Find file2 (partial content)
+    let file2 = state
+        .iter()
+        .find(|(p, _)| *p == PathBuf::from("/file2.txt"));
+    assert!(file2.is_some());
+    let (_, state2) = file2.unwrap();
+    assert!(state2.is_partial());
+    assert_eq!(state2.offset, Some(10));
+    assert_eq!(state2.limit, Some(20));
+}
+
+#[test]
+fn test_file_tracker_state_prefers_newer_turns() {
+    use cocode_protocol::ContextModifier;
+    use cocode_protocol::FileReadKind;
+    use cocode_system_reminder::build_file_read_state_from_modifiers;
+    use std::path::PathBuf;
+
+    // Same file read in two different turns
+    let modifiers1: Vec<ContextModifier> = vec![ContextModifier::FileRead {
+        path: PathBuf::from("/file.txt"),
+        content: "old content".to_string(),
+        file_mtime_ms: None,
+        offset: None,
+        limit: None,
+        read_kind: FileReadKind::FullContent,
+    }];
+
+    let modifiers2: Vec<ContextModifier> = vec![ContextModifier::FileRead {
+        path: PathBuf::from("/file.txt"),
+        content: "new content".to_string(),
+        file_mtime_ms: None,
+        offset: None,
+        limit: None,
+        read_kind: FileReadKind::FullContent,
+    }];
+
+    let tool_calls = vec![
+        ("Read", modifiers1.as_slice(), 1, true),
+        ("Read", modifiers2.as_slice(), 2, true),
+    ];
+
+    let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
+
+    // Should only have one entry (the newer one)
+    assert_eq!(state.len(), 1);
+    assert_eq!(state[0].1.content.as_deref(), Some("new content"));
+    assert_eq!(state[0].1.read_turn, 2);
+}

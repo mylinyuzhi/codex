@@ -23,10 +23,11 @@ fn test_tool_output_constructors() {
 #[test]
 fn test_tool_output_with_modifiers() {
     let output = ToolOutput::text("Read file")
-        .with_modifier(ContextModifier::FileRead {
-            path: PathBuf::from("/tmp/test.txt"),
-            content: "file content".to_string(),
-        })
+        .with_modifier(ContextModifier::file_read(
+            PathBuf::from("/tmp/test.txt"),
+            "file content".to_string(),
+            None,
+        ))
         .with_modifier(ContextModifier::PermissionGranted {
             tool: "Read".to_string(),
             pattern: "/tmp/*".to_string(),
@@ -64,10 +65,11 @@ fn test_validation_error_display() {
 
 #[test]
 fn test_serde_roundtrip() {
-    let output = ToolOutput::text("test").with_modifier(ContextModifier::FileRead {
-        path: PathBuf::from("/test"),
-        content: "content".to_string(),
-    });
+    let output = ToolOutput::text("test").with_modifier(ContextModifier::file_read(
+        PathBuf::from("/test"),
+        "content".to_string(),
+        None,
+    ));
 
     let json = serde_json::to_string(&output).unwrap();
     let parsed: ToolOutput = serde_json::from_str(&json).unwrap();

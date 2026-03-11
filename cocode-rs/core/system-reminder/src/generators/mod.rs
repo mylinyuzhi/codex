@@ -4,7 +4,6 @@
 //! for different types of system reminders.
 
 pub mod agent_mentions;
-pub mod already_read_files;
 pub mod at_mentioned_files;
 pub mod available_skills;
 pub mod budget_usd;
@@ -27,7 +26,6 @@ pub mod unified_tasks;
 
 // Re-export generators
 pub use agent_mentions::AgentMentionsGenerator;
-pub use already_read_files::AlreadyReadFilesGenerator;
 pub use at_mentioned_files::AtMentionedFilesGenerator;
 pub use available_skills::AvailableSkillsGenerator;
 pub use budget_usd::BudgetUsdGenerator;

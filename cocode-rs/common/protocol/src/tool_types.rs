@@ -10,6 +10,40 @@ use serde_json::Value;
 
 use crate::loop_event::ToolResultContent;
 
+/// Kind of file read operation.
+///
+/// This enum distinguishes between different types of file reads for
+/// proper already-read detection and state management.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileReadKind {
+    /// Complete file read with full content.
+    FullContent,
+    /// Partial read with offset/limit (e.g., Read with line range).
+    PartialContent,
+    /// Metadata-only read (e.g., Glob/Grep path discovery).
+    /// These should NOT be considered "already read" for @mention purposes.
+    #[default]
+    MetadataOnly,
+}
+
+impl FileReadKind {
+    /// Check if this is a full content read.
+    pub fn is_full(&self) -> bool {
+        matches!(self, FileReadKind::FullContent)
+    }
+
+    /// Check if this is a partial read.
+    pub fn is_partial(&self) -> bool {
+        matches!(self, FileReadKind::PartialContent)
+    }
+
+    /// Check if this is metadata-only (path discovery).
+    pub fn is_metadata_only(&self) -> bool {
+        matches!(self, FileReadKind::MetadataOnly)
+    }
+}
+
 /// Concurrency safety level for a tool.
 ///
 /// Determines whether a tool can be executed concurrently with other tools.
@@ -140,6 +174,24 @@ pub enum ContextModifier {
         path: PathBuf,
         /// Content that was read.
         content: String,
+        /// File modification time at read time (Unix milliseconds).
+        /// Used for change detection and already-read checks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_mtime_ms: Option<i64>,
+        /// Line offset of the read (1-based, None if from start).
+        /// Present for partial reads with line range.
+        /// Uses i64 for large file support (>2 billion lines).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
+        /// Line limit of the read.
+        /// Present for partial reads with line range.
+        /// Uses i64 for large file support (>2 billion lines).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<i64>,
+        /// Kind of read operation.
+        /// Determines if this file should be considered "already read" for @mention purposes.
+        #[serde(default)]
+        read_kind: FileReadKind,
     },
     /// A permission was granted for future operations.
     PermissionGranted {
@@ -161,6 +213,69 @@ pub enum ContextModifier {
         /// The full task list (as the raw JSON array from TodoWrite input).
         todos: Value,
     },
+}
+
+impl ContextModifier {
+    /// Create a FileRead modifier for a complete file read.
+    pub fn file_read(path: PathBuf, content: String, file_mtime_ms: Option<i64>) -> Self {
+        ContextModifier::FileRead {
+            path,
+            content,
+            file_mtime_ms,
+            offset: None,
+            limit: None,
+            read_kind: FileReadKind::FullContent,
+        }
+    }
+
+    /// Create a FileRead modifier for a partial read with line range.
+    pub fn file_read_partial(
+        path: PathBuf,
+        content: String,
+        file_mtime_ms: Option<i64>,
+        offset: i64,
+        limit: i64,
+    ) -> Self {
+        ContextModifier::FileRead {
+            path,
+            content,
+            file_mtime_ms,
+            offset: Some(offset),
+            limit: Some(limit),
+            read_kind: FileReadKind::PartialContent,
+        }
+    }
+
+    /// Create a FileRead modifier for metadata-only (path discovery).
+    pub fn file_read_metadata(path: PathBuf) -> Self {
+        ContextModifier::FileRead {
+            path,
+            content: String::new(),
+            file_mtime_ms: None,
+            offset: None,
+            limit: None,
+            read_kind: FileReadKind::MetadataOnly,
+        }
+    }
+
+    /// Check if this is a FileRead modifier with full content.
+    pub fn is_full_file_read(&self) -> bool {
+        matches!(
+            self,
+            ContextModifier::FileRead {
+                read_kind: FileReadKind::FullContent,
+                ..
+            }
+        )
+    }
+
+    /// Get the path if this is a FileRead modifier.
+    pub fn file_read_path(&self) -> Option<&PathBuf> {
+        match self {
+            ContextModifier::FileRead { path, .. } => Some(path),
+            _ => None,
+        }
+    }
 }
 
 /// Result of validating tool input.

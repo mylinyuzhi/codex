@@ -9,6 +9,7 @@ use cocode_file_ignore::IgnoreConfig;
 use cocode_file_ignore::IgnoreService;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ContextModifier;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use grep_regex::RegexMatcherBuilder;
@@ -552,13 +553,28 @@ fn format_grep_output(
 
     let output = results.join("\n");
 
-    if truncated {
-        Ok(ToolOutput::text(format!(
+    // Collect unique file paths for metadata-only tracking
+    // Grep discovers paths but doesn't read full content - these are MetadataOnly
+    let unique_paths: std::collections::HashSet<PathBuf> = matches
+        .iter()
+        .filter(|m| !m.is_context && !m.is_break)
+        .map(|m| PathBuf::from(&m.file_path))
+        .collect();
+
+    let modifiers: Vec<_> = unique_paths
+        .iter()
+        .map(|p| ContextModifier::file_read_metadata(p.clone()))
+        .collect();
+
+    let mut result = if truncated {
+        ToolOutput::text(format!(
             "{output}\n\n... (truncated at {head_limit} results, {total} total)"
-        )))
+        ))
     } else {
-        Ok(ToolOutput::text(output))
-    }
+        ToolOutput::text(output)
+    };
+    result.modifiers = modifiers;
+    Ok(result)
 }
 
 /// Map a type name to a file extension for glob filtering.

@@ -10,10 +10,10 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use cocode_tools::FileTracker;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
-use crate::file_tracker::FileTracker;
 use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::ReminderTier;
@@ -293,6 +293,29 @@ pub struct CompactedLargeFile {
     pub byte_size: usize,
 }
 
+/// Record of a file read via @mention syntax.
+///
+/// Captures the details of a file that was read because it was mentioned
+/// in the user's prompt. These records are synced back to the tools
+/// FileTracker after reminder generation to ensure proper state tracking.
+#[derive(Debug, Clone)]
+pub struct MentionReadRecord {
+    /// Path to the file that was read.
+    pub path: PathBuf,
+    /// Content of the file at read time.
+    pub content: String,
+    /// Last modification time of the file.
+    pub last_modified: Option<std::time::SystemTime>,
+    /// Line offset if partial read (None for full reads).
+    pub offset: Option<i64>,
+    /// Line limit if partial read (None for full reads).
+    pub limit: Option<i64>,
+    /// Kind of read operation.
+    pub read_kind: cocode_protocol::FileReadKind,
+    /// Turn number when this read occurred.
+    pub read_turn: i32,
+}
+
 /// Collaboration notification from another agent.
 #[derive(Debug, Clone)]
 pub struct CollabNotification {
@@ -431,6 +454,14 @@ pub struct GeneratorContext<'a> {
     // === Rewind state ===
     /// Information about a rewind that just occurred (consumed once).
     pub rewind_info: Option<RewindContextInfo>,
+
+    // === Mention read records ===
+    /// Records of files read via @mention syntax during this turn.
+    ///
+    /// These are populated by the @mentioned_files generator when it reads
+    /// file contents. After reminder generation, the driver syncs these
+    /// records back to the tools FileTracker for proper state tracking.
+    pub mention_read_records: Vec<MentionReadRecord>,
 }
 
 /// Lightweight rewind info for system reminder generation.
@@ -569,6 +600,7 @@ pub struct GeneratorContextBuilder<'a> {
     queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
     rewind_info: Option<RewindContextInfo>,
+    mention_read_records: Vec<MentionReadRecord>,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -737,6 +769,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn mention_read_records(mut self, records: Vec<MentionReadRecord>) -> Self {
+        self.mention_read_records = records;
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -780,6 +817,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
             rewind_info: self.rewind_info,
+            mention_read_records: self.mention_read_records,
         }
     }
 }

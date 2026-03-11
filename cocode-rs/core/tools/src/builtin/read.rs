@@ -161,11 +161,8 @@ impl Tool for ReadTool {
             .build()
         })?;
 
-        let offset = input["offset"].as_i64().map(|n| n as i32).unwrap_or(0);
-        let limit = input["limit"]
-            .as_i64()
-            .map(|n| n as i32)
-            .unwrap_or(self.max_lines);
+        let offset = input["offset"].as_i64().unwrap_or(0);
+        let limit = input["limit"].as_i64().unwrap_or(self.max_lines as i64);
 
         // Resolve path
         let path = ctx.resolve_path(file_path);
@@ -224,18 +221,38 @@ impl Tool for ReadTool {
         // Record file read with full state tracking
         use crate::context::FileReadState;
         let read_state = if is_complete {
-            FileReadState::complete(content.clone(), file_mtime)
+            FileReadState::complete_with_turn(content.clone(), file_mtime, ctx.turn_number)
         } else {
-            FileReadState::partial(offset, limit, file_mtime)
+            FileReadState::partial_with_turn(offset, limit, file_mtime, ctx.turn_number)
         };
         ctx.record_file_read_with_state(&path, read_state).await;
 
+        // Register tool call ID to path mapping for compaction cleanup
+        ctx.register_file_read_id(&path).await;
+
         // Create output with file read modifier
         let mut result = ToolOutput::text(output);
-        result.modifiers.push(ContextModifier::FileRead {
-            path: path.clone(),
-            content: content.clone(),
+
+        // Convert mtime to milliseconds
+        let file_mtime_ms = file_mtime.and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
         });
+
+        if is_complete {
+            result
+                .modifiers
+                .push(ContextModifier::file_read(path, content, file_mtime_ms));
+        } else {
+            result.modifiers.push(ContextModifier::file_read_partial(
+                path,
+                content,
+                file_mtime_ms,
+                offset,
+                limit,
+            ));
+        }
 
         Ok(result)
     }

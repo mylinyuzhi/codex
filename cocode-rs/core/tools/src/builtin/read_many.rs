@@ -223,17 +223,34 @@ impl Tool for ReadManyFilesTool {
                 .await
                 .ok()
                 .and_then(|m| m.modified().ok());
+            let file_mtime_ms = file_mtime.and_then(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as i64)
+            });
             let read_state = if !truncated {
-                FileReadState::complete(content.clone(), file_mtime)
+                FileReadState::complete_with_turn(content.clone(), file_mtime, ctx.turn_number)
             } else {
-                FileReadState::partial(0, MAX_LINES_PER_FILE as i32, file_mtime)
+                FileReadState::partial_with_turn(
+                    0,
+                    MAX_LINES_PER_FILE as i64,
+                    file_mtime,
+                    ctx.turn_number,
+                )
             };
             ctx.record_file_read_with_state(&path, read_state).await;
 
-            modifiers.push(ContextModifier::FileRead {
-                path: path.clone(),
-                content,
-            });
+            if !truncated {
+                modifiers.push(ContextModifier::file_read(path, content, file_mtime_ms));
+            } else {
+                modifiers.push(ContextModifier::file_read_partial(
+                    path,
+                    content,
+                    file_mtime_ms,
+                    0,
+                    MAX_LINES_PER_FILE as i64,
+                ));
+            }
 
             if output.len() > MAX_TOTAL_CHARS {
                 truncated_total = true;

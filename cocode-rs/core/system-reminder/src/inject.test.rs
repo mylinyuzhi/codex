@@ -236,3 +236,75 @@ fn test_create_injected_messages_empty() {
     let injected = create_injected_messages(vec![]);
     assert!(injected.is_empty());
 }
+
+#[test]
+fn test_silent_reminder_skipped() {
+    // Silent reminders should be filtered out (zero tokens in API)
+    let reminders = vec![
+        SystemReminder::text(AttachmentType::ChangedFiles, "Not silent"),
+        SystemReminder::messages(
+            AttachmentType::AlreadyReadFile,
+            vec![ReminderMessage::assistant(vec![ContentBlock::tool_use(
+                "test-id",
+                "Read",
+                serde_json::json!({}),
+            )])],
+        )
+        .with_silent(true),
+    ];
+
+    let injected = create_injected_messages(reminders);
+    // Only the non-silent reminder should be included
+    assert_eq!(injected.len(), 1);
+    match &injected[0] {
+        InjectedMessage::UserText { content, .. } => {
+            assert!(content.contains("Not silent"));
+        }
+        _ => panic!("Expected UserText"),
+    }
+}
+
+#[test]
+fn test_inject_reminders_skips_silent() {
+    let reminders = vec![
+        SystemReminder::text(AttachmentType::ChangedFiles, "Not silent"),
+        SystemReminder::text(AttachmentType::AlreadyReadFile, "Silent content").with_silent(true),
+    ];
+
+    let injected = inject_reminders(reminders);
+    assert_eq!(injected.len(), 1);
+    assert!(injected[0].contains("Not silent"));
+}
+
+#[test]
+fn test_combine_reminders_skips_silent() {
+    let reminders = vec![
+        SystemReminder::text(AttachmentType::ChangedFiles, "First"),
+        SystemReminder::text(AttachmentType::AlreadyReadFile, "Second").with_silent(true),
+        SystemReminder::text(AttachmentType::PlanModeEnter, "Third"),
+    ];
+
+    let combined = combine_reminders(reminders);
+    assert!(combined.is_some());
+    let content = combined.unwrap();
+    assert!(content.contains("First"));
+    assert!(!content.contains("Second")); // Silent, should be skipped
+    assert!(content.contains("Third"));
+}
+
+#[test]
+fn test_injection_stats_counts_silent() {
+    let reminders = vec![
+        SystemReminder::text(AttachmentType::ChangedFiles, "change 1"),
+        SystemReminder::text(AttachmentType::AlreadyReadFile, "already read").with_silent(true),
+        SystemReminder::messages(
+            AttachmentType::AlreadyReadFile,
+            vec![ReminderMessage::assistant(vec![ContentBlock::text("test")])],
+        )
+        .with_silent(true),
+    ];
+
+    let stats = InjectionStats::from_reminders(&reminders);
+    assert_eq!(stats.total_count, 3);
+    assert_eq!(stats.silent_count, 2);
+}

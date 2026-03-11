@@ -27,10 +27,15 @@
 //! - WebSearch, WebFetch - web content
 //! - Edit, Write - file operation confirmations
 
+use cocode_message::MessageHistory;
+use cocode_protocol::ToolName;
+use cocode_tools::FileReadState;
+use cocode_tools::FileTracker;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use tracing::debug;
@@ -42,6 +47,7 @@ pub use cocode_protocol::CompactBoundaryMetadata;
 pub use cocode_protocol::CompactConfig;
 pub use cocode_protocol::CompactTelemetry;
 pub use cocode_protocol::CompactTrigger;
+pub use cocode_protocol::CompactedLargeFileRef;
 pub use cocode_protocol::FileRestorationConfig;
 pub use cocode_protocol::HookAdditionalContext;
 pub use cocode_protocol::KeepWindowConfig;
@@ -54,6 +60,16 @@ pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET as CONTEXT_RESTORATION_B
 pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_MAX_FILES as CONTEXT_RESTORATION_MAX_FILES;
 pub use cocode_protocol::DEFAULT_MICRO_COMPACT_MIN_SAVINGS as MIN_MICRO_COMPACT_SAVINGS;
 pub use cocode_protocol::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP as RECENT_TOOL_RESULTS_TO_KEEP;
+
+// ============================================================================
+// File Tracker LRU Limits (from Claude Code v2.1.38)
+// ============================================================================
+
+/// Maximum number of entries in the file tracker LRU cache.
+pub const LRU_MAX_ENTRIES: usize = 100;
+
+/// Maximum total size in bytes for file tracker content (~25MB).
+pub const LRU_MAX_SIZE_BYTES: usize = 26_214_400;
 
 // ============================================================================
 // Compactable Tools
@@ -260,6 +276,11 @@ pub struct ContextRestoration {
     pub task_status: Option<TaskStatusRestoration>,
     /// Memory attachments that were preserved.
     pub memory_attachments: Vec<MemoryAttachment>,
+    /// References to large files that were compacted (content removed but reference kept).
+    ///
+    /// When files exceed the restoration size limit, they're added here so the
+    /// model knows the file was read and can re-read it if needed.
+    pub compacted_large_files: Vec<CompactedLargeFileRef>,
 }
 
 /// A recently invoked skill for restoration.
@@ -778,6 +799,58 @@ pub struct ToolResultCandidate {
     pub token_count: i32,
     /// Whether this is a compactable tool.
     pub is_compactable: bool,
+}
+
+/// Collect file paths to keep during compaction.
+///
+/// This implements Claude Code's `collectFilesToKeep` (Ua4):
+/// - Get files from recent turns (those being kept after compaction)
+/// - Return a set of paths that should be preserved in the FileTracker
+///
+/// This ensures that recently accessed files remain in the tracker's cache
+/// even after older tool results are micro-compacted.
+///
+/// # Arguments
+/// * `history` - The message history to extract recent files from
+/// * `keep_recent_turns` - Number of recent turns to preserve
+///
+/// # Returns
+/// A HashSet of file paths that should be preserved in the FileTracker.
+pub fn collect_files_to_keep(history: &MessageHistory, keep_recent_turns: i32) -> HashSet<PathBuf> {
+    let mut files_to_keep = HashSet::new();
+    let total_turns = history.turns().len();
+
+    // Calculate which turns to keep (the most recent N)
+    let keep_from_turn = total_turns.saturating_sub(keep_recent_turns as usize);
+
+    // Collect file paths from recent turns
+    for turn in history.turns().iter().skip(keep_from_turn) {
+        for tool_call in &turn.tool_calls {
+            // Extract file paths from Read tool calls
+            if tool_call.name == ToolName::Read.as_str() {
+                if let Some(file_path) = tool_call.input.get("file_path").and_then(|v| v.as_str()) {
+                    files_to_keep.insert(PathBuf::from(file_path));
+                }
+            }
+            // Also track Edit and Write tools as they modify files
+            if tool_call.name == ToolName::Edit.as_str()
+                || tool_call.name == ToolName::Write.as_str()
+            {
+                if let Some(file_path) = tool_call.input.get("file_path").and_then(|v| v.as_str()) {
+                    files_to_keep.insert(PathBuf::from(file_path));
+                }
+            }
+        }
+    }
+
+    debug!(
+        total_turns,
+        keep_recent_turns,
+        files_to_keep = files_to_keep.len(),
+        "Collected files to keep during compaction"
+    );
+
+    files_to_keep
 }
 
 /// Execute micro-compaction on a message history.
@@ -1436,12 +1509,20 @@ pub fn build_context_restoration_with_config(
     }
 
     // Priority 4: Files (with exclusion, sorting, and limits)
-    // First, filter out excluded files
+    // First, filter out excluded files and internal files
     let mut eligible_files: Vec<FileRestoration> = files
         .into_iter()
         .filter(|f| {
             let path_str = f.path.to_string_lossy();
-            !config.should_exclude(&path_str)
+            // Filter by exclusion patterns from config
+            if config.should_exclude(&path_str) {
+                return false;
+            }
+            // Filter out internal files (session memory, plan files, etc.)
+            if is_internal_file(&f.path, "") {
+                return false;
+            }
+            true
         })
         .collect();
 
@@ -1745,6 +1826,392 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
     breakdown.tool_result_tokens = tool_result_tokens;
 
     breakdown
+}
+
+// ============================================================================
+// File State Rebuild from Message History
+// ============================================================================
+
+/// Extract file read state from message history.
+///
+/// This implements Claude Code's approach where file state is derived
+/// from actual tool calls in messages, ensuring consistency and
+/// enabling automatic recovery after compaction.
+///
+/// # Arguments
+/// * `history` - The message history to extract file state from
+/// * `cwd` - Current working directory for resolving relative paths
+/// * `max_entries` - Maximum number of entries to track (LRU limit)
+///
+/// # Returns
+/// A `FileTracker` populated with file state extracted from Read and Edit tool calls.
+pub fn build_file_read_state(
+    history: &MessageHistory,
+    cwd: &Path,
+    max_entries: usize,
+) -> FileTracker {
+    let tracker = FileTracker::new();
+
+    // Maps to track tool_use -> tool_result correlation
+    let mut read_tool_map: HashMap<String, PathBuf> = HashMap::new();
+    let mut edit_tool_map: HashMap<String, (PathBuf, String)> = HashMap::new();
+
+    // Phase 1: Collect tool_use IDs from assistant messages
+    for turn in history.turns() {
+        if let Some(_msg) = &turn.assistant_message {
+            for tool_call in &turn.tool_calls {
+                if tool_call.name == ToolName::Read.as_str() {
+                    // Only track full reads (no offset/limit)
+                    if let Some(file_path) =
+                        tool_call.input.get("file_path").and_then(|v| v.as_str())
+                    {
+                        let has_offset = tool_call.input.get("offset").is_some();
+                        let has_limit = tool_call.input.get("limit").is_some();
+                        if !has_offset && !has_limit {
+                            let abs_path = cwd.join(file_path);
+                            read_tool_map.insert(tool_call.call_id.clone(), abs_path);
+                        }
+                    }
+                } else if tool_call.name == ToolName::Edit.as_str() {
+                    // Track Edit tools - we need the new_string content
+                    if let (Some(file_path), Some(content)) = (
+                        tool_call.input.get("file_path").and_then(|v| v.as_str()),
+                        tool_call.input.get("new_string").and_then(|v| v.as_str()),
+                    ) {
+                        let abs_path = cwd.join(file_path);
+                        edit_tool_map
+                            .insert(tool_call.call_id.clone(), (abs_path, content.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: Process tool_results from turn tool_calls
+    for turn in history.turns() {
+        for tool_call in &turn.tool_calls {
+            // Handle Read tool results
+            if let Some(path) = read_tool_map.get(&tool_call.call_id) {
+                if let Some(cocode_protocol::ToolResultContent::Text(content)) = &tool_call.output {
+                    // Strip line number prefixes (cat -n format)
+                    let clean_content = strip_line_numbers(content);
+                    let content_hash = FileReadState::compute_hash(&clean_content);
+                    let timestamp = turn.started_at.timestamp_millis();
+
+                    tracker.record_read_with_state(
+                        path.clone(),
+                        FileReadState {
+                            content: Some(clean_content),
+                            timestamp: std::time::SystemTime::UNIX_EPOCH
+                                + std::time::Duration::from_millis(timestamp as u64),
+                            file_mtime: None,
+                            content_hash: Some(content_hash),
+                            offset: None,
+                            limit: None,
+                            kind: cocode_protocol::FileReadKind::FullContent,
+                            access_count: 1,
+                            read_turn: turn.number,
+                        },
+                    );
+                }
+            }
+
+            // Handle Edit tool results (the new_string is the relevant content)
+            if let Some((path, content)) = edit_tool_map.get(&tool_call.call_id) {
+                if tool_call.status.is_success() {
+                    let timestamp = turn.started_at.timestamp_millis();
+                    tracker.record_read_with_state(
+                        path.clone(),
+                        FileReadState {
+                            content: Some(content.clone()),
+                            timestamp: std::time::SystemTime::UNIX_EPOCH
+                                + std::time::Duration::from_millis(timestamp as u64),
+                            file_mtime: None,
+                            content_hash: Some(FileReadState::compute_hash(content)),
+                            offset: None,
+                            limit: None,
+                            kind: cocode_protocol::FileReadKind::FullContent,
+                            access_count: 1,
+                            read_turn: turn.number,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // Limit to max_entries (LRU eviction simulation)
+    // The FileTracker will handle this internally once we add LRU support
+    let _ = max_entries; // Will be used when LRU is implemented
+
+    tracker
+}
+
+/// Strip line number prefixes from Read tool output.
+///
+/// The Read tool outputs content with line numbers in the format "     1\tcontent"
+/// (right-aligned 6-char line number, followed by tab, then content).
+/// This function removes those prefixes to get the original content.
+fn strip_line_numbers(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            // Match pattern: right-aligned line numbers (6 chars) + tab + content
+            // Format from Read tool: format!("{line_num:>6}\t{truncated}\n")
+            // Examples: "     1\tcontent", "   123\tcontent"
+            if let Some(pos) = line.find('\t') {
+                let prefix = &line[..pos];
+                let trimmed = prefix.trim();
+                // Check if everything before the tab is digits
+                if trimmed.chars().all(|c| c.is_ascii_digit()) {
+                    line[pos + 1..].to_string()
+                } else {
+                    // Not a line number prefix, keep as-is
+                    line.to_string()
+                }
+            } else {
+                // No tab found, keep as-is
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Build file restoration list from a FileTracker.
+///
+/// This matches Python's `collectFilesToKeep(Ua4)`:
+/// - Sort by timestamp (newest first)
+/// - Max 5 files
+/// - 50k total token budget
+/// - 5k tokens per file
+/// - Exclude internal files (session memory, plan files, etc.)
+///
+/// # Arguments
+/// * `tracker` - The FileTracker to extract files from
+/// * `config` - Compact configuration with restoration limits
+///
+/// # Returns
+/// A vector of FileRestoration items sorted by most recent access.
+pub fn build_file_restoration_from_tracker(
+    tracker: &FileTracker,
+    config: &CompactConfig,
+) -> Vec<FileRestoration> {
+    let mut files: Vec<FileRestoration> = tracker
+        .read_files_with_state()
+        .into_iter()
+        .filter(|(path, state)| {
+            // Skip files without content
+            state.content.is_some()
+            // Skip internal files
+            && !is_internal_file(path, "")
+        })
+        .map(|(path, state)| {
+            let content = state.content.clone().unwrap_or_default();
+            let tokens = (content.len() / 4) as i32; // Rough estimate: 4 chars per token
+            let last_accessed = state
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+
+            FileRestoration {
+                path,
+                content,
+                priority: 0, // Will be sorted by access time
+                tokens,
+                last_accessed,
+            }
+        })
+        .collect();
+
+    // Sort by last_accessed descending (most recent first)
+    files.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+
+    // Apply limits
+    let mut result = Vec::new();
+    let mut total_tokens = 0;
+    let max_tokens_per_file = config.max_tokens_per_file;
+    let total_budget = config.context_restore_budget;
+    let max_files = config.context_restore_max_files as usize;
+
+    for mut file in files {
+        if result.len() >= max_files {
+            break;
+        }
+
+        // Truncate if exceeds per-file limit
+        if file.tokens > max_tokens_per_file {
+            let char_limit = (max_tokens_per_file * 4) as usize;
+            if file.content.len() > char_limit {
+                file.content = format!(
+                    "{}...\n[Truncated: {} more tokens]",
+                    &file.content[..char_limit.min(file.content.len())],
+                    file.tokens - max_tokens_per_file
+                );
+                file.tokens = max_tokens_per_file;
+            }
+        }
+
+        // Check total budget
+        if total_tokens + file.tokens > total_budget {
+            break;
+        }
+
+        total_tokens += file.tokens;
+        result.push(file);
+    }
+
+    debug!(
+        files_restored = result.len(),
+        total_tokens,
+        budget = total_budget,
+        "Built file restoration from tracker"
+    );
+
+    result
+}
+
+/// Check if a path is an internal file that should be excluded from restoration.
+///
+/// Internal files include:
+/// - Session memory files (summary.md)
+/// - Plan files
+/// - Auto memory files (MEMORY.md, etc.)
+/// - Tool result persistence files
+///
+/// # Arguments
+/// * `path` - The file path to check
+///
+/// # Returns
+/// `true` if the file should be excluded from restoration.
+pub fn is_internal_file(path: &Path, _session_id: &str) -> bool {
+    let path_str = path.to_string_lossy();
+
+    // Session memory file
+    if path_str.contains("session-memory") && path_str.contains("summary.md") {
+        return true;
+    }
+
+    // Plan files (in ~/.cocode/plans/)
+    if path_str.contains(".cocode/plans/") {
+        return true;
+    }
+
+    // Auto memory files (MEMORY.md or project memory)
+    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+        if filename == "MEMORY.md" || filename.starts_with("memory-") {
+            return true;
+        }
+    }
+
+    // Tool result persistence files
+    if path_str.contains("tool-results/") {
+        return true;
+    }
+
+    false
+}
+
+/// Collect files to restore after compaction by re-reading fresh content.
+///
+/// This implements Claude Code's `collectFilesToKeep (Ua4)` behavior:
+/// - Gets most recently accessed files from tracker
+/// - Re-reads files to get fresh content (not cached)
+/// - Applies token limits (5k per file, 50k total, max 5 files)
+/// - Filters out internal files (session memory, plan files, etc.)
+///
+/// Unlike `build_file_restoration_from_tracker`, this function actually
+/// re-reads file content from disk to ensure the model sees the latest
+/// version after compaction.
+///
+/// # Arguments
+/// * `tracker` - The FileTracker containing read file metadata
+/// * `config` - Compaction configuration with token limits
+///
+/// # Returns
+/// A vector of FileRestoration items with fresh content, sorted by access time.
+pub fn collect_files_to_restore(
+    tracker: &FileTracker,
+    config: &CompactConfig,
+) -> Vec<FileRestoration> {
+    // Get files sorted by most recent access
+    let recent_files = tracker.most_recent_files(FileTracker::MAX_FILES_TO_RESTORE * 2);
+
+    let mut files: Vec<FileRestoration> = recent_files
+        .into_iter()
+        .filter(|path| !is_internal_file(path, ""))
+        .filter_map(|path| {
+            // Re-read file to get fresh content
+            let content = std::fs::read_to_string(&path).ok()?;
+            let tokens = FileTracker::estimate_tokens(&content);
+            let last_accessed = tracker
+                .read_state(&path)
+                .and_then(|state| {
+                    state
+                        .timestamp
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .ok()
+                })
+                .unwrap_or(0);
+
+            Some(FileRestoration {
+                path,
+                content,
+                priority: 0, // Sorted by access time instead
+                tokens: tokens as i32,
+                last_accessed,
+            })
+        })
+        .collect();
+
+    // Sort by last_accessed descending (most recent first)
+    files.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+
+    // Apply limits
+    let mut result = Vec::new();
+    let mut total_tokens = 0i32;
+    let max_tokens_per_file = config.max_tokens_per_file;
+    let total_budget = config.context_restore_budget;
+    let max_files = config.context_restore_max_files as usize;
+
+    for mut file in files {
+        if result.len() >= max_files {
+            break;
+        }
+
+        // Truncate if exceeds per-file limit
+        if file.tokens > max_tokens_per_file {
+            let char_limit = (max_tokens_per_file * 4) as usize;
+            if file.content.len() > char_limit {
+                file.content = format!(
+                    "{}...\n[Truncated: {} more tokens]",
+                    &file.content[..char_limit.min(file.content.len())],
+                    file.tokens - max_tokens_per_file
+                );
+                file.tokens = max_tokens_per_file;
+            }
+        }
+
+        // Check total budget
+        if total_tokens + file.tokens > total_budget {
+            break;
+        }
+
+        total_tokens += file.tokens;
+        result.push(file);
+    }
+
+    debug!(
+        files_restored = result.len(),
+        total_tokens,
+        budget = total_budget,
+        max_files,
+        "Collected files to restore after compaction"
+    );
+
+    result
 }
 
 #[cfg(test)]

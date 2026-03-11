@@ -9,6 +9,7 @@ use cocode_file_ignore::IgnoreConfig;
 use cocode_file_ignore::IgnoreService;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ContextModifier;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use globset::GlobBuilder;
@@ -237,7 +238,16 @@ impl Tool for GlobTool {
                 format!("Found {count} files:\n")
             };
 
-            Ok(ToolOutput::text(format!("{header}{output}")))
+            // Create modifiers for metadata-only file tracking
+            // Glob discovers paths but doesn't read content - these are MetadataOnly
+            let modifiers: Vec<_> = matches
+                .iter()
+                .map(|p| ContextModifier::file_read_metadata(p.clone()))
+                .collect();
+
+            let mut result = ToolOutput::text(format!("{header}{output}"));
+            result.modifiers = modifiers;
+            Ok(result)
         }
     }
 }

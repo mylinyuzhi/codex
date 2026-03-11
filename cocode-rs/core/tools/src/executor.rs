@@ -61,6 +61,10 @@ pub struct ExecutorConfig {
     pub cwd: PathBuf,
     /// Session ID.
     pub session_id: String,
+    /// Turn ID for the current turn.
+    pub turn_id: String,
+    /// Turn number for the current turn (1-indexed).
+    pub turn_number: i32,
     /// Permission mode.
     pub permission_mode: PermissionMode,
     /// Default timeout for tool execution (seconds).
@@ -100,6 +104,8 @@ impl Default for ExecutorConfig {
             max_concurrency,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             session_id: String::new(),
+            turn_id: String::new(),
+            turn_number: 0,
             permission_mode: PermissionMode::Default,
             default_timeout_secs: 120,
             is_plan_mode: false,
@@ -1018,6 +1024,8 @@ impl StreamingToolExecutor {
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
             .cwd(self.shell_executor.cwd())
+            .turn_id(&self.config.turn_id)
+            .turn_number(self.config.turn_number)
             .permission_mode(self.config.permission_mode)
             .cancel_token(self.cancel_token.clone())
             .approval_store(self.approval_store.clone())
