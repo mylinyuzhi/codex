@@ -238,6 +238,7 @@ StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12
 |----------|-----------|
 | **No Prompt Caching** | Prompt caching (Anthropic's cache breakpoints feature) is not required for this project. Do not implement or plan for it. |
 | **No Deprecated Code** | When refactoring or implementing features, remove obsolete code completely. Do not mark as deprecated or maintain backward compatibility - delete it outright to keep the codebase clean and avoid technical debt. |
+| **No Inline Tests** | Never put `#[cfg(test)] mod tests { ... }` with test functions inline in source files. Always extract tests to a separate `<name>.test.rs` file and reference it with `#[cfg(test)] #[path = "<name>.test.rs"] mod tests;` at the end of the source file. See `AGENTS.md` "Test Organization". |
 
 ## References
 

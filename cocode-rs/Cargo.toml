@@ -55,6 +55,9 @@ members = [
     "app/session",
     "app/cli",
     "app/tui",
+    "vercel-ai/provider",
+    "vercel-ai/provider-utils",
+    "vercel-ai/ai",
 ]
 resolver = "2"
 
@@ -139,6 +142,11 @@ cocode-tui = { path = "app/tui" }
 
 # Internal - LSP
 cocode-lsp = { path = "lsp" }
+
+# Internal - Vercel AI SDK
+vercel-ai-provider = { path = "vercel-ai/provider" }
+vercel-ai-provider-utils = { path = "vercel-ai/provider-utils" }
+vercel-ai = { path = "vercel-ai/ai" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"
