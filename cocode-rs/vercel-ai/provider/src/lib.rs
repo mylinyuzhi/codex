@@ -146,6 +146,8 @@ pub use image_model::ImageModelV4;
 pub use language_model::LanguageModelV4;
 pub use language_model::LanguageModelV4CallOptions;
 pub use language_model::LanguageModelV4GenerateResult;
+pub use language_model::LanguageModelV4Request;
+pub use language_model::LanguageModelV4Response;
 pub use language_model::LanguageModelV4ProviderTool;
 pub use language_model::LanguageModelV4StreamResponse;
 pub use language_model::LanguageModelV4StreamResult;
