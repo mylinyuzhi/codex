@@ -303,6 +303,96 @@ pub fn is_cacheable_read_for_mention(tool_name: &str, path: &Path, has_line_rang
     is_cacheable_file(path, false)
 }
 
+/// Decision about how to handle a file mention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MentionReadDecision {
+    /// File was fully read before and is unchanged — produce silent reminder.
+    AlreadyReadUnchanged,
+    /// File has a line range — force re-read.
+    NeedsReadLineRange,
+    /// File not cached or has changed — normal read.
+    NeedsRead,
+}
+
+/// Result of resolving a single @mention.
+///
+/// Centralizes mention parsing + path normalization + read decision
+/// into a single struct for use by the `AtMentionedFilesGenerator`.
+#[derive(Debug, Clone)]
+pub struct MentionResolution {
+    /// The resolved absolute path.
+    pub path: PathBuf,
+    /// Line start (1-indexed), if specified.
+    pub line_start: Option<i32>,
+    /// Line end (1-indexed), if specified.
+    pub line_end: Option<i32>,
+    /// The decision about how to handle this mention.
+    pub decision: MentionReadDecision,
+}
+
+/// Resolve all @mentions from a user prompt into `MentionResolution` entries.
+///
+/// Centralizes:
+/// - Mention parsing via `parse_file_mentions()`
+/// - Path normalization for deduplication
+/// - Already-read decision via `resolve_mention_read_decision()`
+///
+/// The returned resolutions are deduplicated by normalized path.
+pub fn resolve_mentions(
+    user_prompt: &str,
+    cwd: &Path,
+    file_tracker: Option<&crate::FileTracker>,
+) -> Vec<MentionResolution> {
+    use std::collections::HashSet;
+
+    use crate::file_read_tracking_policy::normalize_path;
+    use crate::file_read_tracking_policy::resolve_mention_read_decision;
+    use crate::parsing::parse_file_mentions;
+
+    let mentions = parse_file_mentions(user_prompt);
+    if mentions.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::with_capacity(mentions.len());
+    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+
+    for mention in &mentions {
+        let resolved_path = mention.resolve(cwd);
+        let normalized = normalize_path(&resolved_path);
+
+        if seen_paths.contains(&normalized) {
+            continue;
+        }
+        seen_paths.insert(normalized);
+
+        let has_line_range = mention.line_start.is_some() || mention.line_end.is_some();
+        let policy_decision =
+            resolve_mention_read_decision(file_tracker, &resolved_path, has_line_range);
+
+        let decision = match policy_decision {
+            crate::file_read_tracking_policy::MentionReadDecision::AlreadyReadUnchanged => {
+                MentionReadDecision::AlreadyReadUnchanged
+            }
+            crate::file_read_tracking_policy::MentionReadDecision::NeedsReadLineRange => {
+                MentionReadDecision::NeedsReadLineRange
+            }
+            crate::file_read_tracking_policy::MentionReadDecision::NeedsRead => {
+                MentionReadDecision::NeedsRead
+            }
+        };
+
+        results.push(MentionResolution {
+            path: resolved_path,
+            line_start: mention.line_start,
+            line_end: mention.line_end,
+            decision,
+        });
+    }
+
+    results
+}
+
 #[cfg(test)]
 #[path = "file_context_resolver.test.rs"]
 mod tests;

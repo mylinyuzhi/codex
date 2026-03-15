@@ -458,10 +458,12 @@ pub struct GeneratorContext<'a> {
     // === Mention read records ===
     /// Records of files read via @mention syntax during this turn.
     ///
-    /// These are populated by the @mentioned_files generator when it reads
-    /// file contents. After reminder generation, the driver syncs these
-    /// records back to the tools FileTracker for proper state tracking.
-    pub mention_read_records: Vec<MentionReadRecord>,
+    /// Shared buffer populated by the @mentioned_files generator when it reads
+    /// file contents. Uses `Arc<Mutex<>>` so generators can push records via
+    /// `&self` without needing mutable access to the context.
+    /// After reminder generation, the driver drains and syncs these records
+    /// back to the tools FileTracker for proper state tracking.
+    pub mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
 }
 
 /// Lightweight rewind info for system reminder generation.
@@ -600,7 +602,7 @@ pub struct GeneratorContextBuilder<'a> {
     queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
     rewind_info: Option<RewindContextInfo>,
-    mention_read_records: Vec<MentionReadRecord>,
+    mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -769,7 +771,10 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
-    pub fn mention_read_records(mut self, records: Vec<MentionReadRecord>) -> Self {
+    pub fn mention_read_records(
+        mut self,
+        records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
+    ) -> Self {
         self.mention_read_records = records;
         self
     }

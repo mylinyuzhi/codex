@@ -857,7 +857,7 @@ impl SessionState {
         }
 
         // Extract file tracker state from the loop (persists across turns)
-        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_state();
+        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_snapshot().await;
 
         // Inject allowed prompts from plan exit into the shared approval store
         if let StopReason::PlanModeExit {
@@ -1892,44 +1892,80 @@ impl SessionState {
         (messages_removed, restored_prompt)
     }
 
-    /// Prune reminder file tracker for turn boundary.
+    /// Prune reminder file tracker for turn boundary using merge-based approach.
     ///
-    /// Removes entries from the file tracker state that were read at or after
-    /// the specified turn. This is used during rewind to ensure the tracker
-    /// reflects only the files read before the rewound turn.
+    /// Instead of a simple retain, this method:
+    /// 1. Rebuilds state from retained history turns
+    /// 2. Prunes existing state to entries before the boundary and filters internal files
+    /// 3. Merges: rebuilt has priority for same paths
+    ///
+    /// This handles:
+    /// - Same-path overwrite drift (newer dropped reads hiding older retained reads)
+    /// - Mention-driven reads that exist only in persisted snapshot
+    /// - Internal file exclusion
     ///
     /// # Arguments
     ///
     /// * `boundary_turn` - The turn boundary; entries at or after this turn are removed
     pub fn prune_reminder_file_tracker_for_turn_boundary(&mut self, boundary_turn: i32) {
-        self.reminder_file_tracker_state
-            .retain(|(_, state)| state.read_turn < boundary_turn);
+        use cocode_system_reminder::build_file_read_state_from_modifiers;
+        use cocode_system_reminder::merge_file_read_state;
+        use cocode_system_reminder::should_skip_tracked_file;
+
+        // 1. Rebuild from retained history turns
+        let retained_turns = self.message_history.turns();
+        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> =
+            retained_turns
+                .iter()
+                .filter(|turn| turn.number < boundary_turn)
+                .flat_map(|turn| {
+                    turn.tool_calls.iter().map(move |tc| {
+                        (
+                            tc.name.as_str(),
+                            tc.modifiers.as_slice(),
+                            turn.number,
+                            tc.status.is_terminal(),
+                        )
+                    })
+                })
+                .collect();
+        let rebuilt = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+
+        // 2. Prune existing state: keep entries before boundary, filter internal files
+        let plan_path = self.plan_mode_state.plan_file_path.as_ref();
+        let pruned: Vec<_> = self
+            .reminder_file_tracker_state
+            .iter()
+            .filter(|(_, s)| s.read_turn < boundary_turn)
+            .filter(|(p, _)| {
+                !should_skip_tracked_file(p, plan_path.map(|v| v.as_path()), None, &[])
+            })
+            .cloned()
+            .collect();
+
+        // 3. Merge: rebuilt has priority for same paths (more accurate from history)
+        self.reminder_file_tracker_state = merge_file_read_state(pruned, rebuilt);
     }
 
     /// Rebuild reminder file tracker with session memory exclusion.
     ///
-    /// Similar to `rebuild_reminder_file_tracker_from_history`, but excludes
-    /// file reads that occurred within session memory (summarization) turns.
-    /// This is used after session memory compaction to ensure the tracker
-    /// reflects the actual conversation context, not the summarization process.
+    /// Rebuilds file tracker state from message history, filtering out
+    /// internal files like session memory and plan files.
     ///
     /// # Arguments
     ///
-    /// * `session_memory_turns` - Set of turn numbers that were session memory turns
-    ///   and should be excluded from the rebuild
+    /// * `session_memory_path` - Optional path to the session memory file to exclude
     pub fn rebuild_reminder_file_tracker_with_session_memory(
         &mut self,
-        session_memory_turns: &std::collections::HashSet<i32>,
+        session_memory_path: Option<&std::path::PathBuf>,
     ) {
         use cocode_system_reminder::build_file_read_state_from_modifiers;
+        use cocode_system_reminder::should_skip_tracked_file;
 
-        // Build iterator of (tool_name, modifiers, turn_number, is_completed)
-        // excluding session memory turns
         let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
             .message_history
             .turns()
             .iter()
-            .filter(|turn| !session_memory_turns.contains(&turn.number))
             .flat_map(|turn| {
                 turn.tool_calls.iter().map(move |tc| {
                     (
@@ -1943,7 +1979,18 @@ impl SessionState {
             .collect();
 
         let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
-        self.reminder_file_tracker_state = state;
+        let plan_path = self.plan_mode_state.plan_file_path.as_ref();
+        self.reminder_file_tracker_state = state
+            .into_iter()
+            .filter(|(p, _)| {
+                !should_skip_tracked_file(
+                    p,
+                    plan_path.map(|v| v.as_path()),
+                    session_memory_path.map(|v| v.as_path()),
+                    &[],
+                )
+            })
+            .collect();
     }
 
     // ==========================================================
@@ -2565,7 +2612,7 @@ impl SessionState {
         }
 
         // Extract file tracker state from the loop (persists across turns)
-        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_state();
+        self.reminder_file_tracker_state = loop_instance.reminder_file_tracker_snapshot().await;
 
         // Update totals
         self.total_turns += result.turns_completed;

@@ -17,7 +17,6 @@
 //! records the file read info in the reminder's `file_reads` field. The driver
 //! then applies these updates to FileTracker after generate_all() completes.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -26,14 +25,12 @@ use async_trait::async_trait;
 use crate::Result;
 use crate::config::AtMentionedFilesConfig;
 use crate::config::SystemReminderConfig;
-use crate::file_read_tracking_policy::MentionReadDecision;
-use crate::file_read_tracking_policy::normalize_path;
-use crate::file_read_tracking_policy::resolve_mention_read_decision;
+use crate::file_context_resolver::MentionReadDecision;
+use crate::file_context_resolver::resolve_mentions;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::parsing::parse_file_mentions;
+use crate::generator::MentionReadRecord;
 use crate::types::AttachmentType;
-use crate::types::FileReadInfo;
 use crate::types::FileReadKind;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
@@ -70,9 +67,9 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
             _ => return Ok(None),
         };
 
-        // Parse @file mentions from prompt
-        let mentions = parse_file_mentions(user_prompt);
-        if mentions.is_empty() {
+        // Resolve all @mentions: parsing + normalization + dedup + decision
+        let resolutions = resolve_mentions(user_prompt, &ctx.cwd, ctx.file_tracker);
+        if resolutions.is_empty() {
             return Ok(None);
         }
 
@@ -81,32 +78,11 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
 
         let mut content = String::new();
         let mut already_read_files = Vec::new();
-        let mut file_reads = Vec::new();
 
-        // Track seen paths with normalized versions for deduplication.
-        // This prevents processing the same file twice when referenced via
-        // different relative paths (e.g., @./src/lib.rs vs @src/lib.rs).
-        // Claude Code v2.1.38 alignment: normalize paths before checking.
-        let mut seen_paths: HashSet<std::path::PathBuf> = HashSet::new();
+        for resolution in &resolutions {
+            let resolved_path = &resolution.path;
 
-        for mention in &mentions {
-            let resolved_path = mention.resolve(&ctx.cwd);
-
-            // Normalize path for deduplication check
-            let normalized_path = normalize_path(&resolved_path);
-
-            // Skip duplicate mentions (same file referenced multiple times)
-            if seen_paths.contains(&normalized_path) {
-                continue;
-            }
-            seen_paths.insert(normalized_path);
-
-            // Determine read decision using policy module
-            let has_line_range = mention.line_start.is_some() || mention.line_end.is_some();
-            let decision =
-                resolve_mention_read_decision(ctx.file_tracker, &resolved_path, has_line_range);
-
-            match decision {
+            match resolution.decision {
                 MentionReadDecision::AlreadyReadUnchanged => {
                     // ============================================================
                     // Already-Read Handling (Claude Code v2.1.38 Alignment)
@@ -149,17 +125,18 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
             // File is not cached or has changed - read it
             // Format matches Claude Code's Read tool output format
             let file_path_str = resolved_path.to_string_lossy();
+            let has_line_range = resolution.line_start.is_some() || resolution.line_end.is_some();
 
             // Read file content with limits
             match read_file_content(
-                &resolved_path,
-                mention.line_start,
-                mention.line_end,
+                resolved_path,
+                resolution.line_start,
+                resolution.line_end,
                 file_config,
             ) {
                 Ok(ReadResult::Content(file_content)) => {
                     // Get file mtime for FileTracker
-                    let file_mtime = fs::metadata(&resolved_path)
+                    let file_mtime = fs::metadata(resolved_path)
                         .ok()
                         .and_then(|m| m.modified().ok());
 
@@ -170,18 +147,22 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                         FileReadKind::FullContent
                     };
 
-                    // Track file read for FileTracker update
-                    file_reads.push(FileReadInfo {
-                        path: resolved_path.clone(),
-                        content: file_content.clone(),
-                        mtime: file_mtime,
-                        turn_number: ctx.turn_number,
-                        read_kind,
-                        offset: mention.line_start.map(|s| s as i64),
-                        limit: mention
-                            .line_end
-                            .map(|end| (end - mention.line_start.unwrap_or(1)) as i64),
-                    });
+                    // Push mention read record to shared buffer for FileTracker sync
+                    #[allow(clippy::unwrap_used)]
+                    ctx.mention_read_records
+                        .lock()
+                        .unwrap()
+                        .push(MentionReadRecord {
+                            path: resolved_path.clone(),
+                            content: file_content.clone(),
+                            last_modified: file_mtime,
+                            offset: resolution.line_start.map(|s| s as i64),
+                            limit: resolution
+                                .line_end
+                                .map(|end| (end - resolution.line_start.unwrap_or(1)) as i64),
+                            read_kind,
+                            read_turn: ctx.turn_number,
+                        });
 
                     // Format as tool result (Claude Code alignment)
                     content.push_str(&format!(
@@ -246,11 +227,11 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
             return Ok(None);
         }
 
-        // Return reminder with file reads for FileTracker update
-        Ok(Some(
-            SystemReminder::new(AttachmentType::AtMentionedFiles, content.trim())
-                .with_file_reads(file_reads),
-        ))
+        // Return reminder (file reads already pushed to mention_read_records Arc)
+        Ok(Some(SystemReminder::new(
+            AttachmentType::AtMentionedFiles,
+            content.trim(),
+        )))
     }
 }
 

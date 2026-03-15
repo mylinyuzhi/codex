@@ -588,6 +588,20 @@ pub enum LoopEvent {
     /// Maximum turns reached.
     MaxTurnsReached,
 
+    // ========== System Reminder Display ==========
+    /// A system reminder display event for UI notification.
+    ///
+    /// Emitted for silent reminders (e.g., already-read files) so the UI can
+    /// display notifications without the reminder consuming API tokens.
+    /// The `reminder_type` identifies the attachment type and `payload` carries
+    /// type-specific display data.
+    SystemReminderDisplay {
+        /// The attachment type name (e.g., "already_read_file").
+        reminder_type: String,
+        /// Type-specific display payload (e.g., list of file paths).
+        payload: Value,
+    },
+
     // ========== Rewind ==========
     /// A rewind completed successfully.
     RewindCompleted {

@@ -1170,6 +1170,15 @@ impl FileTracker {
             .collect()
     }
 
+    /// Create a read-only snapshot of all tracked files.
+    ///
+    /// Identical to [`snapshot()`] but named to clarify intent: this is a
+    /// point-in-time copy used for building derived tracker views.
+    /// No LRU promotion occurs.
+    pub fn read_files_snapshot(&self) -> Vec<(PathBuf, FileReadState)> {
+        self.snapshot()
+    }
+
     /// Replace all tracked files from a snapshot.
     ///
     /// Used for rewind recovery - restores file read states.

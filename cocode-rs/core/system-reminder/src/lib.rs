@@ -75,11 +75,13 @@ pub use error::Result;
 pub use error::SystemReminderError;
 // Re-export file context resolver types
 pub use file_context_resolver::FileReadConfig;
+pub use file_context_resolver::MentionResolution;
 pub use file_context_resolver::ReadFileResult;
 pub use file_context_resolver::ResolvedFile;
 pub use file_context_resolver::estimate_tokens;
 pub use file_context_resolver::is_cacheable_file;
 pub use file_context_resolver::read_file_with_limits;
+pub use file_context_resolver::resolve_mentions;
 // Re-export file read tracking policy
 pub use file_read_tracking_policy::MentionReadDecision;
 pub use file_read_tracking_policy::categorize_read_kind;
@@ -113,6 +115,7 @@ pub use generator::HookBlockingInfo;
 pub use generator::HookContextInfo;
 pub use generator::HookState;
 pub use generator::InvokedSkillInfo;
+pub use generator::MentionReadRecord;
 pub use generator::QueuedCommandInfo;
 pub use generator::RestoredPlanInfo;
 pub use generator::RewindContextInfo;

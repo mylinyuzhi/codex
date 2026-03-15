@@ -37,6 +37,7 @@ use cocode_system_reminder::HookState;
 use cocode_system_reminder::InjectedBlock;
 use cocode_system_reminder::InjectedMessage;
 use cocode_system_reminder::InvokedSkillInfo;
+use cocode_system_reminder::MentionReadRecord;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SkillInfo;
 use cocode_system_reminder::SystemReminderConfig;
@@ -71,6 +72,7 @@ use tracing::warn;
 
 use crate::compaction::CompactionConfig;
 use crate::compaction::FileRestoration;
+use crate::compaction::FileRestorationConfig;
 use crate::compaction::InvokedSkillRestoration;
 use crate::compaction::LRU_MAX_ENTRIES;
 use crate::compaction::SessionMemorySummary;
@@ -247,6 +249,13 @@ pub struct AgentLoop {
     /// Shared across turns so the TUI driver can send responses that
     /// unblock the AskUserQuestion tool's oneshot channel.
     question_responder: Arc<cocode_tools::QuestionResponder>,
+
+    /// Large files that were compacted but not restored inline.
+    ///
+    /// Populated during context restoration when a file exceeds the per-file
+    /// token limit. Consumed once on the next turn by the
+    /// `CompactFileReferenceGenerator` to notify the model.
+    pending_compacted_large_files: Vec<cocode_protocol::CompactedLargeFileRef>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -552,16 +561,51 @@ impl AgentLoopBuilder {
 
         // Create system reminder components
         let reminder_orchestrator = SystemReminderOrchestrator::new(self.system_reminder_config);
-        // Create shared file tracker for tool execution and change detection (persists across turns)
-        // Initialize with persisted state if available
-        let shared_tools_file_tracker = if !self.reminder_file_tracker_state.is_empty() {
+        // Create shared file tracker for tool execution and change detection (persists across turns).
+        //
+        // Initialization strategy (Claude Code alignment):
+        // 1. Rebuild state from message history via ContextModifier::FileRead
+        // 2. Merge with persisted reminder_file_tracker_state (persisted has priority for same paths)
+        // 3. This ensures consistency with both history and persisted state at startup
+        let shared_tools_file_tracker = {
+            let history_state = if let Some(ref mh) = self.message_history {
+                let tool_calls: Vec<(&str, &[ContextModifier], i32, bool)> = mh
+                    .turns()
+                    .iter()
+                    .flat_map(|turn| {
+                        turn.tool_calls.iter().map(move |tc| {
+                            (
+                                tc.name.as_str(),
+                                tc.modifiers.as_slice(),
+                                turn.number,
+                                tc.status.is_terminal(),
+                            )
+                        })
+                    })
+                    .collect();
+                cocode_system_reminder::build_file_read_state_from_modifiers(
+                    tool_calls.into_iter(),
+                    crate::compaction::LRU_MAX_ENTRIES,
+                )
+            } else {
+                Vec::new()
+            };
+
+            let merged = if !self.reminder_file_tracker_state.is_empty() {
+                // Merge: persisted state has priority for same paths (newer reads)
+                cocode_system_reminder::merge_file_read_state(
+                    history_state,
+                    self.reminder_file_tracker_state,
+                )
+            } else {
+                history_state
+            };
+
             let tracker = FileTracker::new();
-            for (path, state) in self.reminder_file_tracker_state {
+            for (path, state) in merged {
                 tracker.record_read_with_state(path, state);
             }
             Arc::new(tokio::sync::Mutex::new(tracker))
-        } else {
-            Arc::new(tokio::sync::Mutex::new(FileTracker::new()))
         };
         // Use provided approval store or create a fresh one
         let shared_approval_store = self
@@ -625,6 +669,7 @@ impl AgentLoopBuilder {
             question_responder: self
                 .question_responder
                 .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
+            pending_compacted_large_files: Vec::new(),
         }
     }
 }
@@ -703,16 +748,12 @@ impl AgentLoop {
 
     /// Get the current file tracker state for persistence.
     ///
-    /// Returns a snapshot of all tracked files and their read state.
+    /// Returns a read-only snapshot of all tracked files and their read state.
     /// Called by `SessionState` after the loop finishes to preserve file tracker
     /// state for already-read detection across turns.
-    pub fn reminder_file_tracker_state(&self) -> Vec<(std::path::PathBuf, FileReadState)> {
-        let tracker = self.shared_tools_file_tracker.blocking_lock();
-        tracker
-            .read_files_with_state()
-            .into_iter()
-            .map(|(p, s)| (p, s.clone()))
-            .collect()
+    pub async fn reminder_file_tracker_snapshot(&self) -> Vec<(std::path::PathBuf, FileReadState)> {
+        let tracker = self.shared_tools_file_tracker.lock().await;
+        tracker.read_files_snapshot()
     }
 
     /// Subscribe to status updates.
@@ -1133,10 +1174,16 @@ impl AgentLoop {
             self.restore_file_tracker_for_rewind(to_turn).await;
         }
 
-        // Generate system reminders with file tracker lock
-        let (injected_messages, at_mention_file_reads) = {
-            let file_tracker = self.shared_tools_file_tracker.lock().await;
+        // Build per-turn derived tracker view (snapshot + release lock immediately)
+        // This avoids holding the tools tracker lock during the entire generation phase.
+        let reminder_tracker_view = self.build_reminder_tracker_view().await;
 
+        // Create shared mention_read_records buffer for generators to push into
+        let mention_read_records =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::<MentionReadRecord>::new()));
+
+        // Generate system reminders with derived tracker view (lock NOT held)
+        let injected_messages = {
             let mut builder = GeneratorContext::builder()
                 .config(&reminder_config)
                 .turn_number(turn_number)
@@ -1144,15 +1191,30 @@ impl AgentLoop {
                 .has_user_input(has_user_input)
                 .context_window(context_window)
                 .cwd(cwd.clone())
-                .file_tracker(&*file_tracker)
+                .file_tracker(&reminder_tracker_view)
                 .is_plan_mode(is_plan_mode)
                 .is_plan_reentry(is_plan_reentry)
                 .is_plan_interview_phase(is_plan_interview_phase)
+                .mention_read_records(mention_read_records.clone())
                 .hook_state(HookState {
                     async_responses,
                     contexts: context_hooks,
                     blocking: blocking_hooks,
                 });
+
+            // Drain pending compacted large files (one-shot: populated during restoration)
+            if !self.pending_compacted_large_files.is_empty() {
+                let drained = std::mem::take(&mut self.pending_compacted_large_files);
+                let large_files: Vec<cocode_system_reminder::CompactedLargeFile> = drained
+                    .into_iter()
+                    .map(|r| cocode_system_reminder::CompactedLargeFile {
+                        path: r.path,
+                        line_count: r.original_tokens as usize, // approximate
+                        byte_size: r.original_size as usize,
+                    })
+                    .collect();
+                builder = builder.compacted_large_files(large_files);
+            }
 
             // Pass user prompt for @mention file injection
             if let Some(ref prompt) = user_prompt_text {
@@ -1237,51 +1299,29 @@ impl AgentLoop {
             let gen_ctx = builder.build();
             let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
 
-            // Extract file_reads from reminders to update FileTracker
-            // This aligns with Claude Code's transparent hijack pattern where
-            // @mention reads update the file state (just like Read tool does)
-            let file_reads: Vec<_> = reminders
-                .iter()
-                .flat_map(|r| r.file_reads.iter())
-                .cloned()
-                .collect();
-
-            let injected_messages = create_injected_messages(reminders);
-            (injected_messages, file_reads)
-        };
-        // File tracker lock is now released
-
-        // Update FileTracker with files read during @mention generation
-        // This ensures subsequent @mentions of the same file use the cache
-        if !at_mention_file_reads.is_empty() {
-            let tracker = self.shared_tools_file_tracker.lock().await;
-            for read_info in at_mention_file_reads {
-                // Build FileReadState based on read_kind
-                let state = match read_info.read_kind {
-                    cocode_system_reminder::FileReadKind::FullContent => {
-                        cocode_tools::FileReadState::complete_with_turn(
-                            read_info.content,
-                            read_info.mtime,
-                            read_info.turn_number,
-                        )
+            // Emit SystemReminderDisplay for silent reminders (UI notification only)
+            for reminder in &reminders {
+                if reminder.is_silent {
+                    if let Some(ref metadata) = reminder.metadata {
+                        self.emit(LoopEvent::SystemReminderDisplay {
+                            reminder_type: reminder.attachment_type.name().to_string(),
+                            payload: serde_json::to_value(metadata).unwrap_or_default(),
+                        })
+                        .await;
                     }
-                    cocode_system_reminder::FileReadKind::PartialContent => {
-                        cocode_tools::FileReadState::partial_with_turn(
-                            read_info.offset.unwrap_or(0),
-                            read_info.limit.unwrap_or(0),
-                            read_info.mtime,
-                            read_info.turn_number,
-                        )
-                    }
-                    cocode_system_reminder::FileReadKind::MetadataOnly => {
-                        cocode_tools::FileReadState::metadata_only(
-                            read_info.mtime,
-                            read_info.turn_number,
-                        )
-                    }
-                };
-                tracker.record_read_with_state(read_info.path, state);
+                }
             }
+
+            create_injected_messages(reminders)
+        };
+
+        // Drain mention_read_records and apply to shared FileTracker
+        // This bridges @mention reads back to the canonical tracker
+        {
+            #[allow(clippy::unwrap_used)]
+            let records: Vec<MentionReadRecord> =
+                std::mem::take(&mut *mention_read_records.lock().unwrap());
+            self.apply_mention_read_records(&records).await;
         }
 
         // Consume one-shot flags after generating reminders
@@ -2259,6 +2299,96 @@ impl AgentLoop {
         (outcome.compacted_count, tokens_saved)
     }
 
+    /// Build a per-turn derived FileTracker view from the shared tracker snapshot.
+    ///
+    /// Creates a temporary FileTracker populated with a read-only snapshot of the
+    /// shared tools tracker. This allows system reminder generators to read file
+    /// state without holding the shared tracker lock during the entire generation
+    /// phase.
+    ///
+    /// # Claude Code Alignment
+    ///
+    /// CODEX's per-turn derived tracker view pattern: snapshot → release lock →
+    /// pass view to generators → bridge mention reads back afterward.
+    async fn build_reminder_tracker_view(&self) -> FileTracker {
+        let snapshot = {
+            let tools_tracker = self.shared_tools_file_tracker.lock().await;
+            tools_tracker.read_files_snapshot()
+        };
+        // Lock is released here
+        let tracker = FileTracker::new();
+        tracker.replace_snapshot(snapshot);
+        tracker
+    }
+
+    /// Apply mention read records from system reminder generation to the shared tracker.
+    ///
+    /// After `generate_all()` completes, generators may have pushed `MentionReadRecord`
+    /// entries into the shared buffer. This method drains those records and applies
+    /// them to the canonical shared tools FileTracker.
+    async fn apply_mention_read_records(&self, records: &[MentionReadRecord]) {
+        if records.is_empty() {
+            return;
+        }
+        let tracker = self.shared_tools_file_tracker.lock().await;
+        for record in records {
+            let state = match record.read_kind {
+                cocode_protocol::FileReadKind::FullContent => FileReadState::complete_with_turn(
+                    record.content.clone(),
+                    record.last_modified,
+                    record.read_turn,
+                ),
+                cocode_protocol::FileReadKind::PartialContent => FileReadState::partial_with_turn(
+                    record.offset.unwrap_or(0),
+                    record.limit.unwrap_or(0),
+                    record.last_modified,
+                    record.read_turn,
+                ),
+                cocode_protocol::FileReadKind::MetadataOnly => {
+                    FileReadState::metadata_only(record.last_modified, record.read_turn)
+                }
+            };
+            tracker.record_read_with_state(record.path.clone(), state);
+        }
+        debug!(
+            count = records.len(),
+            "Applied mention read records to FileTracker"
+        );
+    }
+
+    /// Rebuild FileTracker from restored file context after compaction.
+    ///
+    /// After compaction restores files, the FileTracker must be rebuilt to match
+    /// the restored context. This replaces ALL tracker entries with entries
+    /// derived from the restored files.
+    ///
+    /// # Claude Code Alignment
+    ///
+    /// Claude Code clears readFileState entirely during compaction and rebuilds
+    /// from restored files only.
+    async fn rebuild_trackers_from_restored_files(&self, files: &[FileRestoration]) {
+        let mut entries = Vec::with_capacity(files.len());
+        for file in files {
+            let file_mtime = std::fs::metadata(&file.path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            entries.push((
+                file.path.clone(),
+                FileReadState::complete_with_turn(
+                    file.content.clone(),
+                    file_mtime,
+                    self.turn_number,
+                ),
+            ));
+        }
+        let tracker = self.shared_tools_file_tracker.lock().await;
+        tracker.replace_snapshot(entries);
+        debug!(
+            files_count = files.len(),
+            "Rebuilt FileTracker from restored files"
+        );
+    }
+
     /// Restore FileTracker state for rewind.
     ///
     /// When a rewind occurs, the FileTracker needs to be restored to match
@@ -2819,14 +2949,14 @@ impl AgentLoop {
     /// # Arguments
     /// * `invoked_skills` - Skills that were invoked before compaction
     /// * `task_status` - Task status restoration data
-    async fn restore_context_after_compaction(
-        &mut self,
-        invoked_skills: &[InvokedSkillRestoration],
-        task_status: &TaskStatusRestoration,
-    ) {
-        // Get file restoration config
-        let file_config = &self.compact_config.file_restoration;
-
+    /// Collect tracked files suitable for context restoration after compaction.
+    ///
+    /// Reads current content from disk, applies exclusion patterns, skips internal
+    /// files, and limits to the configured max_files count.
+    async fn collect_restorable_tracked_files(
+        &self,
+        file_config: &FileRestorationConfig,
+    ) -> Vec<FileRestoration> {
         // Collect files from the file tracker (Layer 2)
         let tracker = self.shared_tools_file_tracker.lock().await;
         let tracked_files = tracker.tracked_files();
@@ -2900,6 +3030,19 @@ impl AgentLoop {
             files_for_restoration.truncate(file_config.max_files as usize);
         }
 
+        files_for_restoration
+    }
+
+    async fn restore_context_after_compaction(
+        &mut self,
+        invoked_skills: &[InvokedSkillRestoration],
+        task_status: &TaskStatusRestoration,
+    ) {
+        // Get file restoration config
+        let file_config = &self.compact_config.file_restoration;
+
+        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
+
         // Build todo list from task status
         let todos = if !task_status.tasks.is_empty() {
             let todo_text = task_status
@@ -2939,6 +3082,10 @@ impl AgentLoop {
             file_config,
         );
 
+        // Transfer compacted large file references so CompactFileReferenceGenerator
+        // can notify the model on the next turn (one-shot drain pattern)
+        self.pending_compacted_large_files = restoration.compacted_large_files.clone();
+
         // Format and inject restoration message if there's content to restore
         let restoration_message = format_restoration_message(&restoration);
         if !restoration_message.is_empty() {
@@ -2950,6 +3097,13 @@ impl AgentLoop {
                 skills_count = restoration.skills.len(),
                 "Context restoration completed"
             );
+
+            // Rebuild FileTracker from restored files (Claude Code alignment: C4)
+            // After compaction, the tracker must reflect the restored context only
+            if !restoration.files.is_empty() {
+                self.rebuild_trackers_from_restored_files(&restoration.files)
+                    .await;
+            }
 
             // Emit context restoration event
             self.emit(LoopEvent::ContextRestored {
@@ -3040,6 +3194,24 @@ impl AgentLoop {
             post_tokens,
         })
         .await;
+
+        // Keep tracker consistent after session memory compact (Claude Code alignment)
+        // Without this, tracker state becomes stale and large compacted files are never
+        // notified to the model after Tier 1 compaction.
+        let file_config = &self.compact_config.file_restoration;
+        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
+        let restoration = build_context_restoration_with_config(
+            files_for_restoration,
+            None,
+            None,
+            Vec::new(),
+            file_config,
+        );
+        self.pending_compacted_large_files = restoration.compacted_large_files;
+        if !restoration.files.is_empty() {
+            self.rebuild_trackers_from_restored_files(&restoration.files)
+                .await;
+        }
 
         Ok(())
     }
