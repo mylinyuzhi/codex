@@ -104,6 +104,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -120,6 +121,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

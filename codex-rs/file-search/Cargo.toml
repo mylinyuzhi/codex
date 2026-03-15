@@ -16,6 +16,7 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
+codex-file-ignore = { workspace = true }
 ignore = { workspace = true }
 nucleo = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

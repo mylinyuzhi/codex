@@ -1,0 +1,430 @@
+//! Plugin registry for runtime plugin management.
+//!
+//! The registry tracks loaded plugins and provides access to their contributions.
+
+use crate::command::PluginCommand;
+use crate::contribution::PluginContribution;
+#[cfg(test)]
+use crate::error::PluginError;
+use crate::error::Result;
+use crate::error::plugin_error::AlreadyRegisteredSnafu;
+use crate::loader::LoadedPlugin;
+use crate::lsp_loader::LspServerConfig;
+use crate::mcp::McpServerConfig;
+use crate::scope::PluginScope;
+
+use cocode_hooks::HookDefinition;
+use cocode_hooks::HookRegistry;
+use cocode_skill::SkillManager;
+use cocode_skill::SkillPromptCommand;
+use cocode_subagent::AgentDefinition;
+use cocode_subagent::SubagentManager;
+use std::collections::HashMap;
+use tracing::debug;
+use tracing::info;
+
+/// Registry for managing loaded plugins.
+///
+/// The registry tracks plugins and provides access to their contributions.
+/// It can also integrate with the skill manager and hook registry.
+#[derive(Debug, Default)]
+pub struct PluginRegistry {
+    /// Loaded plugins indexed by name.
+    plugins: HashMap<String, LoadedPlugin>,
+}
+
+impl PluginRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a loaded plugin.
+    ///
+    /// Returns an error if a plugin with the same name is already registered.
+    pub fn register(&mut self, plugin: LoadedPlugin) -> Result<()> {
+        let name = plugin.name().to_string();
+
+        if self.plugins.contains_key(&name) {
+            return Err(AlreadyRegisteredSnafu { name }.build());
+        }
+
+        debug!(
+            name = %name,
+            scope = %plugin.scope,
+            contributions = plugin.contributions.len(),
+            "Registered plugin"
+        );
+
+        self.plugins.insert(name, plugin);
+        Ok(())
+    }
+
+    /// Register multiple plugins.
+    ///
+    /// Plugins are registered in order. If a duplicate is found, it is skipped
+    /// with a warning.
+    pub fn register_all(&mut self, plugins: Vec<LoadedPlugin>) {
+        for plugin in plugins {
+            if let Err(e) = self.register(plugin) {
+                tracing::warn!(error = %e, "Skipping duplicate plugin");
+            }
+        }
+    }
+
+    /// Unregister a plugin by name.
+    pub fn unregister(&mut self, name: &str) -> Option<LoadedPlugin> {
+        self.plugins.remove(name)
+    }
+
+    /// Get a plugin by name.
+    pub fn get(&self, name: &str) -> Option<&LoadedPlugin> {
+        self.plugins.get(name)
+    }
+
+    /// Check if a plugin is registered.
+    pub fn has(&self, name: &str) -> bool {
+        self.plugins.contains_key(name)
+    }
+
+    /// Get all plugin names.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<_> = self.plugins.keys().map(String::as_str).collect();
+        names.sort();
+        names
+    }
+
+    /// Get all plugins.
+    pub fn all(&self) -> impl Iterator<Item = &LoadedPlugin> {
+        self.plugins.values()
+    }
+
+    /// Get the number of registered plugins.
+    pub fn len(&self) -> usize {
+        self.plugins.len()
+    }
+
+    /// Check if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.plugins.is_empty()
+    }
+
+    /// Get all skill contributions.
+    pub fn skill_contributions(&self) -> Vec<(&SkillPromptCommand, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Skill { skill, plugin_name } = c {
+                        Some((skill, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all hook contributions.
+    pub fn hook_contributions(&self) -> Vec<(&HookDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Hook { hook, plugin_name } = c {
+                        Some((hook, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all agent contributions.
+    pub fn agent_contributions(&self) -> Vec<(&AgentDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Agent {
+                        definition,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((definition, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all command contributions.
+    pub fn command_contributions(&self) -> Vec<(&PluginCommand, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Command {
+                        command,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((command, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all MCP server contributions.
+    pub fn mcp_server_contributions(&self) -> Vec<(&McpServerConfig, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::McpServer {
+                        config,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((config, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all LSP server contributions.
+    pub fn lsp_server_contributions(&self) -> Vec<(&LspServerConfig, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::LspServer {
+                        config,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((config, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all output style contributions.
+    pub fn output_style_contributions(
+        &self,
+    ) -> Vec<(&crate::contribution::OutputStyleDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::OutputStyle { style, plugin_name } = c {
+                        Some((style, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Apply all skill contributions to a skill manager.
+    ///
+    /// Skills are registered with a namespaced name (`plugin_name:skill_name`).
+    /// If the original skill name is unambiguous (no other plugin provides a
+    /// skill with the same name), it's also registered as an alias.
+    pub fn apply_skills_to(&self, manager: &mut SkillManager) {
+        let skills = self.skill_contributions();
+        let count = skills.len();
+
+        // Count how many plugins provide each skill name for ambiguity detection
+        let mut name_counts: std::collections::HashMap<String, i32> =
+            std::collections::HashMap::new();
+        for &(skill, _) in &skills {
+            *name_counts.entry(skill.name.clone()).or_insert(0) += 1;
+        }
+
+        for &(skill, plugin_name) in &skills {
+            // Register with namespaced name
+            let namespaced_name = format!("{plugin_name}:{}", skill.name);
+            let mut namespaced_skill = skill.clone();
+            namespaced_skill.name = namespaced_name.clone();
+            debug!(
+                skill = %namespaced_name,
+                plugin = %plugin_name,
+                "Applying namespaced skill from plugin"
+            );
+            manager.register(namespaced_skill);
+
+            // Also register with original name if unambiguous
+            let is_ambiguous = name_counts.get(&skill.name).copied().unwrap_or(0) > 1;
+            if !is_ambiguous {
+                debug!(
+                    skill = %skill.name,
+                    plugin = %plugin_name,
+                    "Registering unambiguous skill alias"
+                );
+                manager.register(skill.clone());
+            } else {
+                debug!(
+                    skill = %skill.name,
+                    plugin = %plugin_name,
+                    "Skipping ambiguous skill alias (multiple plugins provide this name)"
+                );
+            }
+        }
+
+        if count > 0 {
+            info!(count = count, "Applied skills from plugins");
+        }
+    }
+
+    /// Apply all hook contributions to a hook registry.
+    pub fn apply_hooks_to(&self, registry: &HookRegistry) {
+        let hooks = self.hook_contributions();
+        let count = hooks.len();
+
+        for (hook, plugin_name) in hooks {
+            debug!(
+                hook = %hook.name,
+                plugin = %plugin_name,
+                "Applying hook from plugin"
+            );
+            registry.register(hook.clone());
+        }
+
+        if count > 0 {
+            info!(count = count, "Applied hooks from plugins");
+        }
+    }
+
+    /// Apply all agent contributions to a subagent manager.
+    pub fn apply_agents_to(&self, manager: &mut SubagentManager) {
+        let agents = self.agent_contributions();
+        let count = agents.len();
+
+        for (definition, plugin_name) in agents {
+            debug!(
+                agent = %definition.name,
+                agent_type = %definition.agent_type,
+                plugin = %plugin_name,
+                "Applying agent from plugin"
+            );
+            manager.register_agent_type(definition.clone());
+        }
+
+        if count > 0 {
+            info!(count = count, "Applied agents from plugins");
+        }
+    }
+
+    /// Apply command contributions to skill manager and subagent manager.
+    ///
+    /// Commands with `Skill` handlers are registered as skills.
+    /// Commands with `Agent` handlers register agent definitions in the
+    /// subagent manager (if provided).
+    pub fn apply_commands_to(
+        &self,
+        skill_manager: &mut SkillManager,
+        mut subagent_manager: Option<&mut SubagentManager>,
+    ) {
+        use crate::command::CommandHandler;
+
+        let commands = self.command_contributions();
+        if commands.is_empty() {
+            return;
+        }
+
+        let mut skills_added = 0;
+        let mut agents_added = 0;
+
+        for (cmd, plugin_name) in commands {
+            match &cmd.handler {
+                CommandHandler::Skill { skill_name } => {
+                    // Look up the skill by name; if it exists, register a command alias
+                    if let Some(skill) = skill_manager.get(skill_name) {
+                        let mut alias = skill.clone();
+                        alias.name = cmd.name.clone();
+                        alias.description = cmd.description.clone();
+                        skill_manager.register(alias);
+                        skills_added += 1;
+                    } else {
+                        debug!(
+                            command = %cmd.name,
+                            skill = %skill_name,
+                            plugin = %plugin_name,
+                            "Command references unknown skill"
+                        );
+                    }
+                }
+                CommandHandler::Agent { agent_type } => {
+                    if let Some(ref mut manager) = subagent_manager {
+                        let definition = AgentDefinition {
+                            name: cmd.name.clone(),
+                            description: cmd.description.clone(),
+                            agent_type: agent_type.clone(),
+                            tools: Vec::new(),
+                            disallowed_tools: Vec::new(),
+                            identity: None,
+                            max_turns: None,
+                            permission_mode: None,
+                            fork_context: false,
+                            color: None,
+                            critical_reminder: None,
+                            source: cocode_subagent::AgentSource::Plugin,
+                            skills: Vec::new(),
+                            background: false,
+                            memory: None,
+                            hooks: None,
+                            mcp_servers: None,
+                            isolation: None,
+                            use_custom_prompt: false,
+                        };
+                        manager.register_agent_type(definition);
+                        agents_added += 1;
+                    }
+                }
+                CommandHandler::Shell { .. } => {
+                    debug!(
+                        command = %cmd.name,
+                        plugin = %plugin_name,
+                        "Shell commands not yet wired"
+                    );
+                }
+            }
+        }
+
+        if skills_added > 0 || agents_added > 0 {
+            info!(
+                skills = skills_added,
+                agents = agents_added,
+                "Applied commands from plugins"
+            );
+        }
+    }
+
+    /// Get plugins by scope.
+    pub fn by_scope(&self, scope: PluginScope) -> Vec<&LoadedPlugin> {
+        self.plugins.values().filter(|p| p.scope == scope).collect()
+    }
+
+    /// Clear all registered plugins.
+    pub fn clear(&mut self) {
+        self.plugins.clear();
+    }
+}
+
+#[cfg(test)]
+#[path = "registry.test.rs"]
+mod tests;

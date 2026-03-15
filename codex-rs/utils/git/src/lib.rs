@@ -8,6 +8,11 @@ mod ghost_commits;
 mod operations;
 mod platform;
 
+// Basic git operations
+pub use operations::commit_all;
+pub use operations::get_head_commit;
+pub use operations::get_uncommitted_changes;
+
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
 pub use apply::apply_git_patch;
