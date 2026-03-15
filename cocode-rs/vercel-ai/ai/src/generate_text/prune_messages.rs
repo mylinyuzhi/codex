@@ -202,7 +202,7 @@ fn prune_tool_calls(
 
                     // Remove tool messages from earlier messages
                     if matches!(msg, LanguageModelV4Message::Tool { .. }) {
-                        return LanguageModelV4Message::User {
+                        return LanguageModelV4Message::Tool {
                             content: vec![],
                             provider_options: None,
                         }; // Will be filtered if remove_empty
@@ -212,7 +212,126 @@ fn prune_tool_calls(
                 })
                 .collect()
         }
-        ToolCallsPruneMode::Custom { .. } => messages, // TODO: implement custom pruning
+        ToolCallsPruneMode::Custom { mode, tools } => {
+            prune_tool_calls_custom(messages, *mode, tools.as_deref())
+        }
+    }
+}
+
+/// Check whether a tool name should be pruned given an optional filter list.
+///
+/// If `tool_filter` is `None`, all tools are pruned. If `Some`, only tools
+/// whose name appears in the list are pruned.
+fn should_prune_tool(tool_name: &str, tool_filter: Option<&[String]>) -> bool {
+    match tool_filter {
+        None => true,
+        Some(names) => names.iter().any(|n| n == tool_name),
+    }
+}
+
+/// Filter assistant content parts, removing tool calls/results that match
+/// the tool filter.
+fn filter_assistant_content(
+    content: &[vercel_ai_provider::AssistantContentPart],
+    tool_filter: Option<&[String]>,
+) -> Vec<vercel_ai_provider::AssistantContentPart> {
+    content
+        .iter()
+        .filter(|part| match part {
+            vercel_ai_provider::AssistantContentPart::ToolCall(tc) => {
+                !should_prune_tool(&tc.tool_name, tool_filter)
+            }
+            vercel_ai_provider::AssistantContentPart::ToolResult(tr) => {
+                !should_prune_tool(&tr.tool_name, tool_filter)
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect()
+}
+
+/// Filter tool content parts, removing tool results that match the tool filter.
+fn filter_tool_content(
+    content: &[vercel_ai_provider::ToolContentPart],
+    tool_filter: Option<&[String]>,
+) -> Vec<vercel_ai_provider::ToolContentPart> {
+    content
+        .iter()
+        .filter(|part| match part {
+            vercel_ai_provider::ToolContentPart::ToolResult(tr) => {
+                !should_prune_tool(&tr.tool_name, tool_filter)
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect()
+}
+
+fn prune_tool_calls_custom(
+    messages: Vec<LanguageModelV4Message>,
+    mode: ToolCallsPruneModeInner,
+    tool_filter: Option<&[String]>,
+) -> Vec<LanguageModelV4Message> {
+    match mode {
+        ToolCallsPruneModeInner::None => {
+            // Keep all tool calls -- return messages unchanged.
+            messages
+        }
+        ToolCallsPruneModeInner::All => {
+            // Remove matching tool calls/results from every message.
+            messages
+                .into_iter()
+                .map(|msg| match msg {
+                    LanguageModelV4Message::Assistant {
+                        ref content,
+                        ref provider_options,
+                    } => LanguageModelV4Message::Assistant {
+                        content: filter_assistant_content(content, tool_filter),
+                        provider_options: provider_options.clone(),
+                    },
+                    LanguageModelV4Message::Tool {
+                        ref content,
+                        ref provider_options,
+                    } => LanguageModelV4Message::Tool {
+                        content: filter_tool_content(content, tool_filter),
+                        provider_options: provider_options.clone(),
+                    },
+                    other => other,
+                })
+                .collect()
+        }
+        ToolCallsPruneModeInner::BeforeLastMessage => {
+            // Only prune messages before the last one.
+            let len = messages.len();
+            messages
+                .into_iter()
+                .enumerate()
+                .map(|(idx, msg)| {
+                    // Keep the last message untouched.
+                    if idx >= len - 1 {
+                        return msg;
+                    }
+
+                    match msg {
+                        LanguageModelV4Message::Assistant {
+                            ref content,
+                            ref provider_options,
+                        } => LanguageModelV4Message::Assistant {
+                            content: filter_assistant_content(content, tool_filter),
+                            provider_options: provider_options.clone(),
+                        },
+                        LanguageModelV4Message::Tool {
+                            ref content,
+                            ref provider_options,
+                        } => LanguageModelV4Message::Tool {
+                            content: filter_tool_content(content, tool_filter),
+                            provider_options: provider_options.clone(),
+                        },
+                        other => other,
+                    }
+                })
+                .collect()
+        }
     }
 }
 

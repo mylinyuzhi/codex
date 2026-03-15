@@ -58,6 +58,10 @@ pub struct ImageModelV4CallOptions {
     pub style: Option<ImageStyle>,
     /// The response format.
     pub response_format: Option<ImageResponseFormat>,
+    /// Aspect ratio of the generated images (e.g., "16:9", "1:1").
+    pub aspect_ratio: Option<String>,
+    /// Seed for deterministic generation.
+    pub seed: Option<i64>,
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
     /// Abort signal for cancellation.
@@ -102,6 +106,18 @@ impl ImageModelV4CallOptions {
     /// Set the response format.
     pub fn with_response_format(mut self, format: ImageResponseFormat) -> Self {
         self.response_format = Some(format);
+        self
+    }
+
+    /// Set the aspect ratio.
+    pub fn with_aspect_ratio(mut self, aspect_ratio: impl Into<String>) -> Self {
+        self.aspect_ratio = Some(aspect_ratio.into());
+        self
+    }
+
+    /// Set the seed.
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = Some(seed);
         self
     }
 

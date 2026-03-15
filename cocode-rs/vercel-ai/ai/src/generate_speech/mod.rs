@@ -8,6 +8,7 @@ mod generate_speech;
 mod speech_result;
 
 pub use generate_speech::GenerateSpeechOptions;
+pub use generate_speech::SpeechModel;
 pub use generate_speech::generate_speech;
 pub use speech_result::GeneratedAudioFile;
 pub use speech_result::SpeechResult;

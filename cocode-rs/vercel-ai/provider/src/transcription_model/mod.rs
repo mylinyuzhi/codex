@@ -7,6 +7,7 @@ pub mod v4;
 // Re-export v4 types at this level
 pub use v4::TranscriptionModelV4;
 pub use v4::TranscriptionModelV4CallOptions;
+pub use v4::TranscriptionModelV4Request;
+pub use v4::TranscriptionModelV4Response;
 pub use v4::TranscriptionModelV4Result;
-pub use v4::TranscriptionSegment;
-pub use v4::TranscriptionWord;
+pub use v4::TranscriptionSegmentV4;

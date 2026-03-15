@@ -17,6 +17,22 @@ fn test_step_result_new() {
 }
 
 #[test]
+fn test_step_result_with_model() {
+    let step = StepResult::new(
+        0,
+        "Hello".to_string(),
+        Usage::default(),
+        FinishReason::stop(),
+    )
+    .with_model(CallbackModelInfo::new("openai", "gpt-4"));
+
+    assert_eq!(step.model.provider, "openai");
+    assert_eq!(step.model.model_id, "gpt-4");
+    assert_eq!(step.model_id(), "gpt-4");
+    assert_eq!(step.provider_id(), "openai");
+}
+
+#[test]
 fn test_step_result_with_tools() {
     let tool_call = ToolCall::new("id_1", "test_tool", json!({}));
     let tool_result = ToolResult::new("id_1", "test_tool", json!({}));
@@ -73,4 +89,65 @@ fn test_step_result_message_types() {
     assert!(types.contains(&"text"));
     assert!(types.contains(&"tool_calls"));
     assert!(types.contains(&"tool_results"));
+}
+
+#[test]
+fn test_step_result_telemetry_fields() {
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("key".to_string(), json!("value"));
+
+    let step = StepResult::new(
+        0,
+        "Hello".to_string(),
+        Usage::default(),
+        FinishReason::stop(),
+    )
+    .with_function_id("my-function")
+    .with_metadata(metadata.clone())
+    .with_raw_finish_reason("stop");
+
+    assert_eq!(step.function_id, Some("my-function".to_string()));
+    assert_eq!(step.raw_finish_reason, Some("stop".to_string()));
+    assert!(step.metadata.is_some());
+    assert_eq!(step.metadata.unwrap()["key"], json!("value"));
+}
+
+#[test]
+fn test_step_result_convenience_setters() {
+    let step = StepResult::new(
+        0,
+        "Hello".to_string(),
+        Usage::default(),
+        FinishReason::stop(),
+    )
+    .with_model_id("gpt-4")
+    .with_provider_id("openai");
+
+    assert_eq!(step.model.model_id, "gpt-4");
+    assert_eq!(step.model.provider, "openai");
+}
+
+#[test]
+fn test_step_result_experimental_context() {
+    let step = StepResult::new(
+        0,
+        "Hello".to_string(),
+        Usage::default(),
+        FinishReason::stop(),
+    )
+    .with_experimental_context(json!({"key": "value"}));
+
+    assert_eq!(step.experimental_context, Some(json!({"key": "value"})));
+}
+
+#[test]
+fn test_step_result_no_experimental_context() {
+    let step = StepResult::new(
+        0,
+        "Hello".to_string(),
+        Usage::default(),
+        FinishReason::stop(),
+    );
+
+    assert!(step.experimental_context.is_none());
 }

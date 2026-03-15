@@ -12,9 +12,8 @@ mod message;
 mod message_conversion_error;
 mod prepare_call_settings;
 mod prepare_tools_and_tool_choice;
-#[allow(clippy::module_inception)]
-mod prompt;
 mod standardize;
+mod types;
 mod wrap_gateway_error;
 
 pub use call_settings::CallSettings;
@@ -59,13 +58,13 @@ pub use prepare_tools_and_tool_choice::is_tool_call_disabled;
 pub use prepare_tools_and_tool_choice::is_tool_call_required;
 pub use prepare_tools_and_tool_choice::prepare_tool_definitions;
 pub use prepare_tools_and_tool_choice::prepare_tools_and_tool_choice;
-pub use prompt::Prompt;
-pub use prompt::PromptContent;
-pub use prompt::SystemPrompt;
 pub use standardize::StandardizedPrompt;
 pub use standardize::standardize_messages_prompt;
 pub use standardize::standardize_prompt;
 pub use standardize::standardize_text_prompt;
+pub use types::Prompt;
+pub use types::PromptContent;
+pub use types::SystemPrompt;
 pub use wrap_gateway_error::get_user_friendly_message;
 pub use wrap_gateway_error::is_gateway_error_retryable;
 pub use wrap_gateway_error::wrap_gateway_error;

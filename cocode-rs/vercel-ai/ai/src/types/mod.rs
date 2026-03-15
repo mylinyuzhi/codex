@@ -4,6 +4,7 @@
 //! for convenience.
 
 mod response_metadata;
+mod usage;
 
 // Re-export content types
 pub use vercel_ai_provider::AssistantContentPart;
@@ -28,8 +29,6 @@ pub use vercel_ai_provider::LanguageModelV4ToolChoice;
 pub use vercel_ai_provider::ToolInvocation;
 pub use vercel_ai_provider::language_model::v4::function_tool::LanguageModelV4FunctionTool;
 
-// Legacy aliases for backward compatibility during migration
-pub type ToolDefinitionV4 = LanguageModelV4FunctionTool;
 pub type ToolChoice = LanguageModelV4ToolChoice;
 
 // Re-export usage types
@@ -84,5 +83,26 @@ pub use vercel_ai_provider_utils::ToolExecutionOptions;
 pub use vercel_ai_provider_utils::ToolRegistry;
 
 // Re-export response metadata
+pub use response_metadata::ImageModelResponseMetadata;
 pub use response_metadata::LanguageModelRequestMetadata;
 pub use response_metadata::LanguageModelResponseMetadata;
+pub use response_metadata::SpeechModelResponseMetadata;
+pub use response_metadata::TranscriptionModelResponseMetadata;
+pub use response_metadata::VideoModelResponseMetadata;
+
+/// Type alias matching the TS SDK's `CallWarning` type.
+pub type CallWarning = Warning;
+
+// Re-export usage types
+pub use usage::InputTokenDetails;
+pub use usage::LanguageModelUsage;
+pub use usage::OutputTokenDetails;
+pub use usage::add_image_model_usage;
+pub use usage::add_language_model_usage;
+pub use usage::as_language_model_usage;
+pub use usage::create_null_language_model_usage;
+
+/// Type alias for image model usage (re-export from provider).
+pub type ImageModelUsage = vercel_ai_provider::ImageModelV4Usage;
+/// Type alias for embedding model usage (re-export from provider).
+pub type EmbeddingModelUsage = vercel_ai_provider::EmbeddingUsage;

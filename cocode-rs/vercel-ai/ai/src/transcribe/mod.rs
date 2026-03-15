@@ -11,8 +11,5 @@ pub use transcribe::AudioData;
 pub use transcribe::TranscribeOptions;
 pub use transcribe::TranscriptionModel;
 pub use transcribe::transcribe;
-pub use transcribe_result::TimestampGranularity;
-pub use transcribe_result::TranscribedWord;
-pub use transcribe_result::TranscriptionFormat;
 pub use transcribe_result::TranscriptionResult;
 pub use transcribe_result::TranscriptionSegment;

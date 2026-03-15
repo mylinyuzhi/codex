@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::errors::AISdkError;
 use crate::shared::ProviderOptions;
+use crate::shared::Warning;
 
 /// The embedding model trait (V4).
 ///
@@ -129,6 +130,8 @@ pub struct EmbeddingModelV4EmbedResult {
     pub embeddings: Vec<EmbeddingValue>,
     /// Token usage.
     pub usage: EmbeddingUsage,
+    /// Warnings from the provider.
+    pub warnings: Vec<Warning>,
     /// The raw response (for debugging).
     pub raw_response: Option<serde_json::Value>,
 }
@@ -139,6 +142,7 @@ impl EmbeddingModelV4EmbedResult {
         Self {
             embeddings,
             usage,
+            warnings: Vec::new(),
             raw_response: None,
         }
     }

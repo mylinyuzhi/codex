@@ -14,24 +14,16 @@ use crate::types::ProviderOptions;
 
 use super::output::Output;
 
-/// Build `LanguageModelV4CallOptions` from the shared set of parameters.
+/// Apply `CallSettings` fields to existing call options.
 ///
-/// This function applies all settings fields (max_tokens, temperature, top_p,
-/// top_k, stop_sequences, frequency_penalty, presence_penalty, seed, headers),
-/// tools, tool_choice, abort_signal, provider_options, and output/response_format.
-#[allow(clippy::too_many_arguments)]
-pub fn build_call_options(
+/// This mutates the provided `call_options` in place, setting max_tokens,
+/// temperature, top_p, top_k, stop_sequences, frequency_penalty,
+/// presence_penalty, seed, headers, and abort_signal from the settings.
+pub fn apply_call_settings(
+    call_options: &mut LanguageModelV4CallOptions,
     settings: &CallSettings,
-    tool_choice: &Option<LanguageModelV4ToolChoice>,
     abort_signal: &Option<CancellationToken>,
-    provider_options: &Option<ProviderOptions>,
-    output: &Option<Output>,
-    messages: LanguageModelV4Prompt,
-    tool_definitions: &Option<Vec<LanguageModelV4Tool>>,
-) -> LanguageModelV4CallOptions {
-    let mut call_options = LanguageModelV4CallOptions::new(messages);
-
-    // Apply all settings
+) {
     if let Some(max_tokens) = settings.max_tokens {
         call_options.max_output_tokens = Some(max_tokens);
     }
@@ -59,6 +51,30 @@ pub fn build_call_options(
     if let Some(ref headers) = settings.headers {
         call_options.headers = Some(headers.clone());
     }
+    if let Some(signal) = abort_signal {
+        call_options.abort_signal = Some(signal.clone());
+    }
+}
+
+/// Build `LanguageModelV4CallOptions` from the shared set of parameters.
+///
+/// This function applies all settings fields (max_tokens, temperature, top_p,
+/// top_k, stop_sequences, frequency_penalty, presence_penalty, seed, headers),
+/// tools, tool_choice, abort_signal, provider_options, and output/response_format.
+#[allow(clippy::too_many_arguments)]
+pub fn build_call_options(
+    settings: &CallSettings,
+    tool_choice: &Option<LanguageModelV4ToolChoice>,
+    abort_signal: &Option<CancellationToken>,
+    provider_options: &Option<ProviderOptions>,
+    output: &Option<Output>,
+    messages: LanguageModelV4Prompt,
+    tool_definitions: &Option<Vec<LanguageModelV4Tool>>,
+) -> LanguageModelV4CallOptions {
+    let mut call_options = LanguageModelV4CallOptions::new(messages);
+
+    // Apply all settings + abort signal
+    apply_call_settings(&mut call_options, settings, abort_signal);
 
     // Add tools
     if let Some(defs) = tool_definitions {
@@ -66,11 +82,6 @@ pub fn build_call_options(
     }
     if let Some(choice) = tool_choice {
         call_options.tool_choice = Some(choice.clone());
-    }
-
-    // Set abort signal
-    if let Some(signal) = abort_signal {
-        call_options.abort_signal = Some(signal.clone());
     }
 
     // Add provider options (from CallSettings first, then from explicit options)

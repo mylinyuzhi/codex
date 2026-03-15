@@ -48,6 +48,7 @@ impl Default for ResponseData {
 
 /// Result of an `embed` call.
 #[derive(Debug)]
+#[must_use]
 pub struct EmbedResult {
     /// The value that was embedded.
     pub value: String,
@@ -61,6 +62,8 @@ pub struct EmbedResult {
     pub provider_metadata: Option<ProviderMetadata>,
     /// Optional response data.
     pub response: Option<ResponseData>,
+    /// Raw response from the provider (for debugging).
+    pub raw_response: Option<serde_json::Value>,
 }
 
 impl EmbedResult {
@@ -73,6 +76,7 @@ impl EmbedResult {
             warnings: Vec::new(),
             provider_metadata: None,
             response: None,
+            raw_response: None,
         }
     }
 
@@ -94,6 +98,12 @@ impl EmbedResult {
         self
     }
 
+    /// Set raw response.
+    pub fn with_raw_response(mut self, raw_response: serde_json::Value) -> Self {
+        self.raw_response = Some(raw_response);
+        self
+    }
+
     /// Get the dense embedding vector if available.
     pub fn as_dense(&self) -> Option<&Vec<f32>> {
         self.embedding.as_dense()
@@ -102,6 +112,7 @@ impl EmbedResult {
 
 /// Result of an `embed_many` call.
 #[derive(Debug)]
+#[must_use]
 pub struct EmbedManyResult {
     /// The values that were embedded.
     pub values: Vec<String>,
@@ -115,6 +126,8 @@ pub struct EmbedManyResult {
     pub provider_metadata: Option<ProviderMetadata>,
     /// Optional response data for each chunk.
     pub responses: Vec<Option<ResponseData>>,
+    /// Raw responses from the provider (one per chunk call).
+    pub raw_responses: Vec<serde_json::Value>,
 }
 
 impl EmbedManyResult {
@@ -131,6 +144,7 @@ impl EmbedManyResult {
             warnings: Vec::new(),
             provider_metadata: None,
             responses: Vec::new(),
+            raw_responses: Vec::new(),
         }
     }
 
@@ -149,6 +163,12 @@ impl EmbedManyResult {
     /// Set responses.
     pub fn with_responses(mut self, responses: Vec<Option<ResponseData>>) -> Self {
         self.responses = responses;
+        self
+    }
+
+    /// Set raw responses.
+    pub fn with_raw_responses(mut self, raw_responses: Vec<serde_json::Value>) -> Self {
+        self.raw_responses = raw_responses;
         self
     }
 

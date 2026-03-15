@@ -4,6 +4,7 @@ use vercel_ai_provider::ProviderMetadata;
 
 /// Result of a `rerank` call.
 #[derive(Debug)]
+#[must_use]
 pub struct RerankResult<T = String> {
     /// The original documents that were reranked.
     pub original_documents: Vec<T>,
@@ -52,14 +53,14 @@ pub struct RerankedDocument<T = String> {
     /// The index of the document in the original list.
     pub original_index: usize,
     /// The relevance score (0-1).
-    pub score: f32,
+    pub score: f64,
     /// The document.
     pub document: T,
 }
 
 impl<T> RerankedDocument<T> {
     /// Create a new reranked document.
-    pub fn new(original_index: usize, score: f32, document: T) -> Self {
+    pub fn new(original_index: usize, score: f64, document: T) -> Self {
         Self {
             original_index,
             score,
@@ -79,6 +80,8 @@ pub struct RerankResponse {
     pub model_id: String,
     /// Response headers.
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// The raw response body, if available.
+    pub body: Option<serde_json::Value>,
 }
 
 impl RerankResponse {
@@ -89,6 +92,7 @@ impl RerankResponse {
             timestamp: chrono::Utc::now(),
             model_id: model_id.into(),
             headers: None,
+            body: None,
         }
     }
 
@@ -107,6 +111,12 @@ impl RerankResponse {
     /// Set the headers.
     pub fn with_headers(mut self, headers: std::collections::HashMap<String, String>) -> Self {
         self.headers = Some(headers);
+        self
+    }
+
+    /// Set the body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
         self
     }
 }

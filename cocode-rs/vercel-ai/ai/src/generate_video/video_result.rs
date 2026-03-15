@@ -8,6 +8,7 @@ use vercel_ai_provider::Warning;
 
 /// Result of a `generate_video` call.
 #[derive(Debug)]
+#[must_use]
 pub struct GenerateVideoResult {
     /// The generated videos.
     pub videos: Vec<GeneratedVideo>,

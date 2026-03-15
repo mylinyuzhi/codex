@@ -21,7 +21,10 @@ use super::step_result::StepResult;
 
 /// Result of a `generate_text` call.
 #[derive(Debug)]
+#[must_use]
 pub struct GenerateTextResult {
+    /// Unique call ID for this generation session.
+    pub call_id: String,
     /// The generated text content.
     pub text: String,
     /// The content parts from the response.
@@ -66,6 +69,7 @@ impl GenerateTextResult {
     /// Create a new generate text result.
     pub fn new(text: String, usage: Usage, finish_reason: FinishReason) -> Self {
         Self {
+            call_id: String::new(),
             text,
             content: Vec::new(),
             reasoning: Vec::new(),
@@ -102,6 +106,7 @@ impl GenerateTextResult {
         });
 
         Self {
+            call_id: String::new(),
             text,
             content: result.content,
             reasoning,
@@ -200,6 +205,18 @@ pub struct ToolCall {
     pub tool_name: String,
     /// The tool arguments.
     pub args: JSONValue,
+    /// Whether this is a dynamic tool call (true) or static (false).
+    pub dynamic: bool,
+    /// Whether the tool was executed by the provider.
+    pub provider_executed: bool,
+    /// Whether the tool call arguments are invalid (unparsable).
+    pub invalid: bool,
+    /// The error that caused the tool call to be invalid.
+    pub error: Option<String>,
+    /// Display title for the tool call.
+    pub title: Option<String>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
 }
 
 impl ToolCall {
@@ -213,6 +230,12 @@ impl ToolCall {
             tool_call_id: tool_call_id.into(),
             tool_name: tool_name.into(),
             args,
+            dynamic: false,
+            provider_executed: false,
+            invalid: false,
+            error: None,
+            title: None,
+            provider_metadata: None,
         }
     }
 
@@ -221,6 +244,13 @@ impl ToolCall {
         serde_json::from_value(self.args.clone())
     }
 }
+
+/// Static tool call (tools known at compile time).
+pub type StaticToolCall = ToolCall;
+/// Dynamic tool call (dynamically dispatched).
+pub type DynamicToolCall = ToolCall;
+/// Union type matching TS TypedToolCall.
+pub type TypedToolCall = ToolCall;
 
 /// A tool result from an executed tool.
 #[derive(Debug, Clone)]
@@ -233,6 +263,18 @@ pub struct ToolResult {
     pub result: JSONValue,
     /// Whether the result is an error.
     pub is_error: bool,
+    /// The tool input arguments.
+    pub input: Option<JSONValue>,
+    /// Whether this is a dynamic tool result.
+    pub dynamic: bool,
+    /// Whether the tool was executed by the provider.
+    pub provider_executed: bool,
+    /// Whether this is a preliminary (streaming partial) result.
+    pub preliminary: bool,
+    /// Display title for the tool result.
+    pub title: Option<String>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
 }
 
 impl ToolResult {
@@ -247,6 +289,12 @@ impl ToolResult {
             tool_name: tool_name.into(),
             result,
             is_error: false,
+            input: None,
+            dynamic: false,
+            provider_executed: false,
+            preliminary: false,
+            title: None,
+            provider_metadata: None,
         }
     }
 
@@ -261,6 +309,12 @@ impl ToolResult {
             tool_name: tool_name.into(),
             result: serde_json::json!({ "error": error.into() }),
             is_error: true,
+            input: None,
+            dynamic: false,
+            provider_executed: false,
+            preliminary: false,
+            title: None,
+            provider_metadata: None,
         }
     }
 
@@ -269,6 +323,13 @@ impl ToolResult {
         serde_json::from_value(self.result.clone())
     }
 }
+
+/// Static tool result (tools known at compile time).
+pub type StaticToolResult = ToolResult;
+/// Dynamic tool result (dynamically dispatched).
+pub type DynamicToolResult = ToolResult;
+/// Union type matching TS TypedToolResult.
+pub type TypedToolResult = ToolResult;
 
 #[cfg(test)]
 #[path = "generate_text_result.test.rs"]

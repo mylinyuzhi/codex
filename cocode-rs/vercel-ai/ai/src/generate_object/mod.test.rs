@@ -16,10 +16,10 @@ fn test_generate_object_options() {
 #[test]
 fn test_parse_partial_json() {
     let partial = r#"{"name": "test"#;
-    let result = parse_partial_json(partial);
-    assert!(result.is_ok());
+    let result = crate::util::parse_partial_json(partial);
+    assert!(result.is_some());
 
     let complete = r#"{"name": "test"}"#;
-    let result = parse_partial_json(complete);
-    assert!(result.is_ok());
+    let result = crate::util::parse_partial_json(complete);
+    assert!(result.is_some());
 }

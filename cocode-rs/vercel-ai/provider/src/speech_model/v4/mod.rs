@@ -4,13 +4,13 @@
 //! that follow the Vercel AI SDK v4 specification.
 
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::errors::AISdkError;
+use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
+use crate::shared::Warning;
 
 /// The speech model trait (V4).
 ///
@@ -41,12 +41,16 @@ pub trait SpeechModelV4: Send + Sync {
 pub struct SpeechModelV4CallOptions {
     /// The text to convert to speech.
     pub text: String,
-    /// The voice to use.
-    pub voice: Option<SpeechVoice>,
-    /// The output format.
-    pub response_format: Option<SpeechFormat>,
+    /// The voice to use (plain string, provider-specific identifier).
+    pub voice: Option<String>,
+    /// The output format (plain string, provider-specific identifier).
+    pub output_format: Option<String>,
     /// The speed of the speech (0.25 to 4.0).
     pub speed: Option<f32>,
+    /// Instructions for the speech generation.
+    pub instructions: Option<String>,
+    /// The language for speech generation.
+    pub language: Option<String>,
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
     /// Abort signal for cancellation.
@@ -65,20 +69,32 @@ impl SpeechModelV4CallOptions {
     }
 
     /// Set the voice.
-    pub fn with_voice(mut self, voice: SpeechVoice) -> Self {
-        self.voice = Some(voice);
+    pub fn with_voice(mut self, voice: impl Into<String>) -> Self {
+        self.voice = Some(voice.into());
         self
     }
 
-    /// Set the response format.
-    pub fn with_response_format(mut self, format: SpeechFormat) -> Self {
-        self.response_format = Some(format);
+    /// Set the output format.
+    pub fn with_output_format(mut self, format: impl Into<String>) -> Self {
+        self.output_format = Some(format.into());
         self
     }
 
     /// Set the speed.
     pub fn with_speed(mut self, speed: f32) -> Self {
         self.speed = Some(speed);
+        self
+    }
+
+    /// Set the instructions.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// Set the language.
+    pub fn with_language(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
         self
     }
 
@@ -93,6 +109,12 @@ impl SpeechModelV4CallOptions {
         self.abort_signal = Some(signal);
         self
     }
+
+    /// Set headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
+        self
+    }
 }
 
 /// The result of a speech generation call.
@@ -102,6 +124,14 @@ pub struct SpeechModelV4Result {
     pub audio: Vec<u8>,
     /// The MIME type of the audio.
     pub content_type: String,
+    /// Warnings from the provider.
+    pub warnings: Vec<Warning>,
+    /// Response metadata.
+    pub response: SpeechModelV4Response,
+    /// Request metadata.
+    pub request: Option<SpeechModelV4Request>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
 }
 
 impl SpeechModelV4Result {
@@ -110,6 +140,10 @@ impl SpeechModelV4Result {
         Self {
             audio,
             content_type: content_type.into(),
+            warnings: Vec::new(),
+            response: SpeechModelV4Response::default(),
+            request: None,
+            provider_metadata: None,
         }
     }
 
@@ -122,51 +156,84 @@ impl SpeechModelV4Result {
     pub fn wav(audio: Vec<u8>) -> Self {
         Self::new(audio, "audio/wav")
     }
-}
 
-/// Voice options for speech synthesis.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechVoice {
-    /// The voice ID.
-    pub id: String,
-    /// The voice name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl SpeechVoice {
-    /// Create a new voice.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            name: None,
-        }
+    /// Set warnings.
+    pub fn with_warnings(mut self, warnings: Vec<Warning>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
-    /// Set the voice name.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    /// Set response metadata.
+    pub fn with_response(mut self, response: SpeechModelV4Response) -> Self {
+        self.response = response;
+        self
+    }
+
+    /// Set request metadata.
+    pub fn with_request(mut self, request: SpeechModelV4Request) -> Self {
+        self.request = Some(request);
+        self
+    }
+
+    /// Set provider metadata.
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
         self
     }
 }
 
-/// Audio format options for speech synthesis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SpeechFormat {
-    /// MP3 format.
-    #[default]
-    Mp3,
-    /// Opus format.
-    Opus,
-    /// AAC format.
-    Aac,
-    /// FLAC format.
-    Flac,
-    /// WAV format.
-    Wav,
-    /// PCM format.
-    Pcm,
+/// Response metadata from a speech generation call.
+#[derive(Debug, Clone, Default)]
+pub struct SpeechModelV4Response {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: Option<HashMap<String, String>>,
+    /// The raw response body, if available.
+    pub body: Option<serde_json::Value>,
+}
+
+impl SpeechModelV4Response {
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    /// Set response headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
+        self
+    }
+
+    /// Set the response body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+}
+
+/// Request metadata from a speech generation call.
+#[derive(Debug, Clone, Default)]
+pub struct SpeechModelV4Request {
+    /// The raw request body, if available.
+    pub body: Option<serde_json::Value>,
+}
+
+impl SpeechModelV4Request {
+    /// Set the request body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
 }
 
 #[cfg(test)]

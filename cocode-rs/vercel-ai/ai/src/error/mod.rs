@@ -18,10 +18,6 @@ pub enum AIError {
     #[error("No image was generated")]
     NoImageGenerated,
 
-    /// No video was generated.
-    #[error("No video was generated")]
-    NoVideoGenerated,
-
     /// No video was generated (with response metadata).
     #[error("{0}")]
     NoVideoGeneratedWithResponse(#[from] NoVideoGeneratedError),
@@ -30,9 +26,9 @@ pub enum AIError {
     #[error("No transcript was generated")]
     NoTranscriptGenerated,
 
-    /// No object was generated.
-    #[error("No object was generated")]
-    NoObjectGenerated,
+    /// No object was generated (with detailed metadata).
+    #[error("{0}")]
+    NoObjectGeneratedDetailed(NoObjectGeneratedError),
 
     /// Invalid argument provided.
     #[error("Invalid argument: {0}")]
@@ -97,26 +93,13 @@ pub enum AIError {
     /// JSON error.
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
+
+    /// Internal error.
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 impl AIError {
-    /// Create a new error with a type and message.
-    pub fn new(kind: &str, message: impl Into<String>) -> Self {
-        match kind {
-            "NoOutputGenerated" => Self::NoOutputGenerated,
-            "NoSpeechGenerated" => Self::NoSpeechGenerated,
-            "NoImageGenerated" => Self::NoImageGenerated,
-            "NoVideoGenerated" => Self::NoVideoGenerated,
-            "NoTranscriptGenerated" => Self::NoTranscriptGenerated,
-            "NoObjectGenerated" => Self::NoObjectGenerated,
-            "InvalidArgument" => Self::InvalidArgument(message.into()),
-            "MaxStepsExceeded" => Self::MaxStepsExceeded(message.into().parse().unwrap_or(0)),
-            "ToolExecutionFailed" => Self::ToolExecutionFailed(message.into()),
-            "SchemaValidation" => Self::SchemaValidation(message.into()),
-            _ => Self::InvalidArgument(format!("{}: {}", kind, message.into())),
-        }
-    }
-
     /// Check if this is a no output generated error.
     pub fn is_no_output(&self) -> bool {
         matches!(self, Self::NoOutputGenerated)
@@ -134,7 +117,7 @@ impl AIError {
 
     /// Check if this is a no video generated error.
     pub fn is_no_video(&self) -> bool {
-        matches!(self, Self::NoVideoGenerated)
+        matches!(self, Self::NoVideoGeneratedWithResponse(_))
     }
 
     /// Check if this is a no transcript generated error.
@@ -144,12 +127,12 @@ impl AIError {
 
     /// Check if this is a no object generated error.
     pub fn is_no_object(&self) -> bool {
-        matches!(self, Self::NoObjectGenerated)
+        matches!(self, Self::NoObjectGeneratedDetailed(_))
     }
 }
 
 /// Error thrown when no output is generated.
-#[derive(Debug, Error)]
+#[derive(Debug, Default, Error)]
 #[error("No output generated")]
 pub struct NoOutputGeneratedError {
     /// The prompt that was sent to the model.
@@ -161,10 +144,7 @@ pub struct NoOutputGeneratedError {
 impl NoOutputGeneratedError {
     /// Create a new no output generated error.
     pub fn new() -> Self {
-        Self {
-            prompt: None,
-            model_id: None,
-        }
+        Self::default()
     }
 
     /// Add the prompt that was sent to the model.
@@ -177,12 +157,6 @@ impl NoOutputGeneratedError {
     pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
         self.model_id = Some(model_id.into());
         self
-    }
-}
-
-impl Default for NoOutputGeneratedError {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -247,48 +221,10 @@ impl SchemaValidationError {
     }
 }
 
-/// Response metadata for video generation.
-#[derive(Debug, Clone)]
-pub struct VideoModelResponseMetadata {
-    /// The timestamp of the response.
-    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    /// The model ID used.
-    pub model_id: Option<String>,
-    /// Response headers.
-    pub headers: std::collections::HashMap<String, String>,
-}
-
-impl VideoModelResponseMetadata {
-    /// Create new response metadata.
-    pub fn new() -> Self {
-        Self {
-            timestamp: None,
-            model_id: None,
-            headers: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Set the timestamp.
-    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
-        self.timestamp = Some(timestamp);
-        self
-    }
-
-    /// Set the model ID.
-    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
-        self.model_id = Some(model_id.into());
-        self
-    }
-}
-
-impl Default for VideoModelResponseMetadata {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use crate::types::VideoModelResponseMetadata;
 
 /// Error thrown when no video is generated.
-#[derive(Debug, Error)]
+#[derive(Debug, Default, Error)]
 #[error("No video generated")]
 pub struct NoVideoGeneratedError {
     /// Response metadata from the provider.
@@ -298,9 +234,7 @@ pub struct NoVideoGeneratedError {
 impl NoVideoGeneratedError {
     /// Create a new no video generated error.
     pub fn new() -> Self {
-        Self {
-            responses: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Create with responses.
@@ -312,12 +246,6 @@ impl NoVideoGeneratedError {
     pub fn with_response(mut self, response: VideoModelResponseMetadata) -> Self {
         self.responses.push(response);
         self
-    }
-}
-
-impl Default for NoVideoGeneratedError {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -556,3 +484,151 @@ impl UnsupportedModelVersionError {
         }
     }
 }
+
+// ============================================================================
+// Detailed "no X generated" errors with metadata (aligning with TS SDK)
+// ============================================================================
+
+/// Error thrown when no object was generated, with detailed metadata.
+#[derive(Debug, Default, Error)]
+#[error("No object generated{}", .text.as_ref().map(|t| format!(": received text \"{t}\"")).unwrap_or_default())]
+pub struct NoObjectGeneratedError {
+    /// The text output from the model (if any partial text was received).
+    pub text: Option<String>,
+    /// Token usage statistics.
+    pub usage: Option<vercel_ai_provider::Usage>,
+    /// The finish reason from the model.
+    pub finish_reason: Option<vercel_ai_provider::FinishReason>,
+    /// The raw response string.
+    pub raw_response: Option<String>,
+}
+
+impl NoObjectGeneratedError {
+    /// Create a new no object generated error.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the text received.
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    /// Set the usage.
+    pub fn with_usage(mut self, usage: vercel_ai_provider::Usage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    /// Set the finish reason.
+    pub fn with_finish_reason(mut self, finish_reason: vercel_ai_provider::FinishReason) -> Self {
+        self.finish_reason = Some(finish_reason);
+        self
+    }
+
+    /// Set the raw response.
+    pub fn with_raw_response(mut self, raw: impl Into<String>) -> Self {
+        self.raw_response = Some(raw.into());
+        self
+    }
+}
+
+/// Error thrown when no image was generated, with response metadata.
+#[derive(Debug, Default, Error)]
+#[error("No image generated")]
+pub struct NoImageGeneratedError {
+    /// The model ID that was used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: Option<std::collections::HashMap<String, String>>,
+}
+
+impl NoImageGeneratedError {
+    /// Create a new no image generated error.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+}
+
+pub use crate::types::SpeechModelResponseMetadata;
+
+/// Error thrown when no speech was generated, with response metadata.
+#[derive(Debug, Default, Error)]
+#[error("No speech generated")]
+pub struct NoSpeechGeneratedError {
+    /// Response metadata from the provider.
+    pub responses: Vec<SpeechModelResponseMetadata>,
+}
+
+impl NoSpeechGeneratedError {
+    /// Create a new error.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create with responses.
+    pub fn with_responses(responses: Vec<SpeechModelResponseMetadata>) -> Self {
+        Self { responses }
+    }
+}
+
+pub use crate::types::TranscriptionModelResponseMetadata;
+
+/// Error thrown when no transcript was generated, with response metadata.
+#[derive(Debug, Default, Error)]
+#[error("No transcript generated")]
+pub struct NoTranscriptGeneratedError {
+    /// Response metadata from the provider.
+    pub responses: Vec<TranscriptionModelResponseMetadata>,
+}
+
+impl NoTranscriptGeneratedError {
+    /// Create a new error.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create with responses.
+    pub fn with_responses(responses: Vec<TranscriptionModelResponseMetadata>) -> Self {
+        Self { responses }
+    }
+}
+
+/// Error wrapping failed retry attempts.
+#[derive(Debug, Error)]
+#[error("Retry failed after {attempts} attempts: {}", .last_error)]
+pub struct RetryError {
+    /// The errors from each attempt.
+    pub errors: Vec<String>,
+    /// The last (most recent) error message.
+    pub last_error: String,
+    /// The number of attempts made.
+    pub attempts: usize,
+}
+
+impl RetryError {
+    /// Create a new retry error from a list of error messages.
+    pub fn new(errors: Vec<String>) -> Self {
+        let attempts = errors.len();
+        let last_error = errors
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "Unknown error".to_string());
+        Self {
+            errors,
+            last_error,
+            attempts,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "mod.test.rs"]
+mod tests;

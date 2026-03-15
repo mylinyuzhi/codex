@@ -1,15 +1,25 @@
 //! Generate images from text prompts.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::future::try_join_all;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::ImageModelV4;
 use vercel_ai_provider::ImageModelV4CallOptions;
 use vercel_ai_provider::ImageSize as ProviderImageSize;
+use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::Warning;
 
 use crate::error::AIError;
+use crate::logger::LogWarningsOptions;
+use crate::logger::log_warnings;
 use crate::provider::get_default_provider;
+use crate::types::ImageModelResponseMetadata;
+use crate::types::ProviderOptions;
+use crate::util::retry::RetryConfig;
+use crate::util::retry::with_retry;
 
 use super::image_result::GenerateImageResult;
 use super::image_result::GeneratedImage;
@@ -76,6 +86,8 @@ pub enum ImagePrompt {
         text: String,
         /// Reference images (URLs or base64 data).
         images: Vec<String>,
+        /// Optional mask image (URL or base64 data) for inpainting.
+        mask: Option<String>,
     },
 }
 
@@ -110,6 +122,16 @@ pub struct GenerateImageOptions {
     pub max_images_per_call: Option<usize>,
     /// Size of the images.
     pub size: Option<ImageSize>,
+    /// Aspect ratio of the images (e.g., "16:9", "1:1").
+    pub aspect_ratio: Option<String>,
+    /// Seed for deterministic generation.
+    pub seed: Option<i64>,
+    /// Provider-specific options.
+    pub provider_options: Option<ProviderOptions>,
+    /// Maximum retries (default: 2).
+    pub max_retries: Option<u32>,
+    /// Additional HTTP headers.
+    pub headers: Option<HashMap<String, String>>,
     /// Abort signal for cancellation.
     pub abort_signal: Option<CancellationToken>,
 }
@@ -130,9 +152,45 @@ impl GenerateImageOptions {
         self
     }
 
+    /// Set the maximum images per API call.
+    pub fn with_max_images_per_call(mut self, max: usize) -> Self {
+        self.max_images_per_call = Some(max);
+        self
+    }
+
     /// Set the size.
     pub fn with_size(mut self, size: ImageSize) -> Self {
         self.size = Some(size);
+        self
+    }
+
+    /// Set the aspect ratio.
+    pub fn with_aspect_ratio(mut self, aspect_ratio: impl Into<String>) -> Self {
+        self.aspect_ratio = Some(aspect_ratio.into());
+        self
+    }
+
+    /// Set the seed.
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    /// Set provider-specific options.
+    pub fn with_provider_options(mut self, options: ProviderOptions) -> Self {
+        self.provider_options = Some(options);
+        self
+    }
+
+    /// Set the maximum retries.
+    pub fn with_max_retries(mut self, retries: u32) -> Self {
+        self.max_retries = Some(retries);
+        self
+    }
+
+    /// Set additional HTTP headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
         self
     }
 
@@ -163,6 +221,8 @@ fn resolve_image_model(model: ImageModel) -> Result<Arc<dyn ImageModelV4>, AIErr
 /// Generate images from a text prompt.
 ///
 /// This function generates images using an image generation model.
+/// When `n` exceeds `max_images_per_call`, multiple API calls are made in
+/// parallel and the results are merged.
 ///
 /// # Arguments
 ///
@@ -192,14 +252,18 @@ fn resolve_image_model(model: ImageModel) -> Result<Arc<dyn ImageModelV4>, AIErr
 pub async fn generate_image(options: GenerateImageOptions) -> Result<GenerateImageResult, AIError> {
     let model = resolve_image_model(options.model)?;
     let model_id = model.model_id().to_string();
+    let provider_id = model.provider().to_string();
 
     // Get the number of images to generate
     let n = options.n.unwrap_or(1);
 
-    // Determine how many calls we need to make
+    // Determine how many images per call
     let max_per_call = options
         .max_images_per_call
         .unwrap_or_else(|| model.max_images_per_call());
+
+    // Calculate the number of calls and images per call
+    let call_count = n.div_ceil(max_per_call);
 
     // Extract prompt text
     let prompt_text = match &options.prompt {
@@ -207,63 +271,152 @@ pub async fn generate_image(options: GenerateImageOptions) -> Result<GenerateIma
         ImagePrompt::WithImages { text, .. } => text.clone(),
     };
 
-    // Build call options
-    let mut call_options = ImageModelV4CallOptions::new(&prompt_text);
+    // Set up retry configuration
+    let retry_config = options
+        .max_retries
+        .map(|max_retries| RetryConfig::new().with_max_retries(max_retries))
+        .unwrap_or_default();
 
-    // Set number of images
-    call_options = call_options.with_n(n.min(max_per_call));
+    // Convert size
+    let provider_size = options.size.map(|size| match size {
+        ImageSize::S256x256 => ProviderImageSize::S256x256,
+        ImageSize::S512x512 => ProviderImageSize::S512x512,
+        ImageSize::S1024x1024 => ProviderImageSize::S1024x1024,
+        ImageSize::S1792x1024 => ProviderImageSize::S1792x1024,
+        ImageSize::S1024x1792 => ProviderImageSize::S1024x1792,
+        ImageSize::Custom { width, height } => ProviderImageSize::Custom { width, height },
+    });
 
-    // Set size
-    if let Some(size) = options.size {
-        call_options = call_options.with_size(match size {
-            ImageSize::S256x256 => ProviderImageSize::S256x256,
-            ImageSize::S512x512 => ProviderImageSize::S512x512,
-            ImageSize::S1024x1024 => ProviderImageSize::S1024x1024,
-            ImageSize::S1792x1024 => ProviderImageSize::S1792x1024,
-            ImageSize::S1024x1792 => ProviderImageSize::S1024x1792,
-            ImageSize::Custom { width, height } => ProviderImageSize::Custom { width, height },
-        });
-    }
+    // Build futures for parallel execution
+    let futures: Vec<_> = (0..call_count)
+        .map(|i| {
+            let remaining = n - i * max_per_call;
+            let count = remaining.min(max_per_call);
+            let model = model.clone();
+            let prompt_text = prompt_text.clone();
+            let retry_config = retry_config.clone();
+            let abort_signal = options.abort_signal.clone();
+            let provider_options = options.provider_options.clone();
+            let headers = options.headers.clone();
+            let aspect_ratio = options.aspect_ratio.clone();
+            let seed = options.seed;
 
-    // Set abort signal
-    if let Some(signal) = options.abort_signal {
-        call_options = call_options.with_abort_signal(signal);
-    }
+            async move {
+                let mut call_options = ImageModelV4CallOptions::new(&prompt_text);
+                call_options = call_options.with_n(count);
 
-    // Call the model
-    let result = model.do_generate(call_options).await?;
+                if let Some(size) = provider_size {
+                    call_options = call_options.with_size(size);
+                }
 
-    // Check if images were generated
-    if result.images.is_empty() {
-        return Err(AIError::NoImageGenerated);
-    }
+                if let Some(ref ar) = aspect_ratio {
+                    call_options = call_options.with_aspect_ratio(ar.clone());
+                }
 
-    // Convert results
-    let images: Vec<GeneratedImage> = result
-        .images
-        .into_iter()
-        .map(|img| {
-            let generated = match img.data {
-                vercel_ai_provider::ImageData::Url(url) => GeneratedImage::url(url),
-                vercel_ai_provider::ImageData::Base64(data) => GeneratedImage::base64(data),
-            };
-            if let Some(mt) = img.media_type {
-                generated.with_media_type(mt)
-            } else {
-                generated
+                if let Some(seed) = seed {
+                    call_options = call_options.with_seed(seed);
+                }
+
+                if let Some(ref signal) = abort_signal {
+                    call_options = call_options.with_abort_signal(signal.clone());
+                }
+
+                if let Some(ref opts) = provider_options {
+                    call_options = call_options.with_provider_options(opts.clone());
+                }
+
+                if let Some(ref h) = headers {
+                    call_options.headers = Some(h.clone());
+                }
+
+                with_retry(retry_config, abort_signal, || {
+                    let model = model.clone();
+                    let opts = call_options.clone();
+                    async move { model.do_generate(opts).await.map_err(AIError::from) }
+                })
+                .await
             }
         })
         .collect();
 
-    // Build the result
-    let mut image_result = GenerateImageResult::new(images, model_id);
+    // Execute all calls in parallel
+    let results = try_join_all(futures).await?;
 
-    if !result.warnings.is_empty() {
-        image_result = image_result.with_warnings(result.warnings);
+    // Merge results
+    let mut all_images: Vec<GeneratedImage> = Vec::new();
+    let mut all_warnings: Vec<Warning> = Vec::new();
+    let mut all_responses: Vec<ImageModelResponseMetadata> = Vec::new();
+    let mut last_provider_metadata: Option<ProviderMetadata> = None;
+    let mut last_usage = None;
+
+    for result in results {
+        // Convert images
+        for img in result.images {
+            let generated = match img.data {
+                vercel_ai_provider::ImageData::Url(url) => GeneratedImage::url(url),
+                vercel_ai_provider::ImageData::Base64(data) => GeneratedImage::base64(data),
+            };
+            let generated = if let Some(mt) = img.media_type {
+                generated.with_media_type(mt)
+            } else {
+                generated
+            };
+            all_images.push(generated);
+        }
+
+        // Collect warnings
+        all_warnings.extend(result.warnings);
+
+        // Build response metadata from provider response
+        let mut response_meta = ImageModelResponseMetadata::new()
+            .with_model_id(result.response.model_id.as_deref().unwrap_or(&model_id));
+        if let Some(ts) = result.response.timestamp
+            && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&ts)
+        {
+            response_meta = response_meta.with_timestamp(parsed.with_timezone(&chrono::Utc));
+        }
+        if let Some(headers) = result.response.headers {
+            response_meta = response_meta.with_headers(headers);
+        }
+        all_responses.push(response_meta);
+
+        // Keep the last provider metadata
+        if result.provider_metadata.is_some() {
+            last_provider_metadata = result.provider_metadata;
+        }
+
+        // Keep the last usage
+        if result.usage.is_some() {
+            last_usage = result.usage;
+        }
     }
 
-    if let Some(usage) = result.usage {
+    // Log warnings
+    log_warnings(&LogWarningsOptions::new(
+        all_warnings.clone(),
+        &provider_id,
+        &model_id,
+    ));
+
+    // Check if images were generated
+    if all_images.is_empty() {
+        return Err(AIError::NoImageGenerated);
+    }
+
+    // Build the result
+    let mut image_result =
+        GenerateImageResult::new(all_images, model_id).with_responses(all_responses);
+
+    if !all_warnings.is_empty() {
+        image_result = image_result.with_warnings(all_warnings);
+    }
+
+    if let Some(usage) = last_usage {
         image_result = image_result.with_usage(usage);
+    }
+
+    if let Some(metadata) = last_provider_metadata {
+        image_result = image_result.with_provider_metadata(metadata);
     }
 
     Ok(image_result)
