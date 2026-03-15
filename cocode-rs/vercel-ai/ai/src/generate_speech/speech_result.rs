@@ -1,33 +1,50 @@
 //! Speech result types.
 
-use serde::Deserialize;
-use serde::Serialize;
+use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::Warning;
+
+use crate::types::SpeechModelResponseMetadata;
 
 /// Result of a `generate_speech` call.
 #[derive(Debug)]
+#[must_use]
 pub struct SpeechResult {
     /// The generated audio file.
     pub audio: GeneratedAudioFile,
     /// Warnings from the provider.
     pub warnings: Vec<Warning>,
-    /// The model ID used.
-    pub model_id: String,
+    /// Response metadata from the provider.
+    pub responses: Vec<SpeechModelResponseMetadata>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
 }
 
 impl SpeechResult {
     /// Create a new speech result.
-    pub fn new(audio: GeneratedAudioFile, model_id: impl Into<String>) -> Self {
+    pub fn new(audio: GeneratedAudioFile) -> Self {
         Self {
             audio,
             warnings: Vec::new(),
-            model_id: model_id.into(),
+            responses: Vec::new(),
+            provider_metadata: None,
         }
     }
 
     /// Add warnings.
     pub fn with_warnings(mut self, warnings: Vec<Warning>) -> Self {
         self.warnings = warnings;
+        self
+    }
+
+    /// Set responses.
+    pub fn with_responses(mut self, responses: Vec<SpeechModelResponseMetadata>) -> Self {
+        self.responses = responses;
+        self
+    }
+
+    /// Set provider metadata.
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
         self
     }
 }
@@ -82,76 +99,5 @@ impl GeneratedAudioFile {
     pub fn to_base64(&self) -> String {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(&self.data)
-    }
-}
-
-/// Voice options for speech synthesis.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechVoice {
-    /// The voice ID.
-    pub id: String,
-    /// The voice name (optional).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl SpeechVoice {
-    /// Create a new voice.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            name: None,
-        }
-    }
-
-    /// Set the voice name.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-}
-
-impl From<String> for SpeechVoice {
-    fn from(id: String) -> Self {
-        Self::new(id)
-    }
-}
-
-impl From<&str> for SpeechVoice {
-    fn from(id: &str) -> Self {
-        Self::new(id)
-    }
-}
-
-/// Audio format options for speech synthesis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SpeechFormat {
-    /// MP3 format.
-    #[default]
-    Mp3,
-    /// Opus format.
-    Opus,
-    /// AAC format.
-    Aac,
-    /// FLAC format.
-    Flac,
-    /// WAV format.
-    Wav,
-    /// PCM format.
-    Pcm,
-}
-
-impl SpeechFormat {
-    /// Get the MIME type for this format.
-    pub fn media_type(self) -> &'static str {
-        match self {
-            Self::Mp3 => "audio/mpeg",
-            Self::Opus => "audio/opus",
-            Self::Aac => "audio/aac",
-            Self::Flac => "audio/flac",
-            Self::Wav => "audio/wav",
-            Self::Pcm => "audio/pcm",
-        }
     }
 }

@@ -3,15 +3,15 @@
 //! This module provides `generate_text` and `stream_text` functions
 //! for text generation from language models.
 
-mod build_call_options;
+pub(crate) mod build_call_options;
 mod callback;
 mod collect_tool_approvals;
+mod content_part;
 mod content_utils;
 mod execute_tool_call;
 mod extract_reasoning_content;
 mod extract_text_content;
-#[allow(clippy::module_inception)]
-mod generate_text;
+mod generate;
 mod generate_text_result;
 mod generated_file;
 mod output;
@@ -34,7 +34,8 @@ mod tool_output;
 pub use build_call_options::filter_active_tools;
 
 // callback types
-pub use callback::FinishEventMetadata;
+pub use callback::CallbackModelInfo;
+pub use callback::ChunkEventData;
 pub use callback::GenerateTextCallbacks;
 pub use callback::OnChunkEvent;
 pub use callback::OnFinishEvent;
@@ -44,6 +45,7 @@ pub use callback::OnStepStartEvent;
 pub use callback::OnToolCallFinishEvent;
 pub use callback::OnToolCallStartEvent;
 pub use callback::StreamTextCallbacks;
+pub use callback::ToolCallOutcome;
 
 // collect_tool_approvals
 pub use collect_tool_approvals::AutoApproveCollector;
@@ -56,6 +58,10 @@ pub use collect_tool_approvals::all_approved;
 pub use collect_tool_approvals::apply_approvals;
 pub use collect_tool_approvals::collect_tool_approvals;
 pub use collect_tool_approvals::get_denied_approvals;
+
+// content_part (high-level content types)
+pub use content_part::ContentPart;
+pub use content_part::ToolOutputDenied;
 
 // content_utils (shared extraction functions)
 pub use content_utils::extract_reasoning;
@@ -81,26 +87,45 @@ pub use extract_reasoning_content::has_reasoning_content;
 pub use extract_text_content::extract_text_content;
 pub use extract_text_content::extract_text_content_with_metadata;
 
-// generate_text
-pub use generate_text::GenerateTextOptions;
-pub use generate_text::PrepareStepContext;
-pub use generate_text::PrepareStepFn;
-pub use generate_text::PrepareStepOverrides;
-pub use generate_text::generate_text;
+// generate_text (generate)
+pub use generate::GenerateTextOptions;
+pub use generate::PrepareStepContext;
+pub use generate::PrepareStepFn;
+pub use generate::PrepareStepOverrides;
+pub use generate::generate_text;
 
 // generate_text_result (ToolCall, ToolResult, GenerateTextResult)
+pub use generate_text_result::DynamicToolCall;
+pub use generate_text_result::DynamicToolResult;
 pub use generate_text_result::GenerateTextResult;
+pub use generate_text_result::StaticToolCall;
+pub use generate_text_result::StaticToolResult;
 pub use generate_text_result::ToolCall;
 pub use generate_text_result::ToolResult;
+pub use generate_text_result::TypedToolCall;
+pub use generate_text_result::TypedToolResult;
 
 // generated_file
 pub use generated_file::GeneratedFile;
 pub use generated_file::GeneratedFiles;
 
 // output
+pub use output::ArrayOutputOptions;
+pub use output::ChoiceOutputOptions;
+pub use output::JsonOutputOptions;
 pub use output::Output;
 pub use output::OutputMode;
+pub use output::OutputParseContext;
+pub use output::OutputSpec;
 pub use output::OutputStrategy;
+pub use output::array_output;
+pub use output::array_output_with;
+pub use output::choice_output;
+pub use output::choice_output_with;
+pub use output::json_output;
+pub use output::json_output_with;
+pub use output::object_output;
+pub use output::text_output;
 
 // parse_tool_call
 pub use parse_tool_call::ParsedToolCall;
@@ -139,6 +164,7 @@ pub use stop_condition::response_contains;
 pub use stop_condition::step_count_is;
 
 // stream_text
+pub use stream_text::Lazy;
 pub use stream_text::StreamTextOptions;
 pub use stream_text::StreamTextResult;
 pub use stream_text::TextStreamPart;

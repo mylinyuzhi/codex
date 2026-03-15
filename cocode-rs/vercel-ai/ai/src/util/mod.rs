@@ -2,6 +2,7 @@
 
 pub mod as_array;
 pub mod async_iterable_stream;
+pub mod consume_stream;
 pub mod cosine_similarity;
 pub mod create_resolvable_promise;
 pub mod deep_equal;
@@ -31,6 +32,7 @@ pub use async_iterable_stream::once_stream;
 pub use async_iterable_stream::stream_from_range;
 pub use async_iterable_stream::stream_from_vec;
 pub use async_iterable_stream::stream_repeat;
+pub use consume_stream::consume_stream;
 pub use cosine_similarity::cosine_similarity;
 pub use cosine_similarity::find_most_similar;
 pub use cosine_similarity::safe_cosine_similarity;

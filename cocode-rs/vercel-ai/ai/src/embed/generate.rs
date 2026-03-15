@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::embedding_model::EmbeddingModelV4;
 use vercel_ai_provider::embedding_model::EmbeddingModelV4CallOptions;
 use vercel_ai_provider::embedding_model::EmbeddingModelV4EmbedResult;
@@ -16,7 +15,7 @@ use vercel_ai_provider::embedding_model::EmbeddingUsage;
 use vercel_ai_provider::embedding_model::EmbeddingValue;
 
 use crate::error::AIError;
-use crate::provider::get_default_provider;
+use crate::model::EmbeddingModel;
 use crate::telemetry::TelemetrySettings;
 use crate::types::ProviderOptions;
 use crate::util::retry::RetryConfig;
@@ -24,61 +23,6 @@ use crate::util::retry::with_retry;
 
 use super::embed_result::EmbedManyResult;
 use super::embed_result::EmbedResult;
-
-/// A reference to an embedding model.
-#[derive(Clone)]
-pub enum EmbeddingModel {
-    /// A string model ID that will be resolved via the default provider.
-    String(String),
-    /// A pre-resolved embedding model.
-    V4(Arc<dyn EmbeddingModelV4>),
-}
-
-impl Default for EmbeddingModel {
-    fn default() -> Self {
-        Self::String(String::new())
-    }
-}
-
-impl EmbeddingModel {
-    /// Create from a string ID.
-    pub fn from_id(id: impl Into<String>) -> Self {
-        Self::String(id.into())
-    }
-
-    /// Create from a V4 model.
-    pub fn from_v4(model: Arc<dyn EmbeddingModelV4>) -> Self {
-        Self::V4(model)
-    }
-
-    /// Check if this is a string ID.
-    pub fn is_string(&self) -> bool {
-        matches!(self, Self::String(_))
-    }
-
-    /// Check if this is a V4 model.
-    pub fn is_v4(&self) -> bool {
-        matches!(self, Self::V4(_))
-    }
-}
-
-impl From<String> for EmbeddingModel {
-    fn from(id: String) -> Self {
-        Self::String(id)
-    }
-}
-
-impl From<&str> for EmbeddingModel {
-    fn from(id: &str) -> Self {
-        Self::String(id.to_string())
-    }
-}
-
-impl From<Arc<dyn EmbeddingModelV4>> for EmbeddingModel {
-    fn from(model: Arc<dyn EmbeddingModelV4>) -> Self {
-        Self::V4(model)
-    }
-}
 
 /// Options for `embed`.
 #[derive(Default)]
@@ -99,6 +43,8 @@ pub struct EmbedOptions {
     pub headers: Option<HashMap<String, String>>,
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
+    /// Optional telemetry configuration (experimental).
+    pub telemetry: Option<TelemetrySettings>,
 }
 
 impl EmbedOptions {
@@ -144,6 +90,12 @@ impl EmbedOptions {
     /// Set provider-specific options.
     pub fn with_provider_options(mut self, options: ProviderOptions) -> Self {
         self.provider_options = Some(options);
+        self
+    }
+
+    /// Set telemetry configuration.
+    pub fn with_telemetry(mut self, telemetry: TelemetrySettings) -> Self {
+        self.telemetry = Some(telemetry);
         self
     }
 }
@@ -235,19 +187,7 @@ impl EmbedManyOptions {
 
 /// Resolve an embedding model reference to an actual model instance.
 fn resolve_embedding_model(model: EmbeddingModel) -> Result<Arc<dyn EmbeddingModelV4>, AIError> {
-    match model {
-        EmbeddingModel::V4(m) => Ok(m),
-        EmbeddingModel::String(id) => {
-            let provider = get_default_provider().ok_or_else(|| {
-                AIError::InvalidArgument(
-                    "No default provider set. Call set_default_provider() first or use an EmbeddingModel::V4 variant.".to_string(),
-                )
-            })?;
-            provider
-                .embedding_model(&id)
-                .map_err(|e| AIError::ProviderError(AISdkError::new(e.to_string())))
-        }
-    }
+    crate::model::resolve_embedding_model(model).map_err(AIError::ProviderError)
 }
 
 /// Generate an embedding for a single text.
@@ -273,6 +213,7 @@ fn resolve_embedding_model(model: EmbeddingModel) -> Result<Arc<dyn EmbeddingMod
 ///
 /// println!("Embedding dimension: {}", result.embedding.as_dense().map(|v| v.len()).unwrap_or(0));
 /// ```
+#[tracing::instrument(skip_all)]
 pub async fn embed(options: EmbedOptions) -> Result<EmbedResult, AIError> {
     let model = resolve_embedding_model(options.model)?;
 
@@ -306,13 +247,24 @@ pub async fn embed(options: EmbedOptions) -> Result<EmbedResult, AIError> {
     // Execute with retry
     let result = execute_embed_with_retry(&model, call_options, retry_config).await?;
 
+    crate::logger::log_warnings(&crate::logger::LogWarningsOptions::new(
+        result.warnings.clone(),
+        model.provider(),
+        model.model_id(),
+    ));
+
+    let raw_response = result.raw_response.clone();
     let embedding = result
         .embeddings
         .into_iter()
         .next()
-        .ok_or_else(|| AIError::new("NoOutputGenerated", "No embedding generated"))?;
+        .ok_or(AIError::NoOutputGenerated)?;
 
-    Ok(EmbedResult::new(original_value, embedding, result.usage))
+    let mut embed_result = EmbedResult::new(original_value, embedding, result.usage);
+    if let Some(raw) = raw_response {
+        embed_result.raw_response = Some(raw);
+    }
+    Ok(embed_result)
 }
 
 /// Generate embeddings for multiple texts.
@@ -341,6 +293,7 @@ pub async fn embed(options: EmbedOptions) -> Result<EmbedResult, AIError> {
 ///
 /// println!("Generated {} embeddings", result.embeddings.len());
 /// ```
+#[tracing::instrument(skip_all)]
 pub async fn embed_many(options: EmbedManyOptions) -> Result<EmbedManyResult, AIError> {
     let model = resolve_embedding_model(options.model)?;
 
@@ -391,11 +344,18 @@ pub async fn embed_many(options: EmbedManyOptions) -> Result<EmbedManyResult, AI
 
         let result = execute_embed_with_retry(&model, call_options, retry_config).await?;
 
-        return Ok(EmbedManyResult::new(
-            original_values,
-            result.embeddings,
-            result.usage,
+        crate::logger::log_warnings(&crate::logger::LogWarningsOptions::new(
+            result.warnings.clone(),
+            model.provider(),
+            model.model_id(),
         ));
+
+        let mut many_result =
+            EmbedManyResult::new(original_values, result.embeddings, result.usage);
+        if let Some(raw) = result.raw_response {
+            many_result.raw_responses.push(raw);
+        }
+        return Ok(many_result);
     }
 
     // Chunking case: split values into chunks
@@ -418,6 +378,8 @@ pub async fn embed_many(options: EmbedManyOptions) -> Result<EmbedManyResult, AI
     // Process all chunks
     let mut all_embeddings: Vec<EmbeddingValue> = Vec::new();
     let mut total_tokens: u64 = 0;
+    let mut all_raw_responses: Vec<serde_json::Value> = Vec::new();
+    let mut all_warnings: Vec<vercel_ai_provider::Warning> = Vec::new();
 
     for parallel_group in parallel_groups {
         // Execute chunks in parallel
@@ -463,12 +425,23 @@ pub async fn embed_many(options: EmbedManyOptions) -> Result<EmbedManyResult, AI
         for result in results {
             all_embeddings.extend(result.embeddings);
             total_tokens += result.usage.total_tokens;
+            all_warnings.extend(result.warnings);
+            if let Some(raw) = result.raw_response {
+                all_raw_responses.push(raw);
+            }
         }
     }
 
+    crate::logger::log_warnings(&crate::logger::LogWarningsOptions::new(
+        all_warnings,
+        model.provider(),
+        model.model_id(),
+    ));
+
     // Build final result
     let usage = EmbeddingUsage::new(total_tokens);
-    let result = EmbedManyResult::new(original_values, all_embeddings, usage);
+    let mut result = EmbedManyResult::new(original_values, all_embeddings, usage);
+    result.raw_responses = all_raw_responses;
 
     Ok(result)
 }
@@ -490,5 +463,5 @@ async fn execute_embed_with_retry(
 }
 
 #[cfg(test)]
-#[path = "embed.test.rs"]
+#[path = "generate.test.rs"]
 mod tests;

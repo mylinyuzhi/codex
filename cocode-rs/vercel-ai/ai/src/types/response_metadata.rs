@@ -80,6 +80,148 @@ impl LanguageModelResponseMetadata {
     }
 }
 
+/// Response metadata for video generation.
+#[derive(Debug, Clone, Default)]
+pub struct VideoModelResponseMetadata {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: HashMap<String, String>,
+}
+
+impl VideoModelResponseMetadata {
+    /// Create new response metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+}
+
+/// Response metadata for speech generation.
+#[derive(Debug, Clone, Default)]
+pub struct SpeechModelResponseMetadata {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: HashMap<String, String>,
+    /// The raw response body, if available.
+    pub body: Option<serde_json::Value>,
+}
+
+impl SpeechModelResponseMetadata {
+    /// Create new response metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    /// Set the response body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+}
+
+/// Response metadata for image generation.
+#[derive(Debug, Clone, Default)]
+pub struct ImageModelResponseMetadata {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: HashMap<String, String>,
+}
+
+impl ImageModelResponseMetadata {
+    /// Create new response metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    /// Set response headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+}
+
+/// Response metadata for transcription.
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptionModelResponseMetadata {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: HashMap<String, String>,
+    /// The raw response body, if available.
+    pub body: Option<serde_json::Value>,
+}
+
+impl TranscriptionModelResponseMetadata {
+    /// Create new response metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    /// Set the response body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+}
+
 #[cfg(test)]
 #[path = "response_metadata.test.rs"]
 mod tests;

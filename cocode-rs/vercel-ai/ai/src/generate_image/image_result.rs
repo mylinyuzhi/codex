@@ -3,10 +3,14 @@
 use serde::Deserialize;
 use serde::Serialize;
 use vercel_ai_provider::ImageModelV4Usage;
+use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::Warning;
+
+use crate::types::ImageModelResponseMetadata;
 
 /// Result of a `generate_image` call.
 #[derive(Debug)]
+#[must_use]
 pub struct GenerateImageResult {
     /// The generated images.
     pub images: Vec<GeneratedImage>,
@@ -16,6 +20,10 @@ pub struct GenerateImageResult {
     pub usage: Option<ImageModelV4Usage>,
     /// The model ID used.
     pub model_id: String,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
+    /// Response metadata from each API call.
+    pub responses: Vec<ImageModelResponseMetadata>,
 }
 
 impl GenerateImageResult {
@@ -26,6 +34,8 @@ impl GenerateImageResult {
             warnings: Vec::new(),
             usage: None,
             model_id: model_id.into(),
+            provider_metadata: None,
+            responses: Vec::new(),
         }
     }
 
@@ -43,6 +53,18 @@ impl GenerateImageResult {
     /// Set usage.
     pub fn with_usage(mut self, usage: ImageModelV4Usage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// Set provider metadata.
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
+        self
+    }
+
+    /// Set response metadata.
+    pub fn with_responses(mut self, responses: Vec<ImageModelResponseMetadata>) -> Self {
+        self.responses = responses;
         self
     }
 }

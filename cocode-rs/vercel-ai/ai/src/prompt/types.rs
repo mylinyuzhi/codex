@@ -122,5 +122,5 @@ impl Default for PromptContent {
 }
 
 #[cfg(test)]
-#[path = "prompt.test.rs"]
+#[path = "types.test.rs"]
 mod tests;

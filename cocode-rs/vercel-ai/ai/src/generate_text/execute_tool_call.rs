@@ -38,7 +38,7 @@ pub async fn execute_tool_call(
         return Err(ToolError::new(
             &tool_call.tool_call_id,
             &tool_call.tool_name,
-            format!("Tool '{}' not found", tool_call.tool_name),
+            serde_json::Value::String(format!("Tool '{}' not found", tool_call.tool_name)),
         ));
     }
 
@@ -52,7 +52,7 @@ pub async fn execute_tool_call(
         Err(e) => Err(ToolError::new(
             &tool_call.tool_call_id,
             &tool_call.tool_name,
-            e.to_string(),
+            serde_json::Value::String(e.to_string()),
         )),
     }
 }

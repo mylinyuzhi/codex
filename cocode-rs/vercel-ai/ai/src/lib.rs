@@ -68,6 +68,9 @@
 //! }
 //! ```
 
+/// SDK version from Cargo.toml.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 // Modules
 pub mod embed;
 pub mod error;
@@ -90,11 +93,26 @@ pub mod util;
 
 // Re-exports from generate_text module
 pub use generate_text::{
-    FinishEventMetadata,
+    // Output options structs
+    ArrayOutputOptions,
+    // Callback types
+    CallbackModelInfo,
+    ChoiceOutputOptions,
+    ChunkEventData,
+    // Content part types
+    ContentPart,
+    DynamicToolCall,
+    DynamicToolResult,
     GenerateTextCallbacks,
     GenerateTextOptions,
     GenerateTextResult,
-    // Callback event types
+    // Generated files
+    GeneratedFile,
+    GeneratedFiles,
+    JsonOutputOptions,
+    // Type aliases (Phase 3)
+    // Lazy evaluation
+    Lazy,
     OnChunkEvent,
     OnFinishEvent,
     OnStartEvent,
@@ -105,31 +123,54 @@ pub use generate_text::{
     // Output types
     Output,
     OutputMode,
+    OutputParseContext,
+    OutputSpec,
     OutputStrategy,
     // Prepare step types
     PrepareStepContext,
     PrepareStepFn,
     PrepareStepOverrides,
+    // Prune messages
+    PruneMessagesOptions,
     // Reasoning output
     ReasoningOutput,
+    ReasoningPruneMode,
     // Result types
     ResponseMessageData,
+    // Smooth stream
+    SmoothStream,
+    SmoothStreamConfig,
+    StaticToolCall,
+    StaticToolResult,
     StepResult,
+    // Stop condition
+    StopCondition,
     StreamTextCallbacks,
     StreamTextOptions,
     StreamTextResult,
     TextStreamPart,
     ToolCall,
+    ToolCallOutcome,
+    // Tool call repair
+    ToolCallRepairFunction,
+    ToolCallsPruneMode,
     // Tool error/output types
     ToolError,
     ToolOutput,
     ToolOutputContent,
+    ToolOutputDenied,
     ToolResult,
+    TypedToolCall,
+    TypedToolResult,
+    array_output,
+    array_output_with,
     // Response message building
     build_assistant_message,
     build_assistant_message_from_text,
     build_single_tool_result_message,
     build_tool_result_message,
+    choice_output,
+    choice_output_with,
     // Shared content extraction utilities
     extract_reasoning,
     // Content extraction (original modules)
@@ -144,8 +185,20 @@ pub use generate_text::{
     // Active tools filtering
     filter_active_tools,
     generate_text,
+    // Stop condition functions
     has_reasoning_content,
+    has_tool_call,
+    json_output,
+    json_output_with,
+    object_output,
+    // Prune messages
+    prune_messages,
+    // Smooth stream
+    smooth_stream_iter,
+    // Stop condition
+    step_count_is,
     stream_text,
+    text_output,
 };
 
 // Re-exports from generate_object module
@@ -154,6 +207,8 @@ pub use generate_object::GenerateObjectOptions;
 pub use generate_object::GenerateObjectResult;
 pub use generate_object::ObjectGenerationMode;
 pub use generate_object::ObjectStreamPart;
+pub use generate_object::StreamObjectFinishEvent;
+pub use generate_object::StreamObjectOptions;
 pub use generate_object::StreamObjectResult;
 pub use generate_object::generate_object;
 pub use generate_object::stream_object;
@@ -169,6 +224,7 @@ pub use embed::embed_many;
 // Re-exports from generate_speech module
 pub use generate_speech::GenerateSpeechOptions;
 pub use generate_speech::GeneratedAudioFile;
+pub use generate_speech::SpeechModel;
 pub use generate_speech::SpeechResult;
 pub use generate_speech::generate_speech;
 
@@ -200,7 +256,6 @@ pub use generate_video::generate_video;
 // Re-exports from transcribe module
 pub use transcribe::AudioData;
 pub use transcribe::TranscribeOptions;
-pub use transcribe::TranscriptionFormat;
 pub use transcribe::TranscriptionModel;
 pub use transcribe::TranscriptionResult;
 pub use transcribe::TranscriptionSegment;
@@ -263,6 +318,9 @@ pub use prompt::{
 pub use model::EmbeddingModel;
 pub use model::ImageModelRef;
 pub use model::LanguageModel;
+pub use model::RerankingModelRef;
+pub use model::SpeechModelRef;
+pub use model::TranscriptionModelRef;
 pub use model::VideoModelRef;
 pub use model::resolve_embedding_model;
 pub use model::resolve_embedding_model_with_provider;
@@ -270,6 +328,12 @@ pub use model::resolve_image_model;
 pub use model::resolve_image_model_with_provider;
 pub use model::resolve_language_model;
 pub use model::resolve_language_model_with_provider;
+pub use model::resolve_reranking_model;
+pub use model::resolve_reranking_model_with_provider;
+pub use model::resolve_speech_model;
+pub use model::resolve_speech_model_with_provider;
+pub use model::resolve_transcription_model;
+pub use model::resolve_transcription_model_with_provider;
 pub use model::resolve_video_model;
 pub use model::resolve_video_model_with_provider;
 
@@ -294,7 +358,16 @@ pub use error::ToolCallNotFoundForApprovalError;
 pub use error::ToolCallRepairError;
 pub use error::ToolCallRepairOriginalError;
 pub use error::UnsupportedModelVersionError;
-pub use error::VideoModelResponseMetadata;
+pub use types::CallWarning;
+pub use types::ImageModelResponseMetadata;
+pub use types::VideoModelResponseMetadata;
+
+// Enriched error types (Phase 2)
+pub use error::NoImageGeneratedError;
+pub use error::NoObjectGeneratedError;
+pub use error::NoSpeechGeneratedError;
+pub use error::NoTranscriptGeneratedError;
+pub use error::RetryError;
 
 // Re-exports from logger module
 pub use logger::FIRST_WARNING_INFO_MESSAGE;
@@ -312,7 +385,11 @@ pub use rerank::RerankingModel;
 pub use rerank::rerank;
 
 // Re-exports from telemetry module
+pub use telemetry::TelemetryIntegration;
 pub use telemetry::TelemetrySettings;
+pub use telemetry::clear_global_integrations;
+pub use telemetry::get_global_integrations;
+pub use telemetry::register_telemetry_integration;
 
 // Re-exports from util module
 pub use util::retry::RetryConfig;
@@ -320,15 +397,26 @@ pub use util::retry::RetryableError;
 pub use util::retry::with_retry;
 pub use util::{
     CancellationManager,
+    DeepPartial,
     RetrySettings,
+    SerialJobExecutor,
+    SimulatedStream,
     // Partial JSON parsing
     complete_partial_json,
+    // Stream consumption
+    consume_stream,
+    // Cosine similarity
+    cosine_similarity,
     // Abort signals
     create_deadline_token,
+    // Download
+    create_download,
     create_timeout_token,
     extract_partial_value,
     // Headers
     get_header,
+    // Deep equal
+    is_deep_equal,
     merge_abort_signals,
     merge_abort_signals_with_timeout,
     merge_headers,
@@ -340,6 +428,8 @@ pub use util::{
     // Retries
     prepare_provider_retries,
     prepare_retries,
+    // Simulated stream
+    simulate_readable_stream,
 };
 
 // Re-exports from registry module
@@ -373,6 +463,8 @@ pub use types::{
     // Content types
     AssistantContentPart,
     DataContent,
+    // Usage aliases (Phase 5)
+    EmbeddingModelUsage,
     // Model traits
     EmbeddingModelV4,
     // Embedding types
@@ -386,12 +478,17 @@ pub use types::{
     FilePart,
     // Finish reason
     FinishReason,
+    // Usage types (Phase 5)
+    ImageModelUsage,
+    InputTokenDetails,
     // JSON types
     JSONSchema,
     JSONValue,
     // Metadata types
     LanguageModelRequestMetadata,
     LanguageModelResponseMetadata,
+    // Usage (Phase 5)
+    LanguageModelUsage,
     LanguageModelV4,
     // Response types
     LanguageModelV4CallOptions,
@@ -404,6 +501,7 @@ pub use types::{
     // Message types
     ModelMessage,
     ModelPrompt,
+    OutputTokenDetails,
     // Shared types
     ProviderMetadata,
     ProviderOptions,
@@ -414,23 +512,46 @@ pub use types::{
     // Stream types
     Source,
     SourceType,
+    // Response metadata (Phase 5)
+    SpeechModelResponseMetadata,
     StreamError,
     TextPart,
     ToolCallPart,
     ToolChoice,
     ToolContentPart,
-    ToolDefinitionV4,
     ToolExecutionOptions,
     ToolInvocation,
     ToolRegistry,
     ToolResultContent,
     ToolResultContentPart,
     ToolResultPart,
+    // Response metadata (Phase 5)
+    TranscriptionModelResponseMetadata,
     // Usage types
     Usage,
     UserContentPart,
     Warning,
+    // Usage conversion functions (Phase 5)
+    add_image_model_usage,
+    add_language_model_usage,
+    as_language_model_usage,
+    create_null_language_model_usage,
 };
+
+// Re-exports from provider-utils crate (Phase 4.3)
+pub use vercel_ai_provider_utils::as_schema;
+pub use vercel_ai_provider_utils::dynamic_tool;
+pub use vercel_ai_provider_utils::generate_id;
+pub use vercel_ai_provider_utils::json_schema;
+pub use vercel_ai_provider_utils::parse_json_event_stream;
+
+// Re-exports from provider crate errors (Phase 4.4)
+pub use vercel_ai_provider::NoSuchModelError;
+pub use vercel_ai_provider::UnsupportedFunctionalityError;
+
+/// Test utilities for mock models and providers.
+#[cfg(test)]
+pub mod test_utils;
 
 #[cfg(test)]
 #[path = "lib.test.rs"]

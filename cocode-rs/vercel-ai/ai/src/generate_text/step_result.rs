@@ -3,6 +3,8 @@
 //! This module provides the canonical `StepResult` type which represents the
 //! result of a single step in a multi-step generation process (e.g., tool calling).
 
+use std::collections::HashMap;
+
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::ProviderMetadata;
@@ -10,6 +12,7 @@ use vercel_ai_provider::Source;
 use vercel_ai_provider::Usage;
 use vercel_ai_provider::Warning;
 
+use super::callback::CallbackModelInfo;
 use super::content_utils;
 use super::generate_text_result::ToolCall;
 use super::generate_text_result::ToolResult;
@@ -20,10 +23,17 @@ use crate::types::LanguageModelRequestMetadata;
 use crate::types::LanguageModelResponseMetadata;
 
 /// Result of a single step in multi-step generation.
+///
+/// Also serves as `OnStepFinishEvent` (type alias in callback module),
+/// matching the TS SDK pattern where step finish events ARE StepResults.
 #[derive(Debug, Clone)]
 pub struct StepResult {
     /// The step number (0-indexed).
     pub step: u32,
+    /// Unique call ID for this generation session.
+    pub call_id: String,
+    /// Model information (provider + model ID).
+    pub model: CallbackModelInfo,
     /// The text generated in this step.
     pub text: String,
     /// The content parts from this step.
@@ -54,6 +64,14 @@ pub struct StepResult {
     pub request: Option<LanguageModelRequestMetadata>,
     /// Response metadata.
     pub response: Option<LanguageModelResponseMetadata>,
+    /// Telemetry function ID.
+    pub function_id: Option<String>,
+    /// Telemetry metadata.
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Raw finish reason string from the provider.
+    pub raw_finish_reason: Option<String>,
+    /// Experimental context from the provider.
+    pub experimental_context: Option<serde_json::Value>,
 }
 
 impl StepResult {
@@ -61,6 +79,8 @@ impl StepResult {
     pub fn new(step: u32, text: String, usage: Usage, finish_reason: FinishReason) -> Self {
         Self {
             step,
+            call_id: String::new(),
+            model: CallbackModelInfo::new("", ""),
             text,
             content: Vec::new(),
             reasoning: Vec::new(),
@@ -76,6 +96,10 @@ impl StepResult {
             provider_metadata: None,
             request: None,
             response: None,
+            function_id: None,
+            metadata: None,
+            raw_finish_reason: None,
+            experimental_context: None,
         }
     }
 
@@ -90,6 +114,8 @@ impl StepResult {
         let reasoning = content_utils::extract_reasoning_outputs(&content);
         Self {
             step,
+            call_id: String::new(),
+            model: CallbackModelInfo::new("", ""),
             text,
             reasoning,
             content,
@@ -105,6 +131,10 @@ impl StepResult {
             provider_metadata: None,
             request: None,
             response: None,
+            function_id: None,
+            metadata: None,
+            raw_finish_reason: None,
+            experimental_context: None,
         }
     }
 
@@ -112,6 +142,8 @@ impl StepResult {
     pub fn error(step: u32, error_message: impl Into<String>) -> Self {
         Self {
             step,
+            call_id: String::new(),
+            model: CallbackModelInfo::new("", ""),
             text: String::new(),
             content: Vec::new(),
             reasoning: Vec::new(),
@@ -127,7 +159,35 @@ impl StepResult {
             provider_metadata: None,
             request: None,
             response: None,
+            function_id: None,
+            metadata: None,
+            raw_finish_reason: None,
+            experimental_context: None,
         }
+    }
+
+    /// Set the call ID.
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = call_id.into();
+        self
+    }
+
+    /// Set the model info.
+    pub fn with_model(mut self, model: CallbackModelInfo) -> Self {
+        self.model = model;
+        self
+    }
+
+    /// Set the model ID (convenience setter).
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model.model_id = model_id.into();
+        self
+    }
+
+    /// Set the provider ID (convenience setter).
+    pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Self {
+        self.model.provider = provider_id.into();
+        self
     }
 
     /// Add tool calls to this step.
@@ -186,6 +246,30 @@ impl StepResult {
         self
     }
 
+    /// Set the telemetry function ID.
+    pub fn with_function_id(mut self, function_id: impl Into<String>) -> Self {
+        self.function_id = Some(function_id.into());
+        self
+    }
+
+    /// Set the telemetry metadata.
+    pub fn with_metadata(mut self, metadata: HashMap<String, serde_json::Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Set the raw finish reason.
+    pub fn with_raw_finish_reason(mut self, raw: impl Into<String>) -> Self {
+        self.raw_finish_reason = Some(raw.into());
+        self
+    }
+
+    /// Set the experimental context.
+    pub fn with_experimental_context(mut self, context: serde_json::Value) -> Self {
+        self.experimental_context = Some(context);
+        self
+    }
+
     /// Check if this step has tool calls.
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
@@ -236,6 +320,16 @@ impl StepResult {
     /// Get the combined reasoning text.
     pub fn reasoning_text(&self) -> String {
         super::reasoning_output::reasoning_text(&self.reasoning)
+    }
+
+    /// Get the model ID (convenience accessor).
+    pub fn model_id(&self) -> &str {
+        &self.model.model_id
+    }
+
+    /// Get the provider ID (convenience accessor).
+    pub fn provider_id(&self) -> &str {
+        &self.model.provider
     }
 }
 

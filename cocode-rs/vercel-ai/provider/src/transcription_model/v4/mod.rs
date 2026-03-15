@@ -4,13 +4,13 @@
 //! that follow the Vercel AI SDK v4 specification.
 
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::errors::AISdkError;
+use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
+use crate::shared::Warning;
 
 /// The transcription model trait (V4).
 ///
@@ -42,17 +42,7 @@ pub struct TranscriptionModelV4CallOptions {
     /// The audio data to transcribe.
     pub audio: Vec<u8>,
     /// The MIME type of the audio.
-    pub content_type: String,
-    /// The language of the audio (ISO-639-1 code).
-    pub language: Option<String>,
-    /// The prompt to guide transcription.
-    pub prompt: Option<String>,
-    /// The response format.
-    pub response_format: Option<TranscriptionFormat>,
-    /// The temperature for sampling (0-1).
-    pub temperature: Option<f32>,
-    /// Whether to include timestamps.
-    pub timestamp_granularities: Option<Vec<TimestampGranularity>>,
+    pub media_type: String,
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
     /// Abort signal for cancellation.
@@ -63,36 +53,12 @@ pub struct TranscriptionModelV4CallOptions {
 
 impl TranscriptionModelV4CallOptions {
     /// Create new call options.
-    pub fn new(audio: Vec<u8>, content_type: impl Into<String>) -> Self {
+    pub fn new(audio: Vec<u8>, media_type: impl Into<String>) -> Self {
         Self {
             audio,
-            content_type: content_type.into(),
+            media_type: media_type.into(),
             ..Default::default()
         }
-    }
-
-    /// Set the language.
-    pub fn with_language(mut self, language: impl Into<String>) -> Self {
-        self.language = Some(language.into());
-        self
-    }
-
-    /// Set the prompt.
-    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.prompt = Some(prompt.into());
-        self
-    }
-
-    /// Set the response format.
-    pub fn with_response_format(mut self, format: TranscriptionFormat) -> Self {
-        self.response_format = Some(format);
-        self
-    }
-
-    /// Set the temperature.
-    pub fn with_temperature(mut self, temperature: f32) -> Self {
-        self.temperature = Some(temperature);
-        self
     }
 
     /// Set provider options.
@@ -106,6 +72,12 @@ impl TranscriptionModelV4CallOptions {
         self.abort_signal = Some(signal);
         self
     }
+
+    /// Set headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
+        self
+    }
 }
 
 /// The result of a transcription call.
@@ -116,11 +88,17 @@ pub struct TranscriptionModelV4Result {
     /// The detected language.
     pub language: Option<String>,
     /// Duration of the audio in seconds.
-    pub duration: Option<f32>,
-    /// Word-level timestamps (if requested).
-    pub words: Option<Vec<TranscriptionWord>>,
-    /// Segment-level timestamps (if requested).
-    pub segments: Option<Vec<TranscriptionSegment>>,
+    pub duration_in_seconds: Option<f64>,
+    /// Segment-level timestamps.
+    pub segments: Option<Vec<TranscriptionSegmentV4>>,
+    /// Warnings from the provider.
+    pub warnings: Vec<Warning>,
+    /// Response metadata.
+    pub response: TranscriptionModelV4Response,
+    /// Request metadata.
+    pub request: Option<TranscriptionModelV4Request>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
 }
 
 impl TranscriptionModelV4Result {
@@ -129,9 +107,12 @@ impl TranscriptionModelV4Result {
         Self {
             text: text.into(),
             language: None,
-            duration: None,
-            words: None,
+            duration_in_seconds: None,
             segments: None,
+            warnings: Vec::new(),
+            response: TranscriptionModelV4Response::default(),
+            request: None,
+            provider_metadata: None,
         }
     }
 
@@ -141,117 +122,117 @@ impl TranscriptionModelV4Result {
         self
     }
 
-    /// Set the duration.
-    pub fn with_duration(mut self, duration: f32) -> Self {
-        self.duration = Some(duration);
-        self
-    }
-
-    /// Set the words.
-    pub fn with_words(mut self, words: Vec<TranscriptionWord>) -> Self {
-        self.words = Some(words);
+    /// Set the duration in seconds.
+    pub fn with_duration_in_seconds(mut self, duration: f64) -> Self {
+        self.duration_in_seconds = Some(duration);
         self
     }
 
     /// Set the segments.
-    pub fn with_segments(mut self, segments: Vec<TranscriptionSegment>) -> Self {
+    pub fn with_segments(mut self, segments: Vec<TranscriptionSegmentV4>) -> Self {
         self.segments = Some(segments);
+        self
+    }
+
+    /// Set warnings.
+    pub fn with_warnings(mut self, warnings: Vec<Warning>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
+    /// Set response metadata.
+    pub fn with_response(mut self, response: TranscriptionModelV4Response) -> Self {
+        self.response = response;
+        self
+    }
+
+    /// Set request metadata.
+    pub fn with_request(mut self, request: TranscriptionModelV4Request) -> Self {
+        self.request = Some(request);
+        self
+    }
+
+    /// Set provider metadata.
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
         self
     }
 }
 
-/// A transcribed word with timing information.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptionWord {
-    /// The word text.
-    pub word: String,
-    /// Start time in seconds.
-    pub start: f32,
-    /// End time in seconds.
-    pub end: f32,
-}
-
-impl TranscriptionWord {
-    /// Create a new transcribed word.
-    pub fn new(word: impl Into<String>, start: f32, end: f32) -> Self {
-        Self {
-            word: word.into(),
-            start,
-            end,
-        }
-    }
-}
-
-/// A transcribed segment with timing information.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptionSegment {
-    /// The segment ID.
-    pub id: usize,
-    /// Start time in seconds.
-    pub start: f32,
-    /// End time in seconds.
-    pub end: f32,
+/// A transcription segment with timing information (V4 spec).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptionSegmentV4 {
     /// The segment text.
     pub text: String,
-    /// The tokens in the segment.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tokens: Option<Vec<i32>>,
-    /// The temperature used for this segment.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    /// The average log probability.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avg_logprob: Option<f32>,
-    /// The compression ratio.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_ratio: Option<f32>,
-    /// The no speech probability.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_speech_prob: Option<f32>,
+    /// Start time in seconds.
+    pub start_second: f64,
+    /// End time in seconds.
+    pub end_second: f64,
 }
 
-impl TranscriptionSegment {
-    /// Create a new transcribed segment.
-    pub fn new(id: usize, start: f32, end: f32, text: impl Into<String>) -> Self {
+impl TranscriptionSegmentV4 {
+    /// Create a new transcription segment.
+    pub fn new(text: impl Into<String>, start_second: f64, end_second: f64) -> Self {
         Self {
-            id,
-            start,
-            end,
             text: text.into(),
-            tokens: None,
-            temperature: None,
-            avg_logprob: None,
-            compression_ratio: None,
-            no_speech_prob: None,
+            start_second,
+            end_second,
         }
     }
 }
 
-/// Transcription response format options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TranscriptionFormat {
-    /// Simple text format.
-    #[default]
-    Text,
-    /// JSON format with metadata.
-    Json,
-    /// SubRip subtitle format.
-    Srt,
-    /// Verbose JSON with timestamps.
-    VerboseJson,
-    /// WebVTT format.
-    Vtt,
+/// Response metadata from a transcription call.
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptionModelV4Response {
+    /// The timestamp of the response.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model ID used.
+    pub model_id: Option<String>,
+    /// Response headers.
+    pub headers: Option<HashMap<String, String>>,
+    /// The raw response body, if available.
+    pub body: Option<serde_json::Value>,
 }
 
-/// Timestamp granularity options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TimestampGranularity {
-    /// Word-level timestamps.
-    Word,
-    /// Segment-level timestamps.
-    Segment,
+impl TranscriptionModelV4Response {
+    /// Set the timestamp.
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the model ID.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    /// Set response headers.
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
+        self
+    }
+
+    /// Set the response body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+}
+
+/// Request metadata from a transcription call.
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptionModelV4Request {
+    /// The raw request body, if available.
+    pub body: Option<serde_json::Value>,
+}
+
+impl TranscriptionModelV4Request {
+    /// Set the request body.
+    pub fn with_body(mut self, body: serde_json::Value) -> Self {
+        self.body = Some(body);
+        self
+    }
 }
 
 #[cfg(test)]

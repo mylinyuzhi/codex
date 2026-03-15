@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::reranking_model::RerankedDocument;
+use vercel_ai_provider::reranking_model::RankedItem;
 use vercel_ai_provider::reranking_model::RerankingModelV4;
 use vercel_ai_provider::reranking_model::RerankingModelV4CallOptions;
 use vercel_ai_provider::reranking_model::RerankingModelV4Result;
@@ -11,6 +11,7 @@ use vercel_ai_provider::reranking_model::RerankingModelV4Result;
 use crate::rerank::RerankOptions;
 use crate::rerank::RerankingModel;
 use crate::rerank::rerank;
+use crate::test_utils::MockRerankingModel as TestUtilsMockRerankingModel;
 
 /// Mock reranking model for testing.
 struct MockRerankingModel {
@@ -42,15 +43,13 @@ impl RerankingModelV4 for MockRerankingModel {
         options: RerankingModelV4CallOptions,
     ) -> Result<RerankingModelV4Result, AISdkError> {
         // Simple mock that returns documents in reverse order with decreasing scores
-        let results: Vec<RerankedDocument> = options
-            .documents
-            .iter()
-            .enumerate()
+        let doc_count = options.documents.len();
+        let results: Vec<RankedItem> = (0..doc_count)
             .rev()
             .enumerate()
-            .map(|(i, (original_index, doc))| {
-                let score = 1.0 - (i as f32 * 0.1);
-                RerankedDocument::new(original_index, score).with_document(doc.clone())
+            .map(|(i, original_index)| {
+                let score = 1.0 - (i as f64 * 0.1);
+                RankedItem::new(original_index, score)
             })
             .collect();
 
@@ -132,4 +131,46 @@ fn test_reranking_model_from_v4() {
     let mock: Arc<dyn RerankingModelV4> = Arc::new(MockRerankingModel::new("test", "test"));
     let model: RerankingModel = mock.into();
     assert!(matches!(model, RerankingModel::V4(_)));
+}
+
+#[test]
+fn test_rerank_result_body() {
+    let response = crate::rerank::RerankResponse::new("test-model")
+        .with_body(serde_json::json!({"key": "value"}));
+    assert!(response.body.is_some());
+}
+
+#[tokio::test]
+async fn test_rerank_provider_metadata() {
+    use vercel_ai_provider::ProviderMetadata;
+    use vercel_ai_provider::reranking_model::RankedItem;
+    use vercel_ai_provider::reranking_model::RerankingModelV4Result;
+
+    let mock = TestUtilsMockRerankingModel::builder()
+        .with_rerank_handler(|options| {
+            let doc_count = options.documents.len();
+            let results: Vec<RankedItem> = (0..doc_count)
+                .map(|i| RankedItem::new(i, 1.0 - (i as f64 * 0.1)))
+                .collect();
+            let mut metadata = ProviderMetadata::new();
+            metadata.set("custom_key", serde_json::json!("custom_value"));
+            Ok(RerankingModelV4Result::new(results).with_provider_metadata(metadata))
+        })
+        .build();
+    let model: Arc<dyn RerankingModelV4> = Arc::new(mock);
+
+    let result = rerank(RerankOptions {
+        model: RerankingModel::from_v4(model),
+        query: "test query".to_string(),
+        documents: vec!["doc1".to_string(), "doc2".to_string()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let metadata = result.provider_metadata.expect("should have provider_metadata");
+    assert_eq!(
+        metadata.get("custom_key"),
+        Some(&serde_json::json!("custom_value"))
+    );
 }

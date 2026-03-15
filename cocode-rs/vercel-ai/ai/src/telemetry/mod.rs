@@ -1,25 +1,28 @@
-//! Telemetry module (stub implementation).
+//! Telemetry module.
 //!
-//! This module provides type definitions for telemetry configuration.
-//! The actual OpenTelemetry integration is not implemented; this is a stub
-//! that allows code to compile with telemetry types.
+//! This module provides telemetry configuration, integration traits,
+//! global registry, and dispatch utilities for monitoring AI SDK function calls.
+//!
+//! Telemetry integrations receive the same event types as user callbacks,
+//! matching the TS SDK design.
 
+pub mod attributes;
+pub mod dispatch;
+mod registry;
+mod telemetry_integration;
 mod telemetry_settings;
 
+pub use dispatch::build_integrations;
+pub use dispatch::notify_chunk;
+pub use dispatch::notify_error;
+pub use dispatch::notify_finish;
+pub use dispatch::notify_start;
+pub use dispatch::notify_step_finish;
+pub use dispatch::notify_step_start;
+pub use dispatch::notify_tool_call_finish;
+pub use dispatch::notify_tool_call_start;
+pub use registry::clear_global_integrations;
+pub use registry::get_global_integrations;
+pub use registry::register_telemetry_integration;
+pub use telemetry_integration::TelemetryIntegration;
 pub use telemetry_settings::TelemetrySettings;
-
-/// Get a no-op tracer.
-///
-/// This returns a unit value since we don't have actual OpenTelemetry integration.
-pub fn get_tracer(_settings: Option<&TelemetrySettings>) {}
-
-/// Record a span (no-op).
-///
-/// This is a stub that simply executes the provided function without tracing.
-pub async fn record_span<T, F, Fut>(_name: &str, _tracer: (), f: F) -> T
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = T>,
-{
-    f().await
-}

@@ -147,6 +147,7 @@ pub use language_model::LanguageModelV4;
 pub use language_model::LanguageModelV4CallOptions;
 pub use language_model::LanguageModelV4GenerateResult;
 pub use language_model::LanguageModelV4ProviderTool;
+pub use language_model::LanguageModelV4StreamResponse;
 pub use language_model::LanguageModelV4StreamResult;
 pub use language_model::LanguageModelV4Tool;
 pub use language_model::LanguageModelV4ToolChoice;
@@ -164,19 +165,28 @@ pub use language_model::ToolApprovalRequest;
 // Response metadata
 pub use response_metadata::ResponseMetadata;
 
-// New model types
-pub use reranking_model::RerankingModelV4;
+// New model types - Speech
 pub use speech_model::SpeechModelV4;
 pub use speech_model::SpeechModelV4CallOptions;
+pub use speech_model::SpeechModelV4Request;
+pub use speech_model::SpeechModelV4Response;
 pub use speech_model::SpeechModelV4Result;
-pub use speech_model::v4::SpeechFormat;
-pub use speech_model::v4::SpeechVoice;
+
+// New model types - Transcription
 pub use transcription_model::TranscriptionModelV4;
 pub use transcription_model::TranscriptionModelV4CallOptions;
+pub use transcription_model::TranscriptionModelV4Request;
+pub use transcription_model::TranscriptionModelV4Response;
 pub use transcription_model::TranscriptionModelV4Result;
-pub use transcription_model::TranscriptionSegment;
-pub use transcription_model::TranscriptionWord;
-pub use transcription_model::v4::TranscriptionFormat;
+pub use transcription_model::TranscriptionSegmentV4;
+
+// New model types - Reranking
+pub use reranking_model::RankedItem;
+pub use reranking_model::RerankDocuments;
+pub use reranking_model::RerankingModelV4;
+pub use reranking_model::RerankingModelV4CallOptions;
+pub use reranking_model::RerankingModelV4Response;
+pub use reranking_model::RerankingModelV4Result;
 pub use video_model::VideoDuration;
 pub use video_model::VideoModelV4;
 pub use video_model::VideoModelV4CallOptions;

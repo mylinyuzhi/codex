@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::RerankingModelV4;
+use vercel_ai_provider::reranking_model::RerankDocuments;
 use vercel_ai_provider::reranking_model::RerankingModelV4CallOptions;
 
 use crate::error::AIError;
@@ -226,7 +227,10 @@ pub async fn rerank(options: RerankOptions) -> Result<RerankResult<String>, AIEr
         .unwrap_or_default();
 
     // Store original documents for result construction
-    let original_documents = call_options.documents.clone();
+    let original_documents = match &call_options.documents {
+        RerankDocuments::Text(docs) => docs.clone(),
+        RerankDocuments::Object(_) => Vec::new(),
+    };
 
     // Execute with retry
     let model_clone = model.clone();
@@ -237,25 +241,47 @@ pub async fn rerank(options: RerankOptions) -> Result<RerankResult<String>, AIEr
     })
     .await?;
 
-    // Log warnings
-    let warnings: Vec<vercel_ai_provider::Warning> = vec![]; // TODO: get warnings from result if available
-    log_warnings(&LogWarningsOptions::new(warnings, &provider, &model_id));
+    // Log warnings from the provider result
+    if let Some(ref warnings) = result.warnings {
+        log_warnings(&LogWarningsOptions::new(
+            warnings.clone(),
+            &provider,
+            &model_id,
+        ));
+    }
 
     // Build result
     let ranking: Vec<RerankedDocument<String>> = result
         .results
         .into_iter()
         .map(|r| {
-            let doc = r
-                .document
-                .unwrap_or_else(|| original_documents.get(r.index).cloned().unwrap_or_default());
+            let doc = original_documents.get(r.index).cloned().unwrap_or_default();
             RerankedDocument::new(r.index, r.relevance_score, doc)
         })
         .collect();
 
-    let response = RerankResponse::new(&model_id);
+    let mut response = RerankResponse::new(&model_id);
+    if let Some(ref resp) = result.response {
+        if let Some(ref id) = resp.id {
+            response = response.with_id(id);
+        }
+        if let Some(ts) = resp.timestamp {
+            response = response.with_timestamp(ts);
+        }
+        if let Some(ref headers) = resp.headers {
+            response = response.with_headers(headers.clone());
+        }
+        if let Some(ref body) = resp.body {
+            response = response.with_body(body.clone());
+        }
+    }
 
-    Ok(RerankResult::new(original_documents, ranking, response))
+    let mut rerank_result = RerankResult::new(original_documents, ranking, response);
+    if let Some(metadata) = result.provider_metadata {
+        rerank_result = rerank_result.with_provider_metadata(metadata);
+    }
+
+    Ok(rerank_result)
 }
 
 #[cfg(test)]
