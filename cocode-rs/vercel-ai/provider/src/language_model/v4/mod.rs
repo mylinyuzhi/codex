@@ -5,7 +5,7 @@
 // Core modules
 mod call_options;
 mod call_settings;
-mod generate_result;
+pub mod generate_result;
 mod language_model_v4;
 mod provider_tool;
 mod stream_result;
