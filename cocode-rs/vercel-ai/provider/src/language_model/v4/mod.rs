@@ -34,6 +34,8 @@ pub use call_options::LanguageModelV4CallOptions;
 pub use call_options::ResponseFormat;
 pub use call_settings::LanguageModelV4CallSettings;
 pub use generate_result::LanguageModelV4GenerateResult;
+pub use generate_result::LanguageModelV4Request;
+pub use generate_result::LanguageModelV4Response;
 pub use language_model_v4::LanguageModelV4;
 pub use provider_tool::LanguageModelV4ProviderTool;
 pub use stream_result::LanguageModelV4StreamResponse;

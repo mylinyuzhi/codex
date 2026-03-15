@@ -58,6 +58,7 @@ members = [
     "vercel-ai/provider",
     "vercel-ai/provider-utils",
     "vercel-ai/ai",
+    "vercel-ai/openai",
 ]
 resolver = "2"
 
@@ -147,6 +148,7 @@ cocode-lsp = { path = "lsp" }
 vercel-ai-provider = { path = "vercel-ai/provider" }
 vercel-ai-provider-utils = { path = "vercel-ai/provider-utils" }
 vercel-ai = { path = "vercel-ai/ai" }
+vercel-ai-openai = { path = "vercel-ai/openai" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"

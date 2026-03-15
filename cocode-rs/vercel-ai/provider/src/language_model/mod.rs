@@ -11,6 +11,8 @@ pub use v4::LanguageModelV4;
 pub use v4::LanguageModelV4CallOptions;
 pub use v4::LanguageModelV4CallSettings;
 pub use v4::LanguageModelV4GenerateResult;
+pub use v4::LanguageModelV4Request;
+pub use v4::LanguageModelV4Response;
 pub use v4::LanguageModelV4Message;
 pub use v4::LanguageModelV4Prompt;
 pub use v4::LanguageModelV4ProviderTool;
