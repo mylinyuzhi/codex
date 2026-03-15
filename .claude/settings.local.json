@@ -83,8 +83,10 @@
       "Skill(squash)",
       "Bash(cd:*)",
       "Bash(for dir:*)",
+      "Bash(for d:*)",
       "Bash(do echo:*)",
       "Read(//Users/linyuzhi/codespace/myagent/codex/cocode-rs/**)",
+      "Read(//Users/linyuzhi/codespace/myagent/worktrees/codex-feat-codex-build/codex-rs/$d/**)",
       "Bash(sed 's/\\\\.ts$//')",
       "Bash(sed 's/\\\\.rs$//')",
       "Bash(__NEW_LINE_28fe945e33c639f6__ echo:*)"
