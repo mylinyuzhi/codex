@@ -14,6 +14,8 @@ pub use v4::LanguageModelV4GenerateResult;
 pub use v4::LanguageModelV4Message;
 pub use v4::LanguageModelV4Prompt;
 pub use v4::LanguageModelV4ProviderTool;
+pub use v4::LanguageModelV4Request;
+pub use v4::LanguageModelV4Response;
 pub use v4::LanguageModelV4StreamPart;
 pub use v4::LanguageModelV4StreamResponse;
 pub use v4::LanguageModelV4StreamResult;

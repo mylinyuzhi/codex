@@ -168,7 +168,9 @@ async fn test_rerank_provider_metadata() {
     .await
     .unwrap();
 
-    let metadata = result.provider_metadata.expect("should have provider_metadata");
+    let metadata = result
+        .provider_metadata
+        .expect("should have provider_metadata");
     assert_eq!(
         metadata.get("custom_key"),
         Some(&serde_json::json!("custom_value"))
