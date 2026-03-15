@@ -80,7 +80,10 @@
       "WebFetch(domain:ai-sdk.dev)",
       "WebFetch(domain:sdk.vercel.ai)",
       "Bash(touch:*)",
-      "Skill(squash)"
+      "Skill(squash)",
+      "Bash(for d:*)",
+      "Bash(do echo:*)",
+      "Read(//Users/linyuzhi/codespace/myagent/worktrees/codex-feat-codex-build/codex-rs/$d/**)"
     ],
     "deny": [],
     "ask": []

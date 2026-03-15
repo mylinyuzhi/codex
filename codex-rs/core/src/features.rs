@@ -154,8 +154,6 @@ pub enum Feature {
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
-    /// Route apps MCP calls through the configured gateway.
-    AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -204,7 +202,8 @@ impl Feature {
     }
 
     fn info(self) -> &'static FeatureSpec {
-        all_features()
+        FEATURES
+            .iter()
             .find(|spec| spec.id == self)
             .unwrap_or_else(|| unreachable!("missing FeatureSpec for {:?}", self))
     }
@@ -253,7 +252,7 @@ impl Features {
     /// Starts with built-in defaults.
     pub fn with_defaults() -> Self {
         let mut set = BTreeSet::new();
-        for spec in all_features() {
+        for spec in FEATURES {
             if spec.default_enabled {
                 set.insert(spec.id);
             }
@@ -519,16 +518,7 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
 }
 
-/// Returns all feature specifications (core + ext).
-/// Use this instead of accessing FEATURES directly.
-pub fn all_features() -> impl Iterator<Item = &'static FeatureSpec> {
-    FEATURES
-        .iter()
-        .chain(crate::features_ext::EXT_FEATURES.iter())
-}
-
-/// Core feature specifications. Use `all_features()` to include ext features.
-const FEATURES: &[FeatureSpec] = &[
+pub const FEATURES: &[FeatureSpec] = &[
     // Stable features.
     FeatureSpec {
         id: Feature::GhostCommit,
@@ -758,12 +748,6 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::AppsMcpGateway,
-        key: "apps_mcp_gateway",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
