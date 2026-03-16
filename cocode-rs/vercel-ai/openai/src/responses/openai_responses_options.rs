@@ -1,8 +1,9 @@
 use serde::Deserialize;
 
-use crate::chat::openai_chat_options::{
-    PromptCacheRetention, ReasoningEffort, ServiceTier, TextVerbosity,
-};
+use crate::chat::openai_chat_options::PromptCacheRetention;
+use crate::chat::openai_chat_options::ReasoningEffort;
+use crate::chat::openai_chat_options::ServiceTier;
+use crate::chat::openai_chat_options::TextVerbosity;
 use crate::openai_capabilities::SystemMessageMode;
 
 /// Provider-specific options for the OpenAI Responses API.

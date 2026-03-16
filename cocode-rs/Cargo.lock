@@ -7610,6 +7610,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "vercel-ai-openai-compatible"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "form_urlencoded",
+ "futures",
+ "pretty_assertions",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "vercel-ai-provider",
+ "vercel-ai-provider-utils",
+]
+
+[[package]]
 name = "vercel-ai-provider"
 version = "0.0.0"
 dependencies = [

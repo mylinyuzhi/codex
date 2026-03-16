@@ -1,6 +1,7 @@
-use vercel_ai_provider::{
-    AssistantContentPart, LanguageModelV4Message, LanguageModelV4Prompt, UserContentPart,
-};
+use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::LanguageModelV4Message;
+use vercel_ai_provider::LanguageModelV4Prompt;
+use vercel_ai_provider::UserContentPart;
 
 /// Convert a `LanguageModelV4Prompt` to a single text prompt for the legacy Completions API.
 pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> String {

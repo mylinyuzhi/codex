@@ -1,0 +1,65 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use serde_json::Value;
+
+use crate::metadata_extractor::MetadataExtractor;
+
+/// Shared configuration passed to each OpenAI-compatible model instance.
+pub struct OpenAICompatibleConfig {
+    /// Provider identifier (e.g., "xai.chat", "groq.chat").
+    pub provider: String,
+    /// Base URL for the API (e.g., "https://api.x.ai/v1").
+    pub base_url: String,
+    /// Lazy header supplier — called per-request to get auth + custom headers.
+    pub headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
+    /// Optional query parameters appended to every request URL.
+    pub query_params: Option<HashMap<String, String>>,
+    /// Optional shared HTTP client for connection pooling.
+    pub client: Option<Arc<reqwest::Client>>,
+    /// Whether to include usage in streaming responses (`stream_options: { include_usage: true }`).
+    pub include_usage: bool,
+    /// Whether the provider supports structured outputs (json_schema response format).
+    pub supports_structured_outputs: bool,
+    /// Optional request body transform applied before sending.
+    pub transform_request_body: Option<Arc<dyn Fn(Value) -> Value + Send + Sync>>,
+    /// Optional metadata extractor for provider-specific response metadata.
+    pub metadata_extractor: Option<Arc<dyn MetadataExtractor>>,
+}
+
+impl OpenAICompatibleConfig {
+    /// Build a full URL from a path segment (e.g., "/chat/completions"),
+    /// appending any configured query parameters.
+    pub fn url(&self, path: &str) -> String {
+        let base = format!("{}{path}", self.base_url);
+        match &self.query_params {
+            Some(params) if !params.is_empty() => {
+                let query: String = form_urlencoded::Serializer::new(String::new())
+                    .extend_pairs(params.iter())
+                    .finish();
+                format!("{base}?{query}")
+            }
+            _ => base,
+        }
+    }
+
+    /// Get the current headers by invoking the lazy supplier.
+    pub fn get_headers(&self) -> HashMap<String, String> {
+        (self.headers)()
+    }
+
+    /// Apply the optional request body transform.
+    pub fn transform_body(&self, body: Value) -> Value {
+        match &self.transform_request_body {
+            Some(transform) => transform(body),
+            None => body,
+        }
+    }
+
+    /// Get the provider options key (first segment before '.').
+    ///
+    /// E.g., `"xai.chat"` → `"xai"`, `"groq"` → `"groq"`.
+    pub fn provider_options_name(&self) -> &str {
+        self.provider.split('.').next().unwrap_or(&self.provider)
+    }
+}

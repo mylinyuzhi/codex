@@ -5,30 +5,43 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
-use vercel_ai_provider::{
-    LanguageModelV4Request, LanguageModelV4Response,
-    AISdkError, AssistantContentPart, LanguageModelV4, LanguageModelV4CallOptions,
-    LanguageModelV4GenerateResult, LanguageModelV4StreamPart, LanguageModelV4StreamResponse,
-    LanguageModelV4StreamResult, ProviderMetadata, ResponseFormat, ResponseMetadata, SourceType,
-    TextPart, ToolCallPart, Warning,
-};
-use vercel_ai_provider_utils::{
-    JsonResponseHandler, post_json_to_api_with_client, post_stream_to_api_with_client,
-};
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::LanguageModelV4;
+use vercel_ai_provider::LanguageModelV4CallOptions;
+use vercel_ai_provider::LanguageModelV4GenerateResult;
+use vercel_ai_provider::LanguageModelV4Request;
+use vercel_ai_provider::LanguageModelV4Response;
+use vercel_ai_provider::LanguageModelV4StreamPart;
+use vercel_ai_provider::LanguageModelV4StreamResponse;
+use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ResponseFormat;
+use vercel_ai_provider::ResponseMetadata;
+use vercel_ai_provider::SourceType;
+use vercel_ai_provider::TextPart;
+use vercel_ai_provider::ToolCallPart;
+use vercel_ai_provider::Warning;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::post_json_to_api_with_client;
+use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
-use crate::openai_capabilities::{SystemMessageMode, get_capabilities};
+use crate::openai_capabilities::SystemMessageMode;
+use crate::openai_capabilities::get_capabilities;
 use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;
 
 use super::convert_chat_usage::convert_openai_chat_usage;
 use super::convert_to_chat_messages::convert_to_openai_chat_messages;
 use super::map_finish_reason::map_openai_chat_finish_reason;
-use super::openai_chat_api::{OpenAIChatChunk, OpenAIChatResponse};
-use super::openai_chat_options::{
-    OpenAIChatProviderOptions, ReasoningEffort, extract_openai_options,
-};
+use super::openai_chat_api::OpenAIChatChunk;
+use super::openai_chat_api::OpenAIChatResponse;
+use super::openai_chat_options::OpenAIChatProviderOptions;
+use super::openai_chat_options::ReasoningEffort;
+use super::openai_chat_options::extract_openai_options;
 use super::prepare_tools::prepare_chat_tools;
 
 /// OpenAI Chat Completions language model.
@@ -58,11 +71,14 @@ impl OpenAIChatLanguageModel {
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);
         let is_reasoning_model = force_reasoning || caps.is_reasoning_model;
 
-        let system_message_mode = openai_options.system_message_mode.unwrap_or(if is_reasoning_model {
-            SystemMessageMode::Developer
-        } else {
-            caps.system_message_mode
-        });
+        let system_message_mode =
+            openai_options
+                .system_message_mode
+                .unwrap_or(if is_reasoning_model {
+                    SystemMessageMode::Developer
+                } else {
+                    caps.system_message_mode
+                });
 
         // Convert prompt to messages
         let (messages, msg_warnings) =
@@ -128,15 +144,13 @@ impl OpenAIChatLanguageModel {
             set_logprobs(&mut body, &openai_options);
 
             if let Some(ref bias) = openai_options.logit_bias {
-                body["logit_bias"] = serde_json::to_value(bias)
-                    .unwrap_or_default();
+                body["logit_bias"] = serde_json::to_value(bias).unwrap_or_default();
             }
         }
 
         // Search model handling
         if self.model_id.starts_with("gpt-4o-search-preview") {
-            body.as_object_mut()
-                .map(|o| o.remove("temperature"));
+            body.as_object_mut().map(|o| o.remove("temperature"));
         }
 
         // Common fields
@@ -343,9 +357,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             finish_reason,
             warnings,
             provider_metadata,
-            request: Some(LanguageModelV4Request {
-                body: Some(body),
-            }),
+            request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
                 timestamp,
                 model_id: response.model,
@@ -542,9 +554,8 @@ impl ChatStreamState {
         if self.include_raw
             && let Ok(raw) = serde_json::from_str::<Value>(data)
         {
-            self.pending.push_back(LanguageModelV4StreamPart::Raw {
-                raw_value: raw,
-            });
+            self.pending
+                .push_back(LanguageModelV4StreamPart::Raw { raw_value: raw });
         }
 
         // Emit response metadata once
@@ -595,16 +606,18 @@ impl ChatStreamState {
                 {
                     if !self.text_started {
                         self.text_started = true;
-                        self.pending.push_back(LanguageModelV4StreamPart::TextStart {
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::TextStart {
+                                id: self.text_id.clone(),
+                                provider_metadata: None,
+                            });
+                    }
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::TextDelta {
                             id: self.text_id.clone(),
+                            delta: content.clone(),
                             provider_metadata: None,
                         });
-                    }
-                    self.pending.push_back(LanguageModelV4StreamPart::TextDelta {
-                        id: self.text_id.clone(),
-                        delta: content.clone(),
-                        provider_metadata: None,
-                    });
                 }
 
                 // Tool call deltas
@@ -664,13 +677,12 @@ impl ChatStreamState {
                             && let Some(ref args) = func.arguments
                             && !args.is_empty()
                         {
-                            self.pending.push_back(
-                                LanguageModelV4StreamPart::ToolInputDelta {
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolInputDelta {
                                     id: self.tool_calls[idx].id.clone(),
                                     delta: args.clone(),
                                     provider_metadata: None,
-                                },
-                            );
+                                });
                         }
                     }
                 }
@@ -718,14 +730,10 @@ impl ChatStreamState {
                             provider_metadata: None,
                         });
 
-                    let input: Value =
-                        serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolCall(
-                            vercel_ai_provider::tool::ToolCall::new(
-                                tc.id, tc.name, input,
-                            ),
-                        ));
+                    let input: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
+                        vercel_ai_provider::tool::ToolCall::new(tc.id, tc.name, input),
+                    ));
                 }
             }
         }

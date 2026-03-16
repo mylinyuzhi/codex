@@ -59,6 +59,7 @@ members = [
     "vercel-ai/provider-utils",
     "vercel-ai/ai",
     "vercel-ai/openai",
+    "vercel-ai/openai-compatible",
     "vercel-ai/google",
 ]
 resolver = "2"
@@ -150,6 +151,7 @@ vercel-ai-provider = { path = "vercel-ai/provider" }
 vercel-ai-provider-utils = { path = "vercel-ai/provider-utils" }
 vercel-ai = { path = "vercel-ai/ai" }
 vercel-ai-openai = { path = "vercel-ai/openai" }
+vercel-ai-openai-compatible = { path = "vercel-ai/openai-compatible" }
 vercel-ai-google = { path = "vercel-ai/google" }
 
 # External (only those actually used by existing crates)
@@ -163,6 +165,7 @@ chrono = "0.4.42"
 clap = "4"
 dotenvy = "0.15.7"
 eventsource-stream = "0.2.3"
+form_urlencoded = "1"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
 grep-regex = "0.1.14"

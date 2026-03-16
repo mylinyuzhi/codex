@@ -1,4 +1,5 @@
-use vercel_ai_provider::{FinishReason, UnifiedFinishReason};
+use vercel_ai_provider::FinishReason;
+use vercel_ai_provider::UnifiedFinishReason;
 
 /// Map an OpenAI Responses API finish reason to an SDK `FinishReason`.
 ///
