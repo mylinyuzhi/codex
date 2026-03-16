@@ -23,10 +23,7 @@ fn deserialize_chat_response() {
     let resp: OpenAIChatResponse = serde_json::from_str(json).expect("should deserialize");
     assert_eq!(resp.id.as_deref(), Some("chatcmpl-abc"));
     assert_eq!(resp.choices.len(), 1);
-    assert_eq!(
-        resp.choices[0].message.content.as_deref(),
-        Some("Hello!")
-    );
+    assert_eq!(resp.choices[0].message.content.as_deref(), Some("Hello!"));
     assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
 }
 
@@ -59,7 +56,11 @@ fn deserialize_tool_call_response() {
         }
     }"#;
     let resp: OpenAIChatResponse = serde_json::from_str(json).expect("should deserialize");
-    let tc = &resp.choices[0].message.tool_calls.as_ref().expect("tool_calls")[0];
+    let tc = &resp.choices[0]
+        .message
+        .tool_calls
+        .as_ref()
+        .expect("tool_calls")[0];
     assert_eq!(tc.id, "call_123");
     assert_eq!(tc.function.name, "get_weather");
 }
@@ -79,7 +80,10 @@ fn deserialize_streaming_chunk() {
     }"#;
     let chunk: OpenAIChatChunk = serde_json::from_str(json).expect("should deserialize");
     assert_eq!(
-        chunk.choices.as_ref().expect("choices")[0].delta.content.as_deref(),
+        chunk.choices.as_ref().expect("choices")[0]
+            .delta
+            .content
+            .as_deref(),
         Some("Hello")
     );
 }

@@ -3,12 +3,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
-use vercel_ai_provider::image_model::v4::{ImageModelV4Response, ImageModelV4Usage};
-use vercel_ai_provider::{
-    AISdkError, GeneratedImage, ImageData, ImageModelV4, ImageModelV4CallOptions,
-    ImageModelV4GenerateResult, ImageSize,
-};
-use vercel_ai_provider_utils::{JsonResponseHandler, post_json_to_api_with_client};
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::GeneratedImage;
+use vercel_ai_provider::ImageData;
+use vercel_ai_provider::ImageModelV4;
+use vercel_ai_provider::ImageModelV4CallOptions;
+use vercel_ai_provider::ImageModelV4GenerateResult;
+use vercel_ai_provider::ImageSize;
+use vercel_ai_provider::image_model::v4::ImageModelV4Response;
+use vercel_ai_provider::image_model::v4::ImageModelV4Usage;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::post_json_to_api_with_client;
 
 use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;

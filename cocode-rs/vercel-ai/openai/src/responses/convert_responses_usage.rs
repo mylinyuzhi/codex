@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
-use vercel_ai_provider::{InputTokens, OutputTokens, Usage};
+use serde::Deserialize;
+use serde::Serialize;
+use vercel_ai_provider::InputTokens;
+use vercel_ai_provider::OutputTokens;
+use vercel_ai_provider::Usage;
 
 /// Raw usage from the OpenAI Responses API.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -64,9 +67,10 @@ pub fn convert_openai_responses_usage(usage: Option<&OpenAIResponsesUsage>) -> U
             text: Some(output_tokens.saturating_sub(reasoning)),
             reasoning: Some(reasoning),
         },
-        raw: serde_json::to_value(usage)
-            .ok()
-            .and_then(|v| v.as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())),
+        raw: serde_json::to_value(usage).ok().and_then(|v| {
+            v.as_object()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        }),
     }
 }
 

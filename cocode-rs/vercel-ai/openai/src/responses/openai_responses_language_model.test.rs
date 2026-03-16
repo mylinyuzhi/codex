@@ -35,7 +35,11 @@ fn get_args_basic() {
     let (body, warnings) = model.get_args(&options).expect("get_args");
     assert!(warnings.is_empty());
     assert_eq!(body["model"], "gpt-4o");
-    assert!(body["temperature"].as_f64().is_some_and(|v| (v - 0.7).abs() < 0.01));
+    assert!(
+        body["temperature"]
+            .as_f64()
+            .is_some_and(|v| (v - 0.7).abs() < 0.01)
+    );
     assert!(body["input"].is_array());
 }
 

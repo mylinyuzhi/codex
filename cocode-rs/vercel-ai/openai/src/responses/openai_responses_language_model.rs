@@ -5,30 +5,43 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
-use vercel_ai_provider::{
-    LanguageModelV4Request, LanguageModelV4Response,
-    AISdkError, AssistantContentPart, LanguageModelV4, LanguageModelV4CallOptions,
-    LanguageModelV4GenerateResult, LanguageModelV4StreamPart, LanguageModelV4StreamResponse,
-    LanguageModelV4StreamResult, ProviderMetadata, ResponseFormat, ResponseMetadata, SourceType,
-    TextPart, ToolCallPart, Warning,
-};
-use vercel_ai_provider_utils::{
-    JsonResponseHandler, post_json_to_api_with_client, post_stream_to_api_with_client,
-};
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::LanguageModelV4;
+use vercel_ai_provider::LanguageModelV4CallOptions;
+use vercel_ai_provider::LanguageModelV4GenerateResult;
+use vercel_ai_provider::LanguageModelV4Request;
+use vercel_ai_provider::LanguageModelV4Response;
+use vercel_ai_provider::LanguageModelV4StreamPart;
+use vercel_ai_provider::LanguageModelV4StreamResponse;
+use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ResponseFormat;
+use vercel_ai_provider::ResponseMetadata;
+use vercel_ai_provider::SourceType;
+use vercel_ai_provider::TextPart;
+use vercel_ai_provider::ToolCallPart;
+use vercel_ai_provider::Warning;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::post_json_to_api_with_client;
+use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
-use crate::openai_capabilities::{SystemMessageMode, get_capabilities};
+use crate::openai_capabilities::SystemMessageMode;
+use crate::openai_capabilities::get_capabilities;
 use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;
 
 use super::convert_responses_usage::convert_openai_responses_usage;
 use super::convert_to_responses_input::convert_to_openai_responses_input;
 use super::map_finish_reason::map_openai_responses_finish_reason;
-use super::openai_responses_api::{
-    OpenAIResponsesResponse, ResponseAnnotation, ResponseMessageContent, ResponseOutputItem,
-    ResponsesStreamEvent,
-};
+use super::openai_responses_api::OpenAIResponsesResponse;
+use super::openai_responses_api::ResponseAnnotation;
+use super::openai_responses_api::ResponseMessageContent;
+use super::openai_responses_api::ResponseOutputItem;
+use super::openai_responses_api::ResponsesStreamEvent;
 use super::openai_responses_options::extract_responses_options;
 use super::prepare_tools::prepare_responses_tools;
 use super::provider_metadata::build_responses_provider_metadata;
@@ -213,9 +226,7 @@ impl OpenAIResponsesLanguageModel {
                         body["include"] = json!([]);
                     }
                     if let Some(arr) = body["include"].as_array_mut() {
-                        arr.push(Value::String(
-                            "message.output_text.logprobs".into(),
-                        ));
+                        arr.push(Value::String("message.output_text.logprobs".into()));
                     }
                 }
                 Value::Number(n) => {
@@ -224,9 +235,7 @@ impl OpenAIResponsesLanguageModel {
                         body["include"] = json!([]);
                     }
                     if let Some(arr) = body["include"].as_array_mut() {
-                        arr.push(Value::String(
-                            "message.output_text.logprobs".into(),
-                        ));
+                        arr.push(Value::String("message.output_text.logprobs".into()));
                     }
                 }
                 _ => {}
@@ -285,9 +294,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 } => {
                     for part in msg_content {
                         if let ResponseMessageContent::OutputText {
-                            text,
-                            annotations,
-                            ..
+                            text, annotations, ..
                         } = part
                         {
                             if let Some(text) = text {
@@ -298,18 +305,12 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                             }
                             if let Some(anns) = annotations {
                                 for ann in anns {
-                                    if let ResponseAnnotation::UrlCitation {
-                                        url,
-                                        title,
-                                        ..
-                                    } = ann
+                                    if let ResponseAnnotation::UrlCitation { url, title, .. } = ann
                                     {
                                         content.push(AssistantContentPart::Source(
                                             vercel_ai_provider::content::SourcePart {
                                                 source_type: SourceType::Url,
-                                                id: vercel_ai_provider_utils::generate_id(
-                                                    "src",
-                                                ),
+                                                id: vercel_ai_provider_utils::generate_id("src"),
                                                 url: url.clone(),
                                                 title: title.clone(),
                                                 media_type: None,
@@ -363,9 +364,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 | ResponseOutputItem::CodeInterpreterCall { id, .. } => {
                     let (tool_name, tool_type) = match item {
                         ResponseOutputItem::WebSearchCall { .. } => ("web_search", "web_search"),
-                        ResponseOutputItem::FileSearchCall { .. } => {
-                            ("file_search", "file_search")
-                        }
+                        ResponseOutputItem::FileSearchCall { .. } => ("file_search", "file_search"),
                         ResponseOutputItem::CodeInterpreterCall { .. } => {
                             ("code_interpreter", "code_interpreter")
                         }
@@ -383,10 +382,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
             }
         }
 
-        let finish_reason = map_openai_responses_finish_reason(
-            response.status.as_deref(),
-            has_function_call,
-        );
+        let finish_reason =
+            map_openai_responses_finish_reason(response.status.as_deref(), has_function_call);
         let usage = convert_openai_responses_usage(response.usage.as_ref());
         let provider_metadata = build_responses_provider_metadata(
             response.id.as_deref(),
@@ -404,9 +401,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
             finish_reason,
             warnings,
             provider_metadata,
-            request: Some(LanguageModelV4Request {
-                body: Some(body),
-            }),
+            request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
                 timestamp,
                 model_id: response.model,
@@ -582,9 +577,8 @@ impl ResponsesStreamState {
         if self.include_raw
             && let Ok(raw) = serde_json::from_str::<Value>(data)
         {
-            self.pending.push_back(LanguageModelV4StreamPart::Raw {
-                raw_value: raw,
-            });
+            self.pending
+                .push_back(LanguageModelV4StreamPart::Raw { raw_value: raw });
         }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(data) {
@@ -625,33 +619,27 @@ impl ResponsesStreamState {
                 }
             }
 
-            ResponsesStreamEvent::OutputItemAdded { item: Some(item) } => {
-                match &item {
-                    ResponseOutputItem::FunctionCall { id, name, .. } => {
-                        self.has_function_call = true;
-                        let item_id = id.clone().unwrap_or_default();
-                        self.active_fn_calls.insert(
-                            item_id.clone(),
-                            ActiveFnCall {
-                                id: item_id,
-                                name: name.clone().unwrap_or_default(),
-                                arguments: String::new(),
-                                started: false,
-                            },
-                        );
-                    }
-                    ResponseOutputItem::Message { id, .. } => {
-                        let item_id = id.clone().unwrap_or_default();
-                        self.active_texts.insert(
-                            item_id,
-                            ActiveTextItem {
-                                started: false,
-                            },
-                        );
-                    }
-                    _ => {}
+            ResponsesStreamEvent::OutputItemAdded { item: Some(item) } => match &item {
+                ResponseOutputItem::FunctionCall { id, name, .. } => {
+                    self.has_function_call = true;
+                    let item_id = id.clone().unwrap_or_default();
+                    self.active_fn_calls.insert(
+                        item_id.clone(),
+                        ActiveFnCall {
+                            id: item_id,
+                            name: name.clone().unwrap_or_default(),
+                            arguments: String::new(),
+                            started: false,
+                        },
+                    );
                 }
-            }
+                ResponseOutputItem::Message { id, .. } => {
+                    let item_id = id.clone().unwrap_or_default();
+                    self.active_texts
+                        .insert(item_id, ActiveTextItem { started: false });
+                }
+                _ => {}
+            },
 
             ResponsesStreamEvent::OutputTextDelta { item_id, delta, .. } => {
                 if let (Some(item_id), Some(delta)) = (item_id, delta) {
@@ -659,29 +647,28 @@ impl ResponsesStreamState {
                     if let Some(text_item) = self.active_texts.get_mut(&item_id) {
                         if !text_item.started {
                             text_item.started = true;
-                            self.pending.push_back(LanguageModelV4StreamPart::TextStart {
-                                id: item_id.clone(),
-                                provider_metadata: None,
-                            });
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::TextStart {
+                                    id: item_id.clone(),
+                                    provider_metadata: None,
+                                });
                         }
                     } else {
                         // Auto-create if not tracked
-                        self.active_texts.insert(
-                            item_id.clone(),
-                            ActiveTextItem {
-                                started: true,
-                            },
-                        );
-                        self.pending.push_back(LanguageModelV4StreamPart::TextStart {
-                            id: item_id.clone(),
+                        self.active_texts
+                            .insert(item_id.clone(), ActiveTextItem { started: true });
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::TextStart {
+                                id: item_id.clone(),
+                                provider_metadata: None,
+                            });
+                    }
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::TextDelta {
+                            id: item_id,
+                            delta,
                             provider_metadata: None,
                         });
-                    }
-                    self.pending.push_back(LanguageModelV4StreamPart::TextDelta {
-                        id: item_id,
-                        delta,
-                        provider_metadata: None,
-                    });
                 }
             }
 
@@ -732,12 +719,10 @@ impl ResponsesStreamState {
                             id: fc.id.clone(),
                             provider_metadata: None,
                         });
-                    let input: Value =
-                        serde_json::from_str(&fc.arguments).unwrap_or(Value::Null);
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolCall(
-                            vercel_ai_provider::tool::ToolCall::new(fc.id, fc.name, input),
-                        ));
+                    let input: Value = serde_json::from_str(&fc.arguments).unwrap_or(Value::Null);
+                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
+                        vercel_ai_provider::tool::ToolCall::new(fc.id, fc.name, input),
+                    ));
                 }
             }
 

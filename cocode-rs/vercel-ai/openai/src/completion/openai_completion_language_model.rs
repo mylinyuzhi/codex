@@ -3,17 +3,23 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::Stream;
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
-use vercel_ai_provider::{
-    AISdkError, AssistantContentPart, LanguageModelV4, LanguageModelV4CallOptions,
-    LanguageModelV4GenerateResult, LanguageModelV4Request, LanguageModelV4Response,
-    LanguageModelV4StreamPart, LanguageModelV4StreamResponse, LanguageModelV4StreamResult,
-    TextPart,
-};
-use vercel_ai_provider_utils::{
-    JsonResponseHandler, post_json_to_api_with_client, post_stream_to_api_with_client,
-};
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::LanguageModelV4;
+use vercel_ai_provider::LanguageModelV4CallOptions;
+use vercel_ai_provider::LanguageModelV4GenerateResult;
+use vercel_ai_provider::LanguageModelV4Request;
+use vercel_ai_provider::LanguageModelV4Response;
+use vercel_ai_provider::LanguageModelV4StreamPart;
+use vercel_ai_provider::LanguageModelV4StreamResponse;
+use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::TextPart;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::post_json_to_api_with_client;
+use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
 use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;
@@ -21,7 +27,8 @@ use crate::openai_error::OpenAIFailedResponseHandler;
 use super::convert_completion_usage::convert_openai_completion_usage;
 use super::convert_to_completion_prompt::convert_to_completion_prompt;
 use super::map_finish_reason::map_openai_completion_finish_reason;
-use super::openai_completion_api::{OpenAICompletionChunk, OpenAICompletionResponse};
+use super::openai_completion_api::OpenAICompletionChunk;
+use super::openai_completion_api::OpenAICompletionResponse;
 use super::openai_completion_options::extract_completion_options;
 
 /// OpenAI legacy Completions language model.
@@ -142,9 +149,7 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
             finish_reason,
             warnings: Vec::new(),
             provider_metadata: None,
-            request: Some(LanguageModelV4Request {
-                body: Some(body),
-            }),
+            request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
                 timestamp,
                 model_id: response.model,

@@ -1,4 +1,5 @@
-use vercel_ai_provider::{FinishReason, UnifiedFinishReason};
+use vercel_ai_provider::FinishReason;
+use vercel_ai_provider::UnifiedFinishReason;
 
 /// Map a Completions API finish reason.
 pub fn map_openai_completion_finish_reason(finish_reason: Option<&str>) -> FinishReason {

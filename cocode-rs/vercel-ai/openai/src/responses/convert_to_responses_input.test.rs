@@ -1,5 +1,7 @@
 use super::*;
-use vercel_ai_provider::{TextPart, ToolCallPart, ToolResultPart};
+use vercel_ai_provider::TextPart;
+use vercel_ai_provider::ToolCallPart;
+use vercel_ai_provider::ToolResultPart;
 
 #[test]
 fn converts_system_as_developer() {

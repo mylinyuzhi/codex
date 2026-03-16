@@ -60,6 +60,7 @@ members = [
     "vercel-ai/ai",
     "vercel-ai/openai",
     "vercel-ai/google",
+    "vercel-ai/anthropic",
 ]
 resolver = "2"
 
@@ -151,6 +152,7 @@ vercel-ai-provider-utils = { path = "vercel-ai/provider-utils" }
 vercel-ai = { path = "vercel-ai/ai" }
 vercel-ai-openai = { path = "vercel-ai/openai" }
 vercel-ai-google = { path = "vercel-ai/google" }
+vercel-ai-anthropic = { path = "vercel-ai/anthropic" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"

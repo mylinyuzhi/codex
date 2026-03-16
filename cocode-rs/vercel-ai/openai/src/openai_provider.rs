@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use vercel_ai_provider::errors::{LoadAPIKeyError, NoSuchModelError};
-use vercel_ai_provider::{
-    EmbeddingModelV4, ImageModelV4, LanguageModelV4, ProviderV4,
-};
+use vercel_ai_provider::EmbeddingModelV4;
+use vercel_ai_provider::ImageModelV4;
+use vercel_ai_provider::LanguageModelV4;
+use vercel_ai_provider::ProviderV4;
+use vercel_ai_provider::errors::LoadAPIKeyError;
+use vercel_ai_provider::errors::NoSuchModelError;
 use vercel_ai_provider::provider::v4::FromEnvProvider;
 use vercel_ai_provider_utils::load_api_key;
 
@@ -61,31 +63,30 @@ impl OpenAIProvider {
         let project = settings.project;
         let custom_headers = settings.headers.unwrap_or_default();
 
-        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> =
-            Arc::new(move || {
-                let mut h = HashMap::new();
+        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> = Arc::new(move || {
+            let mut h = HashMap::new();
 
-                // API key — loaded lazily per request
-                let key = load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI")
-                    .unwrap_or_default();
-                if !key.is_empty() {
-                    h.insert("Authorization".into(), format!("Bearer {key}"));
-                }
+            // API key — loaded lazily per request
+            let key =
+                load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI").unwrap_or_default();
+            if !key.is_empty() {
+                h.insert("Authorization".into(), format!("Bearer {key}"));
+            }
 
-                if let Some(ref org) = organization {
-                    h.insert("OpenAI-Organization".into(), org.clone());
-                }
-                if let Some(ref proj) = project {
-                    h.insert("OpenAI-Project".into(), proj.clone());
-                }
+            if let Some(ref org) = organization {
+                h.insert("OpenAI-Organization".into(), org.clone());
+            }
+            if let Some(ref proj) = project {
+                h.insert("OpenAI-Project".into(), proj.clone());
+            }
 
-                // Merge custom headers (custom overrides default)
-                for (k, v) in &custom_headers {
-                    h.insert(k.clone(), v.clone());
-                }
+            // Merge custom headers (custom overrides default)
+            for (k, v) in &custom_headers {
+                h.insert(k.clone(), v.clone());
+            }
 
-                h
-            });
+            h
+        });
 
         Self {
             provider_name,
