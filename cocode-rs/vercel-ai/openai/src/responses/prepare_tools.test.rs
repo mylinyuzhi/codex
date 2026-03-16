@@ -1,6 +1,6 @@
 use super::*;
-use vercel_ai_provider::language_model::v4::function_tool::LanguageModelV4FunctionTool;
 use vercel_ai_provider::LanguageModelV4ProviderTool;
+use vercel_ai_provider::language_model::v4::function_tool::LanguageModelV4FunctionTool;
 
 #[test]
 fn no_tools() {

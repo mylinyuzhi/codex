@@ -3,12 +3,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use vercel_ai_provider::errors::{LoadAPIKeyError, NoSuchModelError};
-use vercel_ai_provider::{
-    EmbeddingModelV4, ImageModelV4, LanguageModelV4, ProviderV4,
-};
+use vercel_ai_provider::EmbeddingModelV4;
+use vercel_ai_provider::ImageModelV4;
+use vercel_ai_provider::LanguageModelV4;
+use vercel_ai_provider::ProviderV4;
+use vercel_ai_provider::SpeechModelV4;
+use vercel_ai_provider::TranscriptionModelV4;
+use vercel_ai_provider::errors::LoadAPIKeyError;
+use vercel_ai_provider::errors::NoSuchModelError;
 use vercel_ai_provider::provider::v4::FromEnvProvider;
 use vercel_ai_provider_utils::load_api_key;
+use vercel_ai_provider_utils::without_trailing_slash;
 
 use crate::chat::OpenAIChatLanguageModel;
 use crate::completion::OpenAICompletionLanguageModel;
@@ -16,6 +21,8 @@ use crate::embedding::OpenAIEmbeddingModel;
 use crate::image::OpenAIImageModel;
 use crate::openai_config::OpenAIConfig;
 use crate::responses::OpenAIResponsesLanguageModel;
+use crate::speech::OpenAISpeechModel;
+use crate::transcription::OpenAITranscriptionModel;
 
 /// Settings for creating an OpenAI provider.
 #[derive(Default)]
@@ -55,37 +62,41 @@ impl OpenAIProvider {
             .base_url
             .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
             .unwrap_or_else(|| "https://api.openai.com/v1".into());
+        let base_url = without_trailing_slash(&base_url).to_string();
 
         let api_key = settings.api_key;
         let organization = settings.organization;
         let project = settings.project;
         let custom_headers = settings.headers.unwrap_or_default();
 
-        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> =
-            Arc::new(move || {
-                let mut h = HashMap::new();
+        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> = Arc::new(move || {
+            let mut h = HashMap::new();
 
-                // API key — loaded lazily per request
-                let key = load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI")
-                    .unwrap_or_default();
-                if !key.is_empty() {
+            // API key — loaded lazily per request
+            match load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI") {
+                Ok(key) if !key.is_empty() => {
                     h.insert("Authorization".into(), format!("Bearer {key}"));
                 }
-
-                if let Some(ref org) = organization {
-                    h.insert("OpenAI-Organization".into(), org.clone());
+                Err(e) => {
+                    tracing::warn!("OpenAI API key not configured: {e}");
                 }
-                if let Some(ref proj) = project {
-                    h.insert("OpenAI-Project".into(), proj.clone());
-                }
+                _ => {}
+            }
 
-                // Merge custom headers (custom overrides default)
-                for (k, v) in &custom_headers {
-                    h.insert(k.clone(), v.clone());
-                }
+            if let Some(ref org) = organization {
+                h.insert("OpenAI-Organization".into(), org.clone());
+            }
+            if let Some(ref proj) = project {
+                h.insert("OpenAI-Project".into(), proj.clone());
+            }
 
-                h
-            });
+            // Merge custom headers (custom overrides default)
+            for (k, v) in &custom_headers {
+                h.insert(k.clone(), v.clone());
+            }
+
+            h
+        });
 
         Self {
             provider_name,
@@ -128,6 +139,16 @@ impl OpenAIProvider {
     pub fn image(&self, model_id: &str) -> OpenAIImageModel {
         OpenAIImageModel::new(model_id, self.make_config("image"))
     }
+
+    /// Get a speech (text-to-speech) model.
+    pub fn speech(&self, model_id: &str) -> OpenAISpeechModel {
+        OpenAISpeechModel::new(model_id, self.make_config("speech"))
+    }
+
+    /// Get a transcription (speech-to-text) model.
+    pub fn transcription(&self, model_id: &str) -> OpenAITranscriptionModel {
+        OpenAITranscriptionModel::new(model_id, self.make_config("transcription"))
+    }
 }
 
 #[async_trait]
@@ -150,6 +171,17 @@ impl ProviderV4 for OpenAIProvider {
 
     fn image_model(&self, model_id: &str) -> Result<Arc<dyn ImageModelV4>, NoSuchModelError> {
         Ok(Arc::new(self.image(model_id)))
+    }
+
+    fn speech_model(&self, model_id: &str) -> Result<Arc<dyn SpeechModelV4>, NoSuchModelError> {
+        Ok(Arc::new(self.speech(model_id)))
+    }
+
+    fn transcription_model(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn TranscriptionModelV4>, NoSuchModelError> {
+        Ok(Arc::new(self.transcription(model_id)))
     }
 }
 

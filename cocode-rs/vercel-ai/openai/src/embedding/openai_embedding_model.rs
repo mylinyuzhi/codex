@@ -3,11 +3,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
-use vercel_ai_provider::{
-    AISdkError, EmbeddingModelV4, EmbeddingModelV4CallOptions, EmbeddingModelV4EmbedResult,
-    EmbeddingUsage, EmbeddingValue,
-};
-use vercel_ai_provider_utils::{JsonResponseHandler, post_json_to_api_with_client};
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::EmbeddingModelV4;
+use vercel_ai_provider::EmbeddingModelV4CallOptions;
+use vercel_ai_provider::EmbeddingModelV4EmbedResult;
+use vercel_ai_provider::EmbeddingUsage;
+use vercel_ai_provider::EmbeddingValue;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::post_json_to_api_with_client;
 
 use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;

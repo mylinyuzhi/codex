@@ -1,4 +1,5 @@
-use vercel_ai_provider::{FinishReason, UnifiedFinishReason};
+use vercel_ai_provider::FinishReason;
+use vercel_ai_provider::UnifiedFinishReason;
 
 /// Map an OpenAI Chat Completions finish_reason to an SDK `FinishReason`.
 pub fn map_openai_chat_finish_reason(finish_reason: Option<&str>) -> FinishReason {

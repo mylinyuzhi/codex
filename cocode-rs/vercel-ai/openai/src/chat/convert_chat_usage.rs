@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
-use vercel_ai_provider::{InputTokens, OutputTokens, Usage};
+use serde::Deserialize;
+use serde::Serialize;
+use vercel_ai_provider::InputTokens;
+use vercel_ai_provider::OutputTokens;
+use vercel_ai_provider::Usage;
 
 /// Raw usage from the OpenAI Chat Completions API.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -67,9 +70,10 @@ pub fn convert_openai_chat_usage(usage: Option<&OpenAIChatUsage>) -> Usage {
             text: Some(completion_tokens.saturating_sub(reasoning_tokens)),
             reasoning: Some(reasoning_tokens),
         },
-        raw: serde_json::to_value(usage)
-            .ok()
-            .and_then(|v| v.as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())),
+        raw: serde_json::to_value(usage).ok().and_then(|v| {
+            v.as_object()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        }),
     }
 }
 
