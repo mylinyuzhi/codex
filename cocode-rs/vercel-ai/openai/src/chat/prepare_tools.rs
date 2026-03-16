@@ -32,14 +32,19 @@ pub fn prepare_chat_tools(
                     if !params.is_object() {
                         params = json!({ "type": "object", "properties": {} });
                     }
+                    let mut func = json!({
+                        "name": ft.name,
+                        "parameters": params,
+                    });
+                    if let Some(ref desc) = ft.description {
+                        func["description"] = Value::String(desc.clone());
+                    }
+                    if let Some(strict) = ft.strict {
+                        func["strict"] = Value::Bool(strict);
+                    }
                     openai_tools.push(json!({
                         "type": "function",
-                        "function": {
-                            "name": ft.name,
-                            "description": ft.description,
-                            "parameters": params,
-                            "strict": ft.strict.unwrap_or(false),
-                        }
+                        "function": func,
                     }));
                 }
                 LanguageModelV4Tool::Provider(_pt) => {

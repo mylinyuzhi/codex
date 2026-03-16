@@ -527,19 +527,18 @@ impl ChatStreamState {
     /// Process accumulated buffer, extracting complete SSE data lines.
     fn process_buffer(&mut self) {
         while let Some(line_end) = self.buffer.find('\n') {
-            let line = self.buffer[..line_end].trim_end_matches('\r').to_string();
-            self.buffer = self.buffer[line_end + 1..].to_string();
-
-            if line.is_empty() {
+            let line_len = line_end + 1;
+            let line = self.buffer[..line_end].trim_end_matches('\r');
+            if !line.is_empty()
+                && let Some(data) = line.strip_prefix("data: ")
+                && data != "[DONE]"
+            {
+                let data = data.to_string();
+                self.buffer.drain(..line_len);
+                self.process_data_line(&data);
                 continue;
             }
-
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
-                    continue;
-                }
-                self.process_data_line(data);
-            }
+            self.buffer.drain(..line_len);
         }
     }
 

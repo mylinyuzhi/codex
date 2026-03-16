@@ -36,6 +36,8 @@ pub mod completion;
 pub mod embedding;
 pub mod image;
 pub mod responses;
+pub mod speech;
+pub mod transcription;
 
 // Provider tools
 pub mod tool;
@@ -56,3 +58,5 @@ pub use completion::OpenAICompletionLanguageModel;
 pub use embedding::OpenAIEmbeddingModel;
 pub use image::OpenAIImageModel;
 pub use responses::OpenAIResponsesLanguageModel;
+pub use speech::OpenAISpeechModel;
+pub use transcription::OpenAITranscriptionModel;
