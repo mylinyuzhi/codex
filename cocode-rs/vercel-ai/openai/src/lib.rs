@@ -36,14 +36,21 @@ pub mod completion;
 pub mod embedding;
 pub mod image;
 pub mod responses;
+pub mod speech;
+pub mod transcription;
 
 // Provider tools
 pub mod tool;
 
 // Re-exports
-pub use openai_capabilities::{OpenAIModelCapabilities, SystemMessageMode, get_capabilities};
+pub use openai_capabilities::OpenAIModelCapabilities;
+pub use openai_capabilities::SystemMessageMode;
+pub use openai_capabilities::get_capabilities;
 pub use openai_config::OpenAIConfig;
-pub use openai_provider::{OpenAIProvider, OpenAIProviderSettings, create_openai, openai};
+pub use openai_provider::OpenAIProvider;
+pub use openai_provider::OpenAIProviderSettings;
+pub use openai_provider::create_openai;
+pub use openai_provider::openai;
 
 // Model type re-exports
 pub use chat::OpenAIChatLanguageModel;
@@ -51,3 +58,5 @@ pub use completion::OpenAICompletionLanguageModel;
 pub use embedding::OpenAIEmbeddingModel;
 pub use image::OpenAIImageModel;
 pub use responses::OpenAIResponsesLanguageModel;
+pub use speech::OpenAISpeechModel;
+pub use transcription::OpenAITranscriptionModel;

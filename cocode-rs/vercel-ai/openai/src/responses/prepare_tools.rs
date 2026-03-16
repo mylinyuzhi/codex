@@ -1,5 +1,8 @@
-use serde_json::{json, Value};
-use vercel_ai_provider::{LanguageModelV4Tool, LanguageModelV4ToolChoice, Warning};
+use serde_json::Value;
+use serde_json::json;
+use vercel_ai_provider::LanguageModelV4Tool;
+use vercel_ai_provider::LanguageModelV4ToolChoice;
+use vercel_ai_provider::Warning;
 
 /// Result of preparing tools for the Responses API.
 pub struct PreparedResponsesTools {

@@ -1,4 +1,6 @@
-use vercel_ai_provider::{InputTokens, OutputTokens, Usage};
+use vercel_ai_provider::InputTokens;
+use vercel_ai_provider::OutputTokens;
+use vercel_ai_provider::Usage;
 
 use super::openai_completion_api::OpenAICompletionUsage;
 
@@ -36,8 +38,9 @@ pub fn convert_openai_completion_usage(usage: Option<&OpenAICompletionUsage>) ->
             text: Some(completion_tokens),
             reasoning: None,
         },
-        raw: serde_json::to_value(usage)
-            .ok()
-            .and_then(|v| v.as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())),
+        raw: serde_json::to_value(usage).ok().and_then(|v| {
+            v.as_object()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        }),
     }
 }

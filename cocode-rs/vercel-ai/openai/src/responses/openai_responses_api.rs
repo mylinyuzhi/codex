@@ -1,14 +1,32 @@
 use serde::Deserialize;
+use serde::de;
 use serde_json::Value;
 
 use super::convert_responses_usage::OpenAIResponsesUsage;
+
+/// Deserialize `created_at` which may be a Unix timestamp (number) or an ISO 8601 string.
+fn deserialize_created_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let val = Option::<Value>::deserialize(deserializer)?;
+    Ok(match val {
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
+            .map(|dt| dt.to_rfc3339()),
+        Some(Value::String(s)) => Some(s),
+        _ => None,
+    })
+}
 
 /// Non-streaming response from the Responses API.
 #[derive(Debug, Deserialize)]
 pub struct OpenAIResponsesResponse {
     pub id: Option<String>,
     pub model: Option<String>,
-    pub created_at: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_created_at")]
+    pub created_at: Option<String>,
     pub output: Vec<ResponseOutputItem>,
     pub usage: Option<OpenAIResponsesUsage>,
     pub status: Option<String>,
@@ -285,7 +303,8 @@ pub enum ResponsesStreamEvent {
 pub struct ResponseMeta {
     pub id: Option<String>,
     pub model: Option<String>,
-    pub created_at: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_created_at")]
+    pub created_at: Option<String>,
     pub usage: Option<OpenAIResponsesUsage>,
     pub status: Option<String>,
     pub service_tier: Option<String>,

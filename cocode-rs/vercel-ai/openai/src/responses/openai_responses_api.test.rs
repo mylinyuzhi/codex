@@ -49,7 +49,9 @@ fn deserialize_function_call_output() {
     }"#;
     let resp: OpenAIResponsesResponse = serde_json::from_str(json).expect("should deserialize");
     match &resp.output[0] {
-        ResponseOutputItem::FunctionCall { name, arguments, .. } => {
+        ResponseOutputItem::FunctionCall {
+            name, arguments, ..
+        } => {
             assert_eq!(name.as_deref(), Some("get_weather"));
             assert_eq!(arguments.as_deref(), Some("{\"city\":\"SF\"}"));
         }

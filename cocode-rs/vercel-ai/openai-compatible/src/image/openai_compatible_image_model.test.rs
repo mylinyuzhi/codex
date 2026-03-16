@@ -1,0 +1,27 @@
+use super::*;
+
+fn make_config() -> Arc<OpenAICompatibleConfig> {
+    Arc::new(OpenAICompatibleConfig {
+        provider: "xai.image".into(),
+        base_url: "https://api.x.ai/v1".into(),
+        headers: Arc::new(|| {
+            let mut h = std::collections::HashMap::new();
+            h.insert("Authorization".into(), "Bearer test".into());
+            h
+        }),
+        query_params: None,
+        client: None,
+        include_usage: true,
+        supports_structured_outputs: false,
+        transform_request_body: None,
+        metadata_extractor: None,
+    })
+}
+
+#[test]
+fn creates_model() {
+    let model = OpenAICompatibleImageModel::new("dall-e-3", make_config());
+    assert_eq!(model.model_id(), "dall-e-3");
+    assert_eq!(model.provider(), "xai.image");
+    assert_eq!(model.max_images_per_call(), 10);
+}
