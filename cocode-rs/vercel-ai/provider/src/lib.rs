@@ -96,6 +96,7 @@ pub use shared::Warning;
 pub use content::AssistantContentPart;
 pub use content::FileIdReference;
 pub use content::FilePart;
+pub use content::ReasoningFilePart;
 pub use content::ReasoningPart;
 pub use content::TextPart;
 pub use content::ToolCallPart;

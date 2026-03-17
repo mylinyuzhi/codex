@@ -95,7 +95,6 @@ impl OpenAIProvider {
                 h.insert(k.clone(), v.clone());
             }
 
-
             h
         });
 

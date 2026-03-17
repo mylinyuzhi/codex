@@ -32,3 +32,38 @@ fn batch_embed_response_deserialization() {
     assert_eq!(response.embeddings[0].values, vec![0.1, 0.2]);
     assert_eq!(response.embeddings[1].values, vec![0.3, 0.4]);
 }
+
+#[test]
+fn build_content_parts_text_only() {
+    let parts = GoogleGenerativeAIEmbeddingModel::build_content_parts("hello", None);
+    assert_eq!(parts, serde_json::json!([{ "text": "hello" }]));
+}
+
+#[test]
+fn build_content_parts_with_multimodal() {
+    let multimodal = vec![serde_json::json!({
+        "inlineData": { "mimeType": "image/png", "data": "abc123" }
+    })];
+    let parts = GoogleGenerativeAIEmbeddingModel::build_content_parts("hello", Some(&multimodal));
+    assert_eq!(
+        parts,
+        serde_json::json!([
+            { "text": "hello" },
+            { "inlineData": { "mimeType": "image/png", "data": "abc123" } }
+        ])
+    );
+}
+
+#[test]
+fn build_content_parts_empty_text_with_multimodal() {
+    let multimodal = vec![serde_json::json!({
+        "inlineData": { "mimeType": "image/png", "data": "abc123" }
+    })];
+    let parts = GoogleGenerativeAIEmbeddingModel::build_content_parts("", Some(&multimodal));
+    assert_eq!(
+        parts,
+        serde_json::json!([
+            { "inlineData": { "mimeType": "image/png", "data": "abc123" } }
+        ])
+    );
+}

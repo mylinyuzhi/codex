@@ -8,7 +8,10 @@ use serde_json::Value;
 /// Convert a JSON Schema to OpenAPI 3.0 schema format.
 ///
 /// This performs a recursive conversion, handling:
+/// - Empty object schemas (return `None` at root, `{ type: "object" }` nested)
+/// - Boolean schemas (`true`/`false`) -> `{ type: "boolean", properties: {} }`
 /// - Type arrays -> anyOf
+/// - anyOf with null-type flattening
 /// - anyOf/oneOf/allOf pass-through with recursive conversion
 /// - `const` -> `enum` with single value
 /// - Removal of `$schema`, `additionalProperties`, `$id`, `$anchor`, `$comment`
@@ -17,10 +20,52 @@ pub fn convert_json_schema_to_openapi_schema(schema: &Value) -> Option<Value> {
     convert_inner(schema, true)
 }
 
+/// Check if a schema is an empty object schema.
+fn is_empty_object_schema(schema: &Value) -> bool {
+    let Some(obj) = schema.as_object() else {
+        return false;
+    };
+    if obj.get("type").and_then(|v| v.as_str()) != Some("object") {
+        return false;
+    }
+    let has_empty_or_no_props = match obj.get("properties") {
+        None => true,
+        Some(Value::Object(props)) => props.is_empty(),
+        _ => false,
+    };
+    // Also check that additionalProperties is not set (matches TS behavior)
+    let no_additional_props = matches!(
+        obj.get("additionalProperties"),
+        None | Some(Value::Bool(false)) | Some(Value::Null)
+    );
+    has_empty_or_no_props && no_additional_props
+}
+
 fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
+    // Handle boolean schemas (JSON Schema allows true/false as schemas)
+    if schema.is_boolean() {
+        let mut m = Map::new();
+        m.insert("type".to_string(), Value::String("boolean".to_string()));
+        m.insert("properties".to_string(), Value::Object(Map::new()));
+        return Some(Value::Object(m));
+    }
+
     let obj = schema.as_object()?;
 
-    // Handle boolean schemas
+    // Handle empty object schema: undefined at root, { type: "object" } nested
+    if is_empty_object_schema(schema) {
+        if is_root {
+            return None;
+        }
+        let mut m = Map::new();
+        m.insert("type".to_string(), Value::String("object".to_string()));
+        if let Some(desc) = obj.get("description").and_then(|v| v.as_str()) {
+            m.insert("description".to_string(), Value::String(desc.to_string()));
+        }
+        return Some(Value::Object(m));
+    }
+
+    // Handle truly empty object (no fields at all)
     if obj.is_empty() {
         return Some(Value::Object(Map::new()));
     }
@@ -32,17 +77,17 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
         match type_val {
             Value::Array(types) => {
                 // Type array: filter out "null" and create anyOf
+                let has_null = types.iter().any(|t| t.as_str() == Some("null"));
                 let non_null_types: Vec<&Value> = types
                     .iter()
                     .filter(|t| t.as_str() != Some("null"))
                     .collect();
 
-                if non_null_types.len() == 1 {
-                    result.insert("type".to_string(), non_null_types[0].clone());
-                    if types.iter().any(|t| t.as_str() == Some("null")) {
-                        result.insert("nullable".to_string(), Value::Bool(true));
-                    }
-                } else if !non_null_types.is_empty() {
+                if non_null_types.is_empty() {
+                    // Only null type
+                    result.insert("type".to_string(), Value::String("null".to_string()));
+                } else {
+                    // One or more non-null types: always use anyOf
                     let any_of: Vec<Value> = non_null_types
                         .iter()
                         .map(|t| {
@@ -52,7 +97,7 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
                         })
                         .collect();
                     result.insert("anyOf".to_string(), Value::Array(any_of));
-                    if types.iter().any(|t| t.as_str() == Some("null")) {
+                    if has_null {
                         result.insert("nullable".to_string(), Value::Bool(true));
                     }
                 }
@@ -89,8 +134,60 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
         result.insert("enum".to_string(), Value::Array(vec![const_val.clone()]));
     }
 
-    // Handle anyOf/oneOf/allOf
-    for keyword in &["anyOf", "oneOf", "allOf"] {
+    // Handle anyOf with null-type flattening
+    if let Some(Value::Array(schemas)) = obj.get("anyOf") {
+        let has_null_type = schemas.iter().any(|s| {
+            s.as_object()
+                .and_then(|o| o.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("null")
+        });
+
+        if has_null_type {
+            let non_null_schemas: Vec<&Value> = schemas
+                .iter()
+                .filter(|s| {
+                    s.as_object()
+                        .and_then(|o| o.get("type"))
+                        .and_then(|t| t.as_str())
+                        != Some("null")
+                })
+                .collect();
+
+            if non_null_schemas.len() == 1 {
+                // Single non-null schema: flatten it into result with nullable
+                if let Some(converted) = convert_inner(non_null_schemas[0], false)
+                    && let Some(converted_obj) = converted.as_object()
+                {
+                    result.insert("nullable".to_string(), Value::Bool(true));
+                    for (k, v) in converted_obj {
+                        result.insert(k.clone(), v.clone());
+                    }
+                }
+            } else {
+                // Multiple non-null schemas: keep in anyOf with nullable
+                let converted: Vec<Value> = non_null_schemas
+                    .iter()
+                    .filter_map(|s| convert_inner(s, false))
+                    .collect();
+                if !converted.is_empty() {
+                    result.insert("anyOf".to_string(), Value::Array(converted));
+                }
+                result.insert("nullable".to_string(), Value::Bool(true));
+            }
+        } else {
+            let converted: Vec<Value> = schemas
+                .iter()
+                .filter_map(|s| convert_inner(s, false))
+                .collect();
+            if !converted.is_empty() {
+                result.insert("anyOf".to_string(), Value::Array(converted));
+            }
+        }
+    }
+
+    // Handle oneOf/allOf (not anyOf, handled above)
+    for keyword in &["oneOf", "allOf"] {
         if let Some(Value::Array(schemas)) = obj.get(*keyword) {
             let converted: Vec<Value> = schemas
                 .iter()
@@ -127,9 +224,6 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
             result.insert(key.to_string(), val.clone());
         }
     }
-
-    // Handle additionalProperties only for non-root
-    // (Google API doesn't support additionalProperties at root)
 
     if is_root {
         // Remove $schema, $id, $anchor, $comment from root
