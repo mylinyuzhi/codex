@@ -55,6 +55,16 @@ impl EmbeddingModelV4 for OpenAIEmbeddingModel {
         &self,
         options: EmbeddingModelV4CallOptions,
     ) -> Result<EmbeddingModelV4EmbedResult, AISdkError> {
+        // Validate max embedding values per call
+        if options.values.len() > self.max_embeddings_per_call() {
+            return Err(AISdkError::new(format!(
+                "Too many values for a single embedding call. The {} model supports at most {} values per call, but {} values were provided.",
+                self.model_id,
+                self.max_embeddings_per_call(),
+                options.values.len()
+            )));
+        }
+
         let openai_opts = extract_embedding_options(&options.provider_options);
 
         let mut body = json!({
@@ -87,6 +97,8 @@ impl EmbeddingModelV4 for OpenAIEmbeddingModel {
         )
         .await?;
 
+        let raw_response = serde_json::to_value(&response).ok();
+
         let embeddings: Vec<EmbeddingValue> = response
             .data
             .into_iter()
@@ -112,7 +124,7 @@ impl EmbeddingModelV4 for OpenAIEmbeddingModel {
             embeddings,
             usage,
             warnings: Vec::new(),
-            raw_response: serde_json::to_value(&body).ok(),
+            raw_response,
         })
     }
 }

@@ -61,7 +61,7 @@ fn deserialize_tool_call_response() {
         .tool_calls
         .as_ref()
         .expect("tool_calls")[0];
-    assert_eq!(tc.id, "call_123");
+    assert_eq!(tc.id.as_deref(), Some("call_123"));
     assert_eq!(tc.function.name, "get_weather");
 }
 
@@ -82,8 +82,8 @@ fn deserialize_streaming_chunk() {
     assert_eq!(
         chunk.choices.as_ref().expect("choices")[0]
             .delta
-            .content
-            .as_deref(),
+            .as_ref()
+            .and_then(|d| d.content.as_deref()),
         Some("Hello")
     );
 }

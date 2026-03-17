@@ -51,6 +51,12 @@ pub enum ResponseOutputItem {
         name: Option<String>,
         arguments: Option<String>,
     },
+    #[serde(rename = "function_call_output")]
+    FunctionCallOutput {
+        id: Option<String>,
+        call_id: Option<String>,
+        output: Option<String>,
+    },
     #[serde(rename = "custom_tool_call")]
     CustomToolCall {
         id: Option<String>,
@@ -63,6 +69,13 @@ pub enum ResponseOutputItem {
         id: Option<String>,
         summary: Option<Vec<ReasoningSummaryItem>>,
         encrypted_content: Option<Value>,
+    },
+    #[serde(rename = "computer_call")]
+    ComputerCall {
+        id: Option<String>,
+        call_id: Option<String>,
+        #[serde(flatten)]
+        rest: Value,
     },
     #[serde(rename = "web_search_call")]
     WebSearchCall {
@@ -102,6 +115,12 @@ pub enum ResponseOutputItem {
         #[serde(flatten)]
         rest: Value,
     },
+    #[serde(rename = "mcp_list_tools")]
+    McpListTools {
+        id: Option<String>,
+        #[serde(flatten)]
+        rest: Value,
+    },
     #[serde(rename = "local_shell_call")]
     LocalShellCall {
         id: Option<String>,
@@ -115,6 +134,12 @@ pub enum ResponseOutputItem {
         call_id: Option<String>,
         action: Option<Value>,
         status: Option<String>,
+        output: Option<Vec<Value>>,
+    },
+    #[serde(rename = "shell_call_output")]
+    ShellCallOutput {
+        id: Option<String>,
+        call_id: Option<String>,
         output: Option<Vec<Value>>,
     },
     #[serde(rename = "apply_patch_call")]
@@ -190,8 +215,14 @@ pub enum ResponsesStreamEvent {
     #[serde(rename = "response.created")]
     ResponseCreated { response: Option<ResponseMeta> },
 
+    #[serde(rename = "response.in_progress")]
+    ResponseInProgress { response: Option<ResponseMeta> },
+
     #[serde(rename = "response.completed")]
     ResponseCompleted { response: Option<ResponseMeta> },
+
+    #[serde(rename = "response.failed")]
+    ResponseFailed { response: Option<ResponseMeta> },
 
     #[serde(rename = "response.incomplete")]
     ResponseIncomplete { response: Option<ResponseMeta> },
@@ -213,6 +244,18 @@ pub enum ResponsesStreamEvent {
     OutputTextAnnotationAdded {
         item_id: Option<String>,
         annotation: Option<ResponseAnnotation>,
+    },
+
+    #[serde(rename = "response.content_part.added")]
+    ContentPartAdded {
+        item_id: Option<String>,
+        part: Option<Value>,
+    },
+
+    #[serde(rename = "response.content_part.done")]
+    ContentPartDone {
+        item_id: Option<String>,
+        part: Option<Value>,
     },
 
     #[serde(rename = "response.output_item.added")]
@@ -245,6 +288,12 @@ pub enum ResponsesStreamEvent {
         input: Option<String>,
     },
 
+    #[serde(rename = "response.reasoning_summary_part.added")]
+    ReasoningSummaryPartAdded {
+        item_id: Option<String>,
+        part: Option<Value>,
+    },
+
     #[serde(rename = "response.reasoning_summary_text.delta")]
     ReasoningSummaryDelta {
         item_id: Option<String>,
@@ -255,6 +304,12 @@ pub enum ResponsesStreamEvent {
     ReasoningSummaryDone {
         item_id: Option<String>,
         text: Option<String>,
+    },
+
+    #[serde(rename = "response.reasoning_summary_part.done")]
+    ReasoningSummaryPartDone {
+        item_id: Option<String>,
+        part: Option<Value>,
     },
 
     #[serde(rename = "response.code_interpreter_call_code.delta")]

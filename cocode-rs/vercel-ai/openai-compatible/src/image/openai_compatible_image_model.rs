@@ -150,6 +150,7 @@ impl ImageModelV4 for OpenAICompatibleImageModel {
 
         let usage = response.usage.map(|u| ImageModelV4Usage {
             prompt_tokens: u.input_tokens.unwrap_or(0),
+            output_tokens: u.output_tokens.unwrap_or(0),
             total_tokens: u.total_tokens.unwrap_or(0),
         });
 

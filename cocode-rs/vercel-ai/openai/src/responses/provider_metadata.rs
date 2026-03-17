@@ -1,26 +1,27 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 use vercel_ai_provider::ProviderMetadata;
 
 /// Build provider metadata for the Responses API response.
+/// Nests all fields under the `"openai"` key to match TS SDK behavior.
 pub fn build_responses_provider_metadata(
     response_id: Option<&str>,
     service_tier: Option<&str>,
 ) -> Option<ProviderMetadata> {
-    let mut meta = HashMap::new();
+    let mut openai_obj = serde_json::Map::new();
 
     if let Some(id) = response_id {
-        meta.insert("responseId".into(), Value::String(id.into()));
+        openai_obj.insert("responseId".into(), Value::String(id.into()));
     }
     if let Some(tier) = service_tier {
-        meta.insert("serviceTier".into(), Value::String(tier.into()));
+        openai_obj.insert("serviceTier".into(), Value::String(tier.into()));
     }
 
-    if meta.is_empty() {
+    if openai_obj.is_empty() {
         None
     } else {
-        Some(ProviderMetadata(meta))
+        let mut meta = ProviderMetadata::default();
+        meta.0.insert("openai".into(), Value::Object(openai_obj));
+        Some(meta)
     }
 }
 

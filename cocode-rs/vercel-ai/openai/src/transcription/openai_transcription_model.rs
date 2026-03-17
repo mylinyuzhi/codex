@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::APICallError;
@@ -16,25 +15,75 @@ use vercel_ai_provider_utils::FormData;
 
 use crate::openai_config::OpenAIConfig;
 
-/// Provider-specific options for OpenAI transcription models.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenAITranscriptionOptions {
-    language: Option<String>,
-    temperature: Option<f64>,
-    prompt: Option<String>,
-}
+use super::openai_transcription_api::OpenAITranscriptionResponse;
+use super::openai_transcription_options::extract_transcription_options;
 
-/// Extract transcription-specific options from provider options.
-fn extract_transcription_options(
-    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> OpenAITranscriptionOptions {
-    provider_options
-        .as_ref()
-        .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<OpenAITranscriptionOptions>(v).ok())
-        .unwrap_or_default()
+/// Models that use 'json' response_format instead of 'verbose_json'.
+const JSON_RESPONSE_FORMAT_MODELS: &[&str] = &["gpt-4o-transcribe", "gpt-4o-mini-transcribe"];
+
+/// Map a full language name (as returned by OpenAI) to an ISO-639-1 code.
+/// Returns `None` if the language is not in the mapping table.
+fn map_language_code(language: &str) -> Option<&'static str> {
+    match language {
+        "afrikaans" => Some("af"),
+        "arabic" => Some("ar"),
+        "armenian" => Some("hy"),
+        "azerbaijani" => Some("az"),
+        "belarusian" => Some("be"),
+        "bosnian" => Some("bs"),
+        "bulgarian" => Some("bg"),
+        "catalan" => Some("ca"),
+        "chinese" => Some("zh"),
+        "croatian" => Some("hr"),
+        "czech" => Some("cs"),
+        "danish" => Some("da"),
+        "dutch" => Some("nl"),
+        "english" => Some("en"),
+        "estonian" => Some("et"),
+        "finnish" => Some("fi"),
+        "french" => Some("fr"),
+        "galician" => Some("gl"),
+        "german" => Some("de"),
+        "greek" => Some("el"),
+        "hebrew" => Some("he"),
+        "hindi" => Some("hi"),
+        "hungarian" => Some("hu"),
+        "icelandic" => Some("is"),
+        "indonesian" => Some("id"),
+        "italian" => Some("it"),
+        "japanese" => Some("ja"),
+        "kannada" => Some("kn"),
+        "kazakh" => Some("kk"),
+        "korean" => Some("ko"),
+        "latvian" => Some("lv"),
+        "lithuanian" => Some("lt"),
+        "macedonian" => Some("mk"),
+        "malay" => Some("ms"),
+        "marathi" => Some("mr"),
+        "maori" => Some("mi"),
+        "nepali" => Some("ne"),
+        "norwegian" => Some("no"),
+        "persian" => Some("fa"),
+        "polish" => Some("pl"),
+        "portuguese" => Some("pt"),
+        "romanian" => Some("ro"),
+        "russian" => Some("ru"),
+        "serbian" => Some("sr"),
+        "slovak" => Some("sk"),
+        "slovenian" => Some("sl"),
+        "spanish" => Some("es"),
+        "swahili" => Some("sw"),
+        "swedish" => Some("sv"),
+        "tagalog" => Some("tl"),
+        "tamil" => Some("ta"),
+        "thai" => Some("th"),
+        "turkish" => Some("tr"),
+        "ukrainian" => Some("uk"),
+        "urdu" => Some("ur"),
+        "vietnamese" => Some("vi"),
+        "welsh" => Some("cy"),
+        _ => None,
+    }
 }
 
 /// Map a media type to a file extension for the multipart upload filename.
@@ -48,24 +97,6 @@ fn extension_from_media_type(media_type: &str) -> &str {
         "audio/flac" => "flac",
         _ => "bin",
     }
-}
-
-/// OpenAI API transcription response shape (verbose_json format).
-#[derive(Debug, Deserialize)]
-struct OpenAITranscriptionResponse {
-    text: String,
-    language: Option<String>,
-    duration: Option<f64>,
-    #[serde(default)]
-    segments: Vec<OpenAITranscriptionSegment>,
-}
-
-/// A segment in the OpenAI transcription response.
-#[derive(Debug, Deserialize)]
-struct OpenAITranscriptionSegment {
-    text: String,
-    start: f64,
-    end: f64,
 }
 
 /// OpenAI Transcription model.
@@ -109,11 +140,27 @@ impl TranscriptionModelV4 for OpenAITranscriptionModel {
         let ext = extension_from_media_type(&options.media_type);
         let filename = format!("audio.{ext}");
 
+        // Prefer verbose_json to get segments for models that support it.
+        let response_format = if JSON_RESPONSE_FORMAT_MODELS
+            .iter()
+            .any(|m| *m == self.model_id)
+        {
+            "json"
+        } else {
+            "verbose_json"
+        };
+
         let mut form = FormData::new()
             .bytes_with_mime("file", options.audio, &filename, &options.media_type)
             .text("model", self.model_id.clone())
-            .text("response_format", "verbose_json")
-            .text("timestamp_granularities[]", "segment");
+            .text("response_format", response_format);
+
+        // Add include[] array fields
+        if let Some(ref include) = openai_opts.include {
+            for item in include {
+                form = form.text("include[]", item.clone());
+            }
+        }
 
         if let Some(ref language) = openai_opts.language {
             form = form.text("language", language.clone());
@@ -125,6 +172,15 @@ impl TranscriptionModelV4 for OpenAITranscriptionModel {
 
         if let Some(ref prompt) = openai_opts.prompt {
             form = form.text("prompt", prompt.clone());
+        }
+
+        // Add timestamp_granularities[] array fields (default: ["segment"])
+        if let Some(ref granularities) = openai_opts.timestamp_granularities {
+            for granularity in granularities {
+                form = form.text("timestamp_granularities[]", granularity.clone());
+            }
+        } else {
+            form = form.text("timestamp_granularities[]", "segment");
         }
 
         // Build HTTP request
@@ -201,25 +257,43 @@ impl TranscriptionModelV4 for OpenAITranscriptionModel {
         let api_response: OpenAITranscriptionResponse = serde_json::from_str(&raw_body)
             .map_err(|e| AISdkError::new(format!("Failed to parse transcription response: {e}")))?;
 
-        let segments: Vec<TranscriptionSegmentV4> = api_response
-            .segments
-            .into_iter()
-            .map(|s| TranscriptionSegmentV4::new(s.text, s.start, s.end))
-            .collect();
+        // Map segments, falling back to words when segments are absent.
+        let segments: Vec<TranscriptionSegmentV4> = if let Some(ref segs) = api_response.segments {
+            segs.iter()
+                .map(|s| TranscriptionSegmentV4::new(&s.text, s.start, s.end))
+                .collect()
+        } else if let Some(ref words) = api_response.words {
+            words
+                .iter()
+                .map(|w| TranscriptionSegmentV4::new(&w.word, w.start, w.end))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-        let body_value: Option<serde_json::Value> = serde_json::from_str(&raw_body).ok();
+        let body_value: Option<serde_json::Value> = serde_json::to_value(&api_response).ok();
 
-        Ok(TranscriptionModelV4Result::new(api_response.text)
+        // Map language name to ISO-639-1 code.
+        let language = api_response
+            .language
+            .as_deref()
+            .and_then(map_language_code)
+            .map(String::from);
+
+        let result = TranscriptionModelV4Result::new(api_response.text)
             .with_response(
                 TranscriptionModelV4Response::default()
                     .with_model_id(self.model_id.clone())
+                    .with_timestamp(chrono::Utc::now())
                     .with_headers(response_headers)
                     .with_body(body_value.unwrap_or(serde_json::Value::Null)),
             )
             .with_request(TranscriptionModelV4Request::default())
-            .with_segments(segments)
-            .with_language_opt(api_response.language)
-            .with_duration_opt(api_response.duration))
+            .with_language_opt(language)
+            .with_duration_opt(api_response.duration)
+            .with_segments(segments);
+
+        Ok(result)
     }
 }
 

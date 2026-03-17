@@ -8,6 +8,7 @@ pub fn map_openai_completion_finish_reason(finish_reason: Option<&str>) -> Finis
         Some("stop") => UnifiedFinishReason::Stop,
         Some("length") => UnifiedFinishReason::Length,
         Some("content_filter") => UnifiedFinishReason::ContentFilter,
+        Some("function_call") | Some("tool_calls") => UnifiedFinishReason::ToolCalls,
         _ => UnifiedFinishReason::Other,
     };
     FinishReason { unified, raw }

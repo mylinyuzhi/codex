@@ -115,6 +115,7 @@ pub fn create_null_language_model_usage() -> LanguageModelUsage {
 pub fn add_image_model_usage(a: &ImageModelV4Usage, b: &ImageModelV4Usage) -> ImageModelV4Usage {
     ImageModelV4Usage {
         prompt_tokens: a.prompt_tokens + b.prompt_tokens,
+        output_tokens: a.output_tokens + b.output_tokens,
         total_tokens: a.total_tokens + b.total_tokens,
     }
 }

@@ -37,7 +37,7 @@ pub struct OpenAIChatMessage {
 /// A tool call in a chat completion response.
 #[derive(Debug, Deserialize)]
 pub struct OpenAIChatToolCall {
-    pub id: String,
+    pub id: Option<String>,
     #[serde(rename = "type")]
     pub tool_type: Option<String>,
     pub function: OpenAIChatFunctionCall,
@@ -108,7 +108,7 @@ pub struct OpenAIChatChunk {
 #[derive(Debug, Deserialize)]
 pub struct OpenAIChatChunkChoice {
     pub index: Option<u32>,
-    pub delta: OpenAIChatChunkDelta,
+    pub delta: Option<OpenAIChatChunkDelta>,
     pub finish_reason: Option<String>,
     pub logprobs: Option<OpenAIChatLogprobs>,
 }

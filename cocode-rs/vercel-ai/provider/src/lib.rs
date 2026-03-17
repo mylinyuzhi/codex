@@ -199,7 +199,9 @@ pub use video_model::v4::VideoData;
 // Image model types
 pub use image_model::GeneratedImage;
 pub use image_model::ImageData;
+pub use image_model::ImageFileData;
 pub use image_model::ImageModelV4CallOptions;
+pub use image_model::ImageModelV4File;
 pub use image_model::ImageModelV4GenerateResult;
 pub use image_model::ImageQuality;
 pub use image_model::ImageResponseFormat;

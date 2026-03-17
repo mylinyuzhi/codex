@@ -7,7 +7,8 @@ use std::collections::HashMap;
 pub struct OpenAICompletionProviderOptions {
     pub echo: Option<bool>,
     pub logit_bias: Option<HashMap<String, f64>>,
-    pub logprobs: Option<u32>,
+    /// `true` for default logprobs, or a number for top N.
+    pub logprobs: Option<serde_json::Value>,
     pub suffix: Option<String>,
     pub user: Option<String>,
 }

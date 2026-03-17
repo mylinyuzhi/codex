@@ -54,6 +54,10 @@ fn removes_system_message_with_warning() {
     let (msgs, warnings) = convert_to_openai_chat_messages(&prompt, SystemMessageMode::Remove);
     assert!(msgs.is_empty());
     assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        warnings[0],
+        Warning::Other { ref message } if message == "system messages are removed for this model"
+    ));
 }
 
 #[test]
