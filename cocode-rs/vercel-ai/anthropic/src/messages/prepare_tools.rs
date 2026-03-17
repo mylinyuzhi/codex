@@ -6,6 +6,9 @@ use vercel_ai_provider::LanguageModelV4Tool;
 use vercel_ai_provider::LanguageModelV4ToolChoice;
 use vercel_ai_provider::Warning;
 
+use crate::cache_control::CacheContext;
+use crate::cache_control::CacheControlValidator;
+
 /// Result of preparing tools for the Anthropic Messages API.
 pub struct PreparedAnthropicTools {
     pub tools: Option<Vec<Value>>,
@@ -15,11 +18,15 @@ pub struct PreparedAnthropicTools {
 }
 
 /// Convert SDK tools + tool_choice to Anthropic Messages API format.
+///
+/// `supports_strict_tools` controls whether the `strict` field is included on
+/// tool definitions and triggers the `structured-outputs` beta header.
 pub fn prepare_anthropic_tools(
     tools: &Option<Vec<LanguageModelV4Tool>>,
     tool_choice: &Option<LanguageModelV4ToolChoice>,
     disable_parallel_tool_use: Option<bool>,
-    supports_structured_output: bool,
+    supports_strict_tools: bool,
+    mut cache_validator: Option<&mut CacheControlValidator>,
 ) -> PreparedAnthropicTools {
     let mut warnings = Vec::new();
     let mut betas = HashSet::new();
@@ -47,8 +54,8 @@ pub fn prepare_anthropic_tools(
                     "input_schema": ft.input_schema,
                 });
 
-                // Strict mode (only when structured output is supported)
-                if supports_structured_output {
+                // Strict mode (only when strict tools are supported)
+                if supports_strict_tools {
                     if let Some(strict) = ft.strict {
                         tool_def["strict"] = Value::Bool(strict);
                     }
@@ -72,6 +79,17 @@ pub fn prepare_anthropic_tools(
                     betas.insert("advanced-tool-use-2025-11-20".into());
                 }
 
+                // Strict mode warning when not supported
+                if !supports_strict_tools && ft.strict.is_some() {
+                    warnings.push(Warning::Unsupported {
+                            feature: "strict".into(),
+                            details: Some(format!(
+                                "Tool '{}' has strict: {:?}, but strict mode is not supported by this provider. The strict property will be ignored.",
+                                ft.name, ft.strict,
+                            )),
+                        });
+                }
+
                 // Provider-specific options (eagerInputStreaming, deferLoading, allowedCallers)
                 if let Some(ref po) = ft.provider_options
                     && let Some(anthropic_opts) = po.0.get("anthropic")
@@ -88,7 +106,21 @@ pub fn prepare_anthropic_tools(
                     }
                     if let Some(callers) = anthropic_opts.get("allowedCallers") {
                         tool_def["allowed_callers"] = callers.clone();
+                        betas.insert("advanced-tool-use-2025-11-20".into());
                     }
+                }
+
+                // Cache control on function tools
+                if let Some(ref mut validator) = cache_validator
+                    && let Some(cc) = validator.get_cache_control_from_options(
+                        &ft.provider_options,
+                        CacheContext {
+                            type_name: "function tool",
+                            can_cache: true,
+                        },
+                    )
+                {
+                    tool_def["cache_control"] = cc;
                 }
 
                 anthropic_tools.push(tool_def);
@@ -299,14 +331,12 @@ pub fn prepare_anthropic_tools(
 
                     // Tool search tools
                     "anthropic.tool_search_regex_20251119" => {
-                        betas.insert("advanced-tool-use-2025-11-20".into());
                         anthropic_tools.push(json!({
                             "type": "tool_search_tool_regex_20251119",
                             "name": "tool_search_tool_regex",
                         }));
                     }
                     "anthropic.tool_search_bm25_20251119" => {
-                        betas.insert("advanced-tool-use-2025-11-20".into());
                         anthropic_tools.push(json!({
                             "type": "tool_search_tool_bm25_20251119",
                             "name": "tool_search_tool_bm25",

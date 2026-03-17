@@ -30,6 +30,12 @@ pub struct AnthropicProviderSettings {
     pub name: Option<String>,
     /// Shared HTTP client.
     pub client: Option<Arc<reqwest::Client>>,
+    /// When false, the model will use JSON tool fallback for structured outputs.
+    /// Defaults to true.
+    pub supports_native_structured_output: Option<bool>,
+    /// When false, `strict` on tool definitions will be ignored and a warning emitted.
+    /// Defaults to true.
+    pub supports_strict_tools: Option<bool>,
 }
 
 /// Anthropic multi-model provider.
@@ -41,6 +47,8 @@ pub struct AnthropicProvider {
     base_url: String,
     headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
     client: Option<Arc<reqwest::Client>>,
+    supports_native_structured_output: Option<bool>,
+    supports_strict_tools: Option<bool>,
 }
 
 impl AnthropicProvider {
@@ -50,7 +58,9 @@ impl AnthropicProvider {
         let base_url = settings
             .base_url
             .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.anthropic.com/v1".into());
+            .unwrap_or_else(|| "https://api.anthropic.com/v1".into())
+            .trim_end_matches('/')
+            .to_string();
 
         // Validate mutual exclusivity
         if settings.api_key.is_some() && settings.auth_token.is_some() {
@@ -93,6 +103,8 @@ impl AnthropicProvider {
             base_url,
             headers,
             client: settings.client,
+            supports_native_structured_output: settings.supports_native_structured_output,
+            supports_strict_tools: settings.supports_strict_tools,
         }
     }
 
@@ -102,6 +114,8 @@ impl AnthropicProvider {
             base_url: self.base_url.clone(),
             headers: self.headers.clone(),
             client: self.client.clone(),
+            supports_native_structured_output: self.supports_native_structured_output,
+            supports_strict_tools: self.supports_strict_tools,
         })
     }
 

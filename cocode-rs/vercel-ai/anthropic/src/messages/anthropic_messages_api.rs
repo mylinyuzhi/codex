@@ -165,7 +165,7 @@ pub struct MessageStartMessage {
     pub content: Option<Vec<Value>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MessageStartUsage {
     pub input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
@@ -275,17 +275,23 @@ pub struct ContentBlockStopEvent {
 pub struct MessageDeltaEvent {
     pub delta: MessageDelta,
     pub usage: Option<MessageDeltaUsage>,
+    pub context_management: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MessageDelta {
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
+    pub container: Option<AnthropicResponseContainerRaw>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MessageDeltaUsage {
+    pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub iterations: Option<Vec<AnthropicUsageIterationRaw>>,
 }
 
 /// SSE error event.

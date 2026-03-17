@@ -27,10 +27,16 @@ pub mod messages;
 // Provider tools
 pub mod tool;
 
+// Cache control and utilities
+pub mod cache_control;
+pub mod forward_container_id;
+
 // Re-exports
 pub use anthropic_config::AnthropicConfig;
 pub use anthropic_provider::AnthropicProvider;
 pub use anthropic_provider::AnthropicProviderSettings;
 pub use anthropic_provider::anthropic;
 pub use anthropic_provider::create_anthropic;
+pub use cache_control::CacheControlValidator;
+pub use forward_container_id::forward_anthropic_container_id_from_last_step;
 pub use messages::AnthropicMessagesLanguageModel;

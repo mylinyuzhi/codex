@@ -45,6 +45,9 @@ pub struct FilePart {
     pub data: DataContent,
     /// The MIME type of the file.
     pub media_type: String,
+    /// Optional filename.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
     /// Provider-specific metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
@@ -56,6 +59,7 @@ impl FilePart {
         Self {
             data,
             media_type: media_type.into(),
+            filename: None,
             provider_metadata: None,
         }
     }
@@ -73,6 +77,12 @@ impl FilePart {
     /// Create an image file part from base64.
     pub fn image_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
         Self::new(DataContent::from_base64(base64), media_type)
+    }
+
+    /// Set the filename.
+    pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
+        self.filename = Some(filename.into());
+        self
     }
 
     /// Add provider metadata.
