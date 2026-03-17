@@ -99,3 +99,7 @@ pub fn standardize_prompt(
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "standardize.test.rs"]
+mod tests;

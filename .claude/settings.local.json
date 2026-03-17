@@ -77,7 +77,8 @@
       "Bash(sed:*)",
       "Skill(update-claude-md)",
       "Skill(wt-del)",
-      "Skill(squash)"
+      "Skill(squash)",
+      "Bash(export:*)"
     ],
     "deny": [],
     "ask": []

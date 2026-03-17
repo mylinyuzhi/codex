@@ -1,7 +1,8 @@
 use serde::Deserialize;
+use serde::Serialize;
 
 /// Response from the OpenAI Embeddings API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAIEmbeddingResponse {
     pub data: Vec<OpenAIEmbeddingData>,
     pub model: Option<String>,
@@ -9,14 +10,14 @@ pub struct OpenAIEmbeddingResponse {
 }
 
 /// A single embedding in the response.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAIEmbeddingData {
     pub embedding: Vec<f32>,
     pub index: Option<usize>,
 }
 
 /// Usage info from the Embeddings API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAIEmbeddingUsage {
     pub prompt_tokens: Option<u64>,
     pub total_tokens: Option<u64>,

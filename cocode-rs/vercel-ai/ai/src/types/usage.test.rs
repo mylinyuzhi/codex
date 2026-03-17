@@ -119,14 +119,17 @@ fn test_create_null_usage() {
 fn test_add_image_model_usage() {
     let a = ImageModelV4Usage {
         prompt_tokens: 100,
+        output_tokens: 50,
         total_tokens: 150,
     };
     let b = ImageModelV4Usage {
         prompt_tokens: 200,
+        output_tokens: 100,
         total_tokens: 300,
     };
 
     let sum = add_image_model_usage(&a, &b);
     assert_eq!(sum.prompt_tokens, 300);
+    assert_eq!(sum.output_tokens, 150);
     assert_eq!(sum.total_tokens, 450);
 }

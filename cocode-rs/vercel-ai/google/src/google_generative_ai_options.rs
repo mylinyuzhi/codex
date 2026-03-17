@@ -10,7 +10,6 @@ use std::collections::HashMap;
 pub enum ResponseModality {
     Text,
     Image,
-    Audio,
 }
 
 /// Thinking configuration for the model.
@@ -27,17 +26,19 @@ pub struct ThinkingConfig {
 
 /// Thinking level for the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
-    Light,
+    Minimal,
+    Low,
     Medium,
-    Verbose,
+    High,
 }
 
 /// Harm category for safety settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum HarmCategory {
+    HarmCategoryUnspecified,
     HarmCategoryHateSpeech,
     HarmCategoryDangerousContent,
     HarmCategorySexuallyExplicit,
@@ -49,6 +50,7 @@ pub enum HarmCategory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum HarmBlockThreshold {
+    HarmBlockThresholdUnspecified,
     BlockLowAndAbove,
     BlockMediumAndAbove,
     BlockOnlyHigh,
@@ -68,6 +70,7 @@ pub struct SafetySetting {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MediaResolution {
+    MediaResolutionUnspecified,
     MediaResolutionLow,
     MediaResolutionMedium,
     MediaResolutionHigh,
@@ -78,25 +81,45 @@ pub enum MediaResolution {
 pub enum AspectRatio {
     #[serde(rename = "1:1")]
     Square,
+    #[serde(rename = "2:3")]
+    TwoByThree,
+    #[serde(rename = "3:2")]
+    ThreeByTwo,
     #[serde(rename = "3:4")]
     ThreeByFour,
     #[serde(rename = "4:3")]
     FourByThree,
+    #[serde(rename = "4:5")]
+    FourByFive,
+    #[serde(rename = "5:4")]
+    FiveByFour,
     #[serde(rename = "9:16")]
-    NineByixteen,
+    NineBySixteen,
     #[serde(rename = "16:9")]
     SixteenByNine,
+    #[serde(rename = "21:9")]
+    TwentyOneByNine,
+    #[serde(rename = "1:8")]
+    OneByEight,
+    #[serde(rename = "8:1")]
+    EightByOne,
+    #[serde(rename = "1:4")]
+    OneByFour,
+    #[serde(rename = "4:1")]
+    FourByOne,
 }
 
 /// Image size for image generation within language model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GoogleImageSize {
-    #[serde(rename = "256")]
-    S256,
     #[serde(rename = "512")]
     S512,
-    #[serde(rename = "1024")]
-    S1024,
+    #[serde(rename = "1K")]
+    S1K,
+    #[serde(rename = "2K")]
+    S2K,
+    #[serde(rename = "4K")]
+    S4K,
 }
 
 /// Image configuration for language model image generation.
@@ -139,8 +162,6 @@ pub struct GoogleLanguageModelOptions {
     pub structured_outputs: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_settings: Option<Vec<SafetySetting>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub threshold: Option<HarmBlockThreshold>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_timestamp: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

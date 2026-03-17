@@ -1,3 +1,4 @@
+use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
@@ -22,7 +23,14 @@ pub struct CompletionPromptResult {
 /// ```
 ///
 /// Returns the prompt text and stop sequences (`["\nuser:"]`).
-pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> CompletionPromptResult {
+///
+/// Errors on:
+/// - System messages after the first
+/// - Tool messages (unsupported in completions)
+/// - Non-text content in user messages
+pub fn convert_to_completion_prompt(
+    prompt: &LanguageModelV4Prompt,
+) -> Result<CompletionPromptResult, AISdkError> {
     let user = "user";
     let assistant = "assistant";
 
@@ -39,8 +47,9 @@ pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> Completio
     for msg in iter {
         match msg {
             LanguageModelV4Message::System { .. } => {
-                // TS throws InvalidPromptError for system messages after the first.
-                // In Rust, we skip them gracefully.
+                return Err(AISdkError::new(
+                    "Invalid prompt: system messages are only supported as the first message in completion prompts",
+                ));
             }
             LanguageModelV4Message::User { content, .. } => {
                 let user_message: String = content
@@ -57,6 +66,16 @@ pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> Completio
                 text.push_str(&format!("{user}:\n{user_message}\n\n"));
             }
             LanguageModelV4Message::Assistant { content, .. } => {
+                // Check for unsupported tool-call parts
+                if content
+                    .iter()
+                    .any(|p| matches!(p, AssistantContentPart::ToolCall(_)))
+                {
+                    return Err(AISdkError::new(
+                        "Unsupported functionality: tool-call messages in completion prompts",
+                    ));
+                }
+
                 let assistant_message: String = content
                     .iter()
                     .filter_map(|part| {
@@ -71,7 +90,9 @@ pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> Completio
                 text.push_str(&format!("{assistant}:\n{assistant_message}\n\n"));
             }
             LanguageModelV4Message::Tool { .. } => {
-                // Tool content not supported in completions (TS throws UnsupportedFunctionalityError)
+                return Err(AISdkError::new(
+                    "Unsupported functionality: tool messages are not supported in completion prompts",
+                ));
             }
         }
     }
@@ -79,10 +100,10 @@ pub fn convert_to_completion_prompt(prompt: &LanguageModelV4Prompt) -> Completio
     // Add assistant prefix for the model to continue from
     text.push_str(&format!("{assistant}:\n"));
 
-    CompletionPromptResult {
+    Ok(CompletionPromptResult {
         prompt: text,
         stop_sequences: vec![format!("\n{user}:")],
-    }
+    })
 }
 
 #[cfg(test)]

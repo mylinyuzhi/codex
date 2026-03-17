@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::Value;
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider_utils::ResponseHandler;
 
 use crate::metadata_extractor::MetadataExtractor;
 
@@ -32,4 +34,7 @@ pub struct OpenAICompatibleProviderSettings {
     pub transform_request_body: Option<Arc<dyn Fn(Value) -> Value + Send + Sync>>,
     /// Optional metadata extractor for provider-specific response metadata.
     pub metadata_extractor: Option<Arc<dyn MetadataExtractor>>,
+    /// Optional custom error handler for failed API responses.
+    /// If not set, uses the default OpenAI-compatible error handler.
+    pub error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
 }

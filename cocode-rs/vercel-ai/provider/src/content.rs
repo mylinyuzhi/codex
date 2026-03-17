@@ -45,6 +45,9 @@ pub struct FilePart {
     pub data: DataContent,
     /// The MIME type of the file.
     pub media_type: String,
+    /// Optional filename.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
     /// Provider-specific metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
@@ -56,6 +59,7 @@ impl FilePart {
         Self {
             data,
             media_type: media_type.into(),
+            filename: None,
             provider_metadata: None,
         }
     }
@@ -73,6 +77,12 @@ impl FilePart {
     /// Create an image file part from base64.
     pub fn image_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
         Self::new(DataContent::from_base64(base64), media_type)
+    }
+
+    /// Set the filename.
+    pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
+        self.filename = Some(filename.into());
+        self
     }
 
     /// Add provider metadata.
@@ -494,6 +504,41 @@ impl UserContentPart {
     }
 }
 
+/// A reasoning file content part (file data that is part of reasoning).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningFilePart {
+    /// The file data.
+    pub data: DataContent,
+    /// The MIME type of the file.
+    pub media_type: String,
+    /// Provider-specific metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+impl ReasoningFilePart {
+    /// Create a new reasoning file part.
+    pub fn new(data: DataContent, media_type: impl Into<String>) -> Self {
+        Self {
+            data,
+            media_type: media_type.into(),
+            provider_metadata: None,
+        }
+    }
+
+    /// Create from base64 data.
+    pub fn from_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::new(DataContent::from_base64(base64), media_type)
+    }
+
+    /// Add provider metadata.
+    pub fn with_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
+        self
+    }
+}
+
 /// Assistant message content parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -504,6 +549,8 @@ pub enum AssistantContentPart {
     File(FilePart),
     /// Reasoning content (for thinking models).
     Reasoning(ReasoningPart),
+    /// Reasoning file content (file data that is part of reasoning).
+    ReasoningFile(ReasoningFilePart),
     /// Tool call.
     ToolCall(ToolCallPart),
     /// Tool result (when assistant receives tool results).

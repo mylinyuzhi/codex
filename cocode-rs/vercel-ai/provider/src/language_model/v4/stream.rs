@@ -37,6 +37,19 @@ pub struct File {
     pub provider_metadata: Option<ProviderMetadata>,
 }
 
+/// A reasoning file in a response (file data that is part of reasoning).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningFile {
+    /// The file data (base64).
+    pub data: String,
+    /// The MIME type.
+    pub media_type: String,
+    /// Provider metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
 /// A stream part emitted during streaming.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -146,6 +159,9 @@ pub enum LanguageModelV4StreamPart {
     /// Emitted when a file is available.
     #[serde(rename = "file")]
     File(File),
+    /// Emitted when a reasoning file is available (file data that is part of reasoning).
+    #[serde(rename = "reasoning-file")]
+    ReasoningFile(ReasoningFile),
     /// Emitted when a source is available.
     #[serde(rename = "source")]
     Source(Source),

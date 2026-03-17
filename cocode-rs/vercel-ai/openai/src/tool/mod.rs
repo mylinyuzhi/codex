@@ -21,6 +21,7 @@ pub use file_search::openai_file_search_tool;
 pub use image_generation::ImageGenerationToolOptions;
 pub use image_generation::openai_image_generation_tool;
 pub use local_shell::openai_local_shell_tool;
+pub use mcp::McpToolOptions;
 pub use mcp::openai_mcp_tool;
 pub use shell::openai_shell_tool;
 pub use web_search::openai_web_search_tool;

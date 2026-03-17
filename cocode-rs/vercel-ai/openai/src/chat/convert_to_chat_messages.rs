@@ -34,12 +34,8 @@ pub fn convert_to_openai_chat_messages(
                     messages.push(json!({ "role": "developer", "content": content }));
                 }
                 SystemMessageMode::Remove => {
-                    warnings.push(Warning::Unsupported {
-                        feature: "system messages".into(),
-                        details: Some(
-                            "System messages are not supported for this model and were removed"
-                                .into(),
-                        ),
+                    warnings.push(Warning::Other {
+                        message: "system messages are removed for this model".into(),
                     });
                 }
             },
@@ -126,13 +122,22 @@ fn convert_user_parts(
             UserContentPart::File(file_part) => {
                 let media_type = &file_part.media_type;
                 if media_type.starts_with("image/") {
-                    let url = data_content_to_url(&file_part.data, media_type);
+                    // Convert wildcard image/* to image/jpeg
+                    let effective_type = if media_type == "image/*" {
+                        "image/jpeg"
+                    } else {
+                        media_type.as_str()
+                    };
+                    let url = data_content_to_url(&file_part.data, effective_type);
                     let mut image_url = json!({ "url": url });
                     if let Some(ref detail) = image_detail {
                         image_url["detail"] = Value::String(detail.clone());
                     }
                     json!({ "type": "image_url", "image_url": image_url })
-                } else if media_type == "audio/wav" || media_type == "audio/mp3" {
+                } else if media_type == "audio/wav"
+                    || media_type == "audio/mp3"
+                    || media_type == "audio/mpeg"
+                {
                     let b64 = data_content_to_base64(&file_part.data);
                     let format = if media_type == "audio/wav" {
                         "wav"
@@ -144,6 +149,15 @@ fn convert_user_parts(
                         "input_audio": { "data": b64, "format": format }
                     })
                 } else if media_type == "application/pdf" {
+                    // Check if data is a file ID (string starting with "file-")
+                    if let DataContent::Base64(ref s) = file_part.data
+                        && s.starts_with("file-")
+                    {
+                        return json!({
+                            "type": "file",
+                            "file": { "file_id": s }
+                        });
+                    }
                     let b64 = data_content_to_base64(&file_part.data);
                     json!({
                         "type": "file",
@@ -209,9 +223,9 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
         ToolResultContent::ErrorJson { value, .. } => {
             serde_json::to_string(value).unwrap_or_default()
         }
-        ToolResultContent::ExecutionDenied { reason, .. } => {
-            reason.clone().unwrap_or_else(|| "Execution denied".into())
-        }
+        ToolResultContent::ExecutionDenied { reason, .. } => reason
+            .clone()
+            .unwrap_or_else(|| "Tool execution denied.".into()),
         ToolResultContent::Content { value, .. } => {
             // Serialize content parts to a string representation
             let parts: Vec<String> = value

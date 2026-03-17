@@ -22,16 +22,16 @@ use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ReasoningPart;
 use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::SourceType;
+use vercel_ai_provider::StreamError;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
 
 use crate::metadata_extractor::StreamMetadataExtractor;
 use crate::openai_compatible_config::OpenAICompatibleConfig;
-use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 
 use super::convert_chat_usage::convert_openai_compatible_chat_usage;
 use super::convert_to_chat_messages::convert_to_openai_compatible_chat_messages;
@@ -75,7 +75,7 @@ impl OpenAICompatibleChatLanguageModel {
         }
 
         // Convert prompt to messages (always uses "system" role, no Developer mode)
-        let (messages, msg_warnings) = convert_to_openai_compatible_chat_messages(&options.prompt);
+        let (messages, msg_warnings) = convert_to_openai_compatible_chat_messages(&options.prompt)?;
         warnings.extend(msg_warnings);
 
         // Prepare tools
@@ -135,7 +135,7 @@ impl OpenAICompatibleChatLanguageModel {
         if let Some(ref format) = options.response_format {
             match format {
                 vercel_ai_provider::ResponseFormat::Text => {
-                    body["response_format"] = json!({"type": "text"});
+                    // Omit response_format for text (some providers reject explicit {"type":"text"})
                 }
                 vercel_ai_provider::ResponseFormat::Json {
                     schema,
@@ -202,11 +202,11 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
     }
 
     fn supported_urls(&self) -> HashMap<String, Vec<Regex>> {
-        let mut map = HashMap::new();
-        if let Ok(re) = Regex::new(r"^https?://.*$") {
-            map.insert("image/*".into(), vec![re]);
-        }
-        map
+        self.config
+            .supported_urls
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or_default()
     }
 
     async fn do_generate(
@@ -218,16 +218,20 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         let headers = self.config.get_headers();
         let provider_name = self.config.provider_options_name();
 
-        let response: OpenAICompatibleChatResponse = post_json_to_api_with_client(
-            &url,
-            Some(headers),
-            &body,
-            JsonResponseHandler::new(),
-            OpenAICompatibleFailedResponseHandler::new(provider_name),
-            options.abort_signal,
-            self.config.client.clone(),
-        )
-        .await?;
+        let api_response =
+            post_json_to_api_with_client_and_headers::<OpenAICompatibleChatResponse>(
+                &url,
+                Some(headers),
+                &body,
+                JsonResponseHandler::new(),
+                self.config.error_handler.clone(),
+                options.abort_signal,
+                self.config.client.clone(),
+            )
+            .await?;
+
+        let response = api_response.value;
+        let response_headers = api_response.headers;
 
         // Extract content from first choice
         let choice = response
@@ -236,6 +240,16 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             .ok_or_else(|| AISdkError::new("No choices in response"))?;
 
         let mut content: Vec<AssistantContentPart> = Vec::new();
+
+        // Text content (before reasoning, matching TS order)
+        if let Some(ref text) = choice.message.content
+            && !text.is_empty()
+        {
+            content.push(AssistantContentPart::Text(TextPart {
+                text: text.clone(),
+                provider_metadata: None,
+            }));
+        }
 
         // Reasoning content (check both fields)
         let reasoning_text = choice
@@ -249,16 +263,6 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             content.push(AssistantContentPart::Reasoning(ReasoningPart::new(
                 reasoning.clone(),
             )));
-        }
-
-        // Text content
-        if let Some(ref text) = choice.message.content
-            && !text.is_empty()
-        {
-            content.push(AssistantContentPart::Text(TextPart {
-                text: text.clone(),
-                provider_metadata: None,
-            }));
         }
 
         // Tool calls
@@ -289,7 +293,10 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                     });
 
                 content.push(AssistantContentPart::ToolCall(ToolCallPart {
-                    tool_call_id: tc.id.clone(),
+                    tool_call_id: tc
+                        .id
+                        .clone()
+                        .unwrap_or_else(|| vercel_ai_provider_utils::generate_id("call")),
                     tool_name: tc.function.name.clone(),
                     input,
                     provider_executed: None,
@@ -373,6 +380,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         };
 
         // Response metadata
+        let response_body = serde_json::to_value(&response).ok();
         let timestamp = response
             .created
             .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
@@ -388,8 +396,8 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             response: Some(LanguageModelV4Response {
                 timestamp,
                 model_id: response.model,
-                headers: None,
-                body: None,
+                headers: Some(response_headers),
+                body: response_body,
             }),
         })
     }
@@ -414,7 +422,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         let headers = self.config.get_headers();
         let provider_name = self.config.provider_options_name();
 
-        let byte_stream = post_stream_to_api_with_client(
+        let (byte_stream, response_headers) = post_stream_to_api_with_client_and_headers(
             &url,
             Some(headers),
             &body,
@@ -445,7 +453,9 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             request: Some(LanguageModelV4Request {
                 body: Some(request_body),
             }),
-            response: Some(LanguageModelV4StreamResponse::new()),
+            response: Some(LanguageModelV4StreamResponse {
+                headers: Some(response_headers),
+            }),
         })
     }
 }
@@ -496,22 +506,82 @@ fn create_chat_stream(
                     Ok(false) => {
                         // Stream ended
                         state.done = true;
+
+                        // Flush open segments (idempotent — safe if already closed)
+                        state.close_reasoning();
+                        state.close_text();
+
+                        // Finalize unfinished tool calls
+                        let tool_calls = std::mem::take(&mut state.tool_calls);
+                        for tc in tool_calls {
+                            if tc.started && !tc.has_finished {
+                                state
+                                    .pending
+                                    .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                                        id: tc.id.clone(),
+                                        provider_metadata: None,
+                                    });
+
+                                let input: Value =
+                                    serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                                let pm = state.tool_call_provider_metadata(&tc.thought_signature);
+                                let mut tool_call =
+                                    vercel_ai_provider::tool::ToolCall::new(tc.id, tc.name, input);
+                                tool_call.provider_metadata = pm;
+                                state
+                                    .pending
+                                    .push_back(LanguageModelV4StreamPart::ToolCall(tool_call));
+                            }
+                        }
+
                         // Emit finish if we haven't already
                         if !state.finish_emitted {
                             state.finish_emitted = true;
 
-                            // Build provider metadata from stream extractor
-                            let extractor_meta = state
+                            // Build provider metadata: merge extractor + prediction tokens
+                            let mut finish_meta = state
                                 .stream_extractor
                                 .as_ref()
-                                .and_then(|e| e.build_metadata());
+                                .and_then(|e| e.build_metadata())
+                                .map(|pm| pm.0)
+                                .unwrap_or_default();
+
+                            if let Some(ref usage_data) = state.usage
+                                && let Some(ref details) = usage_data.completion_tokens_details
+                            {
+                                let mut prediction = serde_json::Map::new();
+                                if let Some(accepted) = details.accepted_prediction_tokens {
+                                    prediction.insert(
+                                        "acceptedPredictionTokens".into(),
+                                        Value::Number(accepted.into()),
+                                    );
+                                }
+                                if let Some(rejected) = details.rejected_prediction_tokens {
+                                    prediction.insert(
+                                        "rejectedPredictionTokens".into(),
+                                        Value::Number(rejected.into()),
+                                    );
+                                }
+                                if !prediction.is_empty() {
+                                    finish_meta.insert(
+                                        state.provider_name.clone(),
+                                        Value::Object(prediction),
+                                    );
+                                }
+                            }
+
+                            let provider_metadata = if finish_meta.is_empty() {
+                                None
+                            } else {
+                                Some(ProviderMetadata(finish_meta))
+                            };
 
                             let finish = LanguageModelV4StreamPart::Finish {
                                 usage: convert_openai_compatible_chat_usage(state.usage.as_ref()),
                                 finish_reason: map_openai_compatible_chat_finish_reason(
                                     state.finish_reason.as_deref(),
                                 ),
-                                provider_metadata: extractor_meta,
+                                provider_metadata,
                             };
                             return Some((Ok(finish), state));
                         }
@@ -654,25 +724,54 @@ impl ChatStreamState {
 
     /// Process a single SSE data JSON line.
     fn process_data_line(&mut self, data: &str) {
-        let chunk: OpenAICompatibleChatChunk = match serde_json::from_str(data) {
-            Ok(c) => c,
-            Err(_) => return,
+        // Parse once as Value for reuse
+        let raw: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                self.finish_reason = Some("error".to_string());
+                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                    error: StreamError::new(format!("Failed to parse chat chunk: {e}")),
+                });
+                return;
+            }
         };
 
-        // Feed to stream metadata extractor
-        if let Some(ref mut extractor) = self.stream_extractor
-            && let Ok(raw) = serde_json::from_str::<Value>(data)
-        {
+        // 1. Emit raw chunk BEFORE any validation (matches TS)
+        if self.include_raw {
+            self.pending.push_back(LanguageModelV4StreamPart::Raw {
+                raw_value: raw.clone(),
+            });
+        }
+
+        // 2. Feed metadata extractor BEFORE error-key check (matches TS)
+        if let Some(ref mut extractor) = self.stream_extractor {
             extractor.process_chunk(&raw);
         }
 
-        // Emit raw chunk if requested
-        if self.include_raw
-            && let Ok(raw) = serde_json::from_str::<Value>(data)
-        {
-            self.pending
-                .push_back(LanguageModelV4StreamPart::Raw { raw_value: raw });
+        // 3. Detect error chunks from the API (e.g. {"error": {"message": "..."}})
+        if let Some(error) = raw.get("error") {
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
+            self.finish_reason = Some("error".to_string());
+            self.pending.push_back(LanguageModelV4StreamPart::Error {
+                error: StreamError::new(message),
+            });
+            return;
         }
+
+        // 4. Typed deserialization
+        let chunk: OpenAICompatibleChatChunk = match serde_json::from_value(raw) {
+            Ok(c) => c,
+            Err(e) => {
+                self.finish_reason = Some("error".to_string());
+                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                    error: StreamError::new(format!("Invalid chat chunk structure: {e}")),
+                });
+                return;
+            }
+        };
 
         // Emit response metadata once
         if !self.metadata_emitted {
@@ -770,7 +869,10 @@ impl ChatStreamState {
                     self.close_reasoning();
 
                     for tc_delta in tool_calls {
-                        let idx = tc_delta.index as usize;
+                        let idx = tc_delta.index.unwrap_or(self.tool_calls.len() as u32) as usize;
+
+                        // Track if this is a new tool call entry
+                        let is_new = self.tool_calls.len() <= idx;
 
                         // Ensure tool_calls vec is big enough
                         while self.tool_calls.len() <= idx {
@@ -792,6 +894,28 @@ impl ChatStreamState {
                         // Update tool call state from delta
                         if let Some(ref id) = tc_delta.id {
                             self.tool_calls[idx].id = id.clone();
+                        }
+
+                        // Validate first delta for a new tool call has id and function.name
+                        if is_new {
+                            let has_id = tc_delta.id.is_some();
+                            let has_name = tc_delta
+                                .function
+                                .as_ref()
+                                .and_then(|f| f.name.as_ref())
+                                .is_some();
+                            if !has_id || !has_name {
+                                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                                    error: StreamError::new(format!(
+                                        "Invalid response data: expected tool call \
+                                             delta to have id and function.name in first chunk, \
+                                             got id={:?} function.name={:?}",
+                                        tc_delta.id,
+                                        tc_delta.function.as_ref().and_then(|f| f.name.as_ref()),
+                                    )),
+                                });
+                                continue;
+                            }
                         }
 
                         // Capture thought_signature from extra_content
@@ -816,8 +940,6 @@ impl ChatStreamState {
                         // Emit ToolInputStart on first delta
                         if !self.tool_calls[idx].started && !self.tool_calls[idx].name.is_empty() {
                             self.tool_calls[idx].started = true;
-                            // Close text if open
-                            self.close_text();
 
                             let tc_id = self.tool_calls[idx].id.clone();
                             let tc_name = self.tool_calls[idx].name.clone();
@@ -897,61 +1019,6 @@ impl ChatStreamState {
                             ));
                         }
                     }
-                }
-            }
-        }
-
-        // When stream is ending, close open segments and finalize tool calls
-        if self.finish_reason.is_some() {
-            // Close reasoning if open
-            self.close_reasoning();
-            self.close_text();
-
-            // Finalize tool calls that haven't been completed early
-            let tool_calls = std::mem::take(&mut self.tool_calls);
-            for tc in tool_calls {
-                if tc.started && !tc.has_finished {
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                            id: tc.id.clone(),
-                            provider_metadata: None,
-                        });
-
-                    let input: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                    let pm = self.tool_call_provider_metadata(&tc.thought_signature);
-                    let mut tool_call =
-                        vercel_ai_provider::tool::ToolCall::new(tc.id, tc.name, input);
-                    tool_call.provider_metadata = pm;
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolCall(tool_call));
-                }
-            }
-
-            // #5: Prediction tokens in streaming provider metadata
-            if let Some(ref usage_data) = self.usage
-                && let Some(ref details) = usage_data.completion_tokens_details
-            {
-                let mut prediction_meta = serde_json::Map::new();
-                if let Some(accepted) = details.accepted_prediction_tokens {
-                    prediction_meta.insert(
-                        "acceptedPredictionTokens".into(),
-                        Value::Number(accepted.into()),
-                    );
-                }
-                if let Some(rejected) = details.rejected_prediction_tokens {
-                    prediction_meta.insert(
-                        "rejectedPredictionTokens".into(),
-                        Value::Number(rejected.into()),
-                    );
-                }
-                if !prediction_meta.is_empty() {
-                    // Emit as a response metadata update with provider metadata
-                    let mut meta_map = HashMap::new();
-                    meta_map.insert(self.provider_name.clone(), Value::Object(prediction_meta));
-                    let pm = ProviderMetadata(meta_map);
-                    let meta = ResponseMetadata::new().with_provider_metadata(pm);
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ResponseMetadata(meta));
                 }
             }
         }

@@ -14,6 +14,29 @@ use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
 use crate::shared::Warning;
 
+/// An image file that can be used for image editing or variation generation.
+#[derive(Debug, Clone)]
+pub enum ImageModelV4File {
+    /// A file with inline data and media type.
+    File {
+        media_type: String,
+        data: ImageFileData,
+        provider_options: Option<ProviderOptions>,
+    },
+    /// A file referenced by URL.
+    Url {
+        url: String,
+        provider_options: Option<ProviderOptions>,
+    },
+}
+
+/// Image file data — either base64-encoded or raw binary.
+#[derive(Debug, Clone)]
+pub enum ImageFileData {
+    Base64(String),
+    Binary(Vec<u8>),
+}
+
 /// The image model trait (V4).
 ///
 /// This trait defines the interface for image generation models following the
@@ -66,6 +89,10 @@ pub struct ImageModelV4CallOptions {
     pub provider_options: Option<ProviderOptions>,
     /// Abort signal for cancellation.
     pub abort_signal: Option<CancellationToken>,
+    /// Input image files for editing / variations.
+    pub files: Option<Vec<ImageModelV4File>>,
+    /// Mask image indicating where to edit.
+    pub mask: Option<ImageModelV4File>,
     /// Headers to include in the request.
     pub headers: Option<HashMap<String, String>>,
 }
@@ -124,6 +151,18 @@ impl ImageModelV4CallOptions {
     /// Set provider options.
     pub fn with_provider_options(mut self, options: ProviderOptions) -> Self {
         self.provider_options = Some(options);
+        self
+    }
+
+    /// Set input image files for editing.
+    pub fn with_files(mut self, files: Vec<ImageModelV4File>) -> Self {
+        self.files = Some(files);
+        self
+    }
+
+    /// Set a mask image for editing.
+    pub fn with_mask(mut self, mask: ImageModelV4File) -> Self {
+        self.mask = Some(mask);
         self
     }
 
@@ -366,6 +405,8 @@ impl ImageModelV4Response {
 pub struct ImageModelV4Usage {
     /// The number of tokens in the prompt.
     pub prompt_tokens: u64,
+    /// The number of output tokens.
+    pub output_tokens: u64,
     /// The total number of tokens.
     pub total_tokens: u64,
 }
@@ -375,6 +416,7 @@ impl ImageModelV4Usage {
     pub fn new(prompt_tokens: u64) -> Self {
         Self {
             prompt_tokens,
+            output_tokens: 0,
             total_tokens: prompt_tokens,
         }
     }

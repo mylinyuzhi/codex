@@ -52,6 +52,7 @@ pub mod image;
 pub use metadata_extractor::MetadataExtractor;
 pub use metadata_extractor::StreamMetadataExtractor;
 pub use openai_compatible_config::OpenAICompatibleConfig;
+pub use openai_compatible_config::SupportedUrlsFn;
 pub use openai_compatible_provider::OpenAICompatibleProvider;
 pub use openai_compatible_provider::create_openai_compatible;
 pub use openai_compatible_provider_settings::OpenAICompatibleProviderSettings;

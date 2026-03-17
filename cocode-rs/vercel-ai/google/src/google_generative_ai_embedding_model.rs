@@ -79,6 +79,23 @@ impl GoogleGenerativeAIEmbeddingModel {
 
         serde_json::from_value(opts_value).unwrap_or_default()
     }
+
+    /// Build content parts for a single embedding value, merging text with multimodal content.
+    fn build_content_parts(text: &str, multimodal_parts: Option<&Vec<Value>>) -> Value {
+        let text_part = if !text.is_empty() {
+            vec![json!({ "text": text })]
+        } else {
+            vec![]
+        };
+        match multimodal_parts {
+            Some(parts) => {
+                let mut all_parts = text_part;
+                all_parts.extend(parts.iter().cloned());
+                json!(all_parts)
+            }
+            None => json!([{ "text": text }]),
+        }
+    }
 }
 
 /// Google embedding response (single).
@@ -125,6 +142,32 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
     ) -> Result<EmbeddingModelV4EmbedResult, AISdkError> {
         let provider_opts = self.parse_provider_options(&options);
 
+        // Validate: too many values
+        if options.values.len() > self.max_embeddings_per_call() {
+            return Err(AISdkError::new(format!(
+                "Too many values for a single embedding call. \
+                 The {} model supports at most {} embeddings per call, but {} values were provided. \
+                 Provider: {}",
+                self.model_id,
+                self.max_embeddings_per_call(),
+                options.values.len(),
+                self.config.provider,
+            )));
+        }
+
+        let multimodal_content = provider_opts.content.as_ref();
+
+        // Validate: multimodal content length must match values length
+        if let Some(content) = multimodal_content
+            && content.len() != options.values.len()
+        {
+            return Err(AISdkError::new(format!(
+                "The number of multimodal content entries ({}) must match the number of values ({}).",
+                content.len(),
+                options.values.len(),
+            )));
+        }
+
         let headers = combine_headers(vec![Some((self.config.headers)()), options.headers.clone()]);
 
         let model_path = get_model_path(&self.model_id);
@@ -138,15 +181,20 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
         if options.values.len() == 1 {
             // Single embedding: use embedContent endpoint.
             let url = format!(
-                "{}/v1beta/{}:embedContent",
+                "{}/{}:embedContent",
                 without_trailing_slash(&self.config.base_url),
                 model_path
             );
 
+            let multimodal_parts = multimodal_content
+                .and_then(|c| c.first())
+                .and_then(|v| v.as_ref());
+            let parts = Self::build_content_parts(&options.values[0], multimodal_parts);
+
             let mut body = json!({
                 "model": model_path,
                 "content": {
-                    "parts": [{ "text": options.values[0] }]
+                    "parts": parts
                 }
             });
 
@@ -179,12 +227,13 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
                     total_tokens: 0,
                 },
                 warnings: Vec::new(),
+                provider_metadata: None,
                 raw_response: None,
             })
         } else {
             // Batch embedding: use batchEmbedContents endpoint.
             let url = format!(
-                "{}/v1beta/{}:batchEmbedContents",
+                "{}/{}:batchEmbedContents",
                 without_trailing_slash(&self.config.base_url),
                 model_path
             );
@@ -192,11 +241,18 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
             let requests: Vec<Value> = options
                 .values
                 .iter()
-                .map(|text| {
+                .enumerate()
+                .map(|(index, text)| {
+                    let multimodal_parts = multimodal_content
+                        .and_then(|c| c.get(index))
+                        .and_then(|v| v.as_ref());
+                    let parts = Self::build_content_parts(text, multimodal_parts);
+
                     let mut req = json!({
                         "model": model_path,
                         "content": {
-                            "parts": [{ "text": text }]
+                            "role": "user",
+                            "parts": parts
                         }
                     });
                     if let Some(dim) = output_dimensionality {
@@ -237,6 +293,7 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
                     total_tokens: 0,
                 },
                 warnings: Vec::new(),
+                provider_metadata: None,
                 raw_response: None,
             })
         }

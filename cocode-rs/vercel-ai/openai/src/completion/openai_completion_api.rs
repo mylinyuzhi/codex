@@ -41,6 +41,7 @@ pub struct OpenAICompletionChunkChoice {
     pub text: Option<String>,
     pub index: Option<u32>,
     pub finish_reason: Option<String>,
+    pub logprobs: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

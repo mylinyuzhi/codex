@@ -366,3 +366,7 @@ fn extract_text(content: &[AssistantContentPart]) -> String {
         .collect::<Vec<_>>()
         .join("")
 }
+
+#[cfg(test)]
+#[path = "generate.test.rs"]
+mod tests;

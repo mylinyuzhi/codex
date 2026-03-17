@@ -28,13 +28,13 @@ pub fn convert_openai_completion_usage(usage: Option<&OpenAICompletionUsage>) ->
 
     Usage {
         input_tokens: InputTokens {
-            total: Some(prompt_tokens),
+            total: usage.prompt_tokens,
             no_cache: Some(prompt_tokens),
             cache_read: None,
             cache_write: None,
         },
         output_tokens: OutputTokens {
-            total: Some(completion_tokens),
+            total: usage.completion_tokens,
             text: Some(completion_tokens),
             reasoning: None,
         },
@@ -44,3 +44,7 @@ pub fn convert_openai_completion_usage(usage: Option<&OpenAICompletionUsage>) ->
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "convert_completion_usage.test.rs"]
+mod tests;

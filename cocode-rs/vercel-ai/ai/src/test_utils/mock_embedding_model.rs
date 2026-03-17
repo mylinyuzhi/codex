@@ -81,6 +81,7 @@ impl EmbeddingModelV4 for MockEmbeddingModel {
                 embeddings,
                 usage: EmbeddingUsage::new(count as u64),
                 warnings: Vec::new(),
+                provider_metadata: None,
                 raw_response: None,
             })
         }

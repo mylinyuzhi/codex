@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::Stream;
+use regex::Regex;
 use serde_json::Value;
 use serde_json::json;
 
@@ -16,14 +18,15 @@ use vercel_ai_provider::LanguageModelV4Response;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResponse;
 use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::ResponseMetadata;
+use vercel_ai_provider::StreamError;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
 
 use crate::openai_compatible_config::OpenAICompatibleConfig;
-use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 
 use super::convert_completion_usage::convert_openai_compatible_completion_usage;
 use super::convert_to_completion_prompt::convert_to_completion_prompt;
@@ -57,16 +60,25 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         &self.model_id
     }
 
+    fn supported_urls(&self) -> HashMap<String, Vec<Regex>> {
+        self.config
+            .supported_urls
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or_default()
+    }
+
     async fn do_generate(
         &self,
         options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
-        let compat_opts = extract_completion_options(&options.provider_options, provider_name);
-        let prompt_result = convert_to_completion_prompt(&options.prompt);
+        let (compat_opts, passthrough) =
+            extract_completion_options(&options.provider_options, provider_name);
+        let prompt_result = convert_to_completion_prompt(&options.prompt)?;
 
-        // #10: Warn about unsupported features
+        // Warn about unsupported features
         if options.top_k.is_some() {
             warnings.push(Warning::Unsupported {
                 feature: "topK".into(),
@@ -140,22 +152,33 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             body["user"] = Value::String(user.clone());
         }
 
+        // Passthrough: spread remaining provider-specific keys into body
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &passthrough {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+
         // Apply request body transform
         let body = self.config.transform_body(body);
 
         let url = self.config.url("/completions");
         let headers = self.config.get_headers();
 
-        let response: OpenAICompatibleCompletionResponse = post_json_to_api_with_client(
-            &url,
-            Some(headers),
-            &body,
-            JsonResponseHandler::new(),
-            OpenAICompatibleFailedResponseHandler::new(provider_name),
-            options.abort_signal,
-            self.config.client.clone(),
-        )
-        .await?;
+        let api_response =
+            post_json_to_api_with_client_and_headers::<OpenAICompatibleCompletionResponse>(
+                &url,
+                Some(headers),
+                &body,
+                JsonResponseHandler::new(),
+                self.config.error_handler.clone(),
+                options.abort_signal,
+                self.config.client.clone(),
+            )
+            .await?;
+
+        let response = api_response.value;
+        let response_headers = api_response.headers;
 
         let text = response
             .choices
@@ -171,12 +194,13 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         );
         let usage = convert_openai_compatible_completion_usage(response.usage.as_ref());
 
+        let response_body = serde_json::to_value(&response).ok();
         let timestamp = response
             .created
             .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
             .map(|dt| dt.to_rfc3339());
 
-        // #11: Only include text content when non-empty
+        // Only include text content when non-empty
         let content = if text.is_empty() {
             Vec::new()
         } else {
@@ -196,8 +220,8 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             response: Some(LanguageModelV4Response {
                 timestamp,
                 model_id: response.model,
-                headers: None,
-                body: None,
+                headers: Some(response_headers),
+                body: response_body,
             }),
         })
     }
@@ -206,9 +230,31 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         &self,
         options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
-        let compat_opts = extract_completion_options(&options.provider_options, provider_name);
-        let prompt_result = convert_to_completion_prompt(&options.prompt);
+        let (compat_opts, passthrough) =
+            extract_completion_options(&options.provider_options, provider_name);
+        let prompt_result = convert_to_completion_prompt(&options.prompt)?;
+
+        // Warn about unsupported features
+        if options.top_k.is_some() {
+            warnings.push(Warning::Unsupported {
+                feature: "topK".into(),
+                details: Some("This model does not support topK. topK is ignored.".into()),
+            });
+        }
+        if options.tools.is_some() {
+            warnings.push(Warning::Unsupported {
+                feature: "tools".into(),
+                details: Some("This model does not support tools.".into()),
+            });
+        }
+        if options.tool_choice.is_some() {
+            warnings.push(Warning::Unsupported {
+                feature: "toolChoice".into(),
+                details: Some("This model does not support toolChoice.".into()),
+            });
+        }
 
         let mut body = json!({
             "model": self.model_id,
@@ -248,8 +294,24 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             body["stop"] = json!(all_stop);
         }
 
+        if let Some(echo) = compat_opts.echo {
+            body["echo"] = Value::Bool(echo);
+        }
+        if let Some(ref bias) = compat_opts.logit_bias {
+            body["logit_bias"] = serde_json::to_value(bias).unwrap_or_default();
+        }
+        if let Some(ref suffix) = compat_opts.suffix {
+            body["suffix"] = Value::String(suffix.clone());
+        }
         if let Some(ref user) = compat_opts.user {
             body["user"] = Value::String(user.clone());
+        }
+
+        // Passthrough: spread remaining provider-specific keys into body
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &passthrough {
+                obj.insert(k.clone(), v.clone());
+            }
         }
 
         // Apply request body transform
@@ -258,7 +320,7 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         let url = self.config.url("/completions");
         let headers = self.config.get_headers();
 
-        let byte_stream = post_stream_to_api_with_client(
+        let (byte_stream, response_headers) = post_stream_to_api_with_client_and_headers(
             &url,
             Some(headers),
             &body,
@@ -268,21 +330,31 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         .await?;
 
         let request_body = body.clone();
-        let stream = create_completion_stream(byte_stream, self.config.include_usage);
+        let include_raw = options.include_raw_chunks.unwrap_or(false);
+        let stream = create_completion_stream(
+            byte_stream,
+            warnings,
+            self.config.include_usage,
+            include_raw,
+        );
 
         Ok(LanguageModelV4StreamResult {
             stream,
             request: Some(LanguageModelV4Request {
                 body: Some(request_body),
             }),
-            response: Some(LanguageModelV4StreamResponse::new()),
+            response: Some(LanguageModelV4StreamResponse {
+                headers: Some(response_headers),
+            }),
         })
     }
 }
 
 fn create_completion_stream(
     byte_stream: vercel_ai_provider_utils::ByteStream,
+    warnings: Vec<Warning>,
     _include_usage: bool,
+    include_raw: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     use futures::StreamExt;
 
@@ -290,12 +362,13 @@ fn create_completion_stream(
         byte_stream: vercel_ai_provider_utils::ByteStream,
         buffer: String,
         pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
-        text_started: bool,
         text_id: String,
         usage: Option<super::openai_compatible_completion_api::OpenAICompatibleCompletionUsage>,
         finish_reason: Option<String>,
         done: bool,
         finish_emitted: bool,
+        metadata_emitted: bool,
+        include_raw: bool,
     }
 
     let stream = futures::stream::unfold(
@@ -304,17 +377,16 @@ fn create_completion_stream(
             buffer: String::new(),
             pending: {
                 let mut q = std::collections::VecDeque::new();
-                q.push_back(LanguageModelV4StreamPart::StreamStart {
-                    warnings: Vec::new(),
-                });
+                q.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
                 q
             },
-            text_started: false,
             text_id: vercel_ai_provider_utils::generate_id("txt"),
             usage: None,
             finish_reason: None,
             done: false,
             finish_emitted: false,
+            metadata_emitted: false,
+            include_raw,
         },
         |mut state| async move {
             loop {
@@ -341,38 +413,106 @@ fn create_completion_stream(
                                 if data == "[DONE]" {
                                     continue;
                                 }
-                                if let Ok(chunk) =
-                                    serde_json::from_str::<OpenAICompatibleCompletionChunk>(data)
-                                {
-                                    if let Some(ref u) = chunk.usage {
-                                        state.usage = Some(u.clone());
+
+                                // Parse once as Value for reuse
+                                let raw: serde_json::Value = match serde_json::from_str(data) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        state.finish_reason = Some("error".to_string());
+                                        state.pending.push_back(LanguageModelV4StreamPart::Error {
+                                            error: StreamError::new(format!(
+                                                "Failed to parse completion chunk: {e}"
+                                            )),
+                                        });
+                                        continue;
                                     }
-                                    if let Some(ref choices) = chunk.choices {
-                                        for choice in choices {
-                                            if let Some(ref fr) = choice.finish_reason {
-                                                state.finish_reason = Some(fr.clone());
+                                };
+
+                                // 1. Emit raw chunk BEFORE any validation (matches TS)
+                                if state.include_raw {
+                                    state.pending.push_back(LanguageModelV4StreamPart::Raw {
+                                        raw_value: raw.clone(),
+                                    });
+                                }
+
+                                // 2. Detect error chunks from the API
+                                if let Some(error) = raw.get("error") {
+                                    let message = error
+                                        .get("message")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("Unknown error");
+                                    state.finish_reason = Some("error".to_string());
+                                    state.pending.push_back(LanguageModelV4StreamPart::Error {
+                                        error: StreamError::new(message),
+                                    });
+                                    continue;
+                                }
+
+                                match serde_json::from_value::<OpenAICompatibleCompletionChunk>(raw)
+                                {
+                                    Ok(chunk) => {
+                                        // Emit ResponseMetadata + TextStart on first valid chunk
+                                        if !state.metadata_emitted {
+                                            state.metadata_emitted = true;
+                                            let timestamp = chunk
+                                                .created
+                                                .and_then(|ts| {
+                                                    chrono::DateTime::from_timestamp(ts as i64, 0)
+                                                })
+                                                .map(|dt| dt.to_rfc3339());
+
+                                            let mut meta = ResponseMetadata::new();
+                                            if let Some(ref id) = chunk.id {
+                                                meta = meta.with_id(id.clone());
                                             }
-                                            if let Some(ref text) = choice.text
-                                                && !text.is_empty()
-                                            {
-                                                if !state.text_started {
-                                                    state.text_started = true;
+                                            if let Some(ref model) = chunk.model {
+                                                meta = meta.with_model(model.clone());
+                                            }
+                                            if let Some(ts) = timestamp {
+                                                meta = meta.with_timestamp(ts);
+                                            }
+                                            state.pending.push_back(
+                                                LanguageModelV4StreamPart::ResponseMetadata(meta),
+                                            );
+
+                                            // Emit TextStart unconditionally on first valid chunk
+                                            state.pending.push_back(
+                                                LanguageModelV4StreamPart::TextStart {
+                                                    id: state.text_id.clone(),
+                                                    provider_metadata: None,
+                                                },
+                                            );
+                                        }
+
+                                        if let Some(ref u) = chunk.usage {
+                                            state.usage = Some(u.clone());
+                                        }
+                                        if let Some(ref choices) = chunk.choices {
+                                            for choice in choices {
+                                                if let Some(ref fr) = choice.finish_reason {
+                                                    state.finish_reason = Some(fr.clone());
+                                                }
+                                                if let Some(ref text) = choice.text
+                                                    && !text.is_empty()
+                                                {
                                                     state.pending.push_back(
-                                                        LanguageModelV4StreamPart::TextStart {
+                                                        LanguageModelV4StreamPart::TextDelta {
                                                             id: state.text_id.clone(),
+                                                            delta: text.clone(),
                                                             provider_metadata: None,
                                                         },
                                                     );
                                                 }
-                                                state.pending.push_back(
-                                                    LanguageModelV4StreamPart::TextDelta {
-                                                        id: state.text_id.clone(),
-                                                        delta: text.clone(),
-                                                        provider_metadata: None,
-                                                    },
-                                                );
                                             }
                                         }
+                                    }
+                                    Err(e) => {
+                                        state.finish_reason = Some("error".to_string());
+                                        state.pending.push_back(LanguageModelV4StreamPart::Error {
+                                            error: StreamError::new(format!(
+                                                "Failed to parse completion chunk: {e}"
+                                            )),
+                                        });
                                     }
                                 }
                             }
@@ -393,7 +533,8 @@ fn create_completion_stream(
                     }
                     None => {
                         state.done = true;
-                        if state.text_started {
+                        // Emit TextEnd if we saw any valid chunk
+                        if state.metadata_emitted {
                             state.pending.push_back(LanguageModelV4StreamPart::TextEnd {
                                 id: state.text_id.clone(),
                                 provider_metadata: None,

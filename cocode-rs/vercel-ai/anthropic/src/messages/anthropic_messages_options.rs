@@ -106,10 +106,11 @@ pub struct ContainerSkill {
 }
 
 /// Cache control configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct CacheControlConfig {
     #[serde(rename = "type")]
     pub cache_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl: Option<String>,
 }
 
@@ -144,13 +145,71 @@ pub struct AnthropicProviderOptions {
 }
 
 /// Extract Anthropic-specific options from generic provider options.
+///
+/// Parses from both the canonical `"anthropic"` key and any custom provider name key,
+/// merging them (custom overrides canonical). The provider name prefix is extracted
+/// from the full provider string (e.g., `"my-proxy.messages"` → `"my-proxy"`).
 pub fn extract_anthropic_options(
     provider_options: &Option<ProviderOptions>,
+    provider: &str,
 ) -> AnthropicProviderOptions {
-    provider_options
-        .as_ref()
-        .and_then(|opts| opts.0.get("anthropic"))
+    let opts = match provider_options.as_ref() {
+        Some(opts) => opts,
+        None => return AnthropicProviderOptions::default(),
+    };
+
+    // Parse canonical "anthropic" key
+    let canonical: AnthropicProviderOptions = opts
+        .0
+        .get("anthropic")
         .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<AnthropicProviderOptions>(v).ok())
-        .unwrap_or_default()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    // Extract custom provider name prefix (e.g., "my-proxy.messages" → "my-proxy")
+    let provider_name = match provider.find('.') {
+        Some(idx) => &provider[..idx],
+        None => provider,
+    };
+
+    if provider_name == "anthropic" {
+        return canonical;
+    }
+
+    // Parse custom provider key and merge (custom overrides canonical)
+    let custom: Option<AnthropicProviderOptions> = opts
+        .0
+        .get(provider_name)
+        .and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| serde_json::from_value(v).ok());
+
+    match custom {
+        Some(custom) => merge_anthropic_options(canonical, custom),
+        None => canonical,
+    }
+}
+
+/// Merge two option structs: custom values override canonical.
+fn merge_anthropic_options(
+    canonical: AnthropicProviderOptions,
+    custom: AnthropicProviderOptions,
+) -> AnthropicProviderOptions {
+    AnthropicProviderOptions {
+        send_reasoning: custom.send_reasoning.or(canonical.send_reasoning),
+        structured_output_mode: custom
+            .structured_output_mode
+            .or(canonical.structured_output_mode),
+        thinking: custom.thinking.or(canonical.thinking),
+        disable_parallel_tool_use: custom
+            .disable_parallel_tool_use
+            .or(canonical.disable_parallel_tool_use),
+        cache_control: custom.cache_control.or(canonical.cache_control),
+        mcp_servers: custom.mcp_servers.or(canonical.mcp_servers),
+        container: custom.container.or(canonical.container),
+        tool_streaming: custom.tool_streaming.or(canonical.tool_streaming),
+        effort: custom.effort.or(canonical.effort),
+        speed: custom.speed.or(canonical.speed),
+        anthropic_beta: custom.anthropic_beta.or(canonical.anthropic_beta),
+        context_management: custom.context_management.or(canonical.context_management),
+    }
 }

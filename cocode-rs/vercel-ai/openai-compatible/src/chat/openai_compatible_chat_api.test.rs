@@ -63,7 +63,7 @@ fn deserialize_tool_call_response() {
         .tool_calls
         .as_ref()
         .expect("tool_calls")[0];
-    assert_eq!(tc.id, "call_123");
+    assert_eq!(tc.id, Some("call_123".to_string()));
     assert_eq!(tc.function.name, "get_weather");
 }
 

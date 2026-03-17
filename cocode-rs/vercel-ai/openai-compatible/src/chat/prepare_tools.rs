@@ -32,19 +32,22 @@ pub fn prepare_chat_tools(
                     if !params.is_object() {
                         params = json!({ "type": "object", "properties": {} });
                     }
+                    let mut func = json!({
+                        "name": ft.name,
+                        "description": ft.description,
+                        "parameters": params,
+                    });
+                    if let Some(strict) = ft.strict {
+                        func["strict"] = json!(strict);
+                    }
                     openai_tools.push(json!({
                         "type": "function",
-                        "function": {
-                            "name": ft.name,
-                            "description": ft.description,
-                            "parameters": params,
-                            "strict": ft.strict.unwrap_or(false),
-                        }
+                        "function": func,
                     }));
                 }
-                LanguageModelV4Tool::Provider(_pt) => {
+                LanguageModelV4Tool::Provider(pt) => {
                     warnings.push(Warning::Unsupported {
-                        feature: "provider tools in chat API".into(),
+                        feature: format!("provider-defined tool {}", pt.id),
                         details: Some(
                             "Provider tools are only supported in the Responses API".into(),
                         ),

@@ -9,11 +9,11 @@ use vercel_ai_provider::EmbeddingModelV4CallOptions;
 use vercel_ai_provider::EmbeddingModelV4EmbedResult;
 use vercel_ai_provider::EmbeddingUsage;
 use vercel_ai_provider::EmbeddingValue;
+use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::post_json_to_api_with_client;
 
 use crate::openai_compatible_config::OpenAICompatibleConfig;
-use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 
 use super::openai_compatible_embedding_api::OpenAICompatibleEmbeddingResponse;
 use super::openai_compatible_embedding_options::extract_embedding_options;
@@ -55,6 +55,16 @@ impl EmbeddingModelV4 for OpenAICompatibleEmbeddingModel {
         &self,
         options: EmbeddingModelV4CallOptions,
     ) -> Result<EmbeddingModelV4EmbedResult, AISdkError> {
+        // Validate embedding count
+        if options.values.len() > self.max_embeddings_per_call() {
+            return Err(AISdkError::new(format!(
+                "Too many values for a single call. The {} model can only embed up to {} values per call, but {} values were provided.",
+                self.model_id,
+                self.max_embeddings_per_call(),
+                options.values.len()
+            )));
+        }
+
         let provider_name = self.config.provider_options_name();
         let compat_opts = extract_embedding_options(&options.provider_options, provider_name);
 
@@ -85,7 +95,7 @@ impl EmbeddingModelV4 for OpenAICompatibleEmbeddingModel {
             Some(headers),
             &body,
             JsonResponseHandler::new(),
-            OpenAICompatibleFailedResponseHandler::new(provider_name),
+            self.config.error_handler.clone(),
             options.abort_signal,
             self.config.client.clone(),
         )
@@ -93,6 +103,11 @@ impl EmbeddingModelV4 for OpenAICompatibleEmbeddingModel {
 
         // Serialize response before consuming it
         let raw_response = serde_json::to_value(&response).ok();
+
+        // Convert provider_metadata from response
+        let provider_metadata = response
+            .provider_metadata
+            .map(|pm| ProviderMetadata::from_map(pm.into_iter().collect()));
 
         let usage = EmbeddingUsage {
             prompt_tokens: response
@@ -119,6 +134,7 @@ impl EmbeddingModelV4 for OpenAICompatibleEmbeddingModel {
             embeddings,
             usage,
             warnings: Vec::new(),
+            provider_metadata,
             raw_response,
         })
     }

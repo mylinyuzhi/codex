@@ -7,6 +7,7 @@ use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::pin::Pin;
+use std::sync::Arc;
 use vercel_ai_provider::AISdkError;
 
 /// Trait for handling API responses.
@@ -152,5 +153,21 @@ impl ResponseHandler<(reqwest::StatusCode, String)> for RawResponseHandler {
             .await
             .map_err(|e| AISdkError::new(format!("Failed to read response: {e}")))?;
         Ok((status, body))
+    }
+}
+
+/// Blanket implementation allowing `Arc<dyn ResponseHandler<T>>` to be used
+/// directly where `impl ResponseHandler<T>` is expected (e.g., API post functions).
+#[async_trait]
+impl<T: Send + 'static> ResponseHandler<T> for Arc<dyn ResponseHandler<T>> {
+    async fn handle(
+        &self,
+        response: Response,
+        url: &str,
+        request_body_values: &Value,
+    ) -> Result<T, AISdkError> {
+        self.as_ref()
+            .handle(response, url, request_body_values)
+            .await
     }
 }

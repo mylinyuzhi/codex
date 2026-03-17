@@ -71,6 +71,14 @@ impl OpenAIChatLanguageModel {
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);
         let is_reasoning_model = force_reasoning || caps.is_reasoning_model;
 
+        // topK is not supported by OpenAI
+        if options.top_k.is_some() {
+            warnings.push(Warning::Unsupported {
+                feature: "topK".into(),
+                details: None,
+            });
+        }
+
         let system_message_mode =
             openai_options
                 .system_message_mode
@@ -128,8 +136,52 @@ impl OpenAIChatLanguageModel {
                 set_optional_f32(&mut body, "temperature", options.temperature);
                 set_optional_f32(&mut body, "top_p", options.top_p);
                 set_logprobs(&mut body, &openai_options);
+            } else {
+                // Emit warnings for silently dropped parameters
+                if options.temperature.is_some() {
+                    warnings.push(Warning::Unsupported {
+                        feature: "temperature".into(),
+                        details: Some("temperature is not supported for reasoning models".into()),
+                    });
+                }
+                if options.top_p.is_some() {
+                    warnings.push(Warning::Unsupported {
+                        feature: "topP".into(),
+                        details: Some("topP is not supported for reasoning models".into()),
+                    });
+                }
+                if openai_options.logprobs.is_some() {
+                    warnings.push(Warning::Other {
+                        message: "logprobs is not supported for reasoning models".into(),
+                    });
+                    if matches!(
+                        openai_options.logprobs,
+                        Some(Value::Number(_)) | Some(Value::Bool(true))
+                    ) {
+                        warnings.push(Warning::Other {
+                            message: "topLogprobs is not supported for reasoning models".into(),
+                        });
+                    }
+                }
             }
             // Always omit: frequency_penalty, presence_penalty, logit_bias for reasoning
+            if options.frequency_penalty.is_some() {
+                warnings.push(Warning::Unsupported {
+                    feature: "frequencyPenalty".into(),
+                    details: Some("frequencyPenalty is not supported for reasoning models".into()),
+                });
+            }
+            if options.presence_penalty.is_some() {
+                warnings.push(Warning::Unsupported {
+                    feature: "presencePenalty".into(),
+                    details: Some("presencePenalty is not supported for reasoning models".into()),
+                });
+            }
+            if openai_options.logit_bias.is_some() {
+                warnings.push(Warning::Other {
+                    message: "logitBias is not supported for reasoning models".into(),
+                });
+            }
         } else {
             // Non-reasoning model: include all parameters
             set_optional_f32(&mut body, "temperature", options.temperature);
@@ -148,9 +200,18 @@ impl OpenAIChatLanguageModel {
             }
         }
 
-        // Search model handling
-        if self.model_id.starts_with("gpt-4o-search-preview") {
+        // Search model handling — temperature is not supported
+        if (self.model_id.starts_with("gpt-4o-search-preview")
+            || self.model_id.starts_with("gpt-4o-mini-search-preview"))
+            && body.get("temperature").is_some()
+        {
             body.as_object_mut().map(|o| o.remove("temperature"));
+            warnings.push(Warning::Unsupported {
+                feature: "temperature".into(),
+                details: Some(
+                    "temperature is not supported for the search preview models and has been removed".into(),
+                ),
+            });
         }
 
         // Common fields
@@ -192,9 +253,35 @@ impl OpenAIChatLanguageModel {
             body["safety_identifier"] = Value::String(safety.clone());
         }
 
-        // Service tier
+        // Service tier with validation
         if let Some(ref tier) = openai_options.service_tier {
-            body["service_tier"] = Value::String(tier.as_str().into());
+            let mut set_tier = true;
+            if *tier == super::openai_chat_options::ServiceTier::Flex
+                && !caps.supports_flex_processing
+            {
+                warnings.push(Warning::Unsupported {
+                    feature: "serviceTier".into(),
+                    details: Some(
+                        "flex processing is only available for o3, o4-mini, and gpt-5 models"
+                            .into(),
+                    ),
+                });
+                set_tier = false;
+            }
+            if *tier == super::openai_chat_options::ServiceTier::Priority
+                && !caps.supports_priority_processing
+            {
+                warnings.push(Warning::Unsupported {
+                    feature: "serviceTier".into(),
+                    details: Some(
+                        "priority processing is only available for supported models (gpt-4, gpt-5, gpt-5-mini, o3, o4-mini) and requires Enterprise access. gpt-5-nano is not supported".into(),
+                    ),
+                });
+                set_tier = false;
+            }
+            if set_tier {
+                body["service_tier"] = Value::String(tier.as_str().into());
+            }
         }
 
         // Response format
@@ -295,8 +382,12 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             for tc in tool_calls {
                 let input: serde_json::Value =
                     serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                let tool_call_id = tc
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| vercel_ai_provider_utils::generate_id("tc"));
                 content.push(AssistantContentPart::ToolCall(ToolCallPart {
-                    tool_call_id: tc.id.clone(),
+                    tool_call_id,
                     tool_name: tc.function.name.clone(),
                     input,
                     provider_executed: None,
@@ -329,20 +420,32 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
         let finish_reason = map_openai_chat_finish_reason(choice.finish_reason.as_deref());
         let usage = convert_openai_chat_usage(response.usage.as_ref());
 
-        // Provider metadata
-        let mut provider_meta = HashMap::new();
+        // Provider metadata (nested under "openai" key)
+        let mut openai_obj = serde_json::Map::new();
+        if let Some(ref usage_data) = response.usage
+            && let Some(ref details) = usage_data.completion_tokens_details
+        {
+            if let Some(accepted) = details.accepted_prediction_tokens {
+                openai_obj.insert("acceptedPredictionTokens".into(), json!(accepted));
+            }
+            if let Some(rejected) = details.rejected_prediction_tokens {
+                openai_obj.insert("rejectedPredictionTokens".into(), json!(rejected));
+            }
+        }
         if let Some(ref logprobs) = choice.logprobs
             && let Ok(v) = serde_json::to_value(logprobs)
         {
-            provider_meta.insert("logprobs".into(), v);
+            openai_obj.insert("logprobs".into(), v);
         }
         if let Some(ref tier) = response.service_tier {
-            provider_meta.insert("serviceTier".into(), Value::String(tier.clone()));
+            openai_obj.insert("serviceTier".into(), Value::String(tier.clone()));
         }
-        let provider_metadata = if provider_meta.is_empty() {
+        let provider_metadata = if openai_obj.is_empty() {
             None
         } else {
-            Some(ProviderMetadata(provider_meta))
+            let mut meta = ProviderMetadata::default();
+            meta.0.insert("openai".into(), Value::Object(openai_obj));
+            Some(meta)
         };
 
         // Response metadata
@@ -444,12 +547,24 @@ fn create_chat_stream(
                         // Emit finish if we haven't already
                         if !state.finish_emitted {
                             state.finish_emitted = true;
+                            let pm = if state.provider_metadata.is_empty() {
+                                None
+                            } else {
+                                let inner = Value::Object(
+                                    std::mem::take(&mut state.provider_metadata)
+                                        .into_iter()
+                                        .collect(),
+                                );
+                                let mut meta = ProviderMetadata::default();
+                                meta.0.insert("openai".into(), inner);
+                                Some(meta)
+                            };
                             let finish = LanguageModelV4StreamPart::Finish {
                                 usage: convert_openai_chat_usage(state.usage.as_ref()),
                                 finish_reason: map_openai_chat_finish_reason(
                                     state.finish_reason.as_deref(),
                                 ),
-                                provider_metadata: None,
+                                provider_metadata: pm,
                             };
                             return Some((Ok(finish), state));
                         }
@@ -480,6 +595,7 @@ struct ChatStreamState {
     done: bool,
     metadata_emitted: bool,
     include_raw: bool,
+    provider_metadata: HashMap<String, Value>,
 }
 
 impl ChatStreamState {
@@ -504,6 +620,7 @@ impl ChatStreamState {
             done: false,
             metadata_emitted: false,
             include_raw,
+            provider_metadata: HashMap::new(),
         }
     }
 
@@ -576,10 +693,10 @@ impl ChatStreamState {
                 meta = meta.with_timestamp(ts);
             }
             if let Some(ref tier) = chunk.service_tier {
-                let pm = ProviderMetadata(HashMap::from([(
-                    "serviceTier".to_string(),
-                    Value::String(tier.clone()),
-                )]));
+                let mut openai_obj = serde_json::Map::new();
+                openai_obj.insert("serviceTier".into(), Value::String(tier.clone()));
+                let mut pm = ProviderMetadata::default();
+                pm.0.insert("openai".into(), Value::Object(openai_obj));
                 meta = meta.with_provider_metadata(pm);
             }
             self.pending
@@ -588,6 +705,16 @@ impl ChatStreamState {
 
         // Usage (comes in the final chunk)
         if let Some(ref u) = chunk.usage {
+            if let Some(ref details) = u.completion_tokens_details {
+                if let Some(accepted) = details.accepted_prediction_tokens {
+                    self.provider_metadata
+                        .insert("acceptedPredictionTokens".into(), json!(accepted));
+                }
+                if let Some(rejected) = details.rejected_prediction_tokens {
+                    self.provider_metadata
+                        .insert("rejectedPredictionTokens".into(), json!(rejected));
+                }
+            }
             self.usage = Some(u.clone());
         }
 
@@ -599,8 +726,20 @@ impl ChatStreamState {
                     self.finish_reason = Some(fr.clone());
                 }
 
+                // Extract logprobs
+                if let Some(ref logprobs) = choice.logprobs
+                    && let Ok(v) = serde_json::to_value(logprobs)
+                {
+                    self.provider_metadata.insert("logprobs".into(), v);
+                }
+
+                // Skip if delta is null/absent
+                let Some(ref delta) = choice.delta else {
+                    continue;
+                };
+
                 // Text delta
-                if let Some(ref content) = choice.delta.content
+                if let Some(ref content) = delta.content
                     && !content.is_empty()
                 {
                     if !self.text_started {
@@ -620,7 +759,7 @@ impl ChatStreamState {
                 }
 
                 // Tool call deltas
-                if let Some(ref tool_calls) = choice.delta.tool_calls {
+                if let Some(ref tool_calls) = delta.tool_calls {
                     for tc_delta in tool_calls {
                         let idx = tc_delta.index as usize;
 
@@ -636,7 +775,45 @@ impl ChatStreamState {
 
                         let tc = &mut self.tool_calls[idx];
 
-                        // First chunk for this tool call
+                        // Validate first chunk for a new tool call (TS: InvalidResponseDataError)
+                        if tc.id.is_empty() && tc.name.is_empty() {
+                            if let Some(ref tc_type) = tc_delta.tool_type
+                                && tc_type != "function"
+                            {
+                                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                                    error: vercel_ai_provider::StreamError::new(
+                                        "Expected 'function' type.",
+                                    ),
+                                });
+                                self.done = true;
+                                return;
+                            }
+                            if tc_delta.id.is_none() {
+                                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                                    error: vercel_ai_provider::StreamError::new(
+                                        "Expected 'id' to be a string.",
+                                    ),
+                                });
+                                self.done = true;
+                                return;
+                            }
+                            if tc_delta
+                                .function
+                                .as_ref()
+                                .and_then(|f| f.name.as_ref())
+                                .is_none()
+                            {
+                                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                                    error: vercel_ai_provider::StreamError::new(
+                                        "Expected 'function.name' to be a string.",
+                                    ),
+                                });
+                                self.done = true;
+                                return;
+                            }
+                        }
+
+                        // Populate fields from delta
                         if let Some(ref id) = tc_delta.id {
                             tc.id = id.clone();
                         }
@@ -652,6 +829,10 @@ impl ChatStreamState {
                         // Emit ToolInputStart on first delta
                         if !tc.started && !tc.name.is_empty() {
                             tc.started = true;
+                            // Generate ID if not provided
+                            if tc.id.is_empty() {
+                                tc.id = vercel_ai_provider_utils::generate_id("tc");
+                            }
                             // Close text if open
                             if self.text_started {
                                 self.text_started = false;
@@ -687,7 +868,7 @@ impl ChatStreamState {
                 }
 
                 // Annotations (sources)
-                if let Some(ref annotations) = choice.delta.annotations {
+                if let Some(ref annotations) = delta.annotations {
                     for ann in annotations {
                         if ann.annotation_type.as_deref() == Some("url_citation")
                             && let Some(ref citation) = ann.url_citation
@@ -750,6 +931,7 @@ fn set_logprobs(body: &mut Value, options: &OpenAIChatProviderOptions) {
         match logprobs {
             Value::Bool(true) => {
                 body["logprobs"] = Value::Bool(true);
+                body["top_logprobs"] = json!(0);
             }
             Value::Number(n) => {
                 body["logprobs"] = Value::Bool(true);

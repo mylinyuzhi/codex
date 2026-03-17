@@ -36,7 +36,8 @@ use crate::openai_config::OpenAIConfig;
 use crate::openai_error::OpenAIFailedResponseHandler;
 
 use super::convert_responses_usage::convert_openai_responses_usage;
-use super::convert_to_responses_input::convert_to_openai_responses_input;
+use super::convert_to_responses_input::ProviderToolFlags;
+use super::convert_to_responses_input::convert_to_openai_responses_input_with_flags;
 use super::map_finish_reason::map_openai_responses_finish_reason;
 use super::openai_responses_api::OpenAIResponsesResponse;
 use super::openai_responses_api::ResponseAnnotation;
@@ -82,8 +83,12 @@ impl OpenAIResponsesLanguageModel {
                 });
 
         // Convert prompt to input items
-        let (input, input_warnings) =
-            convert_to_openai_responses_input(&options.prompt, system_message_mode);
+        let tool_flags = ProviderToolFlags::from_tools(&options.tools);
+        let (input, input_warnings) = convert_to_openai_responses_input_with_flags(
+            &options.prompt,
+            system_message_mode,
+            &tool_flags,
+        );
         warnings.extend(input_warnings);
 
         // Prepare tools
@@ -784,7 +789,10 @@ fn create_responses_stream(
                                     state.status.as_deref(),
                                     state.has_function_call,
                                 ),
-                                provider_metadata: None,
+                                provider_metadata: build_responses_provider_metadata(
+                                    state.response_id.as_deref(),
+                                    state.service_tier.as_deref(),
+                                ),
                             };
                             return Some((Ok(finish), state));
                         }
@@ -817,6 +825,8 @@ struct ResponsesStreamState {
     done: bool,
     metadata_emitted: bool,
     include_raw: bool,
+    response_id: Option<String>,
+    service_tier: Option<String>,
 }
 
 impl ResponsesStreamState {
@@ -843,6 +853,8 @@ impl ResponsesStreamState {
             done: false,
             metadata_emitted: false,
             include_raw,
+            response_id: None,
+            service_tier: None,
         }
     }
 
@@ -905,15 +917,18 @@ impl ResponsesStreamState {
                         meta = meta.with_model(model.clone());
                     }
                     if let Some(ref tier) = resp.service_tier {
-                        let pm = ProviderMetadata(HashMap::from([(
-                            "serviceTier".to_string(),
-                            Value::String(tier.clone()),
-                        )]));
+                        let mut openai_obj = serde_json::Map::new();
+                        openai_obj.insert("serviceTier".into(), Value::String(tier.clone()));
+                        let mut pm = ProviderMetadata::default();
+                        pm.0.insert("openai".into(), Value::Object(openai_obj));
                         meta = meta.with_provider_metadata(pm);
                     }
                     self.pending
                         .push_back(LanguageModelV4StreamPart::ResponseMetadata(meta));
                 }
+                // Track response_id and service_tier for Finish metadata
+                self.response_id = resp.id;
+                self.service_tier = resp.service_tier;
             }
 
             ResponsesStreamEvent::ResponseCompleted { response }

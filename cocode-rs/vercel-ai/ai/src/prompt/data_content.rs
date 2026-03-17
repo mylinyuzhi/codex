@@ -123,3 +123,7 @@ pub fn convert_uint8_array_to_text(data: &[u8]) -> Result<String, AISdkError> {
     String::from_utf8(data.to_vec())
         .map_err(|e| AISdkError::new(format!("Cannot convert binary data to text: {e}")))
 }
+
+#[cfg(test)]
+#[path = "data_content.test.rs"]
+mod tests;

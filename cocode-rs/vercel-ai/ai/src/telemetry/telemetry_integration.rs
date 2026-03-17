@@ -60,3 +60,7 @@ pub trait TelemetryIntegration: Send + Sync {
         f.await
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_integration.test.rs"]
+mod tests;
