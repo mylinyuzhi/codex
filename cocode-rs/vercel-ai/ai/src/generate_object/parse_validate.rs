@@ -115,3 +115,7 @@ fn type_matches(actual: &str, expected: &str) -> bool {
     }
     actual == expected
 }
+
+#[cfg(test)]
+#[path = "parse_validate.test.rs"]
+mod tests;

@@ -105,9 +105,9 @@ impl EmbeddingModelV4 for OpenAICompatibleEmbeddingModel {
         let raw_response = serde_json::to_value(&response).ok();
 
         // Convert provider_metadata from response
-        let provider_metadata = response.provider_metadata.map(|pm| ProviderMetadata::from_map(
-            pm.into_iter().collect(),
-        ));
+        let provider_metadata = response
+            .provider_metadata
+            .map(|pm| ProviderMetadata::from_map(pm.into_iter().collect()));
 
         let usage = EmbeddingUsage {
             prompt_tokens: response

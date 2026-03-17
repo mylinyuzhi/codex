@@ -130,7 +130,8 @@ fn test_file_tracker_is_unchanged() {
     // File should be unchanged immediately after reading
     assert_eq!(tracker.is_unchanged(&test_file), Some(true));
 
-    // Modify the file
+    // Modify the file (sleep briefly so mtime changes on low-resolution filesystems)
+    std::thread::sleep(std::time::Duration::from_millis(50));
     std::fs::write(&test_file, "modified content").unwrap();
 
     // File should now show as changed (is_unchanged = false)

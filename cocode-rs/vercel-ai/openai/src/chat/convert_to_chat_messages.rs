@@ -223,9 +223,9 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
         ToolResultContent::ErrorJson { value, .. } => {
             serde_json::to_string(value).unwrap_or_default()
         }
-        ToolResultContent::ExecutionDenied { reason, .. } => {
-            reason.clone().unwrap_or_else(|| "Tool execution denied.".into())
-        }
+        ToolResultContent::ExecutionDenied { reason, .. } => reason
+            .clone()
+            .unwrap_or_else(|| "Tool execution denied.".into()),
         ToolResultContent::Content { value, .. } => {
             // Serialize content parts to a string representation
             let parts: Vec<String> = value

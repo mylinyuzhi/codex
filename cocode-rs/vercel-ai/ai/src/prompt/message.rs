@@ -199,3 +199,7 @@ impl PromptToolMessage {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "message.test.rs"]
+mod tests;

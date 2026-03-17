@@ -303,3 +303,7 @@ pub enum PromptContentItem {
         filename: Option<String>,
     },
 }
+
+#[cfg(test)]
+#[path = "content_part.test.rs"]
+mod tests;

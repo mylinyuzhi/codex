@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Response from the OpenAI Embeddings API.
 #[derive(Debug, Deserialize, Serialize)]

@@ -738,10 +738,9 @@ impl ChatStreamState {
 
         // 1. Emit raw chunk BEFORE any validation (matches TS)
         if self.include_raw {
-            self.pending
-                .push_back(LanguageModelV4StreamPart::Raw {
-                    raw_value: raw.clone(),
-                });
+            self.pending.push_back(LanguageModelV4StreamPart::Raw {
+                raw_value: raw.clone(),
+            });
         }
 
         // 2. Feed metadata extractor BEFORE error-key check (matches TS)
@@ -1023,7 +1022,6 @@ impl ChatStreamState {
                 }
             }
         }
-
     }
 }
 

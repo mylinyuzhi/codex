@@ -366,9 +366,11 @@ fn serialize_tool_result_for_responses(content: &ToolResultContent) -> Value {
         ToolResultContent::ErrorJson { value, .. } => {
             Value::String(serde_json::to_string(value).unwrap_or_default())
         }
-        ToolResultContent::ExecutionDenied { reason, .. } => {
-            Value::String(reason.clone().unwrap_or_else(|| "Tool execution denied.".into()))
-        }
+        ToolResultContent::ExecutionDenied { reason, .. } => Value::String(
+            reason
+                .clone()
+                .unwrap_or_else(|| "Tool execution denied.".into()),
+        ),
         ToolResultContent::Content { value, .. } => {
             let parts: Vec<Value> = value
                 .iter()

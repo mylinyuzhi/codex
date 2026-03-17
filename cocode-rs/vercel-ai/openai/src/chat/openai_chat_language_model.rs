@@ -154,8 +154,10 @@ impl OpenAIChatLanguageModel {
                     warnings.push(Warning::Other {
                         message: "logprobs is not supported for reasoning models".into(),
                     });
-                    if matches!(openai_options.logprobs, Some(Value::Number(_)) | Some(Value::Bool(true)))
-                {
+                    if matches!(
+                        openai_options.logprobs,
+                        Some(Value::Number(_)) | Some(Value::Bool(true))
+                    ) {
                         warnings.push(Warning::Other {
                             message: "topLogprobs is not supported for reasoning models".into(),
                         });

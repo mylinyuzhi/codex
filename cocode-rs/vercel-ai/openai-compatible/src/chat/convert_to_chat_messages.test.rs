@@ -377,6 +377,7 @@ fn image_part_spreads_metadata() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "image/png".into(),
+            filename: None,
             provider_metadata: Some(pm),
         })],
         provider_options: None,
@@ -395,6 +396,7 @@ fn pdf_url_returns_error() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Url("https://example.com/doc.pdf".into()),
             media_type: "application/pdf".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,
@@ -411,6 +413,7 @@ fn unsupported_audio_format_returns_error() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "audio/ogg".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,
@@ -427,6 +430,7 @@ fn unsupported_file_media_type_returns_error() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "application/octet-stream".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,

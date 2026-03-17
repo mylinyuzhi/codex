@@ -109,3 +109,7 @@ pub fn combine_tool_messages(messages: LanguageModelV4Prompt) -> LanguageModelV4
 
     combined
 }
+
+#[cfg(test)]
+#[path = "convert.test.rs"]
+mod tests;

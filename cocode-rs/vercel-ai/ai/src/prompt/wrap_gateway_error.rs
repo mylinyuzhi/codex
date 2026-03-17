@@ -111,3 +111,7 @@ pub fn get_user_friendly_message(error: &AIError) -> String {
         _ => error.to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "wrap_gateway_error.test.rs"]
+mod tests;

@@ -419,13 +419,11 @@ fn create_completion_stream(
                                     Ok(v) => v,
                                     Err(e) => {
                                         state.finish_reason = Some("error".to_string());
-                                        state.pending.push_back(
-                                            LanguageModelV4StreamPart::Error {
-                                                error: StreamError::new(format!(
-                                                    "Failed to parse completion chunk: {e}"
-                                                )),
-                                            },
-                                        );
+                                        state.pending.push_back(LanguageModelV4StreamPart::Error {
+                                            error: StreamError::new(format!(
+                                                "Failed to parse completion chunk: {e}"
+                                            )),
+                                        });
                                         continue;
                                     }
                                 };
