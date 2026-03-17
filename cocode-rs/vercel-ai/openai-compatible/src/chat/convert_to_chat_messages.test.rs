@@ -124,6 +124,7 @@ fn handles_audio_mpeg_as_mp3() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "audio/mpeg".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,
@@ -140,6 +141,7 @@ fn handles_image_wildcard_as_jpeg() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "image/*".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,
@@ -165,6 +167,7 @@ fn handles_text_media_type() {
             UserContentPart::File(FilePart {
                 data: DataContent::Base64(text_data),
                 media_type: "text/plain".into(),
+                filename: None,
                 provider_metadata: None,
             }),
         ],
@@ -184,6 +187,7 @@ fn pdf_includes_filename() {
         content: vec![UserContentPart::File(FilePart {
             data: DataContent::Base64("dGVzdA==".into()),
             media_type: "application/pdf".into(),
+            filename: None,
             provider_metadata: None,
         })],
         provider_options: None,

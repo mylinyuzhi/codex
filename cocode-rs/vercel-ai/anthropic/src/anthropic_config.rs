@@ -11,6 +11,12 @@ pub struct AnthropicConfig {
     pub headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
     /// Optional shared HTTP client for connection pooling.
     pub client: Option<Arc<reqwest::Client>>,
+    /// When false, the model will use JSON tool fallback for structured outputs.
+    /// Defaults to true.
+    pub supports_native_structured_output: Option<bool>,
+    /// When false, `strict` on tool definitions will be ignored and a warning emitted.
+    /// Defaults to true.
+    pub supports_strict_tools: Option<bool>,
 }
 
 impl AnthropicConfig {

@@ -32,6 +32,7 @@ use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
 use crate::anthropic_config::AnthropicConfig;
 use crate::anthropic_error::AnthropicFailedResponseHandler;
+use crate::cache_control::CacheControlValidator;
 
 use super::anthropic_messages_api::AnthropicCitation;
 use super::anthropic_messages_api::AnthropicMessagesResponse;
@@ -48,6 +49,7 @@ use super::anthropic_messages_options::StructuredOutputMode;
 use super::anthropic_messages_options::ThinkingConfig;
 use super::anthropic_messages_options::extract_anthropic_options;
 use super::convert_anthropic_usage::convert_anthropic_usage;
+use super::convert_to_anthropic_messages::ToolNameMapping;
 use super::convert_to_anthropic_messages::convert_to_anthropic_messages_full;
 use super::map_anthropic_stop_reason::map_anthropic_stop_reason;
 use super::prepare_tools::prepare_anthropic_tools;
@@ -56,6 +58,7 @@ use super::prepare_tools::prepare_anthropic_tools;
 struct ModelCapabilities {
     max_output_tokens: u64,
     supports_structured_output: bool,
+    is_known_model: bool,
 }
 
 /// Get model capabilities based on model ID, matching the TS `getModelCapabilities`.
@@ -65,6 +68,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 128_000,
             supports_structured_output: true,
+            is_known_model: true,
         };
     }
     // claude-sonnet-4-5 / claude-opus-4-5 / claude-haiku-4-5
@@ -75,6 +79,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 64_000,
             supports_structured_output: true,
+            is_known_model: true,
         };
     }
     // claude-opus-4-1
@@ -82,6 +87,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 32_000,
             supports_structured_output: true,
+            is_known_model: true,
         };
     }
     // claude-sonnet-4-*
@@ -89,6 +95,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 64_000,
             supports_structured_output: false,
+            is_known_model: true,
         };
     }
     // claude-opus-4-*
@@ -96,12 +103,22 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 32_000,
             supports_structured_output: false,
+            is_known_model: true,
         };
     }
-    // claude-3-haiku and default
+    // claude-3-haiku
+    if model_id.starts_with("claude-3-haiku") {
+        return ModelCapabilities {
+            max_output_tokens: 4096,
+            supports_structured_output: false,
+            is_known_model: true,
+        };
+    }
+    // Unknown model fallback
     ModelCapabilities {
         max_output_tokens: 4096,
         supports_structured_output: false,
+        is_known_model: false,
     }
 }
 
@@ -195,7 +212,8 @@ impl AnthropicMessagesLanguageModel {
         stream: bool,
     ) -> Result<(Value, HashMap<String, String>, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
-        let anthropic_options = extract_anthropic_options(&options.provider_options);
+        let anthropic_options =
+            extract_anthropic_options(&options.provider_options, &self.config.provider);
 
         // Unsupported standard parameters
         if options.frequency_penalty.is_some() {
@@ -237,14 +255,39 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
+        // Model capabilities
+        let capabilities = get_model_capabilities(&self.model_id);
+
+        // Structured output: config override → model capability
+        let supports_structured_output = self
+            .config
+            .supports_native_structured_output
+            .unwrap_or(true)
+            && capabilities.supports_structured_output;
+
+        // Strict tools: config override → model capability
+        let supports_strict_tools = self.config.supports_strict_tools.unwrap_or(true)
+            && capabilities.supports_structured_output;
+
         // Structured output mode
         let structured_output_mode = anthropic_options
             .structured_output_mode
             .unwrap_or(StructuredOutputMode::Auto);
-        let use_structured_output = matches!(
-            structured_output_mode,
-            StructuredOutputMode::OutputFormat | StructuredOutputMode::Auto
-        );
+        let use_structured_output =
+            matches!(structured_output_mode, StructuredOutputMode::OutputFormat)
+                || (matches!(structured_output_mode, StructuredOutputMode::Auto)
+                    && supports_structured_output);
+
+        // JSON response format warning when schema is null
+        if let Some(ResponseFormat::Json { schema: None, .. }) = &options.response_format {
+            warnings.push(Warning::Unsupported {
+                feature: "responseFormat".into(),
+                details: Some(
+                    "JSON response format requires a schema. The response format is ignored."
+                        .into(),
+                ),
+            });
+        }
 
         // JSON response format handling
         let json_response_tool = if let Some(ResponseFormat::Json {
@@ -264,16 +307,23 @@ impl AnthropicMessagesLanguageModel {
 
         let uses_json_response_tool = json_response_tool.is_some();
 
+        // Build tool name mapping and cache validator
+        let tool_name_mapping_map = build_tool_name_mapping(&options.tools);
+        let tool_name_mapping = ToolNameMapping::new(&tool_name_mapping_map);
+        let mut cache_validator = CacheControlValidator::new();
+
         // Convert prompt
         let send_reasoning = anthropic_options.send_reasoning.unwrap_or(true);
-        let converted = convert_to_anthropic_messages_full(&options.prompt, send_reasoning);
+        let converted = convert_to_anthropic_messages_full(
+            &options.prompt,
+            send_reasoning,
+            &tool_name_mapping,
+            &mut cache_validator,
+        );
         let system = converted.system;
         let messages = converted.messages;
         warnings.extend(converted.warnings);
         let betas_from_messages = converted.betas;
-
-        // Model capabilities
-        let capabilities = get_model_capabilities(&self.model_id);
 
         // Prepare tools (possibly injecting the JSON response tool)
         let prepared = if uses_json_response_tool {
@@ -286,18 +336,23 @@ impl AnthropicMessagesLanguageModel {
                 &Some(vercel_ai_provider::LanguageModelV4ToolChoice::Required),
                 Some(true),
                 false,
+                Some(&mut cache_validator),
             )
         } else {
             prepare_anthropic_tools(
                 &options.tools,
                 &options.tool_choice,
                 anthropic_options.disable_parallel_tool_use,
-                capabilities.supports_structured_output,
+                supports_strict_tools,
+                Some(&mut cache_validator),
             )
         };
         warnings.extend(prepared.warnings);
         let mut betas = prepared.betas;
         betas.extend(betas_from_messages);
+
+        // Collect cache control warnings
+        warnings.extend(cache_validator.into_warnings());
 
         // Thinking configuration
         let thinking_type = anthropic_options.thinking.as_ref();
@@ -340,8 +395,9 @@ impl AnthropicMessagesLanguageModel {
             match thinking_type {
                 Some(ThinkingConfig::Enabled { budget_tokens }) => {
                     let budget = budget_tokens.unwrap_or_else(|| {
-                        warnings.push(Warning::Other {
-                            message: "thinking budget is required when thinking is enabled. using default budget of 1024 tokens.".into(),
+                        warnings.push(Warning::Compatibility {
+                            feature: "extended thinking".into(),
+                            details: Some("thinking budget is required when thinking is enabled. using default budget of 1024 tokens.".into()),
                         });
                         thinking_budget = Some(1024);
                         1024
@@ -394,14 +450,33 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
+        // Clamp max_tokens for known models to enable model switching without breaking
+        if capabilities.is_known_model {
+            let final_max_tokens = body["max_tokens"].as_u64().unwrap_or(0);
+            if final_max_tokens > capabilities.max_output_tokens {
+                if options.max_output_tokens.is_some() {
+                    warnings.push(Warning::Unsupported {
+                        feature: "maxOutputTokens".into(),
+                        details: Some(format!(
+                            "{final_max_tokens} (maxOutputTokens + thinkingBudget) is greater than {} {} max output tokens. The max output tokens have been limited to {}.",
+                            self.model_id,
+                            capabilities.max_output_tokens,
+                            capabilities.max_output_tokens,
+                        )),
+                    });
+                }
+                body["max_tokens"] = json!(capabilities.max_output_tokens);
+            }
+        }
+
         // Standard parameters
         if let Some(t) = temperature {
             body["temperature"] = json!(t);
         }
-        if let Some(top_k) = options.top_k {
-            if !is_thinking {
-                body["top_k"] = json!(top_k);
-            }
+        if let Some(top_k) = options.top_k
+            && !is_thinking
+        {
+            body["top_k"] = json!(top_k);
         }
         if let Some(ref stop) = options.stop_sequences
             && !stop.is_empty()
@@ -416,27 +491,31 @@ impl AnthropicMessagesLanguageModel {
         }
 
         // Structured output via output_config
-        if use_structured_output {
-            if let Some(ResponseFormat::Json {
+        if use_structured_output
+            && let Some(ResponseFormat::Json {
                 schema: Some(ref schema),
                 ..
             }) = options.response_format
-            {
-                let output_config = body
-                    .as_object_mut()
-                    .and_then(|m| m.get_mut("output_config"))
-                    .and_then(|v| v.as_object_mut());
-                if let Some(oc) = output_config {
-                    oc.insert(
-                        "format".into(),
-                        json!({"type": "json_schema", "schema": schema}),
-                    );
-                } else {
-                    body["output_config"] = json!({
-                        "format": {"type": "json_schema", "schema": schema},
-                    });
-                }
+        {
+            let output_config = body
+                .as_object_mut()
+                .and_then(|m| m.get_mut("output_config"))
+                .and_then(|v| v.as_object_mut());
+            if let Some(oc) = output_config {
+                oc.insert(
+                    "format".into(),
+                    json!({"type": "json_schema", "schema": schema}),
+                );
+            } else {
+                body["output_config"] = json!({
+                    "format": {"type": "json_schema", "schema": schema},
+                });
             }
+        }
+
+        // Request-level cache control
+        if let Some(ref cc) = anthropic_options.cache_control {
+            body["cache_control"] = json!(cc);
         }
 
         // Speed
@@ -505,6 +584,23 @@ impl AnthropicMessagesLanguageModel {
                 betas.insert("code-execution-2025-08-25".into());
                 betas.insert("skills-2025-10-02".into());
                 betas.insert("files-api-2025-04-14".into());
+
+                // Validate: code execution tool is required when using skills
+                let has_code_execution = options.tools.as_ref().is_some_and(|tools| {
+                    tools.iter().any(|tool| {
+                        if let vercel_ai_provider::LanguageModelV4Tool::Provider(pt) = tool {
+                            pt.id == "anthropic.code_execution_20250825"
+                                || pt.id == "anthropic.code_execution_20260120"
+                        } else {
+                            false
+                        }
+                    })
+                });
+                if !has_code_execution {
+                    warnings.push(Warning::Other {
+                        message: "code execution tool is required when using skills".into(),
+                    });
+                }
             } else if let Some(ref id) = container.id {
                 body["container"] = Value::String(id.clone());
             }
@@ -512,16 +608,18 @@ impl AnthropicMessagesLanguageModel {
 
         // Context management
         if let Some(ref ctx_mgmt) = anthropic_options.context_management {
-            body["context_management"] = ctx_mgmt.clone();
+            let transformed = transform_context_management(ctx_mgmt, &mut warnings);
+            body["context_management"] = transformed;
             betas.insert("context-management-2025-06-27".into());
             // Check for compact edit
-            if let Some(edits) = ctx_mgmt.get("edits").and_then(|e| e.as_array()) {
-                if edits
+            if let Some(edits) = body["context_management"]
+                .get("edits")
+                .and_then(|e| e.as_array())
+                && edits
                     .iter()
                     .any(|e| e.get("type").and_then(|t| t.as_str()) == Some("compact_20260112"))
-                {
-                    betas.insert("compact-2026-01-12".into());
-                }
+            {
+                betas.insert("compact-2026-01-12".into());
             }
         }
 
@@ -541,8 +639,19 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
+        // Merge betas from pre-existing config headers and request headers
+        let config_headers = self.config.get_headers();
+        merge_betas_from_headers(&mut betas, config_headers.get("anthropic-beta"));
+        merge_betas_from_headers(
+            &mut betas,
+            options
+                .headers
+                .as_ref()
+                .and_then(|h| h.get("anthropic-beta")),
+        );
+
         // Build merged headers
-        let mut headers = self.config.get_headers();
+        let mut headers = config_headers;
         if !betas.is_empty() {
             let beta_str: Vec<&str> = betas.iter().map(String::as_str).collect();
             headers.insert("anthropic-beta".into(), beta_str.join(","));
@@ -556,6 +665,94 @@ impl AnthropicMessagesLanguageModel {
 
         Ok((body, headers, warnings))
     }
+}
+
+/// Extract the provider options name prefix from a config.provider string.
+/// E.g., "my-proxy.messages" → "my-proxy", "anthropic.messages" → "anthropic".
+fn provider_options_name_from(provider: &str) -> String {
+    match provider.find('.') {
+        Some(idx) => provider[..idx].to_string(),
+        None => provider.to_string(),
+    }
+}
+
+/// Extract beta values from a pre-existing `anthropic-beta` header and merge into a set.
+fn merge_betas_from_headers(
+    betas: &mut std::collections::HashSet<String>,
+    header_value: Option<&String>,
+) {
+    if let Some(val) = header_value {
+        for beta in val.split(',') {
+            let trimmed = beta.trim().to_lowercase();
+            if !trimmed.is_empty() {
+                betas.insert(trimmed);
+            }
+        }
+    }
+}
+
+/// Transform context management edits from camelCase (SDK interface) to snake_case (API).
+fn transform_context_management(ctx_mgmt: &Value, warnings: &mut Vec<Warning>) -> Value {
+    let mut result = json!({});
+
+    if let Some(edits) = ctx_mgmt.get("edits").and_then(|e| e.as_array()) {
+        let transformed_edits: Vec<Value> = edits
+            .iter()
+            .filter_map(|edit| {
+                let edit_type = edit.get("type").and_then(|t| t.as_str())?;
+                match edit_type {
+                    "clear_tool_uses_20250919" => {
+                        let mut transformed = json!({"type": edit_type});
+                        if let Some(v) = edit.get("trigger") {
+                            transformed["trigger"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("keep") {
+                            transformed["keep"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("clearAtLeast") {
+                            transformed["clear_at_least"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("clearToolInputs") {
+                            transformed["clear_tool_inputs"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("excludeTools") {
+                            transformed["exclude_tools"] = v.clone();
+                        }
+                        Some(transformed)
+                    }
+                    "clear_thinking_20251015" => {
+                        let mut transformed = json!({"type": edit_type});
+                        if let Some(v) = edit.get("keep") {
+                            transformed["keep"] = v.clone();
+                        }
+                        Some(transformed)
+                    }
+                    "compact_20260112" => {
+                        let mut transformed = json!({"type": edit_type});
+                        if let Some(v) = edit.get("trigger") {
+                            transformed["trigger"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("pauseAfterCompaction") {
+                            transformed["pause_after_compaction"] = v.clone();
+                        }
+                        if let Some(v) = edit.get("instructions") {
+                            transformed["instructions"] = v.clone();
+                        }
+                        Some(transformed)
+                    }
+                    unknown => {
+                        warnings.push(Warning::Other {
+                            message: format!("Unknown context management strategy: {unknown}"),
+                        });
+                        None
+                    }
+                }
+            })
+            .collect();
+        result["edits"] = Value::Array(transformed_edits);
+    }
+
+    result
 }
 
 /// Create a synthetic JSON response function tool.
@@ -615,6 +812,10 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
         // Build tool name mapping (provider API name → SDK tool ID)
         let tool_name_mapping = build_tool_name_mapping(&options.tools);
         let dynamic_code_execution = has_web_tool_20260209_without_code_execution(&options.tools);
+        let mut citation_documents = extract_citation_documents(&options.prompt);
+        // MCP tool call tracking: tool_use_id → (tool_name, provider_metadata)
+        let mut mcp_tool_calls: HashMap<String, (String, Option<ProviderMetadata>)> =
+            HashMap::new();
 
         // Determine if we're using JSON response tool
         let uses_json_response_tool = body
@@ -644,7 +845,9 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                         // Process citations
                         if let Some(citations) = citations {
                             for citation in citations {
-                                if let Some(source) = citation_to_source(citation) {
+                                if let Some(source) =
+                                    citation_to_source(citation, &citation_documents)
+                                {
                                     content.push(source);
                                 }
                             }
@@ -724,13 +927,14 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                             }
                         }
                         "code_execution" => {
-                            // Inject programmatic tool call type if needed
+                            // Inject programmatic-tool-call type when input has { code } format
                             if let Some(obj) = mapped_input.as_object_mut()
+                                && obj.contains_key("code")
                                 && !obj.contains_key("type")
                             {
                                 obj.insert(
                                     "type".to_string(),
-                                    Value::String("code_execution".to_string()),
+                                    Value::String("programmatic-tool-call".to_string()),
                                 );
                             }
                         }
@@ -773,29 +977,35 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                         "anthropic".into(),
                         json!({"type": "mcp-tool-use", "serverName": server_name}),
                     );
+                    let pm = ProviderMetadata(meta);
+                    mcp_tool_calls.insert(id.clone(), (name.clone(), Some(pm.clone())));
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: id.clone(),
                         tool_name: name.clone(),
                         input: input.clone(),
                         provider_executed: Some(true),
-                        provider_metadata: Some(ProviderMetadata(meta)),
+                        provider_metadata: Some(pm),
                     }));
                 }
                 AnthropicResponseContentBlock::McpToolResult {
                     tool_use_id,
                     content: result_content,
-                    ..
+                    is_error,
                 } => {
+                    let (tool_name, pm) = mcp_tool_calls
+                        .get(tool_use_id)
+                        .map(|(n, p)| (n.clone(), p.clone()))
+                        .unwrap_or_default();
                     content.push(AssistantContentPart::ToolResult(
                         vercel_ai_provider::content::ToolResultPart {
                             tool_call_id: tool_use_id.clone(),
-                            tool_name: String::new(),
+                            tool_name,
                             output: vercel_ai_provider::ToolResultContent::Json {
                                 value: result_content.clone(),
                                 provider_options: None,
                             },
-                            is_error: false,
-                            provider_metadata: None,
+                            is_error: *is_error,
+                            provider_metadata: pm,
                         },
                     ));
                 }
@@ -810,6 +1020,15 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                                 result.get("url").and_then(|v| v.as_str()),
                                 result.get("title").and_then(|v| v.as_str()),
                             ) {
+                                let page_age = result.get("page_age").cloned();
+                                let pm = {
+                                    let mut meta = HashMap::new();
+                                    meta.insert(
+                                        "anthropic".into(),
+                                        json!({"pageAge": page_age.as_ref().and_then(|v| v.as_str())}),
+                                    );
+                                    ProviderMetadata(meta)
+                                };
                                 content.push(AssistantContentPart::Source(
                                     vercel_ai_provider::content::SourcePart {
                                         source_type: SourceType::Url,
@@ -818,7 +1037,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                                         title: Some(title.to_string()),
                                         media_type: None,
                                         filename: None,
-                                        provider_metadata: None,
+                                        provider_metadata: Some(pm),
                                     },
                                 ));
                             }
@@ -845,6 +1064,14 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                     tool_use_id,
                     content: result_content,
                 } => {
+                    // Grow citation documents from web_fetch result
+                    if let Some(url) = result_content.get("url").and_then(|v| v.as_str()) {
+                        citation_documents.push(CitationDocument {
+                            title: url.to_string(),
+                            filename: None,
+                            media_type: "text/html".to_string(),
+                        });
+                    }
                     let result_tool_name = tool_name_mapping
                         .get("web_fetch")
                         .cloned()
@@ -945,19 +1172,19 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             if let Some(cc) = u.cache_creation_input_tokens {
                 provider_meta.insert("cacheCreationInputTokens".into(), Value::Number(cc.into()));
             }
-            if let Some(ref iterations) = u.iterations {
-                if let Ok(v) = serde_json::to_value(iterations) {
-                    provider_meta.insert("iterations".into(), v);
-                }
+            if let Some(ref iterations) = u.iterations
+                && let Ok(v) = serde_json::to_value(iterations)
+            {
+                provider_meta.insert("iterations".into(), v);
             }
         }
         if let Some(ref ss) = response.stop_sequence {
             provider_meta.insert("stopSequence".into(), Value::String(ss.clone()));
         }
-        if let Some(ref container) = response.container {
-            if let Ok(v) = serde_json::to_value(container) {
-                provider_meta.insert("container".into(), v);
-            }
+        if let Some(ref container) = response.container
+            && let Ok(v) = serde_json::to_value(container)
+        {
+            provider_meta.insert("container".into(), v);
         }
         if let Some(ref ctx_mgmt) = response.context_management {
             provider_meta.insert("contextManagement".into(), ctx_mgmt.clone());
@@ -967,10 +1194,18 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             None
         } else {
             let mut outer = HashMap::new();
-            outer.insert(
-                "anthropic".into(),
-                serde_json::to_value(&provider_meta).unwrap_or_default(),
-            );
+            let anthropic_val = serde_json::to_value(&provider_meta).unwrap_or_default();
+            // Duplicate under custom provider key if applicable
+            let provider_options_name = provider_options_name_from(&self.config.provider);
+            if provider_options_name != "anthropic"
+                && options
+                    .provider_options
+                    .as_ref()
+                    .is_some_and(|po| po.0.contains_key(&provider_options_name))
+            {
+                outer.insert(provider_options_name, anthropic_val.clone());
+            }
+            outer.insert("anthropic".into(), anthropic_val);
             Some(ProviderMetadata(outer))
         };
 
@@ -1025,8 +1260,28 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                 .and_then(|t| t.as_str())
                 == Some("any");
 
-        let stream =
-            create_anthropic_stream(byte_stream, warnings, include_raw, uses_json_response_tool);
+        // Build tool name mapping for streaming
+        let tool_name_mapping_map = build_tool_name_mapping(&options.tools);
+        let dynamic_code_execution = has_web_tool_20260209_without_code_execution(&options.tools);
+        let citation_documents = extract_citation_documents(&options.prompt);
+        let provider_options_name = provider_options_name_from(&self.config.provider);
+        let used_custom_provider_key = provider_options_name != "anthropic"
+            && options
+                .provider_options
+                .as_ref()
+                .is_some_and(|po| po.0.contains_key(&provider_options_name));
+
+        let stream = create_anthropic_stream(
+            byte_stream,
+            warnings,
+            include_raw,
+            uses_json_response_tool,
+            tool_name_mapping_map,
+            dynamic_code_execution,
+            citation_documents,
+            provider_options_name,
+            used_custom_provider_key,
+        );
 
         Ok(LanguageModelV4StreamResult {
             stream,
@@ -1038,8 +1293,61 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
     }
 }
 
+/// Metadata for a citation-enabled document extracted from the prompt.
+struct CitationDocument {
+    title: String,
+    filename: Option<String>,
+    media_type: String,
+}
+
+/// Extract citation document metadata from prompt file parts.
+///
+/// Scans user messages for file parts with `citations.enabled = true` in
+/// the `anthropic` provider options. The returned vec is indexed by position
+/// to match `document_index` in response citations.
+fn extract_citation_documents(
+    prompt: &[vercel_ai_provider::LanguageModelV4Message],
+) -> Vec<CitationDocument> {
+    let mut docs = Vec::new();
+    for msg in prompt {
+        if let vercel_ai_provider::LanguageModelV4Message::User { content, .. } = msg {
+            for part in content {
+                if let vercel_ai_provider::UserContentPart::File(fp) = part {
+                    // Only PDF and plain text can have citations
+                    if fp.media_type != "application/pdf" && fp.media_type != "text/plain" {
+                        continue;
+                    }
+                    // Check if citations are enabled in provider metadata
+                    let citations_enabled = fp
+                        .provider_metadata
+                        .as_ref()
+                        .and_then(|pm| pm.0.get("anthropic"))
+                        .and_then(|v| v.get("citations"))
+                        .and_then(|c| c.get("enabled"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    if citations_enabled {
+                        docs.push(CitationDocument {
+                            title: fp
+                                .filename
+                                .clone()
+                                .unwrap_or_else(|| "Untitled Document".into()),
+                            filename: fp.filename.clone(),
+                            media_type: fp.media_type.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    docs
+}
+
 /// Convert an Anthropic citation to a source content part.
-fn citation_to_source(citation: &AnthropicCitation) -> Option<AssistantContentPart> {
+fn citation_to_source(
+    citation: &AnthropicCitation,
+    citation_documents: &[CitationDocument],
+) -> Option<AssistantContentPart> {
     match citation {
         AnthropicCitation::WebSearchResultLocation {
             url,
@@ -1064,10 +1372,76 @@ fn citation_to_source(citation: &AnthropicCitation) -> Option<AssistantContentPa
                 },
             ))
         }
-        AnthropicCitation::PageLocation { .. }
-        | AnthropicCitation::CharLocation { .. }
-        | AnthropicCitation::Unknown => {
-            // Document citations or unknown types — skip
+        AnthropicCitation::PageLocation {
+            cited_text,
+            document_index,
+            document_title,
+            start_page_number,
+            end_page_number,
+        } => {
+            let doc = citation_documents.get(*document_index as usize);
+            let mut meta = HashMap::new();
+            let mut anthropic_meta = json!({
+                "citedText": cited_text,
+                "documentIndex": document_index,
+                "startPageNumber": start_page_number,
+                "endPageNumber": end_page_number,
+            });
+            if let Some(dt) = document_title {
+                anthropic_meta["documentTitle"] = json!(dt);
+            }
+            meta.insert("anthropic".into(), anthropic_meta);
+            let title = doc
+                .map(|d| d.title.clone())
+                .or_else(|| document_title.clone());
+            Some(AssistantContentPart::Source(
+                vercel_ai_provider::content::SourcePart {
+                    source_type: SourceType::Document,
+                    id: vercel_ai_provider_utils::generate_id("src"),
+                    url: None,
+                    title,
+                    media_type: doc.map(|d| d.media_type.clone()),
+                    filename: doc.and_then(|d| d.filename.clone()),
+                    provider_metadata: Some(ProviderMetadata(meta)),
+                },
+            ))
+        }
+        AnthropicCitation::CharLocation {
+            cited_text,
+            document_index,
+            document_title,
+            start_char_index,
+            end_char_index,
+        } => {
+            let doc = citation_documents.get(*document_index as usize);
+            let mut meta = HashMap::new();
+            let mut anthropic_meta = json!({
+                "citedText": cited_text,
+                "documentIndex": document_index,
+                "startCharIndex": start_char_index,
+                "endCharIndex": end_char_index,
+            });
+            if let Some(dt) = document_title {
+                anthropic_meta["documentTitle"] = json!(dt);
+            }
+            meta.insert("anthropic".into(), anthropic_meta);
+            let title = doc
+                .map(|d| d.title.clone())
+                .or_else(|| document_title.clone());
+            Some(AssistantContentPart::Source(
+                vercel_ai_provider::content::SourcePart {
+                    source_type: SourceType::Document,
+                    id: vercel_ai_provider_utils::generate_id("src"),
+                    url: None,
+                    title,
+                    media_type: doc.map(|d| d.media_type.clone()),
+                    filename: doc.and_then(|d| d.filename.clone()),
+                    provider_metadata: Some(ProviderMetadata(meta)),
+                },
+            ))
+        }
+        AnthropicCitation::Unknown => {
+            // Unknown citation type — skip
             None
         }
     }
@@ -1095,6 +1469,12 @@ enum InProgressBlock {
         started: bool,
         is_json_tool: bool,
         provider_executed: Option<bool>,
+        /// Original provider API tool name (e.g., "code_execution", "bash_code_execution")
+        provider_tool_name: Option<String>,
+        /// Caller info from tool_use blocks
+        caller: Option<Value>,
+        /// Whether this is a dynamic (runtime-defined) tool
+        dynamic: Option<bool>,
     },
     ServerToolResult,
     Other,
@@ -1108,21 +1488,40 @@ struct AnthropicStreamState {
     current_event_type: Option<String>,
     current_data_lines: Vec<String>,
     usage: Option<super::anthropic_messages_api::AnthropicUsage>,
+    raw_usage: HashMap<String, Value>,
     stop_reason: Option<String>,
+    stop_sequence: Option<String>,
+    container: Option<Value>,
+    context_management: Option<Value>,
     finish_emitted: bool,
     done: bool,
     metadata_emitted: bool,
     include_raw: bool,
     uses_json_response_tool: bool,
     is_json_response_from_tool: bool,
+    tool_name_mapping: HashMap<String, String>,
+    dynamic_code_execution: bool,
+    citation_documents: Vec<CitationDocument>,
+    /// MCP tool call tracking: tool_use_id → (tool_name, provider_metadata)
+    mcp_tool_calls: HashMap<String, (String, Option<ProviderMetadata>)>,
+    /// Provider options name prefix for custom key duplication
+    provider_options_name: String,
+    /// Whether a custom provider key was used in provider_options
+    used_custom_provider_key: bool,
 }
 
 impl AnthropicStreamState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         byte_stream: vercel_ai_provider_utils::ByteStream,
         warnings: Vec<Warning>,
         include_raw: bool,
         uses_json_response_tool: bool,
+        tool_name_mapping: HashMap<String, String>,
+        dynamic_code_execution: bool,
+        citation_documents: Vec<CitationDocument>,
+        provider_options_name: String,
+        used_custom_provider_key: bool,
     ) -> Self {
         let mut pending = std::collections::VecDeque::new();
         pending.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
@@ -1135,13 +1534,23 @@ impl AnthropicStreamState {
             current_event_type: None,
             current_data_lines: Vec::new(),
             usage: None,
+            raw_usage: HashMap::new(),
             stop_reason: None,
+            stop_sequence: None,
+            container: None,
+            context_management: None,
             finish_emitted: false,
             done: false,
             metadata_emitted: false,
             include_raw,
             uses_json_response_tool,
             is_json_response_from_tool: false,
+            tool_name_mapping,
+            dynamic_code_execution,
+            citation_documents,
+            mcp_tool_calls: HashMap::new(),
+            provider_options_name,
+            used_custom_provider_key,
         }
     }
 
@@ -1199,16 +1608,44 @@ impl AnthropicStreamState {
 
     fn process_sse_event(&mut self, event_type: Option<&str>, data: &str) {
         // Emit raw chunk if requested
-        if self.include_raw {
-            if let Ok(raw) = serde_json::from_str::<Value>(data) {
-                self.pending
-                    .push_back(LanguageModelV4StreamPart::Raw { raw_value: raw });
-            }
+        if self.include_raw
+            && let Ok(raw) = serde_json::from_str::<Value>(data)
+        {
+            self.pending
+                .push_back(LanguageModelV4StreamPart::Raw { raw_value: raw });
         }
 
         match event_type {
             Some("message_start") => {
                 if let Ok(event) = serde_json::from_str::<MessageStartEvent>(data) {
+                    // Track usage from message_start
+                    if let Some(ref usage) = event.message.usage {
+                        self.usage = Some(super::anthropic_messages_api::AnthropicUsage {
+                            input_tokens: usage.input_tokens.unwrap_or(0),
+                            output_tokens: 0,
+                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                            cache_read_input_tokens: usage.cache_read_input_tokens,
+                            iterations: None,
+                        });
+                        if let Ok(Value::Object(map)) = serde_json::to_value(usage) {
+                            for (k, val) in map {
+                                self.raw_usage.insert(k, val);
+                            }
+                        }
+                    }
+
+                    // Track container from message_start
+                    if let Some(ref container) = event.message.container
+                        && let Ok(v) = serde_json::to_value(container)
+                    {
+                        self.container = Some(v);
+                    }
+
+                    // Track stop_reason from message_start (may be present for deferred calls)
+                    if let Some(ref sr) = event.message.stop_reason {
+                        self.stop_reason = Some(sr.clone());
+                    }
+
                     if !self.metadata_emitted {
                         self.metadata_emitted = true;
                         let mut meta = ResponseMetadata::new();
@@ -1225,20 +1662,43 @@ impl AnthropicStreamState {
                     // Process pre-populated content (deferred tool calls)
                     if let Some(ref content) = event.message.content {
                         for block in content {
-                            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                                if let (Some(id), Some(name)) = (
+                            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                                && let (Some(id), Some(name)) = (
                                     block.get("id").and_then(|v| v.as_str()),
                                     block.get("name").and_then(|v| v.as_str()),
-                                ) {
-                                    let input = block.get("input").cloned().unwrap_or(Value::Null);
-                                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                                        vercel_ai_provider::tool::ToolCall::new(
-                                            id.to_string(),
-                                            name.to_string(),
-                                            input,
-                                        ),
-                                    ));
-                                }
+                                )
+                            {
+                                let input = block.get("input").cloned().unwrap_or(json!({}));
+                                let input_str = serde_json::to_string(&input).unwrap_or_default();
+
+                                // Emit full tool-input-start → tool-input-delta → tool-input-end → tool-call sequence
+                                self.pending
+                                    .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                                        id: id.to_string(),
+                                        tool_name: name.to_string(),
+                                        provider_executed: None,
+                                        dynamic: None,
+                                        title: None,
+                                        provider_metadata: None,
+                                    });
+                                self.pending
+                                    .push_back(LanguageModelV4StreamPart::ToolInputDelta {
+                                        id: id.to_string(),
+                                        delta: input_str,
+                                        provider_metadata: None,
+                                    });
+                                self.pending
+                                    .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                                        id: id.to_string(),
+                                        provider_metadata: None,
+                                    });
+                                self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
+                                    vercel_ai_provider::tool::ToolCall::new(
+                                        id.to_string(),
+                                        name.to_string(),
+                                        input,
+                                    ),
+                                ));
                             }
                         }
                     }
@@ -1287,7 +1747,9 @@ impl AnthropicStreamState {
                                 });
                             self.blocks[idx] = InProgressBlock::Other;
                         }
-                        ContentBlockStart::ToolUse { id, name, .. } => {
+                        ContentBlockStart::ToolUse {
+                            id, name, caller, ..
+                        } => {
                             let is_json_tool = self.uses_json_response_tool && name == "json";
                             if is_json_tool {
                                 self.is_json_response_from_tool = true;
@@ -1300,41 +1762,116 @@ impl AnthropicStreamState {
                                     started: false,
                                     is_json_tool: true,
                                     provider_executed: None,
+                                    provider_tool_name: None,
+                                    caller: None,
+                                    dynamic: None,
                                 };
                             } else {
+                                // Emit ToolInputStart immediately (Gap 1)
+                                self.pending
+                                    .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                                        id: id.clone(),
+                                        tool_name: name.clone(),
+                                        provider_executed: None,
+                                        dynamic: None,
+                                        title: None,
+                                        provider_metadata: None,
+                                    });
                                 self.blocks[idx] = InProgressBlock::ToolUse {
                                     id,
                                     tool_name: name,
                                     input_json: String::new(),
-                                    started: false,
+                                    started: true,
                                     is_json_tool: false,
                                     provider_executed: None,
+                                    provider_tool_name: None,
+                                    caller,
+                                    dynamic: None,
                                 };
                             }
                         }
                         ContentBlockStart::ServerToolUse { id, name, .. } => {
+                            // Map provider tool names for code execution sub-types
+                            let provider_tool_name = match name.as_str() {
+                                "text_editor_code_execution" | "bash_code_execution" => {
+                                    "code_execution".to_string()
+                                }
+                                other => other.to_string(),
+                            };
+                            let mapped_name = self
+                                .tool_name_mapping
+                                .get(&provider_tool_name)
+                                .cloned()
+                                .unwrap_or_else(|| provider_tool_name.clone());
+
+                            // Determine dynamic flag for code_execution server tools (Gap 2)
+                            let is_dynamic = self.dynamic_code_execution
+                                && matches!(
+                                    name.as_str(),
+                                    "code_execution"
+                                        | "text_editor_code_execution"
+                                        | "bash_code_execution"
+                                );
+                            let dynamic = if is_dynamic { Some(true) } else { None };
+
+                            // Emit ToolInputStart immediately (Gap 1)
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                                    id: id.clone(),
+                                    tool_name: mapped_name.clone(),
+                                    provider_executed: Some(true),
+                                    dynamic,
+                                    title: None,
+                                    provider_metadata: None,
+                                });
                             self.blocks[idx] = InProgressBlock::ToolUse {
                                 id,
-                                tool_name: name,
+                                tool_name: mapped_name,
                                 input_json: String::new(),
-                                started: false,
+                                started: true,
                                 is_json_tool: false,
                                 provider_executed: Some(true),
+                                provider_tool_name: Some(name),
+                                caller: None,
+                                dynamic,
                             };
                         }
                         ContentBlockStart::McpToolUse {
                             id,
                             name,
-                            server_name: _,
+                            server_name,
                             ..
                         } => {
+                            // Store MCP tool call for name correlation (Gap 8)
+                            let mut mcp_meta = HashMap::new();
+                            mcp_meta.insert(
+                                "anthropic".into(),
+                                json!({"type": "mcp-tool-use", "serverName": server_name}),
+                            );
+                            let pm = ProviderMetadata(mcp_meta);
+                            self.mcp_tool_calls
+                                .insert(id.clone(), (name.clone(), Some(pm)));
+
+                            // Emit ToolInputStart immediately (Gap 1 + Gap 3: dynamic: true)
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                                    id: id.clone(),
+                                    tool_name: name.clone(),
+                                    provider_executed: Some(true),
+                                    dynamic: Some(true),
+                                    title: None,
+                                    provider_metadata: None,
+                                });
                             self.blocks[idx] = InProgressBlock::ToolUse {
                                 id,
                                 tool_name: name,
                                 input_json: String::new(),
-                                started: false,
+                                started: true,
                                 is_json_tool: false,
                                 provider_executed: Some(true),
+                                provider_tool_name: None,
+                                caller: None,
+                                dynamic: Some(true),
                             };
                         }
                         ContentBlockStart::Compaction { content } => {
@@ -1435,11 +1972,10 @@ impl AnthropicStreamState {
                             (
                                 InProgressBlock::ToolUse {
                                     id,
-                                    tool_name,
                                     input_json,
                                     started,
                                     is_json_tool,
-                                    provider_executed,
+                                    ..
                                 },
                                 ContentBlockDelta::InputJsonDelta { partial_json },
                             ) => {
@@ -1463,19 +1999,7 @@ impl AnthropicStreamState {
                                             provider_metadata: None,
                                         });
                                 } else {
-                                    if !*started {
-                                        *started = true;
-                                        self.pending.push_back(
-                                            LanguageModelV4StreamPart::ToolInputStart {
-                                                id: id.clone(),
-                                                tool_name: tool_name.clone(),
-                                                provider_executed: *provider_executed,
-                                                dynamic: None,
-                                                title: None,
-                                                provider_metadata: None,
-                                            },
-                                        );
-                                    }
+                                    // ToolInputStart already emitted in content_block_start
                                     self.pending.push_back(
                                         LanguageModelV4StreamPart::ToolInputDelta {
                                             id: id.clone(),
@@ -1489,11 +2013,12 @@ impl AnthropicStreamState {
                                 InProgressBlock::Text { id: _, .. },
                                 ContentBlockDelta::CitationsDelta { citation },
                             ) => {
-                                if let Some(source) = citation_to_source(citation) {
-                                    if let AssistantContentPart::Source(sp) = source {
-                                        self.pending
-                                            .push_back(LanguageModelV4StreamPart::Source(sp));
-                                    }
+                                if let Some(source) =
+                                    citation_to_source(citation, &self.citation_documents)
+                                    && let AssistantContentPart::Source(sp) = source
+                                {
+                                    self.pending
+                                        .push_back(LanguageModelV4StreamPart::Source(sp));
                                 }
                             }
                             _ => {
@@ -1541,7 +2066,10 @@ impl AnthropicStreamState {
                                 input_json,
                                 started,
                                 is_json_tool,
-                                ..
+                                provider_tool_name,
+                                caller,
+                                dynamic,
+                                provider_executed,
                             } => {
                                 if *is_json_tool {
                                     if *started {
@@ -1561,24 +2089,148 @@ impl AnthropicStreamState {
                                             },
                                         );
                                     }
-                                    let input: Value =
-                                        serde_json::from_str(input_json).unwrap_or(Value::Null);
-                                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                                        vercel_ai_provider::tool::ToolCall::new(
-                                            id.clone(),
-                                            tool_name.clone(),
-                                            input,
-                                        ),
-                                    ));
+                                    let mut input: Value = if input_json.is_empty() {
+                                        json!({})
+                                    } else {
+                                        serde_json::from_str(input_json).unwrap_or(Value::Null)
+                                    };
+
+                                    // Inject programmatic-tool-call type for code_execution
+                                    // server tools with { code } input format
+                                    if let Some(ptn) = provider_tool_name {
+                                        match ptn.as_str() {
+                                            "text_editor_code_execution"
+                                            | "bash_code_execution" => {
+                                                if let Some(obj) = input.as_object_mut() {
+                                                    obj.insert(
+                                                        "type".to_string(),
+                                                        Value::String(ptn.clone()),
+                                                    );
+                                                }
+                                            }
+                                            "code_execution" => {
+                                                if let Some(obj) = input.as_object_mut()
+                                                    && obj.contains_key("code")
+                                                    && !obj.contains_key("type")
+                                                {
+                                                    obj.insert(
+                                                        "type".to_string(),
+                                                        Value::String(
+                                                            "programmatic-tool-call".to_string(),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    // Build ToolCall with caller, dynamic, and provider_executed (Gap 2-4)
+                                    let mut tc = vercel_ai_provider::tool::ToolCall::new(
+                                        id.clone(),
+                                        tool_name.clone(),
+                                        input,
+                                    );
+                                    if let Some(pe) = *provider_executed {
+                                        tc = tc.with_provider_executed(pe);
+                                    }
+                                    if let Some(d) = *dynamic {
+                                        tc = tc.with_dynamic(d);
+                                    }
+                                    // Include caller in providerMetadata (Gap 4)
+                                    if let Some(c) = caller {
+                                        let mut meta = HashMap::new();
+                                        meta.insert("anthropic".into(), json!({"caller": c}));
+                                        tc = tc.with_provider_metadata(ProviderMetadata(meta));
+                                    }
+                                    self.pending
+                                        .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                                 }
                             }
                             InProgressBlock::ServerToolResult => {
                                 // Server tool results completed via content_block_stop
                                 // The full result is in the content_block field
                                 if let Some(ref block_val) = event.content_block {
-                                    if let Some(tool_use_id) =
-                                        block_val.get("tool_use_id").and_then(|v| v.as_str())
-                                    {
+                                    let block_type = block_val
+                                        .get("type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let tool_use_id = block_val
+                                        .get("tool_use_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+
+                                    // Emit web search sources with pageAge (Gap 6)
+                                    if block_type == "web_search_tool_result" {
+                                        if let Some(results) =
+                                            block_val.get("content").and_then(|c| c.as_array())
+                                        {
+                                            for result in results {
+                                                if let (Some(url), Some(title)) = (
+                                                    result.get("url").and_then(|v| v.as_str()),
+                                                    result.get("title").and_then(|v| v.as_str()),
+                                                ) {
+                                                    let page_age = result.get("page_age").cloned();
+                                                    let mut meta = HashMap::new();
+                                                    meta.insert(
+                                                        "anthropic".into(),
+                                                        json!({"pageAge": page_age.as_ref().and_then(|v| v.as_str())}),
+                                                    );
+                                                    self.pending.push_back(
+                                                        LanguageModelV4StreamPart::Source(
+                                                            vercel_ai_provider::content::SourcePart {
+                                                                source_type: SourceType::Url,
+                                                                id: vercel_ai_provider_utils::generate_id("src"),
+                                                                url: Some(url.to_string()),
+                                                                title: Some(title.to_string()),
+                                                                media_type: None,
+                                                                filename: None,
+                                                                provider_metadata: Some(ProviderMetadata(meta)),
+                                                            },
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Grow citation documents from web_fetch result (Gap 7)
+                                    if block_type == "web_fetch_tool_result" {
+                                        if let Some(url) = block_val
+                                            .get("content")
+                                            .and_then(|c| c.get("url"))
+                                            .and_then(|v| v.as_str())
+                                        {
+                                            self.citation_documents.push(CitationDocument {
+                                                title: url.to_string(),
+                                                filename: None,
+                                                media_type: "text/html".to_string(),
+                                            });
+                                        }
+                                    }
+
+                                    // MCP tool result with name correlation (Gap 8)
+                                    if block_type == "mcp_tool_result" {
+                                        let (tool_name, _pm) = self
+                                            .mcp_tool_calls
+                                            .get(tool_use_id)
+                                            .map(|(n, p)| (n.clone(), p.clone()))
+                                            .unwrap_or_default();
+                                        let is_error = block_val
+                                            .get("is_error")
+                                            .and_then(Value::as_bool)
+                                            .unwrap_or(false);
+                                        self.pending.push_back(
+                                            LanguageModelV4StreamPart::ToolResult(
+                                                vercel_ai_provider::tool::ToolResult {
+                                                    tool_call_id: tool_use_id.to_string(),
+                                                    tool_name,
+                                                    output: block_val.clone(),
+                                                    is_error,
+                                                },
+                                            ),
+                                        );
+                                    } else if !tool_use_id.is_empty() {
                                         self.pending.push_back(
                                             LanguageModelV4StreamPart::ToolResult(
                                                 vercel_ai_provider::tool::ToolResult::new(
@@ -1601,11 +2253,45 @@ impl AnthropicStreamState {
                     if let Some(ref sr) = event.delta.stop_reason {
                         self.stop_reason = Some(sr.clone());
                     }
+                    self.stop_sequence = event.delta.stop_sequence.clone();
+
+                    // Update container from message_delta
+                    if let Some(ref container) = event.delta.container
+                        && let Ok(v) = serde_json::to_value(container)
+                    {
+                        self.container = Some(v);
+                    }
+
+                    // Update context_management from message_delta
+                    if let Some(ref ctx_mgmt) = event.context_management {
+                        self.context_management = Some(ctx_mgmt.clone());
+                    }
+
                     if let Some(ref du) = event.usage {
-                        // Merge output tokens into usage
+                        // Merge usage fields
                         if let Some(ref mut u) = self.usage {
+                            if let Some(input) = du.input_tokens {
+                                u.input_tokens = input;
+                            }
                             if let Some(ot) = du.output_tokens {
                                 u.output_tokens = ot;
+                            }
+                            if let Some(cc) = du.cache_creation_input_tokens {
+                                u.cache_creation_input_tokens = Some(cc);
+                            }
+                            if let Some(cr) = du.cache_read_input_tokens {
+                                u.cache_read_input_tokens = Some(cr);
+                            }
+                            if let Some(ref iters) = du.iterations {
+                                u.iterations = Some(iters.clone());
+                            }
+                        }
+                        // Merge into raw_usage
+                        if let Ok(Value::Object(map)) = serde_json::to_value(du) {
+                            for (k, val) in map {
+                                if !val.is_null() {
+                                    self.raw_usage.insert(k, val);
+                                }
                             }
                         }
                     }
@@ -1639,14 +2325,30 @@ impl AnthropicStreamState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_anthropic_stream(
     byte_stream: vercel_ai_provider_utils::ByteStream,
     warnings: Vec<Warning>,
     include_raw: bool,
     uses_json_response_tool: bool,
+    tool_name_mapping: HashMap<String, String>,
+    dynamic_code_execution: bool,
+    citation_documents: Vec<CitationDocument>,
+    provider_options_name: String,
+    used_custom_provider_key: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     let stream = futures::stream::unfold(
-        AnthropicStreamState::new(byte_stream, warnings, include_raw, uses_json_response_tool),
+        AnthropicStreamState::new(
+            byte_stream,
+            warnings,
+            include_raw,
+            uses_json_response_tool,
+            tool_name_mapping,
+            dynamic_code_execution,
+            citation_documents,
+            provider_options_name,
+            used_custom_provider_key,
+        ),
         |mut state| async move {
             loop {
                 // Drain pending events first
@@ -1667,13 +2369,72 @@ fn create_anthropic_stream(
                         state.done = true;
                         if !state.finish_emitted {
                             state.finish_emitted = true;
+
+                            // Build provider metadata for finish event
+                            let provider_metadata = {
+                                let mut meta: HashMap<String, Value> = HashMap::new();
+                                // Raw usage
+                                if !state.raw_usage.is_empty() {
+                                    meta.insert(
+                                        "usage".into(),
+                                        Value::Object(
+                                            state
+                                                .raw_usage
+                                                .iter()
+                                                .map(|(k, v)| (k.clone(), v.clone()))
+                                                .collect(),
+                                        ),
+                                    );
+                                }
+                                if let Some(ref u) = state.usage {
+                                    if let Some(cc) = u.cache_creation_input_tokens {
+                                        meta.insert(
+                                            "cacheCreationInputTokens".into(),
+                                            Value::Number(cc.into()),
+                                        );
+                                    }
+                                    if let Some(ref iterations) = u.iterations
+                                        && let Ok(v) = serde_json::to_value(iterations)
+                                    {
+                                        meta.insert("iterations".into(), v);
+                                    }
+                                }
+                                if let Some(ref ss) = state.stop_sequence {
+                                    meta.insert("stopSequence".into(), Value::String(ss.clone()));
+                                }
+                                if let Some(ref container) = state.container {
+                                    meta.insert("container".into(), container.clone());
+                                }
+                                if let Some(ref ctx_mgmt) = state.context_management {
+                                    meta.insert("contextManagement".into(), ctx_mgmt.clone());
+                                }
+                                if meta.is_empty() {
+                                    None
+                                } else {
+                                    let mut outer = HashMap::new();
+                                    let anthropic_val =
+                                        serde_json::to_value(&meta).unwrap_or_default();
+                                    // Duplicate under custom provider key (Gap 9)
+                                    if state.used_custom_provider_key
+                                        && state.provider_options_name != "anthropic"
+                                    {
+                                        outer.insert(
+                                            state.provider_options_name.clone(),
+                                            anthropic_val.clone(),
+                                        );
+                                    }
+                                    outer.insert("anthropic".into(), anthropic_val);
+                                    Some(ProviderMetadata(outer))
+                                }
+                            };
+
                             let finish = LanguageModelV4StreamPart::Finish {
                                 usage: convert_anthropic_usage(state.usage.as_ref()),
                                 finish_reason: map_anthropic_stop_reason(
                                     state.stop_reason.as_deref(),
                                     state.is_json_response_from_tool,
                                 ),
-                                provider_metadata: None,
+                                provider_metadata,
                             };
                             return Some((Ok(finish), state));
                         }
