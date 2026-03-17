@@ -48,14 +48,24 @@ pub struct GoogleGenerativeAIContent {
 pub enum GoogleGenerativeAIContentPart {
     Text {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought: Option<bool>,
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     InlineData {
         #[serde(rename = "inlineData")]
         inline_data: InlineDataPart,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought: Option<bool>,
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     FunctionCall {
         #[serde(rename = "functionCall")]
         function_call: FunctionCallPart,
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     FunctionResponse {
         #[serde(rename = "functionResponse")]
@@ -109,4 +119,8 @@ pub struct GoogleGenerativeAIProviderMetadata {
     pub url_context_metadata: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_ratings: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_message: Option<String>,
 }

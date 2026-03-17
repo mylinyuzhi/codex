@@ -77,7 +77,9 @@
       "Bash(sed:*)",
       "Skill(update-claude-md)",
       "Skill(wt-del)",
-      "Skill(squash)"
+      "Skill(squash)",
+      "Bash(find /lyz/codespace/worktrees/codex-feat-google -type f \\\\\\(-name *google*.ts -o -name *generative*.ts \\\\\\))",
+      "Bash(find /lyz/codespace/worktrees/codex-feat-google/sdk* -type f \\\\\\(-name *google*.ts -o -name *generative*.ts \\\\\\))"
     ],
     "deny": [],
     "ask": []

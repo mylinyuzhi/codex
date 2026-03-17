@@ -22,15 +22,19 @@ use vercel_ai_provider::LanguageModelV4GenerateResult;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningFilePart;
 use vercel_ai_provider::ResponseFormat;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultPart;
+use vercel_ai_provider::Warning;
 use vercel_ai_provider::content::SourcePart;
 use vercel_ai_provider::language_model::LanguageModelV4Request;
 use vercel_ai_provider::language_model::LanguageModelV4Response;
 use vercel_ai_provider::language_model::v4::stream::File as StreamFile;
+use vercel_ai_provider::language_model::v4::stream::ReasoningFile as StreamReasoningFile;
 use vercel_ai_provider::response_metadata::ResponseMetadata;
 use vercel_ai_provider::tool::ToolCall;
+use vercel_ai_provider::tool::ToolResult;
 
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::combine_headers;
@@ -81,19 +85,34 @@ impl GoogleGenerativeAILanguageModel {
         }
     }
 
+    /// Determine the provider options namespace key.
+    fn provider_options_name(&self) -> String {
+        if self.config.provider.contains("vertex") {
+            "vertex".to_string()
+        } else {
+            "google".to_string()
+        }
+    }
+
     /// Parse provider options from call options.
     fn parse_provider_options(
         &self,
         options: &LanguageModelV4CallOptions,
+        provider_options_name: &str,
     ) -> GoogleLanguageModelOptions {
         let Some(ref provider_options) = options.provider_options else {
             return GoogleLanguageModelOptions::default();
         };
 
-        // Try "google" namespace first, then "vertex"
-        let opts_map = provider_options
-            .get("google")
-            .or_else(|| provider_options.get("vertex"));
+        // Try provider-specific namespace first, then fallback to "google"
+        // (only "vertex" falls back to "google", not the reverse)
+        let opts_map = provider_options.get(provider_options_name).or_else(|| {
+            if provider_options_name != "google" {
+                provider_options.get("google")
+            } else {
+                None
+            }
+        });
 
         let Some(opts_map) = opts_map else {
             return GoogleLanguageModelOptions::default();
@@ -104,20 +123,45 @@ impl GoogleGenerativeAILanguageModel {
     }
 
     /// Build the request arguments for the Google API.
-    fn get_args(&self, options: &LanguageModelV4CallOptions) -> (Value, HashMap<String, String>) {
-        let provider_opts = self.parse_provider_options(options);
+    /// Returns (body, headers, warnings, provider_options_name).
+    #[allow(clippy::type_complexity)]
+    fn get_args(
+        &self,
+        options: &LanguageModelV4CallOptions,
+    ) -> Result<(Value, HashMap<String, String>, Vec<Warning>, String), AISdkError> {
+        let provider_options_name = self.provider_options_name();
+        let provider_opts = self.parse_provider_options(options, &provider_options_name);
+        let mut warnings: Vec<Warning> = Vec::new();
 
         // Check if model supports system instructions (Gemma models don't)
-        let supports_system_instruction = !self.model_id.to_lowercase().contains("gemma");
+        let model_lower = self.model_id.to_lowercase();
+        let is_gemma = model_lower.starts_with("gemma-");
 
         let convert_opts = ConvertOptions {
-            supports_system_instruction,
+            supports_system_instruction: !is_gemma,
+            provider_options_name: provider_options_name.clone(),
         };
 
-        let prompt = convert_to_google_generative_ai_messages(&options.prompt, &convert_opts);
+        let prompt = convert_to_google_generative_ai_messages(&options.prompt, &convert_opts)
+            .map_err(AISdkError::new)?;
 
         // Prepare tools
         let prepared_tools = prepare_tools(&options.tools, &options.tool_choice, &self.model_id);
+        warnings.extend(prepared_tools.tool_warnings);
+
+        // Vertex RAG store warning for non-vertex providers
+        if let Some(ref tools) = options.tools {
+            let has_rag = tools.iter().any(|t| {
+                matches!(t, vercel_ai_provider::LanguageModelV4Tool::Provider(p)
+                    if p.id == crate::tool::vertex_rag_store::VERTEX_RAG_STORE_TOOL_ID)
+            });
+            if has_rag && !self.config.provider.contains("vertex") {
+                warnings.push(Warning::unsupported_with_details(
+                    "provider-defined tool",
+                    "google.vertex_rag_store requires a Vertex AI provider (google.vertex.*)",
+                ));
+            }
+        }
 
         // Build generation config
         let mut generation_config = json!({});
@@ -156,7 +200,10 @@ impl GoogleGenerativeAILanguageModel {
                     description: _,
                 } => {
                     generation_config["responseMimeType"] = json!("application/json");
-                    if let Some(schema_val) = schema {
+                    // Only send responseSchema if structured_outputs is not explicitly false
+                    if provider_opts.structured_outputs != Some(false)
+                        && let Some(schema_val) = schema
+                    {
                         let schema_json = serde_json::to_value(schema_val)
                             .unwrap_or(Value::Object(Default::default()));
                         if let Some(openapi) =
@@ -167,7 +214,8 @@ impl GoogleGenerativeAILanguageModel {
                     }
                 }
                 ResponseFormat::Text => {
-                    generation_config["responseMimeType"] = json!("text/plain");
+                    // Do not set responseMimeType for text format;
+                    // the API defaults to text output when no MIME type is specified.
                 }
             }
         }
@@ -187,7 +235,7 @@ impl GoogleGenerativeAILanguageModel {
         if let Some(ref image_config) = provider_opts.image_config
             && let Ok(val) = serde_json::to_value(image_config)
         {
-            generation_config["imageGenerationConfig"] = val;
+            generation_config["imageConfig"] = val;
         }
 
         // Build request body
@@ -211,33 +259,23 @@ impl GoogleGenerativeAILanguageModel {
         if !tools_array.is_empty() {
             body["tools"] = json!(tools_array);
         }
-        if let Some(tool_config) = prepared_tools.tool_config {
-            body["toolConfig"] = tool_config;
+
+        // Merge tool_config with retrieval config
+        let mut tool_config_val = prepared_tools.tool_config.unwrap_or(json!({}));
+        if let Some(ref retrieval_config) = provider_opts.retrieval_config
+            && let Ok(val) = serde_json::to_value(retrieval_config)
+        {
+            tool_config_val["retrievalConfig"] = val;
+        }
+        if tool_config_val != json!({}) {
+            body["toolConfig"] = tool_config_val;
         }
 
         // Safety settings
-        if let Some(ref safety) = provider_opts.safety_settings {
-            if let Ok(val) = serde_json::to_value(safety) {
-                body["safetySettings"] = val;
-            }
-        } else if let Some(ref threshold) = provider_opts.threshold {
-            let categories = [
-                "HARM_CATEGORY_HATE_SPEECH",
-                "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "HARM_CATEGORY_HARASSMENT",
-                "HARM_CATEGORY_CIVIC_INTEGRITY",
-            ];
-            let settings: Vec<Value> = categories
-                .iter()
-                .map(|cat| {
-                    json!({
-                        "category": cat,
-                        "threshold": serde_json::to_value(threshold).unwrap_or(Value::Null),
-                    })
-                })
-                .collect();
-            body["safetySettings"] = json!(settings);
+        if let Some(ref safety) = provider_opts.safety_settings
+            && let Ok(val) = serde_json::to_value(safety)
+        {
+            body["safetySettings"] = val;
         }
 
         // Thinking config
@@ -260,7 +298,7 @@ impl GoogleGenerativeAILanguageModel {
         // Build headers
         let headers = combine_headers(vec![Some((self.config.headers)()), options.headers.clone()]);
 
-        (body, headers)
+        Ok((body, headers, warnings, provider_options_name))
     }
 }
 
@@ -274,6 +312,8 @@ pub struct GoogleGenerateContentResponse {
     pub usage_metadata: Option<GoogleUsageMetadata>,
     #[serde(default)]
     pub model_version: Option<String>,
+    #[serde(default)]
+    pub prompt_feedback: Option<Value>,
 }
 
 /// A candidate response from Google.
@@ -284,6 +324,8 @@ pub struct GoogleCandidate {
     pub content: Option<GoogleCandidateContent>,
     #[serde(default)]
     pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub finish_message: Option<String>,
     #[serde(default)]
     pub safety_ratings: Option<Value>,
     #[serde(default)]
@@ -307,6 +349,8 @@ pub struct GoogleResponsePart {
     pub text: Option<String>,
     #[serde(default)]
     pub thought: Option<bool>,
+    #[serde(default)]
+    pub thought_signature: Option<String>,
     #[serde(default)]
     pub function_call: Option<GoogleFunctionCall>,
     #[serde(default)]
@@ -358,6 +402,16 @@ pub struct GroundingMetadata {
     pub grounding_chunks: Option<Vec<GroundingChunk>>,
     #[serde(default)]
     pub web_search_queries: Option<Vec<String>>,
+    #[serde(default)]
+    pub image_search_queries: Option<Value>,
+    #[serde(default)]
+    pub retrieval_queries: Option<Value>,
+    #[serde(default)]
+    pub search_entry_point: Option<Value>,
+    #[serde(default)]
+    pub grounding_supports: Option<Value>,
+    #[serde(default)]
+    pub retrieval_metadata: Option<Value>,
 }
 
 /// A grounding chunk (source).
@@ -365,6 +419,12 @@ pub struct GroundingMetadata {
 pub struct GroundingChunk {
     #[serde(default)]
     pub web: Option<GroundingWeb>,
+    #[serde(default)]
+    pub image: Option<GroundingImage>,
+    #[serde(default, rename = "retrievedContext")]
+    pub retrieved_context: Option<GroundingRetrievedContext>,
+    #[serde(default)]
+    pub maps: Option<GroundingMaps>,
 }
 
 /// Web grounding info.
@@ -374,6 +434,47 @@ pub struct GroundingWeb {
     pub uri: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
+}
+
+/// Image grounding info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingImage {
+    #[serde(default)]
+    pub source_uri: Option<String>,
+    #[serde(default)]
+    pub image_uri: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+/// Retrieved context grounding info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingRetrievedContext {
+    #[serde(default)]
+    pub uri: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub file_search_store: Option<String>,
+}
+
+/// Maps grounding info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundingMaps {
+    #[serde(default)]
+    pub uri: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default, rename = "placeId")]
+    pub place_id: Option<String>,
 }
 
 /// URL context metadata.
@@ -395,19 +496,45 @@ pub struct UrlMetadataEntry {
 }
 
 /// Extract sources from grounding and URL context metadata.
+fn detect_media_type(uri: &str) -> &'static str {
+    if uri.ends_with(".pdf") {
+        "application/pdf"
+    } else if uri.ends_with(".txt") {
+        "text/plain"
+    } else if uri.ends_with(".docx") {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    } else if uri.ends_with(".doc") {
+        "application/msword"
+    } else if uri.ends_with(".md") || uri.ends_with(".markdown") {
+        "text/markdown"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 fn extract_sources(
     grounding: &Option<GroundingMetadata>,
     url_context: &Option<UrlContextMetadata>,
     id_gen: &dyn Fn() -> String,
 ) -> Vec<SourcePart> {
-    let mut sources = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
+    extract_sources_with_dedup(grounding, url_context, id_gen, &mut seen_urls)
+}
+
+fn extract_sources_with_dedup(
+    grounding: &Option<GroundingMetadata>,
+    url_context: &Option<UrlContextMetadata>,
+    id_gen: &dyn Fn() -> String,
+    seen_urls: &mut std::collections::HashSet<String>,
+) -> Vec<SourcePart> {
+    let mut sources = Vec::new();
 
     // Extract from grounding metadata
     if let Some(gm) = grounding
         && let Some(ref chunks) = gm.grounding_chunks
     {
         for chunk in chunks {
+            // Web chunks
             if let Some(ref web) = chunk.web
                 && let Some(ref uri) = web.uri
                 && seen_urls.insert(uri.clone())
@@ -418,10 +545,68 @@ fn extract_sources(
                 }
                 sources.push(source);
             }
+
+            // Image chunks
+            if let Some(ref img) = chunk.image
+                && let Some(ref source_uri) = img.source_uri
+                && seen_urls.insert(source_uri.clone())
+            {
+                let mut source = SourcePart::url(id_gen(), source_uri);
+                if let Some(ref title) = img.title {
+                    source.title = Some(title.clone());
+                }
+                sources.push(source);
+            }
+
+            // Retrieved context chunks
+            if let Some(ref ctx) = chunk.retrieved_context {
+                if let Some(ref uri) = ctx.uri {
+                    if uri.starts_with("http://") || uri.starts_with("https://") {
+                        // HTTP URL -> URL source
+                        if seen_urls.insert(uri.clone()) {
+                            let mut source = SourcePart::url(id_gen(), uri);
+                            if let Some(ref title) = ctx.title {
+                                source.title = Some(title.clone());
+                            }
+                            sources.push(source);
+                        }
+                    } else {
+                        // File URI (gs://, etc.) -> Document source with media type detection
+                        let media_type = detect_media_type(uri);
+                        let title = ctx.title.as_deref().unwrap_or("Unknown Document");
+                        let filename = uri.rsplit('/').next().map(str::to_string);
+                        let mut source = SourcePart::document(id_gen(), title, media_type);
+                        source.filename = filename;
+                        source.url = Some(uri.clone());
+                        sources.push(source);
+                    }
+                } else if let Some(ref fss) = ctx.file_search_store {
+                    // No URI but file_search_store
+                    let title = ctx.title.as_deref().unwrap_or("Unknown Document");
+                    let filename = fss.rsplit('/').next().map(str::to_string);
+                    let mut source =
+                        SourcePart::document(id_gen(), title, "application/octet-stream");
+                    source.filename = filename;
+                    sources.push(source);
+                }
+            }
+
+            // Maps chunks
+            if let Some(ref maps) = chunk.maps
+                && let Some(ref uri) = maps.uri
+                && seen_urls.insert(uri.clone())
+            {
+                let mut source = SourcePart::url(id_gen(), uri);
+                if let Some(ref title) = maps.title {
+                    source.title = Some(title.clone());
+                }
+                sources.push(source);
+            }
         }
     }
 
-    // Extract from URL context metadata
+    // Extract from URL context metadata.
+    // NOTE: TS does NOT extract Source parts from urlContextMetadata — this is a Rust enhancement.
     if let Some(ucm) = url_context
         && let Some(ref entries) = ucm.url_metadata
     {
@@ -437,51 +622,55 @@ fn extract_sources(
     sources
 }
 
-/// Convert Google response parts to assistant content parts.
-fn convert_response_parts(
+/// Build thoughtSignature provider metadata for a part.
+fn thought_signature_metadata(
+    part: &GoogleResponsePart,
+    provider_options_name: &str,
+) -> Option<ProviderMetadata> {
+    let sig = part.thought_signature.as_ref()?;
+    let mut meta = HashMap::new();
+    meta.insert(
+        provider_options_name.to_string(),
+        json!({ "thoughtSignature": sig }),
+    );
+    Some(ProviderMetadata::from_map(meta))
+}
+
+/// Convert Google response parts to assistant content parts with thoughtSignature metadata.
+fn convert_response_parts_with_metadata(
     parts: &[GoogleResponsePart],
     id_gen: &dyn Fn() -> String,
+    provider_options_name: &str,
 ) -> Vec<AssistantContentPart> {
-    let mut result = Vec::new();
+    let mut result: Vec<AssistantContentPart> = Vec::new();
+    let mut last_code_execution_tool_call_id: Option<String> = None;
 
     for part in parts {
-        if let Some(ref text) = part.text {
-            if part.thought == Some(true) {
-                result.push(AssistantContentPart::reasoning(text));
-            } else {
-                result.push(AssistantContentPart::text(text));
-            }
-        }
+        let ts_meta = thought_signature_metadata(part, provider_options_name);
 
-        if let Some(ref fc) = part.function_call {
-            result.push(AssistantContentPart::tool_call(
-                id_gen(),
-                &fc.name,
-                fc.args.clone(),
-            ));
-        }
-
-        if let Some(ref inline) = part.inline_data {
-            result.push(AssistantContentPart::File(FilePart::image_base64(
-                &inline.data,
-                &inline.mime_type,
-            )));
-        }
-
+        // Handle executable code (before text, per TS order)
         if let Some(ref exec_code) = part.executable_code {
-            result.push(AssistantContentPart::tool_call(
-                id_gen(),
+            let call_id = id_gen();
+            last_code_execution_tool_call_id = Some(call_id.clone());
+            let mut tc = vercel_ai_provider::ToolCallPart::new(
+                &call_id,
                 "code_execution",
                 json!({
                     "language": exec_code.language,
                     "code": exec_code.code,
                 }),
-            ));
+            );
+            tc.provider_executed = Some(true);
+            result.push(AssistantContentPart::ToolCall(tc));
         }
 
+        // Handle code execution result
         if let Some(ref exec_result) = part.code_execution_result {
+            let call_id = last_code_execution_tool_call_id
+                .take()
+                .unwrap_or_else(id_gen);
             result.push(AssistantContentPart::ToolResult(ToolResultPart::new(
-                id_gen(),
+                call_id,
                 "code_execution",
                 ToolResultContent::json(json!({
                     "outcome": exec_result.outcome,
@@ -489,9 +678,70 @@ fn convert_response_parts(
                 })),
             )));
         }
+
+        // Handle text parts
+        if let Some(ref text) = part.text {
+            // Empty text with thoughtSignature: apply to last content
+            if text.is_empty() && ts_meta.is_some() {
+                if let Some(last) = result.last_mut() {
+                    match last {
+                        AssistantContentPart::Text(tp) => {
+                            tp.provider_metadata = ts_meta.clone();
+                        }
+                        AssistantContentPart::Reasoning(rp) => {
+                            rp.provider_metadata = ts_meta.clone();
+                        }
+                        _ => {}
+                    }
+                }
+            } else if part.thought == Some(true) {
+                result.push(AssistantContentPart::Reasoning(
+                    vercel_ai_provider::content::ReasoningPart {
+                        text: text.clone(),
+                        provider_metadata: ts_meta.clone(),
+                    },
+                ));
+            } else {
+                result.push(AssistantContentPart::Text(
+                    vercel_ai_provider::content::TextPart {
+                        text: text.clone(),
+                        provider_metadata: ts_meta.clone(),
+                    },
+                ));
+            }
+        }
+
+        // Handle function calls
+        if let Some(ref fc) = part.function_call {
+            let mut tc = vercel_ai_provider::ToolCallPart::new(id_gen(), &fc.name, fc.args.clone());
+            tc.provider_metadata = ts_meta.clone();
+            result.push(AssistantContentPart::ToolCall(tc));
+        }
+
+        // Handle inline data
+        if let Some(ref inline) = part.inline_data {
+            if part.thought == Some(true) {
+                let mut rfp = ReasoningFilePart::from_base64(&inline.data, &inline.mime_type);
+                rfp.provider_metadata = ts_meta.clone();
+                result.push(AssistantContentPart::ReasoningFile(rfp));
+            } else {
+                let mut fp = FilePart::image_base64(&inline.data, &inline.mime_type);
+                fp.provider_metadata = ts_meta.clone();
+                result.push(AssistantContentPart::File(fp));
+            }
+        }
     }
 
     result
+}
+
+/// Convert Google response parts to assistant content parts (simple version, used in tests).
+#[cfg(test)]
+fn convert_response_parts(
+    parts: &[GoogleResponsePart],
+    id_gen: &dyn Fn() -> String,
+) -> Vec<AssistantContentPart> {
+    convert_response_parts_with_metadata(parts, id_gen, "google")
 }
 
 #[async_trait]
@@ -516,11 +766,11 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
         &self,
         options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, headers) = self.get_args(&options);
+        let (body, headers, warnings, provider_options_name) = self.get_args(&options)?;
 
         let model_path = get_model_path(&self.model_id);
         let url = format!(
-            "{}/v1beta/{}:generateContent",
+            "{}/{}:generateContent",
             without_trailing_slash(&self.config.base_url),
             model_path
         );
@@ -539,10 +789,10 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
         let candidate = response.candidates.first();
         let id_gen = &*self.config.generate_id;
 
-        // Extract content parts
+        // Extract content parts with thoughtSignature support
         let content = if let Some(candidate) = candidate {
             if let Some(ref content) = candidate.content {
-                convert_response_parts(&content.parts, id_gen)
+                convert_response_parts_with_metadata(&content.parts, id_gen, &provider_options_name)
             } else {
                 Vec::new()
             }
@@ -563,10 +813,10 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             }
         }
 
-        // Check for tool calls in content
-        let has_tool_calls = all_content
-            .iter()
-            .any(|p| matches!(p, AssistantContentPart::ToolCall(_)));
+        // Check for tool calls in content (exclude provider-executed)
+        let has_tool_calls = all_content.iter().any(|p| {
+            matches!(p, AssistantContentPart::ToolCall(tc) if tc.provider_executed != Some(true))
+        });
 
         let finish_reason = crate::map_google_generative_ai_finish_reason::map_finish_reason(
             candidate.and_then(|c| c.finish_reason.as_deref()),
@@ -575,31 +825,59 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
 
         let usage = convert_usage(response.usage_metadata.as_ref());
 
-        // Build provider metadata
-        let mut provider_meta = HashMap::new();
-        if let Some(candidate) = candidate {
-            if let Some(ref sr) = candidate.safety_ratings {
-                provider_meta.insert("safetyRatings".to_string(), sr.clone());
-            }
-            if let Some(ref gm) = candidate.grounding_metadata
-                && let Ok(val) = serde_json::to_value(gm)
-            {
-                provider_meta.insert("groundingMetadata".to_string(), val);
-            }
-            if let Some(ref ucm) = candidate.url_context_metadata
-                && let Ok(val) = serde_json::to_value(ucm)
-            {
-                provider_meta.insert("urlContextMetadata".to_string(), val);
-            }
-        }
+        // Build provider metadata under namespace key — always include all 6 fields
+        let mut namespace_meta = HashMap::new();
+        namespace_meta.insert(
+            "promptFeedback".to_string(),
+            response.prompt_feedback.clone().unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "groundingMetadata".to_string(),
+            candidate
+                .and_then(|c| c.grounding_metadata.as_ref())
+                .and_then(|gm| serde_json::to_value(gm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "urlContextMetadata".to_string(),
+            candidate
+                .and_then(|c| c.url_context_metadata.as_ref())
+                .and_then(|ucm| serde_json::to_value(ucm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "safetyRatings".to_string(),
+            candidate
+                .and_then(|c| c.safety_ratings.clone())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "usageMetadata".to_string(),
+            response
+                .usage_metadata
+                .as_ref()
+                .and_then(|um| serde_json::to_value(um).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "finishMessage".to_string(),
+            candidate
+                .and_then(|c| c.finish_message.as_ref())
+                .map(|fm| Value::String(fm.clone()))
+                .unwrap_or(Value::Null),
+        );
 
-        let provider_metadata = if provider_meta.is_empty() {
-            None
-        } else {
-            Some(ProviderMetadata::from_map(provider_meta))
+        let provider_metadata = {
+            let mut outer = HashMap::new();
+            outer.insert(
+                provider_options_name.clone(),
+                serde_json::to_value(&namespace_meta).unwrap_or(Value::Null),
+            );
+            Some(ProviderMetadata::from_map(outer))
         };
 
         let mut result = LanguageModelV4GenerateResult::new(all_content, usage, finish_reason);
+        result.warnings = warnings;
         result.request = Some(LanguageModelV4Request::new().with_body(body));
         if let Some(model_version) = response.model_version {
             result.response = Some(LanguageModelV4Response::new().with_model_id(model_version));
@@ -613,12 +891,12 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
         &self,
         options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        let (body, headers) = self.get_args(&options);
+        let (body, headers, warnings, provider_options_name) = self.get_args(&options)?;
         let include_raw = options.include_raw_chunks.unwrap_or(false);
 
         let model_path = get_model_path(&self.model_id);
         let url = format!(
-            "{}/v1beta/{}:streamGenerateContent?alt=sse",
+            "{}/{}:streamGenerateContent?alt=sse",
             without_trailing_slash(&self.config.base_url),
             model_path
         );
@@ -634,7 +912,13 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
 
         let id_gen = self.config.generate_id.clone();
 
-        let stream = create_google_stream(byte_stream, id_gen, include_raw);
+        let stream = create_google_stream(
+            byte_stream,
+            id_gen,
+            include_raw,
+            warnings,
+            provider_options_name,
+        );
 
         let mut result = LanguageModelV4StreamResult::new(stream);
         result.request = Some(LanguageModelV4Request::new().with_body(body));
@@ -655,6 +939,11 @@ struct StreamState {
     pending_parts: Vec<LanguageModelV4StreamPart>,
     done: bool,
     started: bool,
+    warnings: Vec<Warning>,
+    provider_options_name: String,
+    last_code_execution_tool_call_id: Option<String>,
+    last_grounding_metadata: Option<GroundingMetadata>,
+    last_url_context_metadata: Option<UrlContextMetadata>,
 }
 
 /// Create a stream of LanguageModelV4StreamPart from a byte stream.
@@ -662,6 +951,8 @@ fn create_google_stream(
     byte_stream: vercel_ai_provider_utils::ByteStream,
     id_gen: Arc<dyn Fn() -> String + Send + Sync>,
     include_raw: bool,
+    warnings: Vec<Warning>,
+    provider_options_name: String,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     use std::collections::HashSet;
 
@@ -678,6 +969,11 @@ fn create_google_stream(
             pending_parts: Vec::new(),
             done: false,
             started: false,
+            warnings,
+            provider_options_name,
+            last_code_execution_tool_call_id: None,
+            last_grounding_metadata: None,
+            last_url_context_metadata: None,
         },
         |mut state| async move {
             // Return pending parts first
@@ -692,9 +988,8 @@ fn create_google_stream(
             // Emit stream start
             if !state.started {
                 state.started = true;
-                let part = LanguageModelV4StreamPart::StreamStart {
-                    warnings: Vec::new(),
-                };
+                let w = std::mem::take(&mut state.warnings);
+                let part = LanguageModelV4StreamPart::StreamStart { warnings: w };
                 return Some((Ok(part), state));
             }
 
@@ -714,26 +1009,42 @@ fn create_google_stream(
                                 continue;
                             }
 
-                            if let Some(data) = line.strip_prefix("data: ")
-                                && let Ok(response) =
-                                    serde_json::from_str::<GoogleGenerateContentResponse>(data)
-                            {
-                                let parts = process_stream_chunk(
-                                    &response,
-                                    &state.id_gen,
-                                    &mut state.text_id,
-                                    &mut state.reasoning_id,
-                                    &mut state.tool_call_ids,
-                                    &mut state.seen_source_urls,
-                                    state.include_raw,
-                                    data,
-                                );
-                                if !parts.is_empty() {
-                                    let mut parts = parts;
-                                    let first = parts.remove(0);
-                                    parts.reverse();
-                                    state.pending_parts = parts;
-                                    return Some((Ok(first), state));
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                match serde_json::from_str::<GoogleGenerateContentResponse>(data) {
+                                    Ok(response) => {
+                                        let mut stream_ctx = StreamProcessingContext {
+                                            id_gen: &state.id_gen,
+                                            text_id: &mut state.text_id,
+                                            reasoning_id: &mut state.reasoning_id,
+                                            tool_call_ids: &mut state.tool_call_ids,
+                                            seen_source_urls: &mut state.seen_source_urls,
+                                            include_raw: state.include_raw,
+                                            provider_options_name: &state.provider_options_name,
+                                            last_code_execution_tool_call_id: &mut state
+                                                .last_code_execution_tool_call_id,
+                                            last_grounding_metadata: &mut state
+                                                .last_grounding_metadata,
+                                            last_url_context_metadata: &mut state
+                                                .last_url_context_metadata,
+                                        };
+                                        let parts =
+                                            process_stream_chunk(&response, &mut stream_ctx, data);
+                                        if !parts.is_empty() {
+                                            let mut parts = parts;
+                                            let first = parts.remove(0);
+                                            parts.reverse();
+                                            state.pending_parts = parts;
+                                            return Some((Ok(first), state));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let part = LanguageModelV4StreamPart::Error {
+                                            error: vercel_ai_provider::StreamError::new(format!(
+                                                "Failed to parse chunk: {e}"
+                                            )),
+                                        };
+                                        return Some((Ok(part), state));
+                                    }
                                 }
                             }
                         }
@@ -776,22 +1087,32 @@ fn create_google_stream(
     Box::pin(stream)
 }
 
+/// Mutable state passed to `process_stream_chunk` on every SSE event.
+struct StreamProcessingContext<'a> {
+    id_gen: &'a Arc<dyn Fn() -> String + Send + Sync>,
+    text_id: &'a mut Option<String>,
+    reasoning_id: &'a mut Option<String>,
+    tool_call_ids: &'a mut HashMap<String, String>,
+    seen_source_urls: &'a mut std::collections::HashSet<String>,
+    include_raw: bool,
+    provider_options_name: &'a str,
+    last_code_execution_tool_call_id: &'a mut Option<String>,
+    last_grounding_metadata: &'a mut Option<GroundingMetadata>,
+    last_url_context_metadata: &'a mut Option<UrlContextMetadata>,
+}
+
 /// Process a single SSE chunk and return stream parts.
-#[allow(clippy::too_many_arguments)]
 fn process_stream_chunk(
     response: &GoogleGenerateContentResponse,
-    id_gen: &Arc<dyn Fn() -> String + Send + Sync>,
-    text_id: &mut Option<String>,
-    reasoning_id: &mut Option<String>,
-    tool_call_ids: &mut HashMap<String, String>,
-    seen_source_urls: &mut std::collections::HashSet<String>,
-    include_raw: bool,
+    ctx: &mut StreamProcessingContext<'_>,
     raw_data: &str,
 ) -> Vec<LanguageModelV4StreamPart> {
     let mut parts = Vec::new();
 
     // Emit raw chunk if requested
-    if include_raw && let Ok(raw_val) = serde_json::from_str::<Value>(raw_data) {
+    if ctx.include_raw
+        && let Ok(raw_val) = serde_json::from_str::<Value>(raw_data)
+    {
         parts.push(LanguageModelV4StreamPart::Raw { raw_value: raw_val });
     }
 
@@ -811,102 +1132,22 @@ fn process_stream_chunk(
         }
     };
 
+    // Track grounding/url metadata for this chunk
+    if let Some(ref gm) = candidate.grounding_metadata {
+        *ctx.last_grounding_metadata = Some(gm.clone());
+    }
+    if let Some(ref ucm) = candidate.url_context_metadata {
+        *ctx.last_url_context_metadata = Some(ucm.clone());
+    }
+
     if let Some(ref content) = candidate.content {
         for part in &content.parts {
-            // Handle text parts
-            if let Some(ref text) = part.text {
-                if part.thought == Some(true) {
-                    // Reasoning text
-                    if reasoning_id.is_none() {
-                        let id = id_gen();
-                        *reasoning_id = Some(id.clone());
-                        parts.push(LanguageModelV4StreamPart::ReasoningStart {
-                            id,
-                            provider_metadata: None,
-                        });
-                    }
-                    parts.push(LanguageModelV4StreamPart::ReasoningDelta {
-                        id: reasoning_id.clone().unwrap_or_default(),
-                        delta: text.clone(),
-                        provider_metadata: None,
-                    });
-                } else {
-                    // Close reasoning block if transitioning
-                    if let Some(rid) = reasoning_id.take() {
-                        parts.push(LanguageModelV4StreamPart::ReasoningEnd {
-                            id: rid,
-                            provider_metadata: None,
-                        });
-                    }
+            let ts_meta = thought_signature_metadata(part, ctx.provider_options_name);
 
-                    // Regular text
-                    if text_id.is_none() {
-                        let id = id_gen();
-                        *text_id = Some(id.clone());
-                        parts.push(LanguageModelV4StreamPart::TextStart {
-                            id,
-                            provider_metadata: None,
-                        });
-                    }
-                    parts.push(LanguageModelV4StreamPart::TextDelta {
-                        id: text_id.clone().unwrap_or_default(),
-                        delta: text.clone(),
-                        provider_metadata: None,
-                    });
-                }
-            }
-
-            // Handle function calls
-            if let Some(ref fc) = part.function_call {
-                // Close text block if open
-                if let Some(tid) = text_id.take() {
-                    parts.push(LanguageModelV4StreamPart::TextEnd {
-                        id: tid,
-                        provider_metadata: None,
-                    });
-                }
-
-                let call_id = id_gen();
-                let args_str = serde_json::to_string(&fc.args).unwrap_or_default();
-
-                parts.push(LanguageModelV4StreamPart::ToolInputStart {
-                    id: call_id.clone(),
-                    tool_name: fc.name.clone(),
-                    provider_executed: None,
-                    dynamic: None,
-                    title: None,
-                    provider_metadata: None,
-                });
-                parts.push(LanguageModelV4StreamPart::ToolInputDelta {
-                    id: call_id.clone(),
-                    delta: args_str,
-                    provider_metadata: None,
-                });
-                parts.push(LanguageModelV4StreamPart::ToolInputEnd {
-                    id: call_id.clone(),
-                    provider_metadata: None,
-                });
-                parts.push(LanguageModelV4StreamPart::ToolCall(ToolCall::new(
-                    &call_id,
-                    &fc.name,
-                    fc.args.clone(),
-                )));
-
-                tool_call_ids.insert(fc.name.clone(), call_id);
-            }
-
-            // Handle inline data (images)
-            if let Some(ref inline) = part.inline_data {
-                parts.push(LanguageModelV4StreamPart::File(StreamFile {
-                    data: inline.data.clone(),
-                    media_type: inline.mime_type.clone(),
-                    provider_metadata: None,
-                }));
-            }
-
-            // Handle executable code
+            // Handle executable code (before text, per TS order)
             if let Some(ref exec_code) = part.executable_code {
-                let call_id = id_gen();
+                let call_id = (ctx.id_gen)();
+                *ctx.last_code_execution_tool_call_id = Some(call_id.clone());
                 let args = json!({
                     "language": exec_code.language,
                     "code": exec_code.code,
@@ -934,46 +1175,173 @@ fn process_stream_chunk(
                     ToolCall::new(&call_id, "code_execution", args).with_provider_executed(true),
                 ));
             }
-        }
-    }
 
-    // Extract sources from grounding metadata
-    if let Some(ref gm) = candidate.grounding_metadata
-        && let Some(ref chunks) = gm.grounding_chunks
-    {
-        for chunk in chunks {
-            if let Some(ref web) = chunk.web
-                && let Some(ref uri) = web.uri
-                && seen_source_urls.insert(uri.clone())
-            {
-                let mut source = SourcePart::url(id_gen(), uri);
-                if let Some(ref title) = web.title {
-                    source.title = Some(title.clone());
-                }
-                parts.push(LanguageModelV4StreamPart::Source(source));
-            }
-        }
-    }
-
-    // Extract from URL context metadata
-    if let Some(ref ucm) = candidate.url_context_metadata
-        && let Some(ref entries) = ucm.url_metadata
-    {
-        for entry in entries {
-            if let Some(ref url) = entry.retrieved_url
-                && seen_source_urls.insert(url.clone())
-            {
-                parts.push(LanguageModelV4StreamPart::Source(SourcePart::url(
-                    id_gen(),
-                    url,
+            // Handle code execution result
+            if let Some(ref exec_result) = part.code_execution_result {
+                let call_id = ctx
+                    .last_code_execution_tool_call_id
+                    .take()
+                    .unwrap_or_else(|| (ctx.id_gen)());
+                parts.push(LanguageModelV4StreamPart::ToolResult(ToolResult::new(
+                    &call_id,
+                    "code_execution",
+                    json!({
+                        "outcome": exec_result.outcome,
+                        "output": exec_result.output,
+                    }),
                 )));
             }
+
+            // Handle text parts
+            if let Some(ref text) = part.text {
+                if text.is_empty() {
+                    // Empty text with thoughtSignature: emit empty delta to pass metadata
+                    if ts_meta.is_some()
+                        && let Some(ref tid) = *ctx.text_id
+                    {
+                        parts.push(LanguageModelV4StreamPart::TextDelta {
+                            id: tid.clone(),
+                            delta: String::new(),
+                            provider_metadata: ts_meta.clone(),
+                        });
+                    }
+                } else if part.thought == Some(true) {
+                    // Close any active text block before starting reasoning
+                    if let Some(tid) = ctx.text_id.take() {
+                        parts.push(LanguageModelV4StreamPart::TextEnd {
+                            id: tid,
+                            provider_metadata: None,
+                        });
+                    }
+                    // Reasoning text
+                    if ctx.reasoning_id.is_none() {
+                        let id = (ctx.id_gen)();
+                        *ctx.reasoning_id = Some(id.clone());
+                        parts.push(LanguageModelV4StreamPart::ReasoningStart {
+                            id,
+                            provider_metadata: ts_meta.clone(),
+                        });
+                    }
+                    parts.push(LanguageModelV4StreamPart::ReasoningDelta {
+                        id: ctx.reasoning_id.clone().unwrap_or_default(),
+                        delta: text.clone(),
+                        provider_metadata: ts_meta.clone(),
+                    });
+                } else {
+                    // Close reasoning block if transitioning
+                    if let Some(rid) = ctx.reasoning_id.take() {
+                        parts.push(LanguageModelV4StreamPart::ReasoningEnd {
+                            id: rid,
+                            provider_metadata: None,
+                        });
+                    }
+
+                    // Regular text
+                    if ctx.text_id.is_none() {
+                        let id = (ctx.id_gen)();
+                        *ctx.text_id = Some(id.clone());
+                        parts.push(LanguageModelV4StreamPart::TextStart {
+                            id,
+                            provider_metadata: ts_meta.clone(),
+                        });
+                    }
+                    parts.push(LanguageModelV4StreamPart::TextDelta {
+                        id: ctx.text_id.clone().unwrap_or_default(),
+                        delta: text.clone(),
+                        provider_metadata: ts_meta.clone(),
+                    });
+                }
+            }
+
+            // Handle function calls
+            if let Some(ref fc) = part.function_call {
+                // Close text block if open
+                if let Some(tid) = ctx.text_id.take() {
+                    parts.push(LanguageModelV4StreamPart::TextEnd {
+                        id: tid,
+                        provider_metadata: None,
+                    });
+                }
+
+                let call_id = (ctx.id_gen)();
+                let args_str = serde_json::to_string(&fc.args).unwrap_or_default();
+
+                parts.push(LanguageModelV4StreamPart::ToolInputStart {
+                    id: call_id.clone(),
+                    tool_name: fc.name.clone(),
+                    provider_executed: None,
+                    dynamic: None,
+                    title: None,
+                    provider_metadata: ts_meta.clone(),
+                });
+                parts.push(LanguageModelV4StreamPart::ToolInputDelta {
+                    id: call_id.clone(),
+                    delta: args_str,
+                    provider_metadata: ts_meta.clone(),
+                });
+                parts.push(LanguageModelV4StreamPart::ToolInputEnd {
+                    id: call_id.clone(),
+                    provider_metadata: ts_meta.clone(),
+                });
+                let mut tc = ToolCall::new(&call_id, &fc.name, fc.args.clone());
+                if let Some(ref meta) = ts_meta {
+                    tc.provider_metadata = Some(meta.clone());
+                }
+                parts.push(LanguageModelV4StreamPart::ToolCall(tc));
+
+                ctx.tool_call_ids.insert(fc.name.clone(), call_id);
+            }
+
+            // Handle inline data (images)
+            if let Some(ref inline) = part.inline_data {
+                // Close active text block
+                if let Some(tid) = ctx.text_id.take() {
+                    parts.push(LanguageModelV4StreamPart::TextEnd {
+                        id: tid,
+                        provider_metadata: None,
+                    });
+                }
+                // Close active reasoning block
+                if let Some(rid) = ctx.reasoning_id.take() {
+                    parts.push(LanguageModelV4StreamPart::ReasoningEnd {
+                        id: rid,
+                        provider_metadata: None,
+                    });
+                }
+                if part.thought == Some(true) {
+                    parts.push(LanguageModelV4StreamPart::ReasoningFile(
+                        StreamReasoningFile {
+                            data: inline.data.clone(),
+                            media_type: inline.mime_type.clone(),
+                            provider_metadata: ts_meta.clone(),
+                        },
+                    ));
+                } else {
+                    parts.push(LanguageModelV4StreamPart::File(StreamFile {
+                        data: inline.data.clone(),
+                        media_type: inline.mime_type.clone(),
+                        provider_metadata: ts_meta.clone(),
+                    }));
+                }
+            }
         }
+    }
+
+    // Extract sources using shared logic, with streaming dedup via seen_source_urls
+    let sources = extract_sources_with_dedup(
+        &candidate.grounding_metadata,
+        &candidate.url_context_metadata,
+        ctx.id_gen.as_ref(),
+        ctx.seen_source_urls,
+    );
+    for source in sources {
+        parts.push(LanguageModelV4StreamPart::Source(source));
     }
 
     // Handle finish
     if let Some(ref finish_str) = candidate.finish_reason {
-        let has_tool_calls = !tool_call_ids.is_empty();
+        // Exclude provider-executed tool calls from has_tool_calls check
+        let has_tool_calls = !ctx.tool_call_ids.is_empty();
         let finish_reason = crate::map_google_generative_ai_finish_reason::map_finish_reason(
             Some(finish_str),
             has_tool_calls,
@@ -981,31 +1349,64 @@ fn process_stream_chunk(
 
         let usage = convert_usage(response.usage_metadata.as_ref());
 
-        // Build provider metadata
-        let mut pm = HashMap::new();
-        if let Some(ref sr) = candidate.safety_ratings {
-            pm.insert("safetyRatings".to_string(), sr.clone());
-        }
-        if let Some(ref gm) = candidate.grounding_metadata
-            && let Ok(val) = serde_json::to_value(gm)
-        {
-            pm.insert("groundingMetadata".to_string(), val);
-        }
+        // Build provider metadata under namespace key — always include all 6 fields
+        let mut namespace_meta = HashMap::new();
+        namespace_meta.insert(
+            "promptFeedback".to_string(),
+            response.prompt_feedback.clone().unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "groundingMetadata".to_string(),
+            ctx.last_grounding_metadata
+                .as_ref()
+                .and_then(|gm| serde_json::to_value(gm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "urlContextMetadata".to_string(),
+            ctx.last_url_context_metadata
+                .as_ref()
+                .and_then(|ucm| serde_json::to_value(ucm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "safetyRatings".to_string(),
+            candidate.safety_ratings.clone().unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "usageMetadata".to_string(),
+            response
+                .usage_metadata
+                .as_ref()
+                .and_then(|um| serde_json::to_value(um).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "finishMessage".to_string(),
+            candidate
+                .finish_message
+                .as_ref()
+                .map(|fm| Value::String(fm.clone()))
+                .unwrap_or(Value::Null),
+        );
 
-        let provider_metadata = if pm.is_empty() {
-            None
-        } else {
-            Some(ProviderMetadata::from_map(pm))
+        let provider_metadata = {
+            let mut outer = HashMap::new();
+            outer.insert(
+                ctx.provider_options_name.to_string(),
+                serde_json::to_value(&namespace_meta).unwrap_or(Value::Null),
+            );
+            Some(ProviderMetadata::from_map(outer))
         };
 
         // Close open blocks before finish
-        if let Some(tid) = text_id.take() {
+        if let Some(tid) = ctx.text_id.take() {
             parts.push(LanguageModelV4StreamPart::TextEnd {
                 id: tid,
                 provider_metadata: None,
             });
         }
-        if let Some(rid) = reasoning_id.take() {
+        if let Some(rid) = ctx.reasoning_id.take() {
             parts.push(LanguageModelV4StreamPart::ReasoningEnd {
                 id: rid,
                 provider_metadata: None,

@@ -13,6 +13,7 @@ use vercel_ai_provider::NoSuchModelError;
 use vercel_ai_provider::ProviderV4;
 use vercel_ai_provider::VideoModelV4;
 
+use regex::Regex;
 use vercel_ai_provider_utils::load_api_key;
 use vercel_ai_provider_utils::without_trailing_slash;
 
@@ -27,7 +28,7 @@ use crate::google_generative_ai_video_model::GoogleGenerativeAIVideoModel;
 use crate::google_generative_ai_video_model::GoogleGenerativeAIVideoModelConfig;
 
 /// Default base URL for the Google Generative AI API.
-const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Default environment variable for the Google API key.
 const DEFAULT_API_KEY_ENV: &str = "GOOGLE_GENERATIVE_AI_API_KEY";
@@ -103,6 +104,29 @@ impl GoogleGenerativeAIProvider {
         let base_url = self.base_url.clone();
         let provider = self.provider_name.clone();
 
+        let supported_urls_base = base_url.clone();
+        let supported_urls_fn: Arc<dyn Fn() -> HashMap<String, Vec<Regex>> + Send + Sync> =
+            Arc::new(move || {
+                let escaped_base = regex::escape(&supported_urls_base);
+                let mut patterns = Vec::new();
+                // Google Generative Language "files" endpoint
+                if let Ok(re) = Regex::new(&format!("^{escaped_base}/files/.*$")) {
+                    patterns.push(re);
+                }
+                // YouTube URLs (public or unlisted videos)
+                if let Ok(re) =
+                    Regex::new(r"^https://(?:www\.)?youtube\.com/watch\?v=[\w-]+(?:&[\w=&.-]*)?$")
+                {
+                    patterns.push(re);
+                }
+                if let Ok(re) = Regex::new(r"^https://youtu\.be/[\w-]+(?:\?[\w=&.-]*)?$") {
+                    patterns.push(re);
+                }
+                let mut map = HashMap::new();
+                map.insert("*".to_string(), patterns);
+                map
+            });
+
         Ok(GoogleGenerativeAILanguageModel::new(
             model_id,
             GoogleGenerativeAILanguageModelConfig {
@@ -110,7 +134,7 @@ impl GoogleGenerativeAIProvider {
                 base_url,
                 headers: Arc::new(move || headers.clone()),
                 generate_id: Arc::new(|| vercel_ai_provider_utils::generate_id("google")),
-                supported_urls: None,
+                supported_urls: Some(supported_urls_fn),
                 client: None,
             },
         ))
@@ -173,8 +197,6 @@ impl GoogleGenerativeAIProvider {
                 base_url,
                 headers: Arc::new(move || headers.clone()),
                 client: None,
-                poll_interval: None,
-                poll_timeout: None,
             },
         ))
     }

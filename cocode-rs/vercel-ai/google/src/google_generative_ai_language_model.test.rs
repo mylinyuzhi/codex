@@ -13,7 +13,7 @@ fn make_model() -> GoogleGenerativeAILanguageModel {
         GoogleGenerativeAILanguageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             generate_id: Arc::new(|| generate_id("test")),
             supported_urls: None,
             client: None,
@@ -35,7 +35,7 @@ fn get_args_builds_basic_request() {
         GoogleGenerativeAILanguageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             generate_id: Arc::new(|| "test-id".to_string()),
             supported_urls: None,
             client: None,
@@ -48,7 +48,7 @@ fn get_args_builds_basic_request() {
     .with_temperature(0.5)
     .with_max_output_tokens(100);
 
-    let (body, _headers) = model.get_args(&options);
+    let (body, _headers, _warnings, _provider_name) = model.get_args(&options).unwrap();
 
     assert_eq!(body["generationConfig"]["temperature"], 0.5);
     assert_eq!(body["generationConfig"]["maxOutputTokens"], 100);
@@ -134,6 +134,7 @@ fn convert_response_parts_handles_text() {
     let parts = vec![GoogleResponsePart {
         text: Some("Hello".to_string()),
         thought: None,
+        thought_signature: None,
         function_call: None,
         inline_data: None,
         executable_code: None,
@@ -153,6 +154,7 @@ fn convert_response_parts_handles_thought() {
     let parts = vec![GoogleResponsePart {
         text: Some("thinking...".to_string()),
         thought: Some(true),
+        thought_signature: None,
         function_call: None,
         inline_data: None,
         executable_code: None,
@@ -176,15 +178,26 @@ fn extract_sources_deduplicates() {
                     uri: Some("https://example.com".to_string()),
                     title: Some("Example".to_string()),
                 }),
+                image: None,
+                retrieved_context: None,
+                maps: None,
             },
             GroundingChunk {
                 web: Some(GroundingWeb {
                     uri: Some("https://example.com".to_string()),
                     title: Some("Example Dupe".to_string()),
                 }),
+                image: None,
+                retrieved_context: None,
+                maps: None,
             },
         ]),
         web_search_queries: None,
+        image_search_queries: None,
+        retrieval_queries: None,
+        search_entry_point: None,
+        grounding_supports: None,
+        retrieval_metadata: None,
     });
     let counter = std::sync::atomic::AtomicU32::new(0);
     let id_gen = || {
@@ -210,7 +223,7 @@ fn supported_urls_with_custom_fn() {
         GoogleGenerativeAILanguageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             generate_id: Arc::new(|| "test-id".to_string()),
             supported_urls: Some(Arc::new(|| {
                 let mut m = HashMap::new();
