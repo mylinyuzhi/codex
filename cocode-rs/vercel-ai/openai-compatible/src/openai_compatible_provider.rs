@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::EmbeddingModelV4;
 use vercel_ai_provider::ImageModelV4;
 use vercel_ai_provider::LanguageModelV4;
@@ -10,6 +11,7 @@ use vercel_ai_provider::ProviderV4;
 use vercel_ai_provider::errors::LoadAPIKeyError;
 use vercel_ai_provider::errors::NoSuchModelError;
 use vercel_ai_provider::provider::v4::FromEnvProvider;
+use vercel_ai_provider_utils::ResponseHandler;
 use vercel_ai_provider_utils::load_api_key;
 
 use crate::chat::OpenAICompatibleChatLanguageModel;
@@ -17,6 +19,7 @@ use crate::completion::OpenAICompatibleCompletionLanguageModel;
 use crate::embedding::OpenAICompatibleEmbeddingModel;
 use crate::image::OpenAICompatibleImageModel;
 use crate::openai_compatible_config::OpenAICompatibleConfig;
+use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 use crate::openai_compatible_provider_settings::OpenAICompatibleProviderSettings;
 
 /// OpenAI-compatible multi-model provider.
@@ -34,6 +37,7 @@ pub struct OpenAICompatibleProvider {
     transform_request_body:
         Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
     metadata_extractor: Option<Arc<dyn crate::metadata_extractor::MetadataExtractor>>,
+    error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
 }
 
 impl OpenAICompatibleProvider {
@@ -66,6 +70,16 @@ impl OpenAICompatibleProvider {
                 h.insert("Authorization".into(), format!("Bearer {key}"));
             }
 
+            // User-Agent suffix (matches TS: ai-sdk/openai-compatible/VERSION)
+            let version = env!("CARGO_PKG_VERSION");
+            let ua = format!("ai-sdk/openai-compatible/{version}");
+            h.entry("User-Agent".into())
+                .and_modify(|existing| {
+                    existing.push(' ');
+                    existing.push_str(&ua);
+                })
+                .or_insert(ua);
+
             // Merge custom headers (custom overrides default)
             for (k, v) in &custom_headers {
                 h.insert(k.clone(), v.clone());
@@ -80,14 +94,22 @@ impl OpenAICompatibleProvider {
             headers,
             query_params: settings.query_params,
             client: settings.client,
-            include_usage: settings.include_usage.unwrap_or(true),
+            include_usage: settings.include_usage.unwrap_or(false),
             supports_structured_outputs: settings.supports_structured_outputs.unwrap_or(false),
             transform_request_body: settings.transform_request_body,
             metadata_extractor: settings.metadata_extractor,
+            error_handler: settings.error_handler,
         }
     }
 
     fn make_config(&self, sub_provider: &str) -> Arc<OpenAICompatibleConfig> {
+        let error_handler: Arc<dyn ResponseHandler<AISdkError>> =
+            self.error_handler.clone().unwrap_or_else(|| {
+                Arc::new(OpenAICompatibleFailedResponseHandler::new(
+                    &self.provider_name,
+                ))
+            });
+
         Arc::new(OpenAICompatibleConfig {
             provider: format!("{}.{sub_provider}", self.provider_name),
             base_url: self.base_url.clone(),
@@ -98,6 +120,8 @@ impl OpenAICompatibleProvider {
             supports_structured_outputs: self.supports_structured_outputs,
             transform_request_body: self.transform_request_body.clone(),
             metadata_extractor: self.metadata_extractor.clone(),
+            supported_urls: None,
+            error_handler,
         })
     }
 

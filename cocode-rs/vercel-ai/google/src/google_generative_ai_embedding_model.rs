@@ -179,6 +179,7 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
                     total_tokens: 0,
                 },
                 warnings: Vec::new(),
+                provider_metadata: None,
                 raw_response: None,
             })
         } else {
@@ -237,6 +238,7 @@ impl EmbeddingModelV4 for GoogleGenerativeAIEmbeddingModel {
                     total_tokens: 0,
                 },
                 warnings: Vec::new(),
+                provider_metadata: None,
                 raw_response: None,
             })
         }

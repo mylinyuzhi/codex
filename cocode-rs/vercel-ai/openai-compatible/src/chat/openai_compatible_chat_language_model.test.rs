@@ -17,6 +17,10 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         supports_structured_outputs: false,
         transform_request_body: None,
         metadata_extractor: None,
+        supported_urls: None,
+        error_handler: Arc::new(
+            crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
+        ),
     })
 }
 
@@ -91,6 +95,10 @@ fn get_args_applies_transform_body() {
             body
         })),
         metadata_extractor: None,
+        supported_urls: None,
+        error_handler: Arc::new(
+            crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
+        ),
     });
 
     let model = OpenAICompatibleChatLanguageModel::new("test-model", config);
@@ -129,6 +137,10 @@ fn config_url_with_query_params() {
         supports_structured_outputs: false,
         transform_request_body: None,
         metadata_extractor: None,
+        supported_urls: None,
+        error_handler: Arc::new(
+            crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("test"),
+        ),
     };
     let url = config.url("/chat/completions");
     assert!(url.starts_with("https://api.example.com/v1/chat/completions?"));

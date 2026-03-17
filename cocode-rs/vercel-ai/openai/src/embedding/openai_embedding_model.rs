@@ -112,6 +112,7 @@ impl EmbeddingModelV4 for OpenAIEmbeddingModel {
             embeddings,
             usage,
             warnings: Vec::new(),
+            provider_metadata: None,
             raw_response: serde_json::to_value(&body).ok(),
         })
     }

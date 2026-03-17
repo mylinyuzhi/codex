@@ -56,6 +56,7 @@ async fn test_embed_raw_response_propagation() {
                     embeddings,
                     usage: EmbeddingUsage::new(count as u64),
                     warnings: Vec::new(),
+                    provider_metadata: None,
                     raw_response: Some(serde_json::json!({"model": "test"})),
                 })
             })

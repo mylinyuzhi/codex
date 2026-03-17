@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Response from the legacy Completions API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAICompatibleCompletionResponse {
     pub id: Option<String>,
     pub model: Option<String>,
@@ -11,7 +11,7 @@ pub struct OpenAICompatibleCompletionResponse {
     pub usage: Option<OpenAICompatibleCompletionUsage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAICompatibleCompletionChoice {
     pub text: Option<String>,
     pub index: Option<u32>,

@@ -1,9 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use regex::Regex;
 use serde_json::Value;
+use vercel_ai_provider::AISdkError;
+use vercel_ai_provider_utils::ResponseHandler;
 
 use crate::metadata_extractor::MetadataExtractor;
+
+/// Callback that returns supported URL patterns by MIME type.
+pub type SupportedUrlsFn = dyn Fn() -> HashMap<String, Vec<Regex>> + Send + Sync;
 
 /// Shared configuration passed to each OpenAI-compatible model instance.
 pub struct OpenAICompatibleConfig {
@@ -25,6 +31,11 @@ pub struct OpenAICompatibleConfig {
     pub transform_request_body: Option<Arc<dyn Fn(Value) -> Value + Send + Sync>>,
     /// Optional metadata extractor for provider-specific response metadata.
     pub metadata_extractor: Option<Arc<dyn MetadataExtractor>>,
+    /// Optional supported URL patterns by MIME type.
+    /// If `None`, defaults to empty (no URL support). TS default is also empty `{}`.
+    pub supported_urls: Option<Arc<SupportedUrlsFn>>,
+    /// Error response handler for failed API calls.
+    pub error_handler: Arc<dyn ResponseHandler<AISdkError>>,
 }
 
 impl OpenAICompatibleConfig {

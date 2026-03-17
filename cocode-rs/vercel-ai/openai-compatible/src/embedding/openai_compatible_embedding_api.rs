@@ -7,6 +7,9 @@ pub struct OpenAICompatibleEmbeddingResponse {
     pub data: Vec<OpenAICompatibleEmbeddingData>,
     pub model: Option<String>,
     pub usage: Option<OpenAICompatibleEmbeddingUsage>,
+    /// Provider metadata from the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// A single embedding in the response.
