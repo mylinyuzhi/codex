@@ -236,6 +236,102 @@ pub async fn post_stream_to_api_with_client(
     Ok(Box::pin(response.bytes_stream()))
 }
 
+/// API response wrapper that includes HTTP response headers.
+pub struct ApiResponse<T> {
+    /// The parsed response value.
+    pub value: T,
+    /// HTTP response headers.
+    pub headers: HashMap<String, String>,
+}
+
+/// Extract response headers into a HashMap.
+fn extract_response_headers(response: &Response) -> HashMap<String, String> {
+    response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+/// POST JSON data to an API endpoint with a custom client, returning response headers.
+pub async fn post_json_to_api_with_client_and_headers<T>(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    success_handler: impl ResponseHandler<T>,
+    error_handler: impl ResponseHandler<AISdkError>,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+) -> Result<ApiResponse<T>, AISdkError> {
+    check_cancelled(&abort_signal)?;
+
+    let client = get_client(&client);
+    let mut request = client.post(url).json(body);
+
+    if let Some(h) = headers {
+        for (key, value) in h {
+            request = request.header(&key, &value);
+        }
+    }
+
+    let response = request.send().await.map_err(|e| {
+        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+    })?;
+
+    check_cancelled(&abort_signal)?;
+
+    let response_headers = extract_response_headers(&response);
+    let value =
+        handle_response(response, url, body.clone(), success_handler, error_handler).await?;
+    Ok(ApiResponse {
+        value,
+        headers: response_headers,
+    })
+}
+
+/// POST and return a stream with a custom client, also returning response headers.
+pub async fn post_stream_to_api_with_client_and_headers(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+) -> Result<(ByteStream, HashMap<String, String>), AISdkError> {
+    check_cancelled(&abort_signal)?;
+
+    let client = get_client(&client);
+    let mut request = client.post(url).json(body);
+
+    if let Some(h) = headers {
+        for (key, value) in h {
+            request = request.header(&key, &value);
+        }
+    }
+
+    let response = request.send().await.map_err(|e| {
+        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+    })?;
+
+    let status = response.status();
+    let response_headers = extract_response_headers(&response);
+
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(api_error_to_sdk_error(
+            APICallError::new(format!("HTTP {status}: {body}"), url)
+                .with_status(status.as_u16())
+                .with_response_body(body),
+        ));
+    }
+
+    Ok((Box::pin(response.bytes_stream()), response_headers))
+}
+
 /// Error handler trait for API errors.
 #[async_trait]
 pub trait ErrorHandler: Send + Sync {

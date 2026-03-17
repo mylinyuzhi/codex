@@ -14,10 +14,9 @@ use vercel_ai_provider::Warning;
 use vercel_ai_provider::image_model::v4::ImageModelV4Response;
 use vercel_ai_provider::image_model::v4::ImageModelV4Usage;
 use vercel_ai_provider_utils::JsonResponseHandler;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
 
 use crate::openai_compatible_config::OpenAICompatibleConfig;
-use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 
 use super::openai_compatible_image_api::OpenAICompatibleImageResponse;
 use super::openai_compatible_image_options::extract_image_options;
@@ -119,16 +118,20 @@ impl ImageModelV4 for OpenAICompatibleImageModel {
         let url = self.config.url("/images/generations");
         let headers = self.config.get_headers();
 
-        let response: OpenAICompatibleImageResponse = post_json_to_api_with_client(
-            &url,
-            Some(headers),
-            &body,
-            JsonResponseHandler::new(),
-            OpenAICompatibleFailedResponseHandler::new(provider_name),
-            options.abort_signal,
-            self.config.client.clone(),
-        )
-        .await?;
+        let api_response =
+            post_json_to_api_with_client_and_headers::<OpenAICompatibleImageResponse>(
+                &url,
+                Some(headers),
+                &body,
+                JsonResponseHandler::new(),
+                self.config.error_handler.clone(),
+                options.abort_signal,
+                self.config.client.clone(),
+            )
+            .await?;
+
+        let response = api_response.value;
+        let response_headers = api_response.headers;
 
         let images: Vec<GeneratedImage> = response
             .data
@@ -166,7 +169,7 @@ impl ImageModelV4 for OpenAICompatibleImageModel {
             response: ImageModelV4Response {
                 timestamp,
                 model_id: Some(self.model_id.clone()),
-                headers: None,
+                headers: Some(response_headers),
             },
             usage,
         })

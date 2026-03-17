@@ -41,7 +41,8 @@ pub struct OpenAICompatibleChatMessage {
 /// A tool call in a chat completion response.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAICompatibleChatToolCall {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     #[serde(rename = "type")]
     pub tool_type: Option<String>,
     pub function: OpenAICompatibleChatFunctionCall,
@@ -137,7 +138,7 @@ pub struct OpenAICompatibleChatChunkDelta {
 /// A partial tool call within a streaming chunk.
 #[derive(Debug, Deserialize)]
 pub struct OpenAICompatibleChatChunkToolCall {
-    pub index: u32,
+    pub index: Option<u32>,
     pub id: Option<String>,
     #[serde(rename = "type")]
     pub tool_type: Option<String>,

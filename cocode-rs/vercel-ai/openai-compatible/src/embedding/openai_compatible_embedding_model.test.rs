@@ -15,6 +15,10 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         supports_structured_outputs: false,
         transform_request_body: None,
         metadata_extractor: None,
+        supported_urls: None,
+        error_handler: Arc::new(
+            crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
+        ),
     })
 }
 

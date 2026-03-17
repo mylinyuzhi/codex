@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::errors::AISdkError;
+use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
 use crate::shared::Warning;
 
@@ -132,6 +133,8 @@ pub struct EmbeddingModelV4EmbedResult {
     pub usage: EmbeddingUsage,
     /// Warnings from the provider.
     pub warnings: Vec<Warning>,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
     /// The raw response (for debugging).
     pub raw_response: Option<serde_json::Value>,
 }
@@ -143,6 +146,7 @@ impl EmbeddingModelV4EmbedResult {
             embeddings,
             usage,
             warnings: Vec::new(),
+            provider_metadata: None,
             raw_response: None,
         }
     }

@@ -69,6 +69,7 @@ pub mod without_trailing_slash;
 
 // Re-export main utilities
 pub use api::ApiError;
+pub use api::ApiResponse;
 pub use api::ByteStream;
 pub use api::DefaultErrorHandler;
 pub use api::ErrorHandler;
@@ -76,8 +77,10 @@ pub use api::get_from_api;
 pub use api::get_from_api_with_client;
 pub use api::post_json_to_api;
 pub use api::post_json_to_api_with_client;
+pub use api::post_json_to_api_with_client_and_headers;
 pub use api::post_stream_to_api;
 pub use api::post_stream_to_api_with_client;
+pub use api::post_stream_to_api_with_client_and_headers;
 
 pub use delay::delay;
 pub use delay::parse_retry_after;

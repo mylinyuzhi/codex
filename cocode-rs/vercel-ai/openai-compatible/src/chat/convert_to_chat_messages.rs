@@ -1,9 +1,11 @@
 use serde_json::Value;
 use serde_json::json;
+use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::DataContent;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
+use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::UserContentPart;
@@ -14,10 +16,10 @@ use vercel_ai_provider::Warning;
 /// Unlike the OpenAI-specific converter, this always uses `role: "system"` (no Developer mode)
 /// and includes `reasoning_content` in assistant messages.
 ///
-/// Returns `(messages, warnings)`.
+/// Returns `Ok((messages, warnings))`.
 pub fn convert_to_openai_compatible_chat_messages(
     prompt: &LanguageModelV4Prompt,
-) -> (Vec<Value>, Vec<Warning>) {
+) -> Result<(Vec<Value>, Vec<Warning>), AISdkError> {
     let mut messages = Vec::new();
     let warnings = Vec::new();
 
@@ -25,34 +27,50 @@ pub fn convert_to_openai_compatible_chat_messages(
         match msg {
             LanguageModelV4Message::System {
                 content,
-                provider_options: _,
+                provider_options,
             } => {
-                messages.push(json!({ "role": "system", "content": content }));
+                let mut msg = json!({ "role": "system", "content": content });
+                for (k, v) in get_openai_metadata(provider_options) {
+                    msg[k] = v;
+                }
+                messages.push(msg);
             }
 
             LanguageModelV4Message::User {
                 content,
                 provider_options,
             } => {
-                let parts = convert_user_parts(content, provider_options);
+                let parts = convert_user_parts(content, provider_options)?;
                 // Single text part can be simplified to just a string
                 if parts.len() == 1 && parts[0].get("type").and_then(|t| t.as_str()) == Some("text")
                 {
-                    messages.push(json!({
+                    let mut msg = json!({
                         "role": "user",
                         "content": parts[0]["text"]
-                    }));
+                    });
+                    // For single text, spread the part's metadata on the message
+                    if let Some(UserContentPart::Text(text_part)) = content.first() {
+                        for (k, v) in get_part_metadata(&text_part.provider_metadata) {
+                            msg[k] = v;
+                        }
+                    }
+                    messages.push(msg);
                 } else {
-                    messages.push(json!({
+                    let mut msg = json!({
                         "role": "user",
                         "content": parts
-                    }));
+                    });
+                    // For multi-part, spread message-level metadata on the message
+                    for (k, v) in get_openai_metadata(provider_options) {
+                        msg[k] = v;
+                    }
+                    messages.push(msg);
                 }
             }
 
             LanguageModelV4Message::Assistant {
                 content,
-                provider_options: _,
+                provider_options,
             } => {
                 let (text, tool_calls, reasoning_content) = convert_assistant_parts(content);
                 let mut msg = json!({ "role": "assistant" });
@@ -66,6 +84,9 @@ pub fn convert_to_openai_compatible_chat_messages(
                 if let Some(reasoning) = reasoning_content {
                     msg["reasoning_content"] = Value::String(reasoning);
                 }
+                for (k, v) in get_openai_metadata(provider_options) {
+                    msg[k] = v;
+                }
                 messages.push(msg);
             }
 
@@ -77,11 +98,15 @@ pub fn convert_to_openai_compatible_chat_messages(
                     match part {
                         ToolContentPart::ToolResult(result) => {
                             let output = serialize_tool_result_content(&result.output);
-                            messages.push(json!({
+                            let mut msg = json!({
                                 "role": "tool",
                                 "tool_call_id": result.tool_call_id,
                                 "content": output,
-                            }));
+                            });
+                            for (k, v) in get_part_metadata(&result.provider_metadata) {
+                                msg[k] = v;
+                            }
+                            messages.push(msg);
                         }
                         ToolContentPart::ToolApprovalResponse(_) => {
                             // Approval responses are not supported in Chat API
@@ -92,14 +117,34 @@ pub fn convert_to_openai_compatible_chat_messages(
         }
     }
 
-    (messages, warnings)
+    Ok((messages, warnings))
+}
+
+/// Extract provider metadata from the "openaiCompatible" key in provider options.
+fn get_openai_metadata(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> serde_json::Map<String, Value> {
+    provider_options
+        .as_ref()
+        .and_then(|opts| opts.0.get("openaiCompatible"))
+        .map(|inner| inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// Extract provider metadata from the "openaiCompatible" key in a content part's provider metadata.
+fn get_part_metadata(pm: &Option<ProviderMetadata>) -> serde_json::Map<String, Value> {
+    pm.as_ref()
+        .and_then(|meta| meta.0.get("openaiCompatible"))
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Convert user content parts to OpenAI-compatible format.
 fn convert_user_parts(
     parts: &[UserContentPart],
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> Vec<Value> {
+) -> Result<Vec<Value>, AISdkError> {
     // Extract imageDetail from any provider options (generic key lookup)
     let image_detail = provider_options.as_ref().and_then(|opts| {
         // Try to find imageDetail in any provider's options
@@ -114,10 +159,15 @@ fn convert_user_parts(
         .iter()
         .map(|part| match part {
             UserContentPart::Text(text_part) => {
-                json!({ "type": "text", "text": text_part.text })
+                let mut val = json!({ "type": "text", "text": text_part.text });
+                for (k, v) in get_part_metadata(&text_part.provider_metadata) {
+                    val[k] = v;
+                }
+                Ok(val)
             }
             UserContentPart::File(file_part) => {
                 let media_type = &file_part.media_type;
+                let part_meta = get_part_metadata(&file_part.provider_metadata);
 
                 if media_type.starts_with("image/") {
                     // #16: Convert image/* to image/jpeg as fallback
@@ -131,45 +181,66 @@ fn convert_user_parts(
                     if let Some(ref detail) = image_detail {
                         image_url["detail"] = Value::String(detail.clone());
                     }
-                    json!({ "type": "image_url", "image_url": image_url })
-                } else if media_type == "audio/wav"
-                    || media_type == "audio/mp3"
-                    || media_type == "audio/mpeg"
-                {
-                    // #16: audio/mpeg maps to mp3 format
-                    let b64 = data_content_to_base64(&file_part.data);
-                    let format = if media_type == "audio/wav" {
-                        "wav"
-                    } else {
-                        "mp3"
+                    let mut val = json!({ "type": "image_url", "image_url": image_url });
+                    for (k, v) in part_meta {
+                        val[k] = v;
+                    }
+                    Ok(val)
+                } else if media_type.starts_with("audio/") {
+                    // Audio parts with URLs are not supported
+                    if matches!(file_part.data, DataContent::Url(_)) {
+                        return Err(AISdkError::new(
+                            "Unsupported functionality: audio file parts with URLs",
+                        ));
+                    }
+                    let format = match media_type.as_str() {
+                        "audio/wav" => "wav",
+                        "audio/mp3" | "audio/mpeg" => "mp3",
+                        _ => {
+                            return Err(AISdkError::new(format!(
+                                "Unsupported functionality: audio media type {media_type}"
+                            )));
+                        }
                     };
-                    json!({
+                    let b64 = data_content_to_base64(&file_part.data);
+                    let mut val = json!({
                         "type": "input_audio",
                         "input_audio": { "data": b64, "format": format }
-                    })
-                } else if media_type.starts_with("text/") {
-                    // #17: Decode text/* file parts as text content
-                    let text = decode_text_data(&file_part.data);
-                    json!({ "type": "text", "text": text })
+                    });
+                    for (k, v) in part_meta {
+                        val[k] = v;
+                    }
+                    Ok(val)
                 } else if media_type == "application/pdf" {
-                    // #18: Include filename for PDF
+                    // PDF parts with URLs are not supported
+                    if matches!(file_part.data, DataContent::Url(_)) {
+                        return Err(AISdkError::new(
+                            "Unsupported functionality: PDF file parts with URLs",
+                        ));
+                    }
                     let b64 = data_content_to_base64(&file_part.data);
-                    json!({
+                    let mut val = json!({
                         "type": "file",
                         "file": {
                             "filename": "document.pdf",
                             "file_data": format!("data:{media_type};base64,{b64}"),
                         }
-                    })
+                    });
+                    for (k, v) in part_meta {
+                        val[k] = v;
+                    }
+                    Ok(val)
+                } else if media_type.starts_with("text/") {
+                    let text = decode_text_data(&file_part.data);
+                    let mut val = json!({ "type": "text", "text": text });
+                    for (k, v) in part_meta {
+                        val[k] = v;
+                    }
+                    Ok(val)
                 } else {
-                    // Generic file
-                    let b64 = data_content_to_base64(&file_part.data);
-                    json!({
-                        "type": "file",
-                        "file": {
-                            "file_data": format!("data:{media_type};base64,{b64}"),
-                        }
-                    })
+                    Err(AISdkError::new(format!(
+                        "Unsupported functionality: file part media type {media_type}"
+                    )))
                 }
             }
         })
@@ -199,7 +270,13 @@ fn convert_assistant_parts(
                     }
                 });
 
+                // Spread openaiCompatible part metadata
+                for (k, v) in get_part_metadata(&tc.provider_metadata) {
+                    tool_call[k] = v;
+                }
+
                 // #4: Include thought_signature as extra_content for Google
+                // (after partMetadata so it overrides if conflicting)
                 if let Some(ref pm) = tc.provider_metadata
                     && let Some(google) = pm.0.get("google")
                     && let Some(ts) = google.get("thoughtSignature").and_then(|v| v.as_str())
@@ -249,17 +326,8 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
             reason.clone().unwrap_or_else(|| "Execution denied".into())
         }
         ToolResultContent::Content { value, .. } => {
-            // Serialize content parts to a string representation
-            let parts: Vec<String> = value
-                .iter()
-                .filter_map(|part| match part {
-                    vercel_ai_provider::ToolResultContentPart::Text { text, .. } => {
-                        Some(text.clone())
-                    }
-                    _ => None,
-                })
-                .collect();
-            parts.join("\n")
+            // Serialize the full content value as JSON (matches TS JSON.stringify behavior)
+            serde_json::to_string(value).unwrap_or_default()
         }
     }
 }

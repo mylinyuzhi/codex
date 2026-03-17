@@ -124,6 +124,7 @@ impl EmbeddingModelV4 for OpenAIEmbeddingModel {
             embeddings,
             usage,
             warnings: Vec::new(),
+            provider_metadata: None,
             raw_response,
         })
     }
