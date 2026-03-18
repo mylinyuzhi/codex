@@ -5,13 +5,18 @@
 
 use std::path::Path;
 
-/// Sensitive file path patterns (matching Claude Code v2.1.7).
+/// Sensitive file path patterns (matching Claude Code v2.1.76).
 const SENSITIVE_FILE_PATTERNS: &[&str] = &[
     // Credentials and keys
     ".env",
     "*.pem",
     "*.key",
     "credentials.json",
+    // Keystore formats
+    "*.keystore",
+    "*.jks",
+    "*.p12",
+    "*.pfx",
     // Shell configuration
     ".bashrc",
     ".zshrc",
@@ -25,6 +30,7 @@ const SENSITIVE_FILE_PATTERNS: &[&str] = &[
     // SSH
     ".ssh/config",
     ".ssh/authorized_keys",
+    ".ssh/known_hosts",
     // Tool configuration
     ".mcp.json",
     ".claude/settings.json",
@@ -72,6 +78,21 @@ pub fn is_sensitive_file(path: &Path) -> bool {
 
     // Check .ssh/id_*
     if path_str.contains(".ssh/id_") {
+        return true;
+    }
+
+    // SSH key name suffixes (e.g., mykey_rsa, deploy_ed25519)
+    let fname = filename.as_ref();
+    if fname.ends_with("_rsa")
+        || fname.ends_with("_dsa")
+        || fname.ends_with("_ecdsa")
+        || fname.ends_with("_ed25519")
+    {
+        return true;
+    }
+
+    // known_hosts outside .ssh/ (the .ssh/known_hosts pattern catches the common case)
+    if fname == "known_hosts" {
         return true;
     }
 

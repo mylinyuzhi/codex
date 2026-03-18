@@ -446,3 +446,215 @@ fn test_extract_prefix_pattern_complex_command() {
         Some("cargo *".to_string())
     );
 }
+
+// --- PostHookAction tests ---
+
+#[test]
+fn test_post_hook_action_replace_output_is_not_error() {
+    let original = Ok(ToolOutput::text("original"));
+    let replacement = PostHookAction::ReplaceOutput(ToolOutput::text("hook-replaced"));
+
+    let result = finalize_tool_result(
+        original,
+        replacement,
+        "test_tool",
+        "call-1",
+        std::time::Instant::now(),
+        &None,
+    );
+
+    let output = result.expect("ReplaceOutput should produce Ok");
+    assert!(
+        !output.is_error,
+        "ReplaceOutput should not be marked as error"
+    );
+    match &output.content {
+        cocode_protocol::ToolResultContent::Text(t) => assert_eq!(t, "hook-replaced"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[test]
+fn test_post_hook_action_reject_produces_error() {
+    let original = Ok(ToolOutput::text("original"));
+    let rejection = PostHookAction::Reject("denied by hook".to_string());
+
+    let result = finalize_tool_result(
+        original,
+        rejection,
+        "test_tool",
+        "call-1",
+        std::time::Instant::now(),
+        &None,
+    );
+
+    let output = result.expect("Reject wraps in Ok(error)");
+    assert!(output.is_error, "Reject should produce an error output");
+}
+
+#[test]
+fn test_post_hook_action_none_preserves_result() {
+    let original = Ok(ToolOutput::text("original"));
+    let result = finalize_tool_result(
+        original,
+        PostHookAction::None,
+        "test_tool",
+        "call-1",
+        std::time::Instant::now(),
+        &None,
+    );
+
+    let output = result.expect("None should preserve original");
+    match &output.content {
+        cocode_protocol::ToolResultContent::Text(t) => assert_eq!(t, "original"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[test]
+fn test_post_hook_action_stop_continuation_preserves_result() {
+    let original = Ok(ToolOutput::text("original output"));
+    let result = finalize_tool_result(
+        original,
+        PostHookAction::StopContinuation("hook requested stop".to_string()),
+        "test_tool",
+        "call-1",
+        std::time::Instant::now(),
+        &None,
+    );
+
+    let output = result.expect("StopContinuation should preserve original result");
+    assert!(
+        !output.is_error,
+        "StopContinuation should not mark output as error"
+    );
+    match &output.content {
+        cocode_protocol::ToolResultContent::Text(t) => assert_eq!(t, "original output"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+// --- approval_check_value tests ---
+
+#[test]
+fn test_approval_check_value_bash_extracts_command() {
+    let input = serde_json::json!({"command": "git push origin main"});
+    let value = approval_check_value("Bash", &input, "Bash: git push origin main");
+    assert_eq!(value, "git push origin main");
+}
+
+#[test]
+fn test_approval_check_value_file_tool_extracts_path() {
+    let input = serde_json::json!({"file_path": "/tmp/test.rs"});
+    let value = approval_check_value("Edit", &input, "Edit: /tmp/test.rs");
+    assert_eq!(value, "/tmp/test.rs");
+}
+
+#[test]
+fn test_approval_check_value_fallback_to_description() {
+    let input = serde_json::json!({"query": "search term"});
+    let value = approval_check_value("WebSearch", &input, "Execute tool: WebSearch");
+    assert_eq!(value, "Execute tool: WebSearch");
+}
+
+#[test]
+fn test_approval_wildcard_matches_raw_command() {
+    use crate::context::ApprovalStore;
+
+    let mut store = ApprovalStore::new();
+    // Simulate user approving "git *" prefix pattern
+    store.approve_pattern("Bash", "git *");
+
+    // The raw command value (not the prefixed description) should match
+    let raw_command = "git push origin main";
+    assert!(
+        store.is_approved("Bash", raw_command),
+        "Wildcard 'git *' should match raw command 'git push origin main'"
+    );
+
+    // The old buggy description should NOT match
+    let description = "Bash: git push origin main";
+    assert!(
+        !store.is_approved("Bash", description),
+        "Wildcard 'git *' should NOT match prefixed description"
+    );
+}
+
+// --- drain_one_active tests ---
+
+/// A tool with configurable delay for testing drain_one_active ordering.
+struct DelayTool {
+    name: &'static str,
+}
+
+#[async_trait]
+impl Tool for DelayTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn description(&self) -> &str {
+        "A tool with configurable delay"
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object", "properties": {"delay_ms": {"type": "integer"}}})
+    }
+    fn concurrency_safety(&self) -> ConcurrencySafety {
+        ConcurrencySafety::Safe
+    }
+    async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
+        let delay_ms = input["delay_ms"].as_u64().unwrap_or(10);
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        Ok(ToolOutput::text(format!("done after {delay_ms}ms")))
+    }
+}
+
+#[tokio::test]
+async fn test_drain_one_active_picks_fastest() {
+    let mut registry = ToolRegistry::new();
+    registry.register(DelayTool { name: "delay_tool" });
+
+    let config = ExecutorConfig {
+        max_concurrency: 10,
+        ..ExecutorConfig::default()
+    };
+    let executor = StreamingToolExecutor::new(Arc::new(registry), config, None);
+
+    // Start a slow (200ms) and a fast (5ms) tool
+    let slow = ToolCall::new("slow", "delay_tool", serde_json::json!({"delay_ms": 200}));
+    let fast = ToolCall::new("fast", "delay_tool", serde_json::json!({"delay_ms": 5}));
+
+    executor.on_tool_complete(slow).await;
+    executor.on_tool_complete(fast).await;
+
+    assert_eq!(executor.active_count().await, 2);
+
+    // drain_one_active should complete the fast one first
+    executor.drain_one_active().await;
+
+    // One completed, one still active
+    let completed = executor.completed_results.lock().await;
+    assert_eq!(completed.len(), 1, "One task should have completed");
+    assert_eq!(
+        completed[0].call_id, "fast",
+        "The faster task should complete first"
+    );
+    drop(completed);
+
+    assert_eq!(
+        executor.active_count().await,
+        1,
+        "One should still be active"
+    );
+
+    // Drain the remaining — returns ALL completed results (fast + slow)
+    let results = executor.drain().await;
+    assert_eq!(
+        results.len(),
+        2,
+        "Both tasks should be in completed results"
+    );
+    assert!(
+        results.iter().any(|r| r.call_id == "slow"),
+        "Slow task should be in results"
+    );
+}

@@ -79,3 +79,38 @@ fn test_tool_properties() {
     assert_eq!(tool.name(), cocode_protocol::ToolName::Read.as_str());
     assert!(tool.is_concurrent_safe());
 }
+
+#[test]
+fn test_parse_page_span() {
+    assert_eq!(parse_page_span("1-5"), Some(5));
+    assert_eq!(parse_page_span("3-15"), Some(13));
+    assert_eq!(parse_page_span("1-20"), Some(20));
+    assert_eq!(parse_page_span("1-25"), Some(25));
+    assert_eq!(parse_page_span("7"), Some(1));
+    assert_eq!(parse_page_span("abc"), None);
+    assert_eq!(parse_page_span("1-2-3"), None);
+}
+
+#[tokio::test]
+async fn test_pdf_over_20_pages_requested_returns_error() {
+    // Create a fake PDF file (just needs .pdf extension for the code path)
+    let dir = tempfile::tempdir().unwrap();
+    let pdf_path = dir.path().join("test.pdf");
+    std::fs::write(&pdf_path, b"%PDF-1.4 fake").unwrap();
+
+    let tool = ReadTool::new();
+    let mut ctx = make_context();
+
+    let input = serde_json::json!({
+        "file_path": pdf_path.to_str().unwrap(),
+        "pages": "1-25"
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("20"),
+        "Error should mention 20-page limit: {err_msg}"
+    );
+}

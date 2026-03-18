@@ -44,7 +44,7 @@ impl ApplyPatchTool {
 
     /// Get the Function variant tool definition (JSON schema with "input" field).
     pub fn function_definition() -> ToolDefinition {
-        ToolDefinition::full(
+        ToolDefinition::with_description(
             cocode_protocol::ToolName::ApplyPatch.as_str(),
             prompts::APPLY_PATCH_DESCRIPTION,
             serde_json::json!({
@@ -61,17 +61,28 @@ impl ApplyPatchTool {
     }
 
     /// Get the Freeform variant tool definition (custom tool with Lark grammar).
+    ///
+    /// The custom format is stored in `provider_options` under the `"openai"` provider
+    /// key with a `"custom_format"` entry, for providers that support custom tool types.
     pub fn freeform_definition() -> ToolDefinition {
         let lark_grammar = include_str!("tool_apply_patch.lark");
-        ToolDefinition::custom(
-            cocode_protocol::ToolName::ApplyPatch.as_str(),
-            prompts::APPLY_PATCH_FREEFORM_DESCRIPTION,
-            serde_json::json!({
-                "type": "grammar",
-                "syntax": "lark",
-                "definition": lark_grammar
-            }),
-        )
+        let custom_format = serde_json::json!({
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": lark_grammar
+        });
+        let mut openai_opts = std::collections::HashMap::new();
+        openai_opts.insert("custom_format".to_string(), custom_format);
+        let mut provider_options = cocode_api::ProviderOptions::default();
+        provider_options.set("openai", openai_opts);
+        ToolDefinition {
+            name: cocode_protocol::ToolName::ApplyPatch.as_str().to_string(),
+            description: Some(prompts::APPLY_PATCH_FREEFORM_DESCRIPTION.to_string()),
+            input_schema: serde_json::Value::Null,
+            input_examples: None,
+            strict: None,
+            provider_options: Some(provider_options),
+        }
     }
 }
 
@@ -104,6 +115,10 @@ impl Tool for ApplyPatchTool {
 
     fn is_read_only(&self) -> bool {
         false
+    }
+
+    fn is_edit_tool(&self) -> bool {
+        true
     }
 
     #[allow(clippy::unwrap_used)]

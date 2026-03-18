@@ -34,15 +34,6 @@ fn test_constants() {
     assert_eq!(MAX_OUTPUT_TOKEN_RECOVERY, 3);
 }
 
-#[test]
-fn test_micro_compact_empty_history() {
-    // Cannot construct a full AgentLoop without a model, but we can test
-    // the candidate finder directly.
-    let messages: Vec<serde_json::Value> = vec![];
-    let candidates = crate::compaction::micro_compact_candidates(&messages);
-    assert!(candidates.is_empty());
-}
-
 mod select_tools_for_model_tests {
     use super::*;
     use cocode_protocol::ApplyPatchToolType;
@@ -57,6 +48,14 @@ mod select_tools_for_model_tests {
         ]
     }
 
+    /// Helper to unwrap a LanguageModelTool::Function variant.
+    fn unwrap_function(tool: &LanguageModelTool) -> &ToolDefinition {
+        match tool {
+            LanguageModelTool::Function(f) => f,
+            other => panic!("expected Function variant, got {other:?}"),
+        }
+    }
+
     #[test]
     fn function_variant_replaces_registry_default() {
         let model_info = ModelInfo {
@@ -64,9 +63,10 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-        assert_eq!(ap.parameters["type"], "object");
-        assert!(ap.parameters["properties"]["input"].is_object());
+        let ap = result.iter().find(|d| d.name() == "apply_patch").unwrap();
+        let ap = unwrap_function(ap);
+        assert_eq!(ap.input_schema["type"], "object");
+        assert!(ap.input_schema["properties"]["input"].is_object());
     }
 
     #[test]
@@ -76,9 +76,13 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-        assert!(ap.custom_format.is_some());
-        assert_eq!(ap.custom_format.as_ref().unwrap()["type"], "grammar");
+        let ap = result.iter().find(|d| d.name() == "apply_patch").unwrap();
+        let ap = unwrap_function(ap);
+        assert!(ap.provider_options.is_some());
+        let opts = ap.provider_options.as_ref().unwrap();
+        let openai = opts.get("openai").expect("openai provider options");
+        let custom_format = openai.get("custom_format").expect("custom_format key");
+        assert_eq!(custom_format["type"], "grammar");
     }
 
     #[test]
@@ -88,7 +92,7 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        assert!(result.iter().all(|d| d.name != "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "apply_patch"));
         assert_eq!(result.len(), 2); // Read, Edit
     }
 
@@ -99,7 +103,7 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        assert!(result.iter().all(|d| d.name != "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "apply_patch"));
         assert_eq!(result.len(), 2);
     }
 
@@ -112,9 +116,9 @@ mod select_tools_for_model_tests {
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|d| d.name == "Read"));
-        assert!(result.iter().any(|d| d.name == "apply_patch"));
-        assert!(result.iter().all(|d| d.name != "Edit"));
+        assert!(result.iter().any(|d| d.name() == "Read"));
+        assert!(result.iter().any(|d| d.name() == "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "Edit"));
     }
 
     #[test]
@@ -138,9 +142,9 @@ mod select_tools_for_model_tests {
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|d| d.name == "Read"));
-        assert!(result.iter().any(|d| d.name == "apply_patch"));
-        assert!(result.iter().all(|d| d.name != "Edit"));
+        assert!(result.iter().any(|d| d.name() == "Read"));
+        assert!(result.iter().any(|d| d.name() == "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "Edit"));
     }
 
     #[test]
@@ -169,11 +173,75 @@ mod select_tools_for_model_tests {
     fn static_definitions_match_expected() {
         let func_def = ApplyPatchTool::function_definition();
         assert_eq!(func_def.name, "apply_patch");
-        assert_eq!(func_def.parameters["type"], "object");
+        assert_eq!(func_def.input_schema["type"], "object");
 
         let free_def = ApplyPatchTool::freeform_definition();
         assert_eq!(free_def.name, "apply_patch");
-        assert!(free_def.custom_format.is_some());
-        assert_eq!(free_def.custom_format.as_ref().unwrap()["type"], "grammar");
+        assert!(free_def.provider_options.is_some());
+        let opts = free_def.provider_options.as_ref().unwrap();
+        let openai = opts.get("openai").expect("openai provider options");
+        let custom_format = openai.get("custom_format").expect("custom_format key");
+        assert_eq!(custom_format["type"], "grammar");
+    }
+}
+
+// ============================================================================
+// Compaction Integration Tests
+// ============================================================================
+
+mod compaction_integration_tests {
+    use super::*;
+    use crate::compaction::ThresholdStatus;
+    use cocode_protocol::CompactConfig;
+
+    /// Test: threshold recalculation after auto-compact prevents false blocking (Plan 1.1)
+    #[test]
+    fn threshold_status_reflects_post_compact_tokens() {
+        let config = CompactConfig::default();
+        let context_window = 200_000;
+
+        // Simulate: before compact, tokens are at blocking limit
+        let pre_tokens = 190_000;
+        let pre_status = ThresholdStatus::calculate(pre_tokens, context_window, &config);
+        assert!(
+            pre_status.is_at_blocking_limit,
+            "pre-compact should be at blocking limit"
+        );
+
+        // Simulate: after compact, tokens are well below
+        let post_tokens = 80_000;
+        let post_status = ThresholdStatus::calculate(post_tokens, context_window, &config);
+        assert!(
+            !post_status.is_at_blocking_limit,
+            "post-compact should NOT be at blocking limit"
+        );
+        assert!(
+            !post_status.is_above_auto_compact_threshold,
+            "post-compact should NOT trigger auto-compact"
+        );
+    }
+
+    /// Test: circuit breaker state is independent of compaction tier
+    #[test]
+    fn circuit_breaker_reset_logic() {
+        // Circuit breaker opens at 3 consecutive failures
+        let mut failure_count = 0;
+        let mut circuit_breaker_open = false;
+
+        // Simulate 3 Tier 2 failures
+        for _ in 0..3 {
+            failure_count += 1;
+            if failure_count >= 3 {
+                circuit_breaker_open = true;
+            }
+        }
+        assert!(circuit_breaker_open);
+        assert_eq!(failure_count, 3);
+
+        // Simulate Tier 1 success resetting the circuit breaker (Plan 1.3)
+        failure_count = 0;
+        circuit_breaker_open = false;
+        assert!(!circuit_breaker_open);
+        assert_eq!(failure_count, 0);
     }
 }

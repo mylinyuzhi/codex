@@ -37,7 +37,7 @@ fn test_system_message() {
 
     let messages = history.messages_for_api();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].role, hyper_sdk::Role::System);
+    assert!(messages[0].is_system());
 }
 
 #[test]

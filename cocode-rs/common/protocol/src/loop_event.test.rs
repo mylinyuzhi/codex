@@ -28,6 +28,7 @@ fn test_hook_event_type() {
     );
     assert_eq!(HookEventType::SessionStart.as_str(), "session_start");
     assert_eq!(HookEventType::PreCompact.as_str(), "pre_compact");
+    assert_eq!(HookEventType::PostCompact.as_str(), "post_compact");
     assert_eq!(HookEventType::Stop.as_str(), "stop");
     assert_eq!(HookEventType::SubagentStart.as_str(), "subagent_start");
     assert_eq!(HookEventType::SubagentStop.as_str(), "subagent_stop");
@@ -74,6 +75,10 @@ fn test_hook_event_type_from_str_snake_case() {
     assert_eq!(
         "pre_compact".parse::<HookEventType>().unwrap(),
         HookEventType::PreCompact
+    );
+    assert_eq!(
+        "post_compact".parse::<HookEventType>().unwrap(),
+        HookEventType::PostCompact
     );
     assert_eq!(
         "notification".parse::<HookEventType>().unwrap(),
@@ -696,5 +701,26 @@ fn test_rewind_mode_variants() {
         assert_eq!(mode, RewindMode::CodeOnly);
     } else {
         panic!("Wrong event type");
+    }
+}
+
+#[test]
+fn test_compaction_circuit_breaker_open_event() {
+    let event = LoopEvent::CompactionCircuitBreakerOpen {
+        consecutive_failures: 3,
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("compaction_circuit_breaker_open"));
+    assert!(json.contains("3"));
+
+    let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+    match parsed {
+        LoopEvent::CompactionCircuitBreakerOpen {
+            consecutive_failures,
+        } => {
+            assert_eq!(consecutive_failures, 3);
+        }
+        _ => panic!("Wrong event type"),
     }
 }

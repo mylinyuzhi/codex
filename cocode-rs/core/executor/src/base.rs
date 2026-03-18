@@ -9,7 +9,6 @@ use cocode_context::EnvironmentInfo;
 use cocode_error::boxed_err;
 use cocode_hooks::HookRegistry;
 use cocode_loop::AgentLoop;
-use cocode_loop::CompactionConfig;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
@@ -244,7 +243,6 @@ impl AgentExecutor {
         )
         .config(loop_config)
         .fallback_config(FallbackConfig::default())
-        .compaction_config(CompactionConfig::default())
         .hooks(self.hooks.clone())
         .cancel_token(self.cancel_token.clone())
         .features(self.config.features.clone())

@@ -62,6 +62,10 @@ impl Tool for TaskOutputTool {
         ConcurrencySafety::Safe
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let task_id = input["task_id"].as_str().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {

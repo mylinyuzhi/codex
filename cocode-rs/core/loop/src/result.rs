@@ -1,3 +1,5 @@
+use cocode_api::AssistantContentPart;
+use cocode_api::TextPart;
 use cocode_protocol::AllowedPrompt;
 use cocode_protocol::PlanExitOption;
 use serde::Deserialize;
@@ -55,7 +57,7 @@ pub struct LoopResult {
     pub final_text: String,
 
     /// All content blocks from the last response.
-    pub last_response_content: Vec<hyper_sdk::ContentBlock>,
+    pub last_response_content: Vec<AssistantContentPart>,
 }
 
 impl LoopResult {
@@ -65,7 +67,7 @@ impl LoopResult {
         input_tokens: i32,
         output_tokens: i32,
         text: String,
-        content: Vec<hyper_sdk::ContentBlock>,
+        content: Vec<AssistantContentPart>,
     ) -> Self {
         Self {
             stop_reason: StopReason::ModelStopSignal,
@@ -133,13 +135,13 @@ impl LoopResult {
         approved: bool,
         exit_option: Option<PlanExitOption>,
         allowed_prompts: Vec<AllowedPrompt>,
-        content: Vec<hyper_sdk::ContentBlock>,
+        content: Vec<AssistantContentPart>,
     ) -> Self {
         // Extract text from content blocks
         let text: String = content
             .iter()
             .filter_map(|b| match b {
-                hyper_sdk::ContentBlock::Text { text } => Some(text.as_str()),
+                AssistantContentPart::Text(TextPart { text, .. }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();

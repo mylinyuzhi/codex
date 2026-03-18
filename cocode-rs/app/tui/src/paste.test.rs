@@ -105,7 +105,10 @@ fn test_resolve_to_blocks_no_pills() {
     let blocks = manager.resolve_to_blocks(text);
 
     assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].as_text(), Some("hello world"));
+    match &blocks[0] {
+        UserContentPart::Text(tp) => assert_eq!(tp.text, "hello world"),
+        _ => panic!("Expected text block"),
+    }
 }
 
 #[test]

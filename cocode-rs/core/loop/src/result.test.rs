@@ -35,7 +35,7 @@ fn test_loop_result_completed() {
         1000,
         500,
         "Hello".to_string(),
-        vec![hyper_sdk::ContentBlock::text("Hello")],
+        vec![AssistantContentPart::text("Hello")],
     );
     assert_eq!(result.turns_completed, 5);
     assert_eq!(result.total_input_tokens, 1000);

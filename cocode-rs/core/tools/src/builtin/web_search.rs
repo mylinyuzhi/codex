@@ -60,7 +60,13 @@ fn get_cached(
     max_results: usize,
 ) -> Option<SearchResponse> {
     let key = format!("{provider:?}:{max_results}:{query}");
-    let mut cache = SEARCH_CACHE.lock().ok()?;
+    let mut cache = match SEARCH_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            tracing::warn!("WebSearch cache lock poisoned in get_cached: {e}");
+            return None;
+        }
+    };
     if let Some(cached) = cache.get(&key) {
         if cached.cached_at.elapsed() < Duration::from_secs(CACHE_TTL_SECS) {
             tracing::debug!("web_search cache hit for: {}", query);
@@ -80,14 +86,19 @@ fn set_cached(
     response: SearchResponse,
 ) {
     let key = format!("{provider:?}:{max_results}:{query}");
-    if let Ok(mut cache) = SEARCH_CACHE.lock() {
-        cache.put(
-            key,
-            CachedResult {
-                response,
-                cached_at: Instant::now(),
-            },
-        );
+    match SEARCH_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.put(
+                key,
+                CachedResult {
+                    response,
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+        Err(e) => {
+            tracing::warn!("WebSearch cache lock poisoned in set_cached: {e}");
+        }
     }
 }
 
@@ -247,6 +258,23 @@ impl Tool for WebSearchTool {
             .map(|n| n as usize)
             .unwrap_or(config.max_results)
             .clamp(1, 20);
+
+        // Reject mutually exclusive domain filters
+        let has_allowed = input
+            .get("allowed_domains")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty());
+        let has_blocked = input
+            .get("blocked_domains")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty());
+        if has_allowed && has_blocked {
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message:
+                    "Cannot specify both allowed_domains and blocked_domains. Use one or the other.",
+            }
+            .build());
+        }
 
         ctx.emit_progress(format!("Searching: {query}")).await;
 

@@ -7,6 +7,7 @@ fn test_retry_config_defaults() {
     assert_eq!(config.base_delay_ms, 1000);
     assert_eq!(config.max_delay_ms, 30000);
     assert_eq!(config.multiplier, 2.0);
+    assert_eq!(config.jitter, 0.2);
 }
 
 #[test]
@@ -70,7 +71,8 @@ fn test_delay_calculation() {
     let ctx = RetryContext::new(
         RetryConfig::default()
             .with_base_delay(Duration::from_millis(100))
-            .with_multiplier(2.0),
+            .with_multiplier(2.0)
+            .with_jitter(0.0), // Disable jitter for deterministic test
     );
 
     let error: ApiError = NetworkSnafu { message: "test" }.build();
@@ -95,7 +97,8 @@ fn test_delay_respects_max() {
     let mut ctx = RetryContext::new(
         RetryConfig::default()
             .with_base_delay(Duration::from_secs(10))
-            .with_max_delay(Duration::from_secs(5)),
+            .with_max_delay(Duration::from_secs(5))
+            .with_jitter(0.0), // Disable jitter for deterministic test
     );
 
     ctx.current_attempt = 1;
@@ -241,4 +244,70 @@ fn test_diagnostics_non_retryable_still_recorded() {
     assert!(!retryable);
     assert_eq!(ctx.diagnostics().len(), 1);
     assert!(ctx.diagnostics()[0].contains("invalid key"));
+}
+
+// =========================================================================
+// P23: Jitter tests
+// =========================================================================
+
+#[test]
+fn test_jitter_config_builder() {
+    let config = RetryConfig::default().with_jitter(0.3);
+    assert_eq!(config.jitter, 0.3);
+}
+
+#[test]
+fn test_jitter_clamped() {
+    let config = RetryConfig::default().with_jitter(1.5);
+    assert_eq!(config.jitter, 1.0);
+
+    let config = RetryConfig::default().with_jitter(-0.5);
+    assert_eq!(config.jitter, 0.0);
+}
+
+#[test]
+fn test_jitter_delay_within_expected_range() {
+    use crate::error::api_error::*;
+
+    let base_ms = 1000;
+    let jitter = 0.2;
+    let mut ctx = RetryContext::new(
+        RetryConfig::default()
+            .with_base_delay(Duration::from_millis(base_ms))
+            .with_multiplier(1.0)
+            .with_jitter(jitter),
+    );
+    ctx.current_attempt = 1;
+
+    let error: ApiError = NetworkSnafu { message: "test" }.build();
+    let min_ms = (base_ms as f64 * (1.0 - jitter)) as u64;
+    let max_ms = (base_ms as f64 * (1.0 + jitter)) as u64;
+
+    // Run multiple samples — all should fall within the expected range
+    for _ in 0..50 {
+        let delay = ctx.calculate_delay(&error);
+        let ms = delay.as_millis() as u64;
+        assert!(
+            ms >= min_ms && ms <= max_ms,
+            "delay {ms}ms outside [{min_ms}, {max_ms}]",
+        );
+    }
+}
+
+#[test]
+fn test_zero_jitter_is_deterministic() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(
+        RetryConfig::default()
+            .with_base_delay(Duration::from_millis(500))
+            .with_multiplier(2.0)
+            .with_jitter(0.0),
+    );
+    ctx.current_attempt = 2;
+
+    let error: ApiError = NetworkSnafu { message: "test" }.build();
+    for _ in 0..10 {
+        assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(1000));
+    }
 }

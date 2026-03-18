@@ -14,6 +14,7 @@ use crate::error::ToolError;
 use crate::registry::McpToolInfo;
 use crate::tool::Tool;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ContextModifier;
 use cocode_protocol::ToolOutput;
 
 /// MCPSearch tool for discovering MCP tools by keyword.
@@ -53,6 +54,11 @@ impl Tool for McpSearchTool {
                     "type": "string",
                     "description": "Search query to match against tool names and descriptions"
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 5)",
+                    "default": 5
+                },
                 "server": {
                     "type": "string",
                     "description": "Optional server name to filter results"
@@ -76,6 +82,11 @@ impl Tool for McpSearchTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_lowercase();
+
+        let max_results = input
+            .get("max_results")
+            .and_then(Value::as_i64)
+            .unwrap_or(5) as usize;
 
         let server_filter = input
             .get("server")
@@ -114,11 +125,17 @@ impl Tool for McpSearchTool {
             b_name_match.cmp(&a_name_match)
         });
 
+        // Apply max_results limit
+        matches.truncate(max_results);
+
         if matches.is_empty() {
             return Ok(ToolOutput::text(format!(
                 "No MCP tools found matching query: \"{query}\". Try a different search term.",
             )));
         }
+
+        // Collect qualified names for the restore modifier
+        let matched_names: Vec<String> = matches.iter().map(|t| t.qualified_name()).collect();
 
         let mut output = format!(
             "Found {} MCP tool(s) matching \"{query}\":\n\n",
@@ -136,7 +153,11 @@ impl Tool for McpSearchTool {
             ));
         }
 
-        Ok(ToolOutput::text(output))
+        Ok(
+            ToolOutput::text(output).with_modifier(ContextModifier::RestoreDeferredMcpTools {
+                names: matched_names,
+            }),
+        )
     }
 }
 

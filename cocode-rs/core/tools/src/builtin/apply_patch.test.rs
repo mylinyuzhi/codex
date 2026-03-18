@@ -27,16 +27,18 @@ fn test_input_schema() {
 fn test_function_definition() {
     let def = ApplyPatchTool::function_definition();
     assert_eq!(def.name, "apply_patch");
-    assert_eq!(def.parameters["type"], "object");
-    assert!(def.parameters["properties"]["input"].is_object());
+    assert_eq!(def.input_schema["type"], "object");
+    assert!(def.input_schema["properties"]["input"].is_object());
 }
 
 #[test]
 fn test_freeform_definition() {
     let def = ApplyPatchTool::freeform_definition();
     assert_eq!(def.name, "apply_patch");
-    assert!(def.custom_format.is_some());
-    let format = def.custom_format.unwrap();
+    assert!(def.provider_options.is_some());
+    let opts = def.provider_options.unwrap();
+    let openai_opts = opts.get("openai").unwrap();
+    let format = &openai_opts["custom_format"];
     assert_eq!(format["type"], "grammar");
     assert_eq!(format["syntax"], "lark");
     assert!(

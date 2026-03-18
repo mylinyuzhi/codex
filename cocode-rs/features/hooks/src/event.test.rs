@@ -25,6 +25,8 @@ fn test_as_str() {
     );
     assert_eq!(HookEventType::TeammateIdle.as_str(), "teammate_idle");
     assert_eq!(HookEventType::TaskCompleted.as_str(), "task_completed");
+    assert_eq!(HookEventType::WorktreeCreate.as_str(), "worktree_create");
+    assert_eq!(HookEventType::WorktreeRemove.as_str(), "worktree_remove");
 }
 
 #[test]

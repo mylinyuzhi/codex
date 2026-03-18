@@ -61,8 +61,7 @@ impl Tool for TaskTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model to use for this agent",
-                    "enum": ["sonnet", "opus", "haiku"]
+                    "description": "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent."
                 },
                 "max_turns": {
                     "type": "integer",
@@ -76,14 +75,42 @@ impl Tool for TaskTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Tools to grant this agent"
+                },
+                "isolation": {
+                    "type": "string",
+                    "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo.",
+                    "enum": ["worktree"]
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Display name for the spawned agent"
+                },
+                "team_name": {
+                    "type": "string",
+                    "description": "Team to auto-join the agent to after spawn"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["normal", "plan", "auto"],
+                    "description": "Agent execution mode (default: normal)"
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory for the spawned agent"
                 }
             },
-            "required": ["description", "prompt", "subagent_type"]
+            "required": ["description", "prompt"]
         })
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        ConcurrencySafety::Safe
+        // Default to Unsafe (foreground blocks); background overridden by is_concurrency_safe_for
+        ConcurrencySafety::Unsafe
+    }
+
+    fn is_concurrency_safe_for(&self, input: &Value) -> bool {
+        // Background tasks are safe for concurrent execution; foreground tasks block
+        input["run_in_background"].as_bool().unwrap_or(false)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -99,12 +126,7 @@ impl Tool for TaskTool {
             }
             .build()
         })?;
-        let subagent_type = input["subagent_type"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "subagent_type must be a string",
-            }
-            .build()
-        })?;
+        let subagent_type = input["subagent_type"].as_str().unwrap_or("general-purpose");
 
         // Parse optional fields
         let run_in_background = input["run_in_background"].as_bool();
@@ -116,6 +138,7 @@ impl Tool for TaskTool {
                 .collect()
         });
         let resume_from = input["resume"].as_str().map(String::from);
+        let isolation = input["isolation"].as_str().map(String::from);
 
         ctx.emit_progress(format!("Launching {subagent_type} agent: {description}"))
             .await;
@@ -190,6 +213,11 @@ impl Tool for TaskTool {
             parent_selections: ctx.parent_selections.clone(),
             permission_mode: None, // Resolved by driver from AgentDefinition
             resume_from,
+            isolation,
+            name: input["name"].as_str().map(String::from),
+            team_name: input["team_name"].as_str().map(String::from),
+            mode: input["mode"].as_str().map(String::from),
+            cwd: input["cwd"].as_str().map(String::from),
         };
 
         // Spawn the agent

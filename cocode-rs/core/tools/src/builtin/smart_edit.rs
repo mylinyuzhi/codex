@@ -311,6 +311,10 @@ impl Tool for SmartEditTool {
         false
     }
 
+    fn is_edit_tool(&self) -> bool {
+        true
+    }
+
     fn feature_gate(&self) -> Option<Feature> {
         Some(Feature::SmartEdit)
     }
@@ -596,15 +600,17 @@ impl Tool for SmartEditTool {
         let user_prompt =
             build_correction_user_prompt(instruction, old_string, new_string, &error_msg, &content);
 
-        let request = hyper_sdk::ObjectRequest::new(
-            vec![
-                hyper_sdk::Message::system(CORRECTION_SYSTEM_PROMPT),
-                hyper_sdk::Message::user(user_prompt),
+        let request = cocode_api::LanguageModelCallOptions {
+            prompt: vec![
+                cocode_api::LanguageModelMessage::system(CORRECTION_SYSTEM_PROMPT),
+                cocode_api::LanguageModelMessage::user_text(user_prompt),
             ],
-            correction_schema(),
-        )
-        .schema_name("CorrectionResult")
-        .max_tokens(4096);
+            max_output_tokens: Some(4096),
+            response_format: Some(cocode_api::ResponseFormat::json_with_schema(
+                correction_schema(),
+            )),
+            ..Default::default()
+        };
 
         let call_result = tokio::time::timeout(
             CORRECTION_TIMEOUT,
@@ -643,8 +649,9 @@ impl Tool for SmartEditTool {
             }
         };
 
-        // Parse the correction result
-        let correction: CorrectionResult = response.parse().map_err(|e| {
+        // Parse the correction result from the text content
+        let text = response.text_content().unwrap_or_default();
+        let correction: CorrectionResult = serde_json::from_str(&text).map_err(|e| {
             crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!("Failed to parse LLM correction response: {e}"),
             }

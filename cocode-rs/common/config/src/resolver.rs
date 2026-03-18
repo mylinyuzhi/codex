@@ -276,6 +276,10 @@ impl ConfigResolver {
             info = info.with_options(extra.clone());
         }
 
+        if !provider_config.interceptors.is_empty() {
+            info = info.with_interceptors(provider_config.interceptors.clone());
+        }
+
         Ok(info)
     }
 

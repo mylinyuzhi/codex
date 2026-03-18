@@ -86,6 +86,7 @@ pub mod prompt;
 pub mod provider;
 pub mod registry;
 pub mod rerank;
+pub mod stream;
 pub mod telemetry;
 pub mod transcribe;
 pub mod types;
@@ -548,6 +549,15 @@ pub use vercel_ai_provider_utils::parse_json_event_stream;
 // Re-exports from provider crate errors (Phase 4.4)
 pub use vercel_ai_provider::NoSuchModelError;
 pub use vercel_ai_provider::UnsupportedFunctionalityError;
+
+// Re-exports from stream module
+pub use stream::FileSnapshot;
+pub use stream::ReasoningSnapshot;
+pub use stream::SourceSnapshot;
+pub use stream::StreamProcessor;
+pub use stream::StreamProcessorConfig;
+pub use stream::StreamSnapshot;
+pub use stream::ToolCallSnapshot;
 
 /// Test utilities for mock models and providers.
 #[cfg(test)]

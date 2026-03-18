@@ -40,9 +40,6 @@ cocode-otel.workspace = true
 # Internal - MCP
 cocode-rmcp-client.workspace = true
 
-# Internal - provider SDK
-hyper-sdk.workspace = true
-
 # External
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4", "serde"] }

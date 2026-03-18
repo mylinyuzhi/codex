@@ -78,6 +78,8 @@ pub struct AttachmentSettings {
     pub output_style: bool,
     /// Enable todo/task reminders.
     pub todo_reminders: bool,
+    /// Enable cron job state reminders.
+    pub cron_reminders: bool,
     /// Enable delegate mode instructions.
     pub delegate_mode: bool,
     /// Enable collaboration notifications.
@@ -96,6 +98,8 @@ pub struct AttachmentSettings {
     pub compact_file_reference: bool,
     /// Enable rewind notifications.
     pub rewind: bool,
+    /// Enable compaction reminder (prevents "context anxiety").
+    pub compaction_reminder: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -118,6 +122,7 @@ impl Default for AttachmentSettings {
             invoked_skills: true,
             output_style: true,
             todo_reminders: true,
+            cron_reminders: true,
             delegate_mode: true,
             collab_notifications: true,
             plan_verification: true,
@@ -127,6 +132,7 @@ impl Default for AttachmentSettings {
             budget_usd: true,
             compact_file_reference: true,
             rewind: true,
+            compaction_reminder: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

@@ -253,6 +253,95 @@ fn test_escape_regex_special_chars() {
     assert_eq!(escape_regex("$HOME"), r"\$HOME");
 }
 
+// ── Quote normalization ─────────────────────────────────────────
+
+#[test]
+fn test_normalize_quotes_no_change() {
+    assert_eq!(normalize_quotes("hello world"), "hello world");
+}
+
+#[test]
+fn test_normalize_quotes_single_curly() {
+    assert_eq!(
+        normalize_quotes("it\u{2018}s a test\u{2019}"),
+        "it's a test'"
+    );
+}
+
+#[test]
+fn test_normalize_quotes_double_curly() {
+    assert_eq!(
+        normalize_quotes("say \u{201C}hello\u{201D}"),
+        "say \"hello\""
+    );
+}
+
+#[test]
+fn test_normalize_quotes_mixed() {
+    assert_eq!(normalize_quotes("\u{201C}it\u{2019}s\u{201D}"), "\"it's\"");
+}
+
+#[test]
+fn test_quote_normalized_replace_smart_old_straight_content() {
+    // LLM sends smart quotes in old_string, file has straight quotes
+    let content = r#"let msg = "hello world";"#;
+    let old_string = "let msg = \u{201C}hello world\u{201D};";
+    let new_string = r#"let msg = "goodbye";"#;
+    let (result, count) =
+        try_quote_normalized_replace(content, old_string, new_string, false).unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(result, r#"let msg = "goodbye";"#);
+}
+
+#[test]
+fn test_quote_normalized_replace_straight_old_smart_content() {
+    // File has smart quotes, LLM sends straight quotes
+    let content = "let msg = \u{201C}hello world\u{201D};";
+    let old_string = r#"let msg = "hello world";"#;
+    let new_string = r#"let msg = "goodbye";"#;
+    let (result, count) =
+        try_quote_normalized_replace(content, old_string, new_string, false).unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(result, r#"let msg = "goodbye";"#);
+}
+
+#[test]
+fn test_quote_normalized_replace_no_match() {
+    let content = "let x = 1;";
+    let old_string = "let y = 2;";
+    assert!(try_quote_normalized_replace(content, old_string, "z", false).is_none());
+}
+
+#[test]
+fn test_quote_normalized_replace_no_normalization_needed() {
+    // Both already use straight quotes — should return None (let exact handle it)
+    let content = r#"let x = "a";"#;
+    let old_string = r#"let x = "a";"#;
+    assert!(try_quote_normalized_replace(content, old_string, "z", false).is_none());
+}
+
+#[test]
+fn test_quote_normalized_replace_multiple_occurrences() {
+    let content = r#""hello" and "hello""#;
+    let old_string = "\u{201C}hello\u{201D}";
+    let new_string = r#""world""#;
+    let (result, count) =
+        try_quote_normalized_replace(content, old_string, new_string, true).unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(result, r#""world" and "world""#);
+}
+
+#[test]
+fn test_try_match_with_smart_quotes() {
+    // Integration: try_match should find match via quote normalization tier
+    let content = r#"let msg = "hello";"#;
+    let old = "let msg = \u{201C}hello\u{201D};";
+    let new = r#"let msg = "world";"#;
+    let (result, strategy) = try_match(content, old, new, false).unwrap();
+    assert_eq!(strategy, MatchStrategy::Exact);
+    assert_eq!(result, r#"let msg = "world";"#);
+}
+
 // ── Regex trailing newline preservation ─────────────────────────
 
 #[test]

@@ -27,20 +27,51 @@ async fn test_web_search_too_short() {
 }
 
 #[tokio::test]
-async fn test_web_search_with_domains() {
+async fn test_web_search_with_allowed_domains() {
     let tool = WebSearchTool::new();
     let mut ctx = make_context();
 
     let input = serde_json::json!({
         "query": "rust async",
-        "allowed_domains": ["docs.rs", "doc.rust-lang.org"],
-        "blocked_domains": ["stackoverflow.com"]
+        "allowed_domains": ["docs.rs", "doc.rust-lang.org"]
     });
 
     // This makes a real network call (DuckDuckGo) — the result may fail in CI
     // but the tool should not panic and should return a valid ToolOutput.
     let result = tool.execute(input, &mut ctx).await;
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_web_search_with_blocked_domains() {
+    let tool = WebSearchTool::new();
+    let mut ctx = make_context();
+
+    let input = serde_json::json!({
+        "query": "rust async",
+        "blocked_domains": ["stackoverflow.com"]
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_web_search_both_domain_filters_rejected() {
+    let tool = WebSearchTool::new();
+    let mut ctx = make_context();
+
+    let input = serde_json::json!({
+        "query": "rust async",
+        "allowed_domains": ["docs.rs"],
+        "blocked_domains": ["stackoverflow.com"]
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(
+        result.is_err(),
+        "Should reject both allowed_domains and blocked_domains"
+    );
 }
 
 #[test]

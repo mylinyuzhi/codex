@@ -1761,18 +1761,14 @@ fn embed_images_in_answers(answers: &mut serde_json::Value, paste_manager: &Past
             None => continue,
         };
         for block in paste_manager.resolve_to_blocks(text) {
-            if let hyper_sdk::ContentBlock::Image {
-                source:
-                    hyper_sdk::ImageSource::Base64 {
-                        data, media_type, ..
-                    },
-                ..
-            } = block
-            {
-                images.push(serde_json::json!({
-                    "data": data,
-                    "media_type": media_type,
-                }));
+            if let cocode_api::UserContentPart::File(file_part) = block {
+                if file_part.media_type.starts_with("image/") {
+                    let data = file_part.data.to_base64();
+                    images.push(serde_json::json!({
+                        "data": data,
+                        "media_type": file_part.media_type,
+                    }));
+                }
             }
         }
     }

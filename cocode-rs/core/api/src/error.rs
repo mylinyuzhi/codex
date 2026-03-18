@@ -89,7 +89,7 @@ pub enum ApiError {
         location: Location,
     },
 
-    /// Underlying hyper-sdk error.
+    /// Underlying SDK error.
     #[snafu(display("SDK error: {message}"))]
     Sdk {
         message: String,
@@ -118,8 +118,6 @@ impl ApiError {
     }
 
     /// Check if this is a stream-related error that should trigger fallback.
-    ///
-    /// Returns true for errors where falling back to non-streaming mode might help.
     pub fn is_stream_error(&self) -> bool {
         matches!(
             self,
@@ -179,14 +177,99 @@ impl ErrorExt for ApiError {
     }
 }
 
-/// Classify a provider error by scanning the code and message for known patterns.
+/// Classify an AISdkError from vercel-ai into a specific ApiError variant.
 ///
-/// This heuristic reclassifies generic `ProviderError` into more specific error types
-/// (auth failure, model-not-found, context overflow, rate limit) based on keywords.
-fn classify_provider_error(code: &str, message: &str) -> ApiError {
+/// First inspects the error cause chain for structured `APICallError` fields
+/// (status_code, is_retryable, retry_after). Falls back to message-based
+/// keyword heuristics only for untyped errors.
+pub fn classify_sdk_error(err: &crate::AISdkError) -> ApiError {
+    // Step 1: Try to extract structured error info from the cause chain.
+    if let Some(cause) = &err.cause {
+        if let Some(provider_err) = cause.downcast_ref::<vercel_ai_provider::ProviderError>() {
+            if let vercel_ai_provider::ProviderError::ApiCall(api_call) = provider_err {
+                return classify_api_call_error(api_call);
+            }
+        }
+    }
+
+    // Step 2: Fall back to message-based heuristics.
+    classify_by_message(&err.message)
+}
+
+/// Classify using structured `APICallError` fields.
+fn classify_api_call_error(err: &vercel_ai_provider::APICallError) -> ApiError {
     use api_error::*;
-    let lower = message.to_ascii_lowercase();
-    let lower_code = code.to_ascii_lowercase();
+    let msg = &err.message;
+    let lower = msg.to_ascii_lowercase();
+
+    // Context overflow is typically 400 with specific message patterns
+    if is_context_overflow_message(&lower) {
+        return ContextOverflowSnafu {
+            message: msg.clone(),
+        }
+        .build();
+    }
+
+    let retry_after_ms = err
+        .retry_after
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(1000);
+
+    match err.status_code {
+        Some(401 | 403) => AuthenticationSnafu {
+            message: msg.clone(),
+        }
+        .build(),
+        // P14: OpenAI models sometimes transiently return 404 during deployment.
+        // Treating as network error makes it retryable. Non-OpenAI 404s are genuinely
+        // not-found and retrying them just fails again harmlessly.
+        Some(404) => NetworkSnafu {
+            message: msg.clone(),
+        }
+        .build(),
+        // P13: HTTP 413 "Request Entity Too Large" from proxies indicates context overflow.
+        Some(413) => ContextOverflowSnafu {
+            message: msg.clone(),
+        }
+        .build(),
+        Some(429) => RateLimitedSnafu {
+            message: msg.clone(),
+            retry_after_ms,
+        }
+        .build(),
+        Some(500 | 502 | 503 | 529) => OverloadedSnafu {
+            message: msg.clone(),
+            retry_after_ms,
+        }
+        .build(),
+        _ => {
+            // P17: Try extracting a better message from response_body before
+            // falling to heuristic classification on the original message.
+            let effective_msg =
+                extract_message_from_response_body(err).unwrap_or_else(|| msg.clone());
+            classify_by_message(&effective_msg)
+        }
+    }
+}
+
+/// Message-based heuristic classification (fallback for untyped errors).
+///
+/// Public so that downstream crates (e.g., `core/loop`) can classify
+/// mid-stream error messages into structured `ApiError` variants.
+pub fn classify_by_message(msg: &str) -> ApiError {
+    use api_error::*;
+    let lower = msg.to_ascii_lowercase();
+
+    // Stream idle timeout
+    if lower.contains("stream idle timeout") {
+        let secs = lower
+            .split("after ")
+            .nth(1)
+            .and_then(|s| s.split('s').next())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(60);
+        return StreamIdleTimeoutSnafu { timeout_secs: secs }.build();
+    }
 
     // Auth failure keywords
     const AUTH_KEYWORDS: &[&str] = &[
@@ -200,10 +283,35 @@ fn classify_provider_error(code: &str, message: &str) -> ApiError {
         "invalid authorization",
         "permission denied",
         "access denied",
+        "401",
     ];
-    if lower_code == "401" || AUTH_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+    if AUTH_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
         return AuthenticationSnafu {
-            message: message.to_string(),
+            message: msg.to_string(),
+        }
+        .build();
+    }
+
+    // Context window overflow keywords
+    if is_context_overflow_message(&lower) {
+        return ContextOverflowSnafu {
+            message: msg.to_string(),
+        }
+        .build();
+    }
+
+    // Rate limit keywords
+    const RATE_LIMIT_KEYWORDS: &[&str] = &[
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "throttled",
+        "429",
+    ];
+    if RATE_LIMIT_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+        return RateLimitedSnafu {
+            message: msg.to_string(),
+            retry_after_ms: 1000_i64,
         }
         .build();
     }
@@ -220,13 +328,56 @@ fn classify_provider_error(code: &str, message: &str) -> ApiError {
     ];
     if MODEL_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
         return InvalidRequestSnafu {
-            message: message.to_string(),
+            message: msg.to_string(),
         }
         .build();
     }
 
-    // Context window overflow keywords
+    // Stream error keywords
+    if lower.contains("stream error") || lower.contains("stream closed") {
+        return StreamSnafu {
+            message: msg.to_string(),
+        }
+        .build();
+    }
+
+    // Network error keywords
+    const NETWORK_KEYWORDS: &[&str] = &[
+        "connection",
+        "timeout",
+        "dns",
+        "network",
+        "reset",
+        "refused",
+    ];
+    if NETWORK_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+        return NetworkSnafu {
+            message: msg.to_string(),
+        }
+        .build();
+    }
+
+    // Overloaded / server error keywords (includes 500, 502 for heuristic fallback)
+    const OVERLOADED_KEYWORDS: &[&str] = &["overloaded", "503", "529", "500", "502", "bad gateway"];
+    if OVERLOADED_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+        return OverloadedSnafu {
+            message: msg.to_string(),
+            retry_after_ms: 1000_i64,
+        }
+        .build();
+    }
+
+    // Default: SDK error
+    SdkSnafu {
+        message: msg.to_string(),
+    }
+    .build()
+}
+
+/// Check if a lowercased message indicates context overflow.
+fn is_context_overflow_message(lower: &str) -> bool {
     const CONTEXT_KEYWORDS: &[&str] = &[
+        // Core patterns (original)
         "context length",
         "context window",
         "token limit",
@@ -236,109 +387,74 @@ fn classify_provider_error(code: &str, message: &str) -> ApiError {
         "maximum context",
         "max_tokens",
         "tokens exceeded",
+        // P13: Additional provider-specific patterns
+        "prompt is too long",
+        "maximum prompt length",
+        "reduce the length of the messages",
+        "request entity too large",
+        "exceeds the available context size",
+        "exceeds the limit of",
     ];
     if CONTEXT_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
-        return ContextOverflowSnafu {
-            message: message.to_string(),
-        }
-        .build();
+        return true;
     }
 
-    // Rate limit keywords
-    const RATE_LIMIT_KEYWORDS: &[&str] = &[
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "throttled",
-        "try again",
-    ];
-    if lower_code == "429" || RATE_LIMIT_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
-        let retry_ms = hyper_sdk::error::parse_retry_after(message)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(1000);
-        return RateLimitedSnafu {
-            message: message.to_string(),
-            retry_after_ms: retry_ms,
-        }
-        .build();
+    // Compound pattern: Google Gemini "input token count ... exceeds the maximum"
+    if lower.contains("input token count") && lower.contains("exceeds the maximum") {
+        return true;
     }
 
-    // Default: keep as Provider error
-    ProviderSnafu {
-        message: message.to_string(),
-    }
-    .build()
+    false
 }
 
-impl From<hyper_sdk::HyperError> for ApiError {
-    fn from(err: hyper_sdk::HyperError) -> Self {
-        use api_error::*;
-        use hyper_sdk::HyperError;
-        use hyper_sdk::scrub_secret_patterns as scrub;
+/// Extract a useful error message from an API response body.
+///
+/// Providers return error details in various formats:
+/// - JSON: `{ "error": { "message": "..." } }` or `{ "error": "..." }` or `{ "message": "..." }`
+/// - HTML: gateway pages (502, 503, etc.)
+///
+/// Returns `None` if no useful message can be extracted.
+fn extract_message_from_response_body(err: &vercel_ai_provider::APICallError) -> Option<String> {
+    let body = err.response_body.as_deref()?;
 
-        match err {
-            HyperError::NetworkError(msg) => NetworkSnafu {
-                message: scrub(&msg),
-            }
-            .build(),
-            HyperError::AuthenticationFailed(msg) => AuthenticationSnafu {
-                message: scrub(&msg),
-            }
-            .build(),
-            HyperError::RateLimitExceeded(msg) => {
-                let retry_ms = hyper_sdk::error::parse_retry_after(&msg)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(1000);
-                RateLimitedSnafu {
-                    message: scrub(&msg),
-                    retry_after_ms: retry_ms,
-                }
-                .build()
-            }
-            HyperError::Retryable { message, delay } => {
-                let ms = delay.map(|d| d.as_millis() as i64).unwrap_or(1000);
-                OverloadedSnafu {
-                    message: scrub(&message),
-                    retry_after_ms: ms,
-                }
-                .build()
-            }
-            HyperError::ContextWindowExceeded(msg) => ContextOverflowSnafu {
-                message: scrub(&msg),
-            }
-            .build(),
-            HyperError::StreamError(msg) => StreamSnafu {
-                message: scrub(&msg),
-            }
-            .build(),
-            HyperError::StreamIdleTimeout(timeout) => StreamIdleTimeoutSnafu {
-                timeout_secs: timeout.as_secs() as i64,
-            }
-            .build(),
-            HyperError::InvalidRequest(msg) => InvalidRequestSnafu {
-                message: scrub(&msg),
-            }
-            .build(),
-            HyperError::ProviderError { code, message } => {
-                classify_provider_error(&code, &scrub(&message))
-            }
-            HyperError::ProviderNotFound(msg) => InvalidRequestSnafu {
-                message: format!("Provider not found: {}", scrub(&msg)),
-            }
-            .build(),
-            HyperError::ModelNotFound(msg) => InvalidRequestSnafu {
-                message: format!("Model not found: {}", scrub(&msg)),
-            }
-            .build(),
-            HyperError::ConfigError(msg) => SdkSnafu {
-                message: format!("Config error: {}", scrub(&msg)),
-            }
-            .build(),
-            other => SdkSnafu {
-                message: scrub(&other.to_string()),
-            }
-            .build(),
+    // Try JSON extraction
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        // { "error": { "message": "..." } }
+        if let Some(msg) = json
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return Some(msg.to_string());
         }
+        // { "error": "..." }
+        if let Some(msg) = json.get("error").and_then(|e| e.as_str()) {
+            return Some(msg.to_string());
+        }
+        // { "message": "..." }
+        if let Some(msg) = json.get("message").and_then(|m| m.as_str()) {
+            return Some(msg.to_string());
+        }
+    }
+
+    // HTML gateway pages
+    let trimmed = body.trim_start();
+    if trimmed.starts_with("<html")
+        || trimmed.starts_with("<!DOCTYPE")
+        || trimmed.starts_with("<!doctype")
+    {
+        if let Some(status) = err.status_code {
+            return Some(format!("HTTP {status} gateway error"));
+        }
+        return Some("Gateway error (HTML response)".to_string());
+    }
+
+    None
+}
+
+impl From<crate::AISdkError> for ApiError {
+    fn from(err: crate::AISdkError) -> Self {
+        classify_sdk_error(&err)
     }
 }
 

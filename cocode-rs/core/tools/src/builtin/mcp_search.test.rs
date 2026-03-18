@@ -129,6 +129,55 @@ async fn test_search_case_insensitive() {
     assert!(text.contains("ListRepos"));
 }
 
+#[tokio::test]
+async fn test_search_emits_restore_modifier() {
+    let tools = Arc::new(Mutex::new(vec![
+        make_tool_info("github", "list_repos", "List GitHub repositories"),
+        make_tool_info("github", "create_issue", "Create a GitHub issue"),
+        make_tool_info("slack", "send_message", "Send a Slack message"),
+    ]));
+    let tool = McpSearchTool::new(tools);
+    let mut ctx = ToolContext::new("test", "session", std::path::PathBuf::from("."));
+
+    let result = tool
+        .execute(serde_json::json!({"query": "github"}), &mut ctx)
+        .await
+        .unwrap();
+
+    // Should have exactly one modifier
+    assert_eq!(result.modifiers.len(), 1);
+    match &result.modifiers[0] {
+        cocode_protocol::ContextModifier::RestoreDeferredMcpTools { names } => {
+            // Both github tools match
+            assert_eq!(names.len(), 2);
+            assert!(names.contains(&"mcp__github__list_repos".to_string()));
+            assert!(names.contains(&"mcp__github__create_issue".to_string()));
+            // Slack tool should not be included
+            assert!(!names.contains(&"mcp__slack__send_message".to_string()));
+        }
+        other => panic!("Expected RestoreDeferredMcpTools, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_search_no_results_has_no_modifier() {
+    let tools = Arc::new(Mutex::new(vec![make_tool_info(
+        "github",
+        "list_repos",
+        "List repos",
+    )]));
+    let tool = McpSearchTool::new(tools);
+    let mut ctx = ToolContext::new("test", "session", std::path::PathBuf::from("."));
+
+    let result = tool
+        .execute(serde_json::json!({"query": "nonexistent"}), &mut ctx)
+        .await
+        .unwrap();
+
+    // No matches = no modifier
+    assert!(result.modifiers.is_empty());
+}
+
 #[test]
 fn test_tool_metadata() {
     let tools = Arc::new(Mutex::new(Vec::new()));

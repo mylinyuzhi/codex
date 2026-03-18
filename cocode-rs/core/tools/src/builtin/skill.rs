@@ -136,6 +136,11 @@ impl Tool for SkillTool {
                     parent_selections: ctx.parent_selections.clone(),
                     permission_mode: None,
                     resume_from: None,
+                    isolation: None,
+                    name: None,
+                    team_name: None,
+                    mode: None,
+                    cwd: None,
                 };
 
                 // Emit SubagentSpawned event for TUI visibility

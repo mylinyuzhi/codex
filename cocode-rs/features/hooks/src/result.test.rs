@@ -104,3 +104,34 @@ fn test_async_result_serde() {
         panic!("Expected Async");
     }
 }
+
+#[test]
+fn test_prevent_continuation_serde() {
+    let result = HookResult::PreventContinuation {
+        reason: Some("deployment complete".to_string()),
+    };
+    let json = serde_json::to_string(&result).expect("serialize");
+    assert!(json.contains("prevent_continuation"));
+    assert!(json.contains("deployment complete"));
+
+    let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+    if let HookResult::PreventContinuation { reason } = parsed {
+        assert_eq!(reason, Some("deployment complete".to_string()));
+    } else {
+        panic!("Expected PreventContinuation");
+    }
+}
+
+#[test]
+fn test_prevent_continuation_no_reason_serde() {
+    let result = HookResult::PreventContinuation { reason: None };
+    let json = serde_json::to_string(&result).expect("serialize");
+    assert!(json.contains("prevent_continuation"));
+
+    let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+    if let HookResult::PreventContinuation { reason } = parsed {
+        assert!(reason.is_none());
+    } else {
+        panic!("Expected PreventContinuation");
+    }
+}

@@ -50,7 +50,8 @@ async fn test_enter_plan_mode_interview_phase() {
 fn test_tool_properties() {
     let tool = EnterPlanModeTool::new();
     assert_eq!(tool.name(), "EnterPlanMode");
-    assert!(!tool.is_concurrent_safe());
+    assert!(tool.is_concurrent_safe());
+    assert!(tool.is_read_only());
 }
 
 #[test]

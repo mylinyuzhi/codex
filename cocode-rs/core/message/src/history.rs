@@ -9,9 +9,9 @@ use crate::normalization::normalize_messages_for_api;
 use crate::read_tracking_policy::is_read_state_source_tool;
 use crate::tracked::TrackedMessage;
 use crate::turn::Turn;
+use cocode_api::LanguageModelMessage;
 use cocode_protocol::FileReadKind;
 use cocode_protocol::TokenUsage;
-use hyper_sdk::Message;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -231,7 +231,7 @@ impl MessageHistory {
     }
 
     /// Collect all messages for API request.
-    pub fn messages_for_api(&self) -> Vec<Message> {
+    pub fn messages_for_api(&self) -> Vec<LanguageModelMessage> {
         let mut messages = Vec::new();
 
         // Add system message first
@@ -241,7 +241,7 @@ impl MessageHistory {
 
         // Add compacted summary if present
         if let Some(summary) = &self.compacted_summary {
-            messages.push(Message::user(format!(
+            messages.push(LanguageModelMessage::user_text(format!(
                 "<conversation_summary>\n{summary}\n</conversation_summary>\n\nContinuing from the summary above:"
             )));
         }

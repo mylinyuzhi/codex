@@ -17,7 +17,6 @@ use cocode_hooks::HookHandler;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookSource;
 use cocode_loop::AgentLoop;
-use cocode_loop::CompactionConfig;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
@@ -257,6 +256,12 @@ pub struct SessionState {
     /// Current task list (updated by TodoWrite tool via ContextModifier).
     todos: serde_json::Value,
 
+    /// Current structured tasks (updated by TaskCreate/TaskUpdate via ContextModifier).
+    structured_tasks: serde_json::Value,
+
+    /// Current cron jobs (updated by CronCreate/CronDelete via ContextModifier).
+    cron_jobs: serde_json::Value,
+
     /// Optional OTel manager for metrics and traces.
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 
@@ -347,7 +352,21 @@ impl SessionState {
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
-        cocode_tools::builtin::register_builtin_tools(&mut tool_registry, &config.features);
+        let builtin_stores =
+            cocode_tools::builtin::register_builtin_tools(&mut tool_registry, &config.features);
+
+        // Load durable cron jobs from disk and merge into the shared store
+        if let Ok(durable_jobs) =
+            cocode_tools::builtin::cron_state::load_durable_jobs(&config.cocode_home).await
+        {
+            if !durable_jobs.is_empty() {
+                let mut store = builtin_stores.cron_store.lock().await;
+                for (id, job) in durable_jobs {
+                    store.insert(id, job);
+                }
+                tracing::info!(count = store.len(), "Loaded durable cron jobs from disk");
+            }
+        }
 
         // Create hook registry and load hooks via aggregator (respects disable/managed-only)
         let hook_registry = HookRegistry::new();
@@ -653,7 +672,7 @@ impl SessionState {
             None
         };
 
-        Ok(Self {
+        let state_result = Ok(Self {
             session,
             message_history: MessageHistory::new(),
             tool_registry: Arc::new(tool_registry),
@@ -679,6 +698,8 @@ impl SessionState {
             config,
             permission_rules,
             todos: serde_json::json!([]),
+            structured_tasks: serde_json::json!({}),
+            cron_jobs: serde_json::json!({}),
             otel_manager,
             output_style_override: None,
             plugin_output_styles,
@@ -689,7 +710,71 @@ impl SessionState {
                 cocode_tools::ApprovalStore::new(),
             )),
             reminder_file_tracker_state: Vec::new(),
-        })
+        });
+
+        // Clean up orphaned worktrees at session startup (Gap 8 fix)
+        if let Ok(ref state) = state_result {
+            Self::cleanup_orphaned_worktrees(&state.session.working_dir).await;
+        }
+
+        state_result
+    }
+
+    /// Clean up orphaned worktrees matching the `agent/task-*` branch naming convention.
+    ///
+    /// At session startup, detect and silently remove worktrees whose branches match
+    /// the auto-generated pattern and have no live session.
+    async fn cleanup_orphaned_worktrees(cwd: &std::path::Path) {
+        // Use git rev-parse to check if we're in a git repo (no cocode_git dep)
+        let in_repo = tokio::process::Command::new("git")
+            .current_dir(cwd)
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !in_repo {
+            return;
+        }
+        let output = match tokio::process::Command::new("git")
+            .current_dir(cwd)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => return,
+        };
+
+        // Parse porcelain output for worktrees with agent/task-* branches
+        let mut worktree_path: Option<String> = None;
+        for line in output.lines() {
+            if let Some(path) = line.strip_prefix("worktree ") {
+                worktree_path = Some(path.to_string());
+            } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
+                if branch.starts_with("agent/task-") {
+                    if let Some(ref wt_path) = worktree_path {
+                        // Silently remove the orphaned worktree
+                        let _ = tokio::process::Command::new("git")
+                            .current_dir(cwd)
+                            .args(["worktree", "remove", "--force", wt_path])
+                            .output()
+                            .await;
+                        tracing::debug!(worktree = wt_path, branch, "Cleaned up orphaned worktree");
+                    }
+                }
+                worktree_path = None;
+            } else if line.is_empty() {
+                worktree_path = None;
+            }
+        }
+
+        // Prune stale entries
+        let _ = tokio::process::Command::new("git")
+            .current_dir(cwd)
+            .args(["worktree", "prune"])
+            .output()
+            .await;
     }
 
     /// Run a single turn with the given user input.
@@ -772,6 +857,11 @@ impl SessionState {
                             parent_selections: None,
                             permission_mode: None,
                             resume_from: None,
+                            isolation: None,
+                            name: None,
+                            team_name: None,
+                            mode: None,
+                            cwd: None,
                         };
                         let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
                         Ok(result.output.unwrap_or_default())
@@ -795,6 +885,11 @@ impl SessionState {
                             parent_selections: None,
                             permission_mode: None,
                             resume_from: None,
+                            isolation: None,
+                            name: None,
+                            team_name: None,
+                            mode: None,
+                            cwd: None,
                         };
                         let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
                         Ok(result.output.unwrap_or_default())
@@ -815,7 +910,6 @@ impl SessionState {
         )
         .config(self.loop_config.clone())
         .fallback_config(FallbackConfig::default())
-        .compaction_config(CompactionConfig::default())
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())
@@ -832,7 +926,8 @@ impl SessionState {
         .question_responder(self.question_responder.clone())
         .approval_store(self.shared_approval_store.clone())
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
-        .message_history(self.message_history.clone());
+        .message_history(self.message_history.clone())
+        .cocode_home(self.config.cocode_home.clone());
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -846,6 +941,16 @@ impl SessionState {
         // Extract todos state before dropping the loop
         if let Some(todos) = loop_instance.take_todos() {
             self.todos = todos;
+        }
+
+        // Extract structured tasks state from the loop
+        if let Some(tasks) = loop_instance.take_structured_tasks() {
+            self.structured_tasks = tasks;
+        }
+
+        // Extract cron jobs state from the loop
+        if let Some(jobs) = loop_instance.take_cron_jobs() {
+            self.cron_jobs = jobs;
         }
 
         // Sync message history back from loop (persists across turns)
@@ -1353,7 +1458,7 @@ impl SessionState {
     pub fn get_model_for_role(
         &self,
         role: ModelRole,
-    ) -> anyhow::Result<Option<(Arc<dyn hyper_sdk::Model>, ProviderType)>> {
+    ) -> anyhow::Result<Option<(Arc<dyn cocode_api::LanguageModel>, ProviderType)>> {
         match self
             .model_hub
             .get_model_for_role_with_selections(role, &self.session.selections)
@@ -1373,7 +1478,7 @@ impl SessionState {
     /// Get the main model (shorthand for get_model_for_role(ModelRole::Main)).
     ///
     /// Returns the main model using the session's selections.
-    pub fn main_model(&self) -> anyhow::Result<Arc<dyn hyper_sdk::Model>> {
+    pub fn main_model(&self) -> anyhow::Result<Arc<dyn cocode_api::LanguageModel>> {
         self.model_hub
             .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
             .map(|(m, _)| m)
@@ -1441,7 +1546,7 @@ impl SessionState {
         &self,
         role: ModelRole,
         model_info: Option<&cocode_protocol::ModelInfo>,
-    ) -> Option<hyper_sdk::options::ProviderOptions> {
+    ) -> Option<cocode_api::ProviderOptions> {
         let thinking_level = self.thinking_level(role)?;
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
@@ -2317,7 +2422,6 @@ impl SessionState {
                 )
                 .config(child_config)
                 .fallback_config(FallbackConfig::default())
-                .compaction_config(CompactionConfig::default())
                 .hooks(hook_registry.clone())
                 .cancel_token(params.cancel_token)
                 .features(features)
@@ -2328,7 +2432,8 @@ impl SessionState {
                 .skill_manager(skill_manager)
                 .lsp_manager(lsp_manager)
                 .is_subagent(true)
-                .task_type_restrictions(params.task_type_restrictions);
+                .task_type_restrictions(params.task_type_restrictions)
+                .cocode_home(cocode_home.clone());
                 // NO .spawn_agent_fn() — prevents infinite recursion
 
                 // Apply custom system prompt if the agent definition requested it
@@ -2562,7 +2667,6 @@ impl SessionState {
         )
         .config(self.loop_config.clone())
         .fallback_config(FallbackConfig::default())
-        .compaction_config(CompactionConfig::default())
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())
@@ -2579,7 +2683,8 @@ impl SessionState {
         .question_responder(self.question_responder.clone())
         .approval_store(self.shared_approval_store.clone())
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
-        .message_history(self.message_history.clone());
+        .message_history(self.message_history.clone())
+        .cocode_home(self.config.cocode_home.clone());
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
@@ -2601,6 +2706,16 @@ impl SessionState {
         // Extract todos state from the loop
         if let Some(todos) = loop_instance.take_todos() {
             self.todos = todos;
+        }
+
+        // Extract structured tasks state from the loop
+        if let Some(tasks) = loop_instance.take_structured_tasks() {
+            self.structured_tasks = tasks;
+        }
+
+        // Extract cron jobs state from the loop
+        if let Some(jobs) = loop_instance.take_cron_jobs() {
+            self.cron_jobs = jobs;
         }
 
         // Sync message history back from loop (persists across turns)
@@ -2681,8 +2796,8 @@ impl SessionState {
         );
 
         let summary_messages = vec![
-            cocode_api::Message::system(&system_prompt),
-            cocode_api::Message::user(&user_prompt),
+            cocode_api::LanguageModelMessage::system(&system_prompt),
+            cocode_api::LanguageModelMessage::user_text(&user_prompt),
         ];
 
         // 3. Call LLM for summary
@@ -2695,7 +2810,7 @@ impl SessionState {
 
         let summary_request = cocode_api::RequestBuilder::new(ctx)
             .messages(summary_messages)
-            .max_tokens(max_output_tokens)
+            .max_tokens(max_output_tokens as u64)
             .build();
 
         let response = self
@@ -2708,7 +2823,7 @@ impl SessionState {
             .content
             .iter()
             .filter_map(|b| match b {
-                hyper_sdk::ContentBlock::Text { text } => Some(text.as_str()),
+                cocode_api::AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
                 _ => None,
             })
             .collect();

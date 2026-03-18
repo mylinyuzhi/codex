@@ -268,3 +268,80 @@ fn test_validate_token_safety_margin() {
     };
     assert!(config.validate().is_ok());
 }
+
+#[test]
+fn test_with_env_overrides_no_vars() {
+    // Ensure with_env_overrides doesn't crash when no relevant env vars are set
+    let config = CompactConfig::default().with_env_overrides();
+    // Default pct is 80
+    assert_eq!(config.auto_compact_pct, Some(80));
+}
+
+#[test]
+fn test_with_env_overrides_disable_compact() {
+    // SAFETY: test-only, single-threaded access to env vars
+    unsafe { std::env::set_var("COCODE_DISABLE_COMPACT", "1") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert!(config.disable_compact);
+    unsafe { std::env::remove_var("COCODE_DISABLE_COMPACT") };
+}
+
+#[test]
+fn test_with_env_overrides_pct() {
+    unsafe { std::env::set_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE", "50") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert_eq!(config.auto_compact_pct, Some(50));
+    unsafe { std::env::remove_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE") };
+}
+
+#[test]
+fn test_with_env_overrides_invalid_pct_ignored() {
+    unsafe { std::env::set_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE", "200") };
+    let config = CompactConfig::default().with_env_overrides();
+    // Invalid value should be ignored — default 80 preserved
+    assert_eq!(config.auto_compact_pct, Some(80));
+    unsafe { std::env::remove_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE") };
+}
+
+#[test]
+fn test_with_env_overrides_blocking_limit() {
+    unsafe { std::env::set_var("COCODE_BLOCKING_LIMIT_OVERRIDE", "100000") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert_eq!(config.blocking_limit_override, Some(100000));
+    unsafe { std::env::remove_var("COCODE_BLOCKING_LIMIT_OVERRIDE") };
+}
+
+#[test]
+fn test_with_env_overrides_disable_auto_compact() {
+    // SAFETY: test-only, single-threaded access to env vars
+    unsafe { std::env::set_var("COCODE_DISABLE_AUTO_COMPACT", "true") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert!(config.disable_auto_compact);
+    unsafe { std::env::remove_var("COCODE_DISABLE_AUTO_COMPACT") };
+}
+
+#[test]
+fn test_with_env_overrides_blocking_limit_zero_ignored() {
+    // Blocking limit must be > 0; zero should be silently ignored.
+    unsafe { std::env::set_var("COCODE_BLOCKING_LIMIT_OVERRIDE", "0") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert!(config.blocking_limit_override.is_none());
+    unsafe { std::env::remove_var("COCODE_BLOCKING_LIMIT_OVERRIDE") };
+}
+
+#[test]
+fn test_with_env_overrides_negative_blocking_limit_ignored() {
+    unsafe { std::env::set_var("COCODE_BLOCKING_LIMIT_OVERRIDE", "-100") };
+    let config = CompactConfig::default().with_env_overrides();
+    assert!(config.blocking_limit_override.is_none());
+    unsafe { std::env::remove_var("COCODE_BLOCKING_LIMIT_OVERRIDE") };
+}
+
+#[test]
+fn test_with_env_overrides_non_integer_pct_ignored() {
+    unsafe { std::env::set_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE", "not_a_number") };
+    let config = CompactConfig::default().with_env_overrides();
+    // Invalid value should be ignored — default 80 preserved
+    assert_eq!(config.auto_compact_pct, Some(80));
+    unsafe { std::env::remove_var("COCODE_AUTOCOMPACT_PCT_OVERRIDE") };
+}

@@ -60,7 +60,10 @@ impl QuestionResponder {
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Lock poisoned — concurrent bug detected");
+                e.into_inner()
+            })
             .insert(request_id, tx);
         rx
     }
@@ -72,7 +75,10 @@ impl QuestionResponder {
         if let Some(tx) = self
             .pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Lock poisoned — concurrent bug detected");
+                e.into_inner()
+            })
             .remove(request_id)
         {
             tx.send(answers).is_ok()
@@ -130,6 +136,29 @@ pub struct SpawnAgentInput {
     /// prepending the prior context to the prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<String>,
+
+    /// Isolation mode for the spawned agent.
+    ///
+    /// When set to `"worktree"`, a temporary git worktree is created and the
+    /// agent's CWD is set to the worktree path. Auto-cleanup on completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<String>,
+
+    /// Display name for the spawned agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Team to auto-join the agent to after spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+
+    /// Agent execution mode (normal, plan, auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+
+    /// Working directory for the spawned agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Result of spawning a subagent.
@@ -155,15 +184,15 @@ pub struct SpawnAgentResult {
 /// Input for a single-shot model call (no agent loop).
 #[derive(Debug, Clone)]
 pub struct ModelCallInput {
-    /// The object request (messages + JSON schema).
-    pub request: hyper_sdk::ObjectRequest,
+    /// The call options (messages + JSON response format).
+    pub request: cocode_api::LanguageModelCallOptions,
 }
 
 /// Result of a single-shot model call.
 #[derive(Debug, Clone)]
 pub struct ModelCallResult {
-    /// The structured object response.
-    pub response: hyper_sdk::ObjectResponse,
+    /// The generate result.
+    pub response: cocode_api::LanguageModelGenerateResult,
 }
 
 /// Lightweight model call callback — single request/response, no agent loop.
@@ -665,6 +694,22 @@ impl Default for FileTracker {
 }
 
 impl FileTracker {
+    /// Acquire a read guard, recovering from lock poisoning.
+    fn read_guard(&self) -> std::sync::RwLockReadGuard<'_, TrackerState> {
+        self.state.read().unwrap_or_else(|e| {
+            tracing::warn!("Lock poisoned — concurrent bug detected");
+            e.into_inner()
+        })
+    }
+
+    /// Acquire a write guard, recovering from lock poisoning.
+    fn write_guard(&self) -> std::sync::RwLockWriteGuard<'_, TrackerState> {
+        self.state.write().unwrap_or_else(|e| {
+            tracing::warn!("Lock poisoned — concurrent bug detected");
+            e.into_inner()
+        })
+    }
+
     /// Create a new file tracker with default limits (100 entries, ~25MB).
     pub fn new() -> Self {
         Self::default()
@@ -683,8 +728,8 @@ impl FileTracker {
     /// * `max_entries` - Maximum number of files to track (sets LRU capacity)
     /// * `max_size_bytes` - Maximum total content size in bytes
     pub fn with_limits(max_entries: usize, max_size_bytes: usize) -> Self {
-        let capacity =
-            NonZeroUsize::new(max_entries.max(1)).unwrap_or(NonZeroUsize::new(1).unwrap());
+        // SAFETY: max(1) guarantees the value is at least 1
+        let capacity = NonZeroUsize::new(max_entries.max(1)).unwrap_or(NonZeroUsize::MIN);
         Self {
             state: std::sync::RwLock::new(TrackerState {
                 read_files: LruCache::new(capacity),
@@ -705,28 +750,17 @@ impl FileTracker {
 
     /// Get the current number of tracked files.
     pub fn len(&self) -> usize {
-        self.state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .read_files
-            .len()
+        self.read_guard().read_files.len()
     }
 
     /// Check if the tracker is empty.
     pub fn is_empty(&self) -> bool {
-        self.state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .read_files
-            .is_empty()
+        self.read_guard().read_files.is_empty()
     }
 
     /// Get current total content size in bytes.
     pub fn current_size(&self) -> usize {
-        self.state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .current_size_bytes
+        self.read_guard().current_size_bytes
     }
 
     /// Get all read files with their state for syncing to another tracker.
@@ -736,7 +770,7 @@ impl FileTracker {
     ///
     /// Returns owned data (cloned) to avoid holding the read lock.
     pub fn read_files_with_state(&self) -> Vec<(PathBuf, FileReadState)> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state
             .read_files
             .iter()
@@ -751,7 +785,7 @@ impl FileTracker {
         if Self::is_internal_file(&path) {
             return;
         }
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         if let Some(read_state) = state.read_files.get_mut(&path) {
             read_state.access_count += 1;
             read_state.timestamp = SystemTime::now();
@@ -786,23 +820,23 @@ impl FileTracker {
 
     /// Insert a file with state, handling LRU eviction.
     fn insert_with_eviction(&self, path: PathBuf, read_state: FileReadState) {
-        let content_size = read_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+        let content_size = read_state.content.as_ref().map(String::len).unwrap_or(0);
         let max_size = self.max_size_bytes;
 
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
 
         // Check if we need to evict entries for size
         while state.current_size_bytes + content_size > max_size && !state.read_files.is_empty() {
             // Evict oldest entry
             if let Some((_, old_state)) = state.read_files.pop_lru() {
-                let old_size = old_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+                let old_size = old_state.content.as_ref().map(String::len).unwrap_or(0);
                 state.current_size_bytes = state.current_size_bytes.saturating_sub(old_size);
             }
         }
 
         // If this path already exists, update the size accounting
         if let Some(old_state) = state.read_files.peek(&path) {
-            let old_size = old_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+            let old_size = old_state.content.as_ref().map(String::len).unwrap_or(0);
             state.current_size_bytes = state.current_size_bytes.saturating_sub(old_size);
         }
 
@@ -815,43 +849,46 @@ impl FileTracker {
 
     /// Record a file modification.
     pub fn record_modified(&self, path: impl Into<PathBuf>) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         state.modified_files.insert(path.into());
     }
 
     /// Check if a file has been read.
     pub fn was_read(&self, path: &PathBuf) -> bool {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.contains(path)
     }
 
     /// Get the read state for a file (cloned to avoid holding lock).
     pub fn read_state(&self, path: &PathBuf) -> Option<FileReadState> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.peek(path).cloned()
     }
 
-    /// Get mutable read state for a file (and promote to most-recently-used).
-    pub fn read_state_mut(&self, path: &PathBuf) -> Option<FileReadState> {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+    /// Get read state for a file, promoting it to most-recently-used in the LRU cache.
+    ///
+    /// Unlike [`read_state`] which only peeks without affecting LRU order,
+    /// this method promotes the entry so it's less likely to be evicted.
+    pub fn read_state_promoted(&self, path: &PathBuf) -> Option<FileReadState> {
+        let mut state = self.write_guard();
         state.read_files.get_mut(path).map(|s| s.clone())
     }
 
     /// Check if a file has been modified.
     pub fn was_modified(&self, path: &PathBuf) -> bool {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.modified_files.contains(path)
     }
 
     /// Get all read file paths.
     pub fn read_files(&self) -> Vec<PathBuf> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.iter().map(|(k, _)| k.clone()).collect()
     }
 
     /// Get all modified files.
     pub fn modified_files(&self) -> HashSet<PathBuf> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.modified_files.clone()
     }
 
@@ -866,7 +903,10 @@ impl FileTracker {
         self.insert_with_eviction(path.clone(), read_state);
 
         if is_memory_trigger {
-            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.write().unwrap_or_else(|e| {
+                tracing::warn!("Lock poisoned — concurrent bug detected");
+                e.into_inner()
+            });
             state.nested_memory_triggers.insert(path);
             true
         } else {
@@ -884,7 +924,10 @@ impl FileTracker {
     pub fn has_file_changed(&self, path: &Path) -> Option<bool> {
         // Get state under read lock, then release lock before filesystem access
         let (file_mtime, content_hash, is_partial) = {
-            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+            let state = self.state.read().unwrap_or_else(|e| {
+                tracing::warn!("Lock poisoned — concurrent bug detected");
+                e.into_inner()
+            });
             let read_state = state.read_files.peek(path)?;
             let is_partial = read_state.is_partial();
             (
@@ -929,7 +972,10 @@ impl FileTracker {
     pub fn is_unchanged(&self, path: &Path) -> Option<bool> {
         // Get state under read lock, then release lock before filesystem access
         let (file_mtime, content_hash, is_partial) = {
-            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+            let state = self.state.read().unwrap_or_else(|e| {
+                tracing::warn!("Lock poisoned — concurrent bug detected");
+                e.into_inner()
+            });
             let read_state = state.read_files.peek(path)?;
             let is_partial = read_state.is_partial();
             (
@@ -963,7 +1009,7 @@ impl FileTracker {
 
     /// Get all tracked file paths.
     pub fn tracked_files(&self) -> Vec<PathBuf> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.iter().map(|(k, _)| k.clone()).collect()
     }
 
@@ -977,7 +1023,7 @@ impl FileTracker {
 
     /// Update the modification time for a file after editing.
     pub fn update_modified_time(&self, path: &Path) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         if let Some(read_state) = state.read_files.get_mut(path)
             && let Ok(meta) = std::fs::metadata(path)
         {
@@ -987,17 +1033,34 @@ impl FileTracker {
 
     /// Remove tracking for a file.
     pub fn remove(&self, path: &Path) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         if let Some(read_state) = state.read_files.pop(path) {
-            let size = read_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+            let size = read_state.content.as_ref().map(String::len).unwrap_or(0);
             state.current_size_bytes = state.current_size_bytes.saturating_sub(size);
         }
         state.nested_memory_triggers.remove(path);
     }
 
+    /// Enforce an entry limit by evicting the least-recently-used entries.
+    ///
+    /// Pops LRU entries until the count is at most `max_entries`.
+    pub fn enforce_entry_limit(&self, max_entries: usize) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        while state.read_files.len() > max_entries {
+            if let Some((_path, evicted)) = state.read_files.pop_lru() {
+                if let Some(content) = &evicted.content {
+                    state.current_size_bytes =
+                        state.current_size_bytes.saturating_sub(content.len());
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Clear all tracked files.
     pub fn clear(&self) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         state.read_files.clear();
         state.modified_files.clear();
         state.nested_memory_triggers.clear();
@@ -1008,13 +1071,13 @@ impl FileTracker {
     ///
     /// Returns paths that need nested memory lookup, then clears them.
     pub fn drain_nested_memory_triggers(&self) -> HashSet<PathBuf> {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         std::mem::take(&mut state.nested_memory_triggers)
     }
 
     /// Check if there are pending nested memory triggers.
     pub fn has_nested_memory_triggers(&self) -> bool {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         !state.nested_memory_triggers.is_empty()
     }
 
@@ -1064,7 +1127,7 @@ impl FileTracker {
     /// When micro-compact removes tool results, this mapping allows
     /// cleaning up the corresponding FileTracker entries.
     pub fn register_tool_read(&self, tool_call_id: String, path: PathBuf) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         state.tool_id_to_path.insert(tool_call_id, path);
     }
 
@@ -1072,12 +1135,12 @@ impl FileTracker {
     ///
     /// Called after micro-compaction to remove entries for compacted reads.
     pub fn cleanup_compacted(&self, compacted_ids: &[String]) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         for id in compacted_ids {
             if let Some(path) = state.tool_id_to_path.remove(id) {
                 // Remove from read_files if present
                 if let Some(read_state) = state.read_files.pop(&path) {
-                    let size = read_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+                    let size = read_state.content.as_ref().map(String::len).unwrap_or(0);
                     state.current_size_bytes = state.current_size_bytes.saturating_sub(size);
                 }
                 state.nested_memory_triggers.remove(&path);
@@ -1087,7 +1150,7 @@ impl FileTracker {
 
     /// Get the mapping of tool call IDs to paths (for testing/debugging).
     pub fn tool_id_paths(&self) -> HashMap<String, PathBuf> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.tool_id_to_path.clone()
     }
 
@@ -1095,7 +1158,7 @@ impl FileTracker {
     ///
     /// Returns up to `limit` file paths sorted by most recent access.
     pub fn most_recent_files(&self, limit: usize) -> Vec<PathBuf> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         let mut files: Vec<_> = state
             .read_files
             .iter()
@@ -1136,7 +1199,7 @@ impl FileTracker {
     /// Partial reads and metadata-only entries (from Glob/Grep) are NOT cacheable.
     pub fn is_already_read_unchanged(&self, path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         let Some(read_state) = state.read_files.peek(path) else {
             return false;
         };
@@ -1154,7 +1217,7 @@ impl FileTracker {
     ///
     /// Returns `None` if the file is not tracked.
     pub fn get_state(&self, path: impl AsRef<Path>) -> Option<FileReadState> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.peek(path.as_ref()).cloned()
     }
 
@@ -1162,7 +1225,7 @@ impl FileTracker {
     ///
     /// Used for rewind recovery - captures all file read states.
     pub fn snapshot(&self) -> Vec<(PathBuf, FileReadState)> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state
             .read_files
             .iter()
@@ -1183,12 +1246,12 @@ impl FileTracker {
     ///
     /// Used for rewind recovery - restores file read states.
     pub fn replace_snapshot(&self, entries: Vec<(PathBuf, FileReadState)>) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         state.read_files.clear();
         state.current_size_bytes = 0;
 
         for (path, read_state) in entries {
-            let content_size = read_state.content.as_ref().map(|c| c.len()).unwrap_or(0);
+            let content_size = read_state.content.as_ref().map(String::len).unwrap_or(0);
             state.current_size_bytes += content_size;
             state.read_files.put(path, read_state);
         }
@@ -1207,7 +1270,7 @@ impl FileTracker {
     ///
     /// Used for full reset during rewind.
     pub fn clear_reads(&self) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.write_guard();
         state.read_files.clear();
         state.nested_memory_triggers.clear();
         state.current_size_bytes = 0;
@@ -1217,7 +1280,7 @@ impl FileTracker {
     ///
     /// Returns the count of files currently in the read cache.
     pub fn read_count(&self) -> usize {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state.read_files.len()
     }
 
@@ -1277,21 +1340,12 @@ impl FileTracker {
     // Token Estimation (Claude Code v2.1.38 alignment)
     // ========================================================================
 
-    /// Maximum tokens per file during restoration (Claude Code: 5,000).
-    pub const MAX_TOKENS_PER_FILE: usize = 5_000;
-
-    /// Maximum total tokens for all restored files (Claude Code: 50,000).
-    pub const MAX_TOTAL_TOKENS: usize = 50_000;
-
-    /// Maximum number of files to restore after compaction (Claude Code: 5).
-    pub const MAX_FILES_TO_RESTORE: usize = 5;
-
-    /// Estimate token count for content.
+    /// Estimate token count for content using the canonical formula.
     ///
-    /// Uses a simple approximation of ~4 characters per token, which is
-    /// accurate enough for budget estimation during compaction.
+    /// Delegates to `cocode_protocol::estimate_text_tokens` which uses
+    /// `ceil(len / 3.0)` (~3 characters per token).
     pub fn estimate_tokens(content: &str) -> usize {
-        content.len() / 4
+        cocode_protocol::estimate_text_tokens(content) as usize
     }
 
     /// Estimate token count for a tracked file.
@@ -1299,7 +1353,7 @@ impl FileTracker {
     /// Returns the estimated tokens for a file's content, or 0 if not tracked
     /// or if content is not available.
     pub fn estimate_file_tokens(&self, path: &Path) -> usize {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state
             .read_files
             .peek(path)
@@ -1312,7 +1366,7 @@ impl FileTracker {
     ///
     /// Sums up the estimated tokens for all files with content in the tracker.
     pub fn total_estimated_tokens(&self) -> usize {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let state = self.read_guard();
         state
             .read_files
             .iter()
@@ -1429,6 +1483,10 @@ pub struct ToolContext {
     /// When set, the AskUserQuestion tool can emit a `QuestionAsked` event
     /// and wait for the user's structured response via a oneshot channel.
     pub question_responder: Option<Arc<QuestionResponder>>,
+    /// Path to the cocode home directory (e.g. `~/.cocode`).
+    ///
+    /// Used for durable cron persistence and other session-scoped file operations.
+    pub cocode_home: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -1469,6 +1527,7 @@ impl ToolContext {
             task_type_restrictions: None,
             file_backup_store: None,
             question_responder: None,
+            cocode_home: None,
         }
     }
 
@@ -1602,6 +1661,12 @@ impl ToolContext {
     /// Set the question responder for AskUserQuestion tool.
     pub fn with_question_responder(mut self, responder: Arc<QuestionResponder>) -> Self {
         self.question_responder = Some(responder);
+        self
+    }
+
+    /// Set the cocode home directory path.
+    pub fn with_cocode_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cocode_home = Some(path.into());
         self
     }
 
@@ -1856,8 +1921,10 @@ pub struct ToolContextBuilder {
     features: Features,
     web_search_config: WebSearchConfig,
     web_fetch_config: WebFetchConfig,
+    task_type_restrictions: Option<Vec<String>>,
     file_backup_store: Option<Arc<cocode_file_backup::FileBackupStore>>,
     question_responder: Option<Arc<QuestionResponder>>,
+    cocode_home: Option<PathBuf>,
 }
 
 impl ToolContextBuilder {
@@ -1894,8 +1961,10 @@ impl ToolContextBuilder {
             features: Features::with_defaults(),
             web_search_config: WebSearchConfig::default(),
             web_fetch_config: WebFetchConfig::default(),
+            task_type_restrictions: None,
             file_backup_store: None,
             question_responder: None,
+            cocode_home: None,
         }
     }
 
@@ -2081,6 +2150,18 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the cocode home directory path.
+    pub fn cocode_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cocode_home = Some(path.into());
+        self
+    }
+
+    /// Set allowed subagent types for the Task tool.
+    pub fn task_type_restrictions(mut self, restrictions: Vec<String>) -> Self {
+        self.task_type_restrictions = Some(restrictions);
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         let shell_executor = self
@@ -2117,9 +2198,10 @@ impl ToolContextBuilder {
             features: self.features,
             web_search_config: self.web_search_config,
             web_fetch_config: self.web_fetch_config,
-            task_type_restrictions: None,
+            task_type_restrictions: self.task_type_restrictions,
             file_backup_store: self.file_backup_store,
             question_responder: self.question_responder,
+            cocode_home: self.cocode_home,
         }
     }
 }

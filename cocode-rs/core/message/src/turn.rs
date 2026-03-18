@@ -6,10 +6,10 @@
 use crate::tracked::TrackedMessage;
 use chrono::DateTime;
 use chrono::Utc;
+use cocode_api::ToolCall;
 use cocode_protocol::AbortReason;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::ToolResultContent;
-use hyper_sdk::ToolCall;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -92,9 +92,9 @@ impl TrackedToolCall {
     /// Create a new pending tool call.
     pub fn new(tool_call: &ToolCall) -> Self {
         Self {
-            call_id: tool_call.id.clone(),
-            name: tool_call.name.clone(),
-            input: tool_call.arguments.clone(),
+            call_id: tool_call.tool_call_id.clone(),
+            name: tool_call.tool_name.clone(),
+            input: tool_call.input.clone(),
             output: None,
             modifiers: Vec::new(),
             status: ToolCallStatus::Pending,

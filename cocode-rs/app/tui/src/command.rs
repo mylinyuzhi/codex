@@ -3,11 +3,11 @@
 //! These commands represent user actions that need to be communicated
 //! to the core agent loop for processing.
 
+use cocode_api::UserContentPart;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::RoleSelection;
 use cocode_protocol::SubmissionId;
 use cocode_protocol::ThinkingLevel;
-use hyper_sdk::ContentBlock;
 
 /// Commands sent from the TUI to the core agent.
 ///
@@ -18,7 +18,7 @@ pub enum UserCommand {
     /// Submit user input to the agent.
     SubmitInput {
         /// Content blocks (text, images) to send to the agent.
-        content: Vec<ContentBlock>,
+        content: Vec<UserContentPart>,
         /// Original display text (with pills) for chat history.
         display_text: String,
     },
@@ -145,10 +145,10 @@ impl UserCommand {
     ///
     /// ```
     /// use cocode_tui::UserCommand;
-    /// use hyper_sdk::ContentBlock;
+    /// use cocode_api::UserContentPart;
     ///
     /// let cmd = UserCommand::SubmitInput {
-    ///     content: vec![ContentBlock::text("Hello")],
+    ///     content: vec![UserContentPart::text("Hello")],
     ///     display_text: "Hello".to_string(),
     /// };
     /// let (id, cmd) = cmd.with_correlation_id();

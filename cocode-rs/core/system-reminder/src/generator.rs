@@ -316,6 +316,21 @@ pub struct MentionReadRecord {
     pub read_turn: i32,
 }
 
+/// Cron job information for system reminders.
+#[derive(Debug, Clone)]
+pub struct CronJobInfo {
+    /// Job ID.
+    pub id: String,
+    /// Cron schedule expression.
+    pub cron: String,
+    /// Job description or prompt snippet.
+    pub description: String,
+    /// Whether this is a one-shot (non-recurring) job.
+    pub one_shot: bool,
+    /// Number of executions so far.
+    pub execution_count: u32,
+}
+
 /// Collaboration notification from another agent.
 #[derive(Debug, Clone)]
 pub struct CollabNotification {
@@ -404,6 +419,10 @@ pub struct GeneratorContext<'a> {
     /// Current todo items.
     pub todos: Vec<TodoItem>,
 
+    // === Cron Jobs ===
+    /// Current cron jobs for reminder injection.
+    pub cron_jobs: Vec<CronJobInfo>,
+
     // === Nested memory ===
     /// Paths that trigger nested memory lookup.
     pub nested_memory_triggers: HashSet<PathBuf>,
@@ -450,6 +469,10 @@ pub struct GeneratorContext<'a> {
     // === Global state flags ===
     /// Whether plan mode exit is pending (triggers one-time exit instructions).
     pub plan_mode_exit_pending: bool,
+
+    // === Compaction state ===
+    /// Whether auto-compaction is enabled for this session.
+    pub is_auto_compact_enabled: bool,
 
     // === Rewind state ===
     /// Information about a rewind that just occurred (consumed once).
@@ -531,6 +554,11 @@ impl<'a> GeneratorContext<'a> {
             .filter(|t| t.status == TodoStatus::InProgress)
     }
 
+    /// Check if there are any cron jobs.
+    pub fn has_cron_jobs(&self) -> bool {
+        !self.cron_jobs.is_empty()
+    }
+
     /// Check if delegate mode is active.
     pub fn in_delegate_mode(&self) -> bool {
         self.is_delegate_mode
@@ -586,6 +614,7 @@ pub struct GeneratorContextBuilder<'a> {
     background_tasks: Vec<BackgroundTaskInfo>,
     diagnostics: Vec<DiagnosticInfo>,
     todos: Vec<TodoItem>,
+    cron_jobs: Vec<CronJobInfo>,
     nested_memory_triggers: HashSet<PathBuf>,
     full_content_flags: HashMap<AttachmentType, bool>,
     hook_state: HookState,
@@ -603,6 +632,7 @@ pub struct GeneratorContextBuilder<'a> {
     plan_mode_exit_pending: bool,
     rewind_info: Option<RewindContextInfo>,
     mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
+    is_auto_compact_enabled: bool,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -701,6 +731,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn cron_jobs(mut self, jobs: Vec<CronJobInfo>) -> Self {
+        self.cron_jobs = jobs;
+        self
+    }
+
     pub fn nested_memory_triggers(mut self, triggers: HashSet<PathBuf>) -> Self {
         self.nested_memory_triggers = triggers;
         self
@@ -779,6 +814,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn is_auto_compact_enabled(mut self, enabled: bool) -> Self {
+        self.is_auto_compact_enabled = enabled;
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -806,6 +846,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             background_tasks: self.background_tasks,
             diagnostics: self.diagnostics,
             todos: self.todos,
+            cron_jobs: self.cron_jobs,
             nested_memory_triggers: self.nested_memory_triggers,
             full_content_flags: self.full_content_flags,
             hook_state: self.hook_state,
@@ -821,6 +862,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             collab_notifications: self.collab_notifications,
             queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
+            is_auto_compact_enabled: self.is_auto_compact_enabled,
             rewind_info: self.rewind_info,
             mention_read_records: self.mention_read_records,
         }

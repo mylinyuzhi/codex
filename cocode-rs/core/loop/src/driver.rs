@@ -4,12 +4,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cocode_api::ApiClient;
+use cocode_api::AssistantContentPart;
 use cocode_api::CollectedResponse;
+use cocode_api::FinishReason;
+use cocode_api::LanguageModelMessage;
+use cocode_api::LanguageModelTool;
 use cocode_api::ModelHub;
 use cocode_api::QueryResultType;
 use cocode_api::RequestBuilder;
 use cocode_api::StreamOptions;
+use cocode_api::TextPart;
+use cocode_api::ToolCall;
+use cocode_api::ToolCallPart;
+use cocode_api::UnifiedFinishReason;
 use cocode_context::ConversationContext;
+use cocode_error::ErrorExt;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
 use cocode_message::MessageHistory;
@@ -52,13 +61,9 @@ use cocode_tools::ModelCallInput;
 use cocode_tools::ModelCallResult;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::StreamingToolExecutor;
+use cocode_tools::ToolDefinition;
 use cocode_tools::ToolExecutionResult;
 use cocode_tools::ToolRegistry;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::FinishReason;
-use hyper_sdk::Message;
-use hyper_sdk::ToolCall;
-use hyper_sdk::ToolDefinition;
 use std::sync::Mutex;
 
 use snafu::ResultExt;
@@ -70,7 +75,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::compaction::CompactionConfig;
 use crate::compaction::FileRestoration;
 use crate::compaction::FileRestorationConfig;
 use crate::compaction::InvokedSkillRestoration;
@@ -82,10 +86,13 @@ use crate::compaction::build_compact_instructions;
 use crate::compaction::build_context_restoration_with_config;
 use crate::compaction::build_file_read_state;
 use crate::compaction::calculate_keep_start_index;
+use crate::compaction::find_session_memory_boundary;
 use crate::compaction::format_restoration_message;
+use crate::compaction::format_summary_with_transcript;
 use crate::compaction::is_internal_file;
 use crate::compaction::map_message_index_to_keep_turns;
 use crate::compaction::try_session_memory_compact;
+use crate::compaction::wrap_hook_additional_context;
 use crate::compaction::write_session_memory;
 use crate::error::agent_loop_error;
 use crate::fallback::FallbackConfig;
@@ -127,8 +134,7 @@ pub struct AgentLoop {
     // Config
     config: LoopConfig,
     fallback_config: FallbackConfig,
-    compaction_config: CompactionConfig,
-    /// Protocol-level compact configuration with all threshold constants.
+    /// Compact configuration with all threshold constants and session memory settings.
     compact_config: CompactConfig,
 
     // System reminders
@@ -157,6 +163,17 @@ pub struct AgentLoop {
 
     // Background extraction agent (optional)
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
+    /// Channel for receiving extraction outcomes from background tasks.
+    extraction_result_rx: mpsc::Receiver<crate::session_memory_agent::ExtractionOutcome>,
+    /// Sender cloned into each background extraction task.
+    extraction_result_tx: mpsc::Sender<crate::session_memory_agent::ExtractionOutcome>,
+
+    // Circuit breaker for auto-compaction
+    /// Consecutive compaction failure count. Reset to 0 on success.
+    compact_failure_count: i32,
+    /// When true, auto-compaction is disabled (manual still works).
+    /// Trips after 3 consecutive failures.
+    circuit_breaker_open: bool,
 
     // Agent type tracking (for tier filtering in system reminders)
     /// Whether this is a subagent (spawned by Task tool).
@@ -197,6 +214,14 @@ pub struct AgentLoop {
     // Task list state (updated by TodoWrite tool via ContextModifier)
     /// Latest task list from the most recent TodoWrite tool call.
     current_todos: Option<serde_json::Value>,
+
+    // Structured task state (updated by TaskCreate/TaskUpdate via ContextModifier)
+    /// Latest structured tasks snapshot.
+    current_structured_tasks: Option<serde_json::Value>,
+
+    // Cron job state (updated by CronCreate/CronDelete via ContextModifier)
+    /// Latest cron jobs snapshot.
+    current_cron_jobs: Option<serde_json::Value>,
 
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
@@ -256,6 +281,9 @@ pub struct AgentLoop {
     /// token limit. Consumed once on the next turn by the
     /// `CompactFileReferenceGenerator` to notify the model.
     pending_compacted_large_files: Vec<cocode_protocol::CompactedLargeFileRef>,
+
+    /// Path to the cocode home directory for durable cron persistence.
+    cocode_home: Option<std::path::PathBuf>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -272,7 +300,6 @@ pub struct AgentLoopBuilder {
     message_history: Option<MessageHistory>,
     config: LoopConfig,
     fallback_config: FallbackConfig,
-    compaction_config: CompactionConfig,
     compact_config: CompactConfig,
     system_reminder_config: SystemReminderConfig,
     hooks: Option<Arc<HookRegistry>>,
@@ -301,6 +328,7 @@ pub struct AgentLoopBuilder {
     /// Named to clarify this is the reminder-level snapshot, distinct from the
     /// shared tools-level tracker.
     reminder_file_tracker_state: Vec<(std::path::PathBuf, FileReadState)>,
+    cocode_home: Option<std::path::PathBuf>,
 }
 
 impl AgentLoopBuilder {
@@ -325,7 +353,6 @@ impl AgentLoopBuilder {
             message_history: None,
             config: LoopConfig::default(),
             fallback_config: FallbackConfig::default(),
-            compaction_config: CompactionConfig::default(),
             compact_config: CompactConfig::default(),
             system_reminder_config: SystemReminderConfig::default(),
             hooks: None,
@@ -350,6 +377,7 @@ impl AgentLoopBuilder {
             question_responder: None,
             approval_store: None,
             reminder_file_tracker_state: Vec::new(),
+            cocode_home: None,
         }
     }
 
@@ -368,12 +396,7 @@ impl AgentLoopBuilder {
         self
     }
 
-    pub fn compaction_config(mut self, config: CompactionConfig) -> Self {
-        self.compaction_config = config;
-        self
-    }
-
-    /// Set the protocol-level compact configuration.
+    /// Set the compact configuration.
     pub fn compact_config(mut self, config: CompactConfig) -> Self {
         self.compact_config = config;
         self
@@ -551,6 +574,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the cocode home directory for durable cron persistence.
+    pub fn cocode_home(mut self, path: std::path::PathBuf) -> Self {
+        self.cocode_home = Some(path);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     pub fn build(self) -> AgentLoop {
         let model_name = self
@@ -622,6 +651,10 @@ impl AgentLoopBuilder {
             .shell_executor
             .unwrap_or_else(|| ShellExecutor::new(cwd));
 
+        // Create the extraction outcome channel (bounded to 4 to avoid unbounded growth)
+        let (extraction_result_tx, extraction_result_rx) =
+            mpsc::channel::<crate::session_memory_agent::ExtractionOutcome>(4);
+
         AgentLoop {
             api_client: self.api_client,
             model_hub: self.model_hub,
@@ -631,7 +664,6 @@ impl AgentLoopBuilder {
             context: self.context,
             config: self.config,
             fallback_config: self.fallback_config,
-            compaction_config: self.compaction_config,
             compact_config: self.compact_config,
             reminder_orchestrator,
             shared_tools_file_tracker,
@@ -645,6 +677,10 @@ impl AgentLoopBuilder {
             total_input_tokens: 0,
             total_output_tokens: 0,
             extraction_agent: self.extraction_agent,
+            extraction_result_rx,
+            extraction_result_tx,
+            compact_failure_count: 0,
+            circuit_breaker_open: false,
             is_subagent: self.is_subagent,
             custom_system_prompt: self.custom_system_prompt,
             // Initially true - the first turn always has user input
@@ -656,6 +692,8 @@ impl AgentLoopBuilder {
             invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             active_skill_allowed_tools: None,
             current_todos: None,
+            current_structured_tasks: None,
+            current_cron_jobs: None,
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,
@@ -670,6 +708,7 @@ impl AgentLoopBuilder {
                 .question_responder
                 .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
             pending_compacted_large_files: Vec::new(),
+            cocode_home: self.cocode_home,
         }
     }
 }
@@ -736,6 +775,16 @@ impl AgentLoop {
     /// Take the current task list (if any) set by a TodoWrite tool call.
     pub fn take_todos(&mut self) -> Option<serde_json::Value> {
         self.current_todos.take()
+    }
+
+    /// Take the current structured tasks (if any) set by TaskCreate/TaskUpdate.
+    pub fn take_structured_tasks(&mut self) -> Option<serde_json::Value> {
+        self.current_structured_tasks.take()
+    }
+
+    /// Take the current cron jobs (if any) set by CronCreate/CronDelete.
+    pub fn take_cron_jobs(&mut self) -> Option<serde_json::Value> {
+        self.current_cron_jobs.take()
     }
 
     /// Take the plan mode state for persistence across loop runs.
@@ -969,7 +1018,34 @@ impl AgentLoop {
         // ── STEP 3: Normalize messages ──
         // Messages are already normalized through MessageHistory::messages_for_api().
 
+        // ── STEP 3.5: Drain extraction outcomes from background tasks ──
+        // Fixes bug where extraction_in_progress stayed true forever because
+        // the background tokio::spawn couldn't update auto_compact_tracking.
+        while let Ok(outcome) = self.extraction_result_rx.try_recv() {
+            match outcome {
+                crate::session_memory_agent::ExtractionOutcome::Completed {
+                    summary_tokens,
+                    last_summarized_id,
+                } => {
+                    auto_compact_tracking
+                        .mark_extraction_completed(summary_tokens, &last_summarized_id);
+                    debug!(
+                        summary_tokens,
+                        last_summarized_id, "Extraction outcome received: completed"
+                    );
+                }
+                crate::session_memory_agent::ExtractionOutcome::Failed => {
+                    auto_compact_tracking.mark_extraction_failed();
+                    debug!("Extraction outcome received: failed");
+                }
+            }
+        }
+
         // ── STEP 4: Micro-compaction (PRE-API) ──
+        // NOTE: Deliberate divergence from Claude Code v2.1.76, where `performMicrocompaction`
+        // is a no-op (returns messages unchanged). cocode-rs has micro-compact active by
+        // default because it operates at the MessageHistory level rather than raw JSON,
+        // making tool-result trimming safe and effective.
         if self.config.enable_micro_compaction {
             let (removed, tokens_saved) = self.micro_compact().await;
             if removed > 0 {
@@ -1027,27 +1103,52 @@ impl AgentLoop {
         }
 
         // Trigger auto-compact if above threshold (and auto-compact is enabled)
-        if status.is_above_auto_compact_threshold && self.compact_config.is_auto_compact_enabled() {
+        // Skip if circuit breaker is open (3+ consecutive failures)
+        if status.is_above_auto_compact_threshold
+            && self.compact_config.is_auto_compact_enabled()
+            && !self.circuit_breaker_open
+        {
             // Tier 1: Try session memory first (zero API cost)
             // Only if session memory compact is enabled
-            if self.compaction_config.session_memory.enable_sm_compact {
-                if let Some(summary) =
-                    try_session_memory_compact(&self.compaction_config.session_memory)
-                {
+            let mut needs_llm_compact = true;
+            if self.compact_config.enable_sm_compact {
+                if let Some(summary) = try_session_memory_compact(&self.compact_config) {
                     self.apply_session_memory_summary(summary, &turn_id, auto_compact_tracking)
                         .await?;
-                } else {
-                    // Tier 2: Fall back to LLM-based compaction
-                    self.compact(auto_compact_tracking, &turn_id, query_tracking)
-                        .await?;
+
+                    // Post-compact validation: check if session memory compact was sufficient.
+                    // If post-compact tokens still exceed auto-compact target, fall through
+                    // to Tier 2 (LLM-based compaction).
+                    let post_tokens = self.message_history.estimate_tokens();
+                    let post_estimated =
+                        self.compact_config.estimate_tokens_with_margin(post_tokens);
+                    let target = self.compact_config.auto_compact_target(context_window);
+                    if post_estimated < target {
+                        needs_llm_compact = false;
+                    } else {
+                        warn!(
+                            post_tokens = post_estimated,
+                            target,
+                            "Session memory compact insufficient, falling through to LLM compact"
+                        );
+                    }
                 }
-            } else {
-                // Session memory compact disabled, go directly to Tier 2
-                debug!("Session memory compact disabled, using LLM-based compaction");
+            }
+            if needs_llm_compact {
                 self.compact(auto_compact_tracking, &turn_id, query_tracking)
                     .await?;
             }
         }
+
+        // Recalculate threshold status after auto-compact.
+        // The status from Step 5 is stale if Tier 1 or Tier 2 compact ran,
+        // which could cause a false-positive blocking limit error at Step 8.
+        let estimated_tokens = self.message_history.estimate_tokens();
+        let estimated_with_margin = self
+            .compact_config
+            .estimate_tokens_with_margin(estimated_tokens);
+        let status =
+            ThresholdStatus::calculate(estimated_with_margin, context_window, &self.compact_config);
 
         // ── STEP 6: Initialize state ──
         self.turn_number += 1;
@@ -1200,7 +1301,8 @@ impl AgentLoop {
                     async_responses,
                     contexts: context_hooks,
                     blocking: blocking_hooks,
-                });
+                })
+                .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
 
             // Drain pending compacted large files (one-shot: populated during restoration)
             if !self.pending_compacted_large_files.is_empty() {
@@ -1294,6 +1396,104 @@ impl AgentLoop {
             // Get rewind info if available (already extracted earlier)
             if let Some(rewind_info) = rewind_context_for_builder.clone() {
                 builder = builder.rewind_info(rewind_info);
+            }
+
+            // Convert structured tasks to TodoItems for the reminder system.
+            // When StructuredTasks feature is enabled, these replace TodoWrite items.
+            // Also include plain todos from TodoWrite for backwards compatibility.
+            {
+                let mut todo_items = Vec::new();
+
+                // Structured tasks → TodoItems
+                if let Some(ref tasks_val) = self.current_structured_tasks {
+                    if let Some(tasks_map) = tasks_val.as_object() {
+                        for (_id, task) in tasks_map {
+                            let status_str = task["status"].as_str().unwrap_or("pending");
+                            let status = match status_str {
+                                "in_progress" => {
+                                    cocode_system_reminder::generator::TodoStatus::InProgress
+                                }
+                                "completed" => {
+                                    cocode_system_reminder::generator::TodoStatus::Completed
+                                }
+                                _ => cocode_system_reminder::generator::TodoStatus::Pending,
+                            };
+                            // Skip deleted tasks
+                            if status_str == "deleted" {
+                                continue;
+                            }
+                            let blocked_by = task["blocked_by"].as_array();
+                            let is_blocked = blocked_by.map_or(false, |arr| !arr.is_empty());
+                            todo_items.push(cocode_system_reminder::generator::TodoItem {
+                                id: task["id"].as_str().unwrap_or("?").to_string(),
+                                subject: task["subject"].as_str().unwrap_or("?").to_string(),
+                                status,
+                                is_blocked,
+                            });
+                        }
+                    }
+                }
+
+                // Plain todos (from TodoWrite) — only when structured tasks are absent
+                if todo_items.is_empty() {
+                    if let Some(ref todos_val) = self.current_todos {
+                        if let Some(arr) = todos_val.as_array() {
+                            for todo in arr {
+                                let status_str = todo["status"].as_str().unwrap_or("pending");
+                                let status = match status_str {
+                                    "in_progress" => {
+                                        cocode_system_reminder::generator::TodoStatus::InProgress
+                                    }
+                                    "completed" => {
+                                        cocode_system_reminder::generator::TodoStatus::Completed
+                                    }
+                                    _ => cocode_system_reminder::generator::TodoStatus::Pending,
+                                };
+                                todo_items.push(cocode_system_reminder::generator::TodoItem {
+                                    id: todo["id"].as_str().unwrap_or("?").to_string(),
+                                    subject: todo["subject"]
+                                        .as_str()
+                                        .or_else(|| todo["content"].as_str())
+                                        .unwrap_or("?")
+                                        .to_string(),
+                                    status,
+                                    is_blocked: false,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                if !todo_items.is_empty() {
+                    builder = builder.todos(todo_items);
+                }
+            }
+
+            // Convert cron jobs to CronJobInfo for the reminder system.
+            {
+                if let Some(ref jobs_val) = self.current_cron_jobs {
+                    if let Some(jobs_map) = jobs_val.as_object() {
+                        let cron_infos: Vec<cocode_system_reminder::CronJobInfo> = jobs_map
+                            .values()
+                            .map(|job| cocode_system_reminder::CronJobInfo {
+                                id: job["id"].as_str().unwrap_or("?").to_string(),
+                                cron: job["cron"].as_str().unwrap_or("?").to_string(),
+                                description: job["description"]
+                                    .as_str()
+                                    .unwrap_or_else(|| job["prompt"].as_str().unwrap_or("?"))
+                                    .chars()
+                                    .take(80)
+                                    .collect(),
+                                one_shot: job["one_shot"].as_bool().unwrap_or(false),
+                                execution_count: job["execution_count"].as_u64().unwrap_or(0)
+                                    as u32,
+                            })
+                            .collect();
+                        if !cron_infos.is_empty() {
+                            builder = builder.cron_jobs(cron_infos);
+                        }
+                    }
+                }
             }
 
             let gen_ctx = builder.build();
@@ -1434,7 +1634,7 @@ impl AgentLoop {
                         .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
                         .map_err(cocode_error::boxed_err)?;
                     let response = model
-                        .generate_object(input.request)
+                        .do_generate(input.request)
                         .await
                         .map_err(|e| cocode_error::boxed(e, cocode_error::StatusCode::External))?;
                     Ok(ModelCallResult { response })
@@ -1455,6 +1655,11 @@ impl AgentLoop {
 
         // Wire question responder for AskUserQuestion tool
         executor = executor.with_question_responder(self.question_responder.clone());
+
+        // Wire cocode_home for durable cron persistence
+        if let Some(ref home) = self.cocode_home {
+            executor = executor.with_cocode_home(home.clone());
+        }
 
         // Share invoked skills tracker with the executor so the driver
         // can read which skills were invoked during tool execution
@@ -1547,7 +1752,7 @@ impl AgentLoop {
             .content
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
+                AssistantContentPart::Text(TextPart { text, .. }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -1556,7 +1761,7 @@ impl AgentLoop {
         let has_tool_calls = collected
             .content
             .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+            .any(|b| matches!(b, AssistantContentPart::ToolCall(_)));
 
         // Add assistant message to history
         if let Some(turn) = self.message_history.current_turn_mut() {
@@ -1574,9 +1779,12 @@ impl AgentLoop {
                 .content
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::ToolUse {
-                        id, name, input, ..
-                    } => Some(hyper_sdk::ToolCall::new(id, name, input.clone())),
+                    AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id,
+                        tool_name,
+                        input,
+                        ..
+                    }) => Some(ToolCall::new(tool_call_id, tool_name, input.clone())),
                     _ => None,
                 })
                 .collect();
@@ -1608,7 +1816,7 @@ impl AgentLoop {
             // ── Handle plan mode transitions ──
             // Check if EnterPlanMode or ExitPlanMode was called
             for tc in &tool_calls {
-                let tc_name = tc.name.as_str();
+                let tc_name = tc.tool_name.as_str();
                 match tc_name {
                     name if name == cocode_protocol::ToolName::EnterPlanMode.as_str() => {
                         // Skip if already in plan mode (prevents pre_plan_mode corruption)
@@ -1619,7 +1827,7 @@ impl AgentLoop {
                             continue;
                         }
                         // Find the result for this tool call to extract plan file path
-                        if let Some(result) = results.iter().find(|r| r.call_id == tc.id)
+                        if let Some(result) = results.iter().find(|r| r.call_id == tc.tool_call_id)
                             && let Ok(output) = &result.result
                         {
                             if let ToolResultContent::Structured(json) = &output.content {
@@ -1663,7 +1871,7 @@ impl AgentLoop {
                         // Extract allowedPrompts from the tool result's structured JSON
                         let allowed_prompts = results
                             .iter()
-                            .find(|r| r.call_id == tc.id)
+                            .find(|r| r.call_id == tc.tool_call_id)
                             .and_then(|r| r.result.as_ref().ok())
                             .and_then(|output| match &output.content {
                                 ToolResultContent::Structured(json) => {
@@ -1715,10 +1923,25 @@ impl AgentLoop {
             for _ in &tool_calls {
                 auto_compact_tracking.record_tool_call();
             }
-        }
 
-        // ── STEP 14: Check for hook stop ──
-        // Hook execution is deferred to a future session.
+            // ── STEP 14: Check for hook stop ──
+            // If any PostToolUse hook returned `preventContinuation`, halt the loop
+            // after processing this turn's tool results. The tool output itself is
+            // preserved — only the loop continuation is suppressed.
+            if let Some(reason) = results.iter().find_map(|r| r.stop_continuation.as_deref()) {
+                info!(
+                    turn = self.turn_number,
+                    reason = %reason,
+                    "PostToolUse hook requested loop stop (preventContinuation)"
+                );
+                self.set_status(AgentStatus::Idle);
+                return Ok(LoopResult::hook_stopped(
+                    self.turn_number,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                ));
+            }
+        }
 
         // ── STEP 15: Update auto-compact tracking ──
         auto_compact_tracking.turn_counter += 1;
@@ -1738,9 +1961,12 @@ impl AgentLoop {
                 let messages = self.message_history.messages_for_api();
                 let conversation_text: String = messages
                     .iter()
-                    .map(|m| format!("{m:?}"))
+                    .map(|m| {
+                        let role = format!("{:?}", m.role).to_lowercase();
+                        format!("[{}]: {}", role, m.text())
+                    })
                     .collect::<Vec<_>>()
-                    .join("\n");
+                    .join("\n\n");
 
                 let current_tokens = estimated_tokens;
                 let tool_calls_since = auto_compact_tracking.tool_calls_since_extraction();
@@ -1753,6 +1979,7 @@ impl AgentLoop {
                 // Clone what we need for the background task
                 let agent = Arc::clone(extraction_agent);
                 let tracking_current_tokens = current_tokens;
+                let outcome_tx = self.extraction_result_tx.clone();
 
                 // Spawn extraction in background (non-blocking)
                 tokio::spawn(async move {
@@ -1772,12 +1999,18 @@ impl AgentLoop {
                                 last_id = %result.last_summarized_id,
                                 "Background extraction completed"
                             );
-                            // Note: We can't update auto_compact_tracking here since
-                            // it's owned by the main loop. The next turn will see
-                            // the updated summary.md file.
+                            let _ = outcome_tx
+                                .send(crate::session_memory_agent::ExtractionOutcome::Completed {
+                                    summary_tokens: result.summary_tokens,
+                                    last_summarized_id: result.last_summarized_id,
+                                })
+                                .await;
                         }
                         Err(e) => {
                             warn!(error = %e, "Background extraction failed");
+                            let _ = outcome_tx
+                                .send(crate::session_memory_agent::ExtractionOutcome::Failed)
+                                .await;
                         }
                     }
                 });
@@ -1819,8 +2052,8 @@ impl AgentLoop {
         }
 
         // ── STEP 18: Recurse or return ──
-        match collected.finish_reason {
-            FinishReason::Stop => {
+        match collected.finish_reason.unified {
+            UnifiedFinishReason::Stop => {
                 // Turn completed with stop - set status to Idle
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1831,13 +2064,13 @@ impl AgentLoop {
                     collected.content,
                 ))
             }
-            FinishReason::ToolCalls => {
+            UnifiedFinishReason::ToolCalls => {
                 // Tool call turns don't have fresh user input - only tool results
                 self.current_turn_has_user_input = false;
                 // Recursive call for next turn (boxed to avoid infinite future size)
                 Box::pin(self.core_message_loop(query_tracking, auto_compact_tracking)).await
             }
-            FinishReason::MaxTokens => {
+            UnifiedFinishReason::Length => {
                 // Output token recovery already handled in step 9
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1902,7 +2135,7 @@ impl AgentLoop {
         // Any tool call outside this set is rejected as NotFound, preventing
         // hallucinated calls to apply_patch (when type=None/Shell) or tools
         // outside experimental_supported_tools.
-        executor.set_allowed_tool_names(tools.iter().map(|d| d.name.clone()).collect());
+        executor.set_allowed_tool_names(tools.iter().map(|d| d.name().to_string()).collect());
 
         // Use RequestBuilder to assemble the final request with context parameters
         let mut builder = RequestBuilder::new(ctx).messages(messages);
@@ -1910,7 +2143,7 @@ impl AgentLoop {
             builder = builder.tools(tools);
         }
         if let Some(max_tokens) = self.config.max_tokens {
-            builder = builder.max_tokens(max_tokens);
+            builder = builder.max_tokens(max_tokens as u64);
         }
 
         let request = builder.build();
@@ -1933,9 +2166,9 @@ impl AgentLoop {
 
         let mut stream = stream_result.context(agent_loop_error::ApiStreamSnafu)?;
 
-        let mut all_content: Vec<ContentBlock> = Vec::new();
+        let mut all_content: Vec<AssistantContentPart> = Vec::new();
         let mut final_usage: Option<TokenUsage> = None;
-        let mut final_finish_reason = FinishReason::Stop;
+        let mut final_finish_reason = FinishReason::stop();
 
         // Stall detection configuration
         let stall_timeout = self.config.stall_detection.stall_timeout;
@@ -2049,26 +2282,32 @@ impl AgentLoop {
                     // Emit text deltas for UI and process tool uses DURING streaming
                     for block in &result.content {
                         match block {
-                            ContentBlock::Text { text } if !text.is_empty() => {
+                            AssistantContentPart::Text(TextPart { text, .. })
+                                if !text.is_empty() =>
+                            {
                                 self.emit(LoopEvent::TextDelta {
                                     turn_id: turn_id.to_string(),
                                     delta: text.clone(),
                                 })
                                 .await;
                             }
-                            ContentBlock::Thinking { content, .. } if !content.is_empty() => {
+                            AssistantContentPart::Reasoning(rp) if !rp.text.is_empty() => {
                                 self.emit(LoopEvent::ThinkingDelta {
                                     turn_id: turn_id.to_string(),
-                                    delta: content.clone(),
+                                    delta: rp.text.clone(),
                                 })
                                 .await;
                             }
-                            ContentBlock::ToolUse {
-                                id, name, input, ..
-                            } => {
+                            AssistantContentPart::ToolCall(ToolCallPart {
+                                tool_call_id,
+                                tool_name,
+                                input,
+                                ..
+                            }) => {
                                 // Start tool execution DURING streaming!
                                 // Safe tools begin immediately; unsafe tools are queued.
-                                let tool_call = ToolCall::new(id, name, input.clone());
+                                let tool_call =
+                                    ToolCall::new(tool_call_id, tool_name, input.clone());
                                 executor.on_tool_complete(tool_call).await;
                             }
                             _ => {}
@@ -2094,8 +2333,16 @@ impl AgentLoop {
                 QueryResultType::Error => {
                     let msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
 
-                    // Check for overload errors and handle fallback
-                    if (msg.contains("overload") || msg.contains("rate_limit"))
+                    // P26: Use structured error classification instead of raw string matching.
+                    // The provider's is_retryable hint (from StreamError) is used as a fast
+                    // path; otherwise fall back to heuristic message classification.
+                    let classified = cocode_api::error::classify_by_message(&msg);
+                    let is_retryable = result
+                        .is_retryable
+                        .unwrap_or_else(|| classified.is_retryable());
+
+                    // Attempt model fallback for retryable overload/rate-limit errors
+                    if is_retryable
                         && self.fallback_state.should_fallback(&self.fallback_config)
                         && let Some(fallback_model) =
                             self.fallback_state.next_model(&self.fallback_config)
@@ -2142,7 +2389,7 @@ impl AgentLoop {
         &self,
         injected_messages: &[InjectedMessage],
         model_info: &cocode_protocol::ModelInfo,
-    ) -> (Vec<Message>, Vec<ToolDefinition>) {
+    ) -> (Vec<LanguageModelMessage>, Vec<LanguageModelTool>) {
         // Build system prompt (use custom prompt if set, otherwise generate from builder)
         let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
             custom.clone()
@@ -2154,7 +2401,7 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
 
         // Build messages with system, reminders, and conversation
-        let mut all_messages = vec![Message::system(&system_prompt)];
+        let mut all_messages = vec![LanguageModelMessage::system(&system_prompt)];
 
         // Inject system reminders as individual messages before the conversation
         // This supports both text reminders and multi-message tool_use/tool_result pairs
@@ -2173,50 +2420,62 @@ impl AgentLoop {
     fn select_tools_for_model(
         &self,
         model_info: &cocode_protocol::ModelInfo,
-    ) -> Vec<ToolDefinition> {
+    ) -> Vec<LanguageModelTool> {
         select_tools_for_model(
             self.tool_registry.definitions_filtered(&self.features),
             model_info,
         )
     }
 
-    /// Convert an injected message to an API Message.
-    fn convert_injected_message(&self, msg: &InjectedMessage) -> Message {
+    /// Convert an injected message to an API message.
+    fn convert_injected_message(&self, msg: &InjectedMessage) -> LanguageModelMessage {
         match msg {
             InjectedMessage::UserText { content, .. } => {
                 // Text reminders become simple user messages
-                Message::user(content.as_str())
+                LanguageModelMessage::user_text(content.as_str())
             }
             InjectedMessage::AssistantBlocks { blocks, .. } => {
                 // Assistant blocks (typically tool_use) become assistant messages
-                let content_blocks: Vec<ContentBlock> =
-                    blocks.iter().map(Self::convert_injected_block).collect();
-                Message::new(hyper_sdk::Role::Assistant, content_blocks)
+                let content_parts: Vec<AssistantContentPart> = blocks
+                    .iter()
+                    .map(Self::convert_injected_block_to_assistant)
+                    .collect();
+                LanguageModelMessage::assistant(content_parts)
             }
             InjectedMessage::UserBlocks { blocks, .. } => {
                 // User blocks (typically tool_result) become user messages
-                let content_blocks: Vec<ContentBlock> =
-                    blocks.iter().map(Self::convert_injected_block).collect();
-                Message::new(hyper_sdk::Role::User, content_blocks)
+                let content_parts: Vec<cocode_api::UserContentPart> = blocks
+                    .iter()
+                    .map(|block| match block {
+                        InjectedBlock::Text(text) => {
+                            cocode_api::UserContentPart::text(text.as_str())
+                        }
+                        InjectedBlock::ToolUse { .. } | InjectedBlock::ToolResult { .. } => {
+                            // Tool-related blocks in user messages are serialized as text
+                            cocode_api::UserContentPart::text(format!("{block:?}"))
+                        }
+                    })
+                    .collect();
+                LanguageModelMessage::user(content_parts)
             }
         }
     }
 
-    /// Convert an injected block to a hyper_sdk ContentBlock.
-    fn convert_injected_block(block: &InjectedBlock) -> ContentBlock {
+    /// Convert an injected block to an AssistantContentPart.
+    fn convert_injected_block_to_assistant(block: &InjectedBlock) -> AssistantContentPart {
         match block {
-            InjectedBlock::Text(text) => ContentBlock::text(text.as_str()),
+            InjectedBlock::Text(text) => AssistantContentPart::text(text.as_str()),
             InjectedBlock::ToolUse { id, name, input } => {
-                ContentBlock::tool_use(id.as_str(), name.as_str(), input.clone())
+                AssistantContentPart::tool_call(id.as_str(), name.as_str(), input.clone())
             }
             InjectedBlock::ToolResult {
                 tool_use_id,
                 content,
-            } => ContentBlock::tool_result(
+            } => AssistantContentPart::ToolResult(cocode_api::ToolResultPart::new(
                 tool_use_id.as_str(),
-                hyper_sdk::ToolResultContent::text(content.as_str()),
-                false,
-            ),
+                "",
+                cocode_api::ToolResultContent::text(content.as_str()),
+            )),
         }
     }
 
@@ -2251,6 +2510,13 @@ impl AgentLoop {
             return (0, 0);
         }
 
+        // Emit started event before compaction begins
+        self.emit(LoopEvent::MicroCompactionStarted {
+            candidates: 0, // Exact count will be in MicroCompactionApplied
+            potential_savings: 0,
+        })
+        .await;
+
         // Apply micro-compaction using configured recent_tool_results_to_keep
         // Get paths from ContextModifier::FileRead for FileTracker cleanup
         let keep_count = self.compact_config.recent_tool_results_to_keep;
@@ -2261,7 +2527,7 @@ impl AgentLoop {
         if !outcome.cleared_read_paths.is_empty() {
             // Determine how many recent turns to preserve files from
             // This matches Claude Code's collectFilesToKeep behavior
-            let keep_recent_turns = 3; // Keep files from last 3 turns
+            let keep_recent_turns = self.compact_config.micro_compact_keep_recent_turns;
             let files_to_keep =
                 crate::compaction::collect_files_to_keep(&self.message_history, keep_recent_turns);
 
@@ -2482,7 +2748,8 @@ impl AgentLoop {
 
         let outcomes = self.hooks.execute(&hook_ctx).await;
 
-        // Check if any hook rejected compaction
+        // Check if any hook rejected compaction and collect additional context
+        let mut hook_additional_context = Vec::new();
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
             self.emit(LoopEvent::HookExecuted {
@@ -2491,18 +2758,24 @@ impl AgentLoop {
             })
             .await;
 
-            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                info!(
-                    hook_name = %outcome.hook_name,
-                    reason = %reason,
-                    "Compaction skipped by hook"
-                );
-                self.emit(LoopEvent::CompactionSkippedByHook {
-                    hook_name: outcome.hook_name.clone(),
-                    reason: reason.clone(),
-                })
-                .await;
-                return Ok(());
+            match &outcome.result {
+                cocode_hooks::HookResult::Reject { reason } => {
+                    info!(
+                        hook_name = %outcome.hook_name,
+                        reason = %reason,
+                        "Compaction skipped by hook"
+                    );
+                    self.emit(LoopEvent::CompactionSkippedByHook {
+                        hook_name: outcome.hook_name.clone(),
+                        reason: reason.clone(),
+                    })
+                    .await;
+                    return Ok(());
+                }
+                cocode_hooks::HookResult::ContinueWithContext { additional_context } => {
+                    hook_additional_context.push(additional_context.clone());
+                }
+                _ => {}
             }
         }
 
@@ -2520,16 +2793,30 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
         let conversation_text: String = messages
             .iter()
-            .map(|m| format!("{m:?}"))
+            .map(|m| {
+                let role = format!("{:?}", m.role).to_lowercase();
+                format!("[{}]: {}", role, m.text())
+            })
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n\n");
 
         // Use the 9-section compact instructions
         let max_output_tokens = self.compact_config.max_compact_output_tokens;
         let system_prompt = build_compact_instructions(max_output_tokens);
 
-        // Fallback to legacy prompt builder if available
-        let (_, user_prompt) = SystemPromptBuilder::build_summarization(&conversation_text, None);
+        // Build user prompt, injecting any PreCompact hook context
+        let (_, mut user_prompt) =
+            SystemPromptBuilder::build_summarization(&conversation_text, None);
+        {
+            let extra: Vec<&str> = hook_additional_context
+                .iter()
+                .filter_map(|c| c.as_deref())
+                .collect();
+            if !extra.is_empty() {
+                let ctx = extra.join("\n\n");
+                user_prompt = format!("{ctx}\n\n---\n\n{user_prompt}");
+            }
+        }
 
         // Use the API client to get a summary with retry mechanism
         let max_retries = self.compact_config.max_summary_retries;
@@ -2540,8 +2827,10 @@ impl AgentLoop {
             let last_error: String;
 
             // Build request for each attempt
-            let summary_messages =
-                vec![Message::system(&system_prompt), Message::user(&user_prompt)];
+            let summary_messages = vec![
+                LanguageModelMessage::system(&system_prompt),
+                LanguageModelMessage::user_text(&user_prompt),
+            ];
 
             // Get compact model and build request using ModelHub
             // Use the real session_id from query_tracking
@@ -2554,7 +2843,7 @@ impl AgentLoop {
             // Use RequestBuilder for the summary request
             let summary_request = RequestBuilder::new(ctx)
                 .messages(summary_messages.clone())
-                .max_tokens(max_output_tokens)
+                .max_tokens(max_output_tokens as u64)
                 .build();
 
             match self
@@ -2568,7 +2857,9 @@ impl AgentLoop {
                         .content
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
+                            AssistantContentPart::Text(TextPart { text, .. }) => {
+                                Some(text.as_str())
+                            }
                             _ => None,
                         })
                         .collect();
@@ -2619,10 +2910,12 @@ impl AgentLoop {
                 }
             }
 
-            // All retries exhausted
+            // All retries exhausted — update circuit breaker
+            self.compact_failure_count += 1;
             warn!(
                 attempts = attempt,
                 error = %last_error,
+                consecutive_failures = self.compact_failure_count,
                 "Compaction failed after all retries"
             );
             self.emit(LoopEvent::CompactionFailed {
@@ -2630,24 +2923,23 @@ impl AgentLoop {
                 error: last_error,
             })
             .await;
+
+            // Trip circuit breaker after 3 consecutive failures
+            if self.compact_failure_count >= 3 && !self.circuit_breaker_open {
+                self.circuit_breaker_open = true;
+                warn!(
+                    consecutive_failures = self.compact_failure_count,
+                    "Auto-compaction circuit breaker opened"
+                );
+                self.emit(LoopEvent::CompactionCircuitBreakerOpen {
+                    consecutive_failures: self.compact_failure_count,
+                })
+                .await;
+            }
             return Ok(());
         };
 
-        // Extract task status from tool calls before compaction
-        let tool_calls: Vec<(String, serde_json::Value)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
-                turn.tool_calls
-                    .iter()
-                    .map(|tc| (tc.name.clone(), tc.input.clone()))
-            })
-            .collect();
-
-        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
-
-        // Extract invoked skills from tool calls with turn numbers
+        // Extract task status and invoked skills in a single pass over turns
         let tool_calls_with_turns: Vec<(String, serde_json::Value, i32)> = self
             .message_history
             .turns()
@@ -2660,6 +2952,12 @@ impl AgentLoop {
             })
             .collect();
 
+        let tool_calls: Vec<(String, serde_json::Value)> = tool_calls_with_turns
+            .iter()
+            .map(|(name, input, _)| (name.clone(), input.clone()))
+            .collect();
+
+        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
         let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
 
         // Build final summary with task status
@@ -2678,6 +2976,9 @@ impl AgentLoop {
 
             format!("{summary_text}\n\n<task_status>\n{tasks_section}\n</task_status>")
         };
+
+        // Track message count before compaction for accurate removal reporting
+        let turn_count_before = self.message_history.turn_count();
 
         // Calculate keep window using token-based algorithm
         let messages_json = self.message_history.messages_for_api_json();
@@ -2702,8 +3003,16 @@ impl AgentLoop {
         // Get transcript path from context if available
         let transcript_path = self.context.transcript_path.clone();
 
+        // Wrap summary with continuation header and transcript reference
+        let wrapped_summary = format_summary_with_transcript(
+            &final_summary,
+            transcript_path.as_ref(),
+            true, // recent_messages_preserved
+            tokens_before,
+        );
+
         self.message_history.apply_compaction_with_metadata(
-            final_summary.clone(),
+            wrapped_summary,
             keep_turns,
             turn_id,
             tokens_saved,
@@ -2737,6 +3046,9 @@ impl AgentLoop {
         // Update tracking
         tracking.mark_compacted(turn_id, self.turn_number);
 
+        // Reset circuit breaker on successful compaction
+        self.compact_failure_count = 0;
+
         // Calculate post-compaction tokens and update boundary
         let post_tokens = self.message_history.estimate_tokens();
         self.message_history
@@ -2754,8 +3066,9 @@ impl AgentLoop {
         if let Some(otel) = &self.otel_manager {
             otel.counter("cocode.compaction.completed", 1, &[]);
         }
+        let removed_messages = (turn_count_before - self.message_history.turn_count()).max(0);
         self.emit(LoopEvent::CompactionCompleted {
-            removed_messages: 0, // Tracked by MessageHistory
+            removed_messages,
             summary_tokens: post_tokens,
         })
         .await;
@@ -2782,8 +3095,8 @@ impl AgentLoop {
             .await;
 
         // Save to session memory for future Tier 1 compaction
-        if self.compaction_config.session_memory.enabled
-            && let Some(ref path) = self.compaction_config.session_memory.summary_path
+        if self.compact_config.enable_sm_compact
+            && let Some(ref path) = self.compact_config.summary_path
         {
             let summary_content = final_summary;
             let turn_id_owned = turn_id.to_string();
@@ -2815,54 +3128,69 @@ impl AgentLoop {
         Ok(())
     }
 
-    /// Execute SessionStart hooks after compaction.
+    /// Execute PostCompact hooks after compaction.
     ///
-    /// Runs SessionStart hooks with source='compact' to allow them to provide
-    /// additional context for the resumed conversation.
+    /// Fires the dedicated `PostCompact` hook event to allow hooks to provide
+    /// additional context for the resumed conversation after compaction.
+    /// Any additional context provided by hooks is injected into the message
+    /// history as a meta user message so the model can see it on the next turn.
     async fn execute_post_compact_hooks(&mut self, turn_id: &str) {
         let hook_ctx = cocode_hooks::HookContext::new(
-            cocode_hooks::HookEventType::SessionStart,
+            cocode_hooks::HookEventType::PostCompact,
             turn_id.to_string(),
             self.context.environment.cwd.clone(),
-        )
-        .with_source("compact");
+        );
 
         let outcomes = self.hooks.execute(&hook_ctx).await;
 
         let mut hooks_executed = 0;
-        let mut additional_context_count = 0;
+        let mut hook_contexts: Vec<cocode_protocol::HookAdditionalContext> = Vec::new();
 
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
             self.emit(LoopEvent::HookExecuted {
-                hook_type: HookEventType::SessionStart,
+                hook_type: HookEventType::PostCompact,
                 hook_name: outcome.hook_name.clone(),
             })
             .await;
 
             hooks_executed += 1;
 
-            // Check for additional context from hooks
+            // Collect additional context from hooks
             if let cocode_hooks::HookResult::ContinueWithContext { additional_context } =
                 &outcome.result
                 && let Some(ctx) = additional_context
                 && !ctx.is_empty()
             {
-                additional_context_count += 1;
                 debug!(
                     hook_name = %outcome.hook_name,
                     context_len = ctx.len(),
                     "Hook provided additional context"
                 );
+                hook_contexts.push(cocode_protocol::HookAdditionalContext {
+                    content: ctx.clone(),
+                    hook_name: outcome.hook_name.clone(),
+                    suppress_output: false,
+                });
             }
         }
 
         if hooks_executed > 0 {
+            let additional_context_count = hook_contexts.len() as i32;
             self.emit(LoopEvent::PostCompactHooksExecuted {
                 hooks_executed,
                 additional_context_count,
             })
             .await;
+
+            // Inject hook additional context into message history as a meta message
+            if let Some(formatted) = wrap_hook_additional_context(&hook_contexts) {
+                let meta_turn_id = uuid::Uuid::new_v4().to_string();
+                let mut msg = TrackedMessage::user(&formatted, &meta_turn_id);
+                msg.set_meta(true);
+                let turn = Turn::new(self.turn_number, msg);
+                self.message_history.add_turn(turn);
+            }
         }
     }
 
@@ -2957,14 +3285,25 @@ impl AgentLoop {
         &self,
         file_config: &FileRestorationConfig,
     ) -> Vec<FileRestoration> {
-        // Collect files from the file tracker (Layer 2)
-        let tracker = self.shared_tools_file_tracker.lock().await;
-        let tracked_files = tracker.tracked_files();
-        drop(tracker); // Release lock before async operations
+        // Collect files and their last_accessed times in a single lock acquisition
+        let file_info: Vec<(std::path::PathBuf, i64)> = {
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            tracker
+                .tracked_files()
+                .into_iter()
+                .map(|path| {
+                    let last_accessed = tracker
+                        .read_state(&path)
+                        .map(|s| s.read_turn as i64)
+                        .unwrap_or(0);
+                    (path, last_accessed)
+                })
+                .collect()
+        };
 
         let mut files_for_restoration: Vec<FileRestoration> = Vec::new();
 
-        for path in tracked_files {
+        for (path, last_accessed) in file_info {
             // Skip excluded patterns
             let path_str = path.to_string_lossy();
             if file_config.should_exclude(&path_str) {
@@ -2979,7 +3318,7 @@ impl AgentLoop {
 
             // Try to read the file content (re-read at compact time for current content)
             // Truncate to max_tokens_per_file limit to avoid large file overhead
-            let max_chars = (file_config.max_tokens_per_file * 4) as usize;
+            let max_chars = (file_config.max_tokens_per_file * 3) as usize;
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => {
                     // Truncate content if it exceeds per-file limit
@@ -2988,17 +3327,7 @@ impl AgentLoop {
                     } else {
                         (content, false)
                     };
-                    let tokens = (content.len() / 4) as i32; // Rough estimate
-
-                    // Get last access time from file tracker
-                    let tracker = self.shared_tools_file_tracker.lock().await;
-                    let last_accessed = if let Some(state) = tracker.read_state(&path) {
-                        // Use read_turn as a proxy for access time
-                        state.read_turn as i64
-                    } else {
-                        0
-                    };
-                    drop(tracker); // Release lock
+                    let tokens = cocode_protocol::estimate_text_tokens(&content);
 
                     if truncated {
                         debug!(
@@ -3041,31 +3370,78 @@ impl AgentLoop {
         // Get file restoration config
         let file_config = &self.compact_config.file_restoration;
 
-        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
+        // Run file collection and plan reading in parallel (both are async I/O)
+        let plan_path = self.plan_mode_state.plan_file_path.clone();
+        let plan_fut = async {
+            if let Some(path) = &plan_path {
+                tokio::fs::read_to_string(path).await.ok()
+            } else {
+                None
+            }
+        };
+        let (files_for_restoration, plan) =
+            tokio::join!(self.collect_restorable_tracked_files(file_config), plan_fut,);
 
-        // Build todo list from task status
-        let todos = if !task_status.tasks.is_empty() {
+        // Build todo list from task status, structured tasks, and cron jobs.
+        // Include structured tasks and cron state so they survive compaction.
+        let mut todo_parts: Vec<String> = Vec::new();
+
+        if !task_status.tasks.is_empty() {
             let todo_text = task_status
                 .tasks
                 .iter()
                 .map(|t| format!("- [{}] {}: {}", t.status, t.id, t.subject))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Some(todo_text)
-        } else {
+            todo_parts.push(todo_text);
+        }
+
+        // Include structured tasks state in restoration
+        if let Some(ref tasks_val) = self.current_structured_tasks {
+            if let Some(tasks_map) = tasks_val.as_object() {
+                if !tasks_map.is_empty() {
+                    let mut task_text = String::from("Structured Tasks:\n");
+                    for task in tasks_map.values() {
+                        let status = task["status"].as_str().unwrap_or("pending");
+                        if status == "deleted" {
+                            continue;
+                        }
+                        let id = task["id"].as_str().unwrap_or("?");
+                        let subject = task["subject"].as_str().unwrap_or("?");
+                        task_text.push_str(&format!("- [{status}] {id}: {subject}\n"));
+                    }
+                    todo_parts.push(task_text);
+                }
+            }
+        }
+
+        // Include cron jobs state in restoration
+        if let Some(ref jobs_val) = self.current_cron_jobs {
+            if let Some(jobs_map) = jobs_val.as_object() {
+                if !jobs_map.is_empty() {
+                    let mut cron_text = String::from("Scheduled Cron Jobs:\n");
+                    for job in jobs_map.values() {
+                        let id = job["id"].as_str().unwrap_or("?");
+                        let schedule = job["schedule"].as_str().unwrap_or("?");
+                        let desc = job["description"]
+                            .as_str()
+                            .or_else(|| job["prompt"].as_str())
+                            .unwrap_or("?");
+                        cron_text.push_str(&format!("- {id}: [{schedule}] {desc}\n"));
+                    }
+                    todo_parts.push(cron_text);
+                }
+            }
+        }
+
+        let todos = if todo_parts.is_empty() {
             None
+        } else {
+            Some(todo_parts.join("\n"))
         };
 
         // Build skills list from invoked skills
         let skills: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
-
-        // Get plan content if plan file exists (even if plan mode is not active,
-        // the plan may have been approved and should survive compaction)
-        let plan = if let Some(plan_path) = &self.plan_mode_state.plan_file_path {
-            tokio::fs::read_to_string(plan_path).await.ok()
-        } else {
-            None
-        };
 
         // Mark that a plan file reference should be injected on the next turn
         // so the model knows the plan still exists after compaction
@@ -3142,10 +3518,13 @@ impl AgentLoop {
         // Get transcript path from context if available
         let transcript_path = self.context.transcript_path.clone();
 
-        // Calculate keep window using token-based algorithm
+        // Calculate keep window using anchor-based session memory boundary algorithm
         let messages_json = self.message_history.messages_for_api_json();
-        let keep_result =
-            calculate_keep_start_index(&messages_json, &self.compact_config.keep_window);
+        let keep_result = find_session_memory_boundary(
+            &messages_json,
+            &self.compact_config.keep_window,
+            summary.last_summarized_id.as_deref(),
+        );
         let keep_turns = map_message_index_to_keep_turns(
             self.message_history.turn_count(),
             &messages_json,
@@ -3158,11 +3537,20 @@ impl AgentLoop {
             keep_start_index = keep_result.keep_start_index,
             messages_to_keep = keep_result.messages_to_keep,
             keep_tokens = keep_result.keep_tokens,
-            "Calculated keep window for session memory compact"
+            text_messages_kept = keep_result.text_messages_kept,
+            "Calculated keep window for session memory compact (anchor-based)"
+        );
+
+        // Wrap summary with continuation header and transcript reference
+        let wrapped_summary = format_summary_with_transcript(
+            &summary.summary,
+            transcript_path.as_ref(),
+            true, // recent_messages_preserved
+            tokens_before,
         );
 
         self.message_history.apply_compaction_with_metadata(
-            summary.summary.clone(),
+            wrapped_summary,
             keep_turns,
             turn_id,
             tokens_saved,
@@ -3180,6 +3568,15 @@ impl AgentLoop {
         self.message_history
             .update_boundary_post_tokens(post_tokens);
 
+        // Reset circuit breaker on successful Tier 1 compaction
+        self.compact_failure_count = 0;
+        self.circuit_breaker_open = false;
+
+        // Set compaction boundary on the snapshot manager
+        if let Some(ref sm) = self.snapshot_manager {
+            sm.set_compaction_boundary(self.turn_number).await;
+        }
+
         // Emit events
         self.emit(LoopEvent::SessionMemoryCompactApplied {
             saved_tokens: tokens_saved,
@@ -3195,23 +3592,55 @@ impl AgentLoop {
         })
         .await;
 
-        // Keep tracker consistent after session memory compact (Claude Code alignment)
-        // Without this, tracker state becomes stale and large compacted files are never
-        // notified to the model after Tier 1 compaction.
-        let file_config = &self.compact_config.file_restoration;
-        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
-        let restoration = build_context_restoration_with_config(
-            files_for_restoration,
-            None,
-            None,
-            Vec::new(),
-            file_config,
-        );
-        self.pending_compacted_large_files = restoration.compacted_large_files;
-        if !restoration.files.is_empty() {
-            self.rebuild_trackers_from_restored_files(&restoration.files)
-                .await;
+        // Rebuild FileTracker from remaining messages after compaction
+        {
+            let cwd = self.context.environment.cwd.clone();
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            tracker.clear();
+            let new_tracker = build_file_read_state(&self.message_history, &cwd, LRU_MAX_ENTRIES);
+            for (path, state) in new_tracker.read_files_with_state() {
+                tracker.record_read_with_state(path, state.clone());
+            }
+            debug!(
+                tracked_files = tracker.len(),
+                "FileTracker rebuilt after session memory compact"
+            );
         }
+
+        // Extract task status and invoked skills for context restoration
+        // (same pattern as Tier 2 compact)
+        let tool_calls_with_turns: Vec<(String, serde_json::Value, i32)> = self
+            .message_history
+            .turns()
+            .iter()
+            .flat_map(|turn| {
+                let turn_num = turn.number;
+                turn.tool_calls
+                    .iter()
+                    .map(move |tc| (tc.name.clone(), tc.input.clone(), turn_num))
+            })
+            .collect();
+
+        let tool_calls: Vec<(String, serde_json::Value)> = tool_calls_with_turns
+            .iter()
+            .map(|(name, input, _)| (name.clone(), input.clone()))
+            .collect();
+
+        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
+        let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
+
+        // Emit invoked skills restored event if any skills were found
+        if !invoked_skills.is_empty() {
+            let skill_names: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
+            self.emit(LoopEvent::InvokedSkillsRestored {
+                skills: skill_names,
+            })
+            .await;
+        }
+
+        // Full context restoration: files, todos, plans, skills
+        self.restore_context_after_compaction(&invoked_skills, &task_status)
+            .await;
 
         Ok(())
     }
@@ -3294,17 +3723,13 @@ impl AgentLoop {
         let user_msg = if all_images.is_empty() {
             TrackedMessage::user(&tool_results_text, &next_turn_id)
         } else {
-            let mut content_blocks = vec![ContentBlock::text(&tool_results_text)];
+            let mut content_parts = vec![cocode_api::UserContentPart::text(&tool_results_text)];
             for img in &all_images {
-                content_blocks.push(ContentBlock::Image {
-                    source: hyper_sdk::ImageSource::Base64 {
-                        data: img.data.clone(),
-                        media_type: img.media_type.clone(),
-                    },
-                    detail: None,
-                });
+                content_parts.push(cocode_api::UserContentPart::File(
+                    cocode_api::FilePart::image_base64(&img.data, &img.media_type),
+                ));
             }
-            let message = Message::new(hyper_sdk::Role::User, content_blocks);
+            let message = LanguageModelMessage::user(content_parts);
             TrackedMessage::new(message, &next_turn_id, cocode_message::MessageSource::User)
         };
         let turn = Turn::new(self.turn_number + 1, user_msg);
@@ -3412,6 +3837,38 @@ impl AgentLoop {
                         "Applied TodosUpdated modifier"
                     );
                 }
+                ContextModifier::StructuredTasksUpdated { tasks } => {
+                    self.current_structured_tasks = Some(tasks.clone());
+                    debug!("Applied StructuredTasksUpdated modifier");
+                }
+                ContextModifier::CronJobsUpdated { jobs } => {
+                    self.current_cron_jobs = Some(jobs.clone());
+                    debug!("Applied CronJobsUpdated modifier");
+                }
+                ContextModifier::TeamsUpdated { teams } => {
+                    // Teams state is tracked for potential future use
+                    debug!(
+                        count = teams.as_object().map_or(0, |m| m.len()),
+                        "Applied TeamsUpdated modifier"
+                    );
+                }
+                ContextModifier::RestoreDeferredMcpTools { names } => {
+                    // Restore deferred MCP tools into the active registry so
+                    // they become callable on subsequent turns.
+                    if let Some(registry) = Arc::get_mut(&mut self.tool_registry) {
+                        let restored = registry.restore_deferred_tools(names);
+                        debug!(
+                            count = restored.len(),
+                            tools = ?restored,
+                            "Restored deferred MCP tools"
+                        );
+                    } else {
+                        debug!(
+                            count = names.len(),
+                            "Cannot restore deferred MCP tools: registry has other references"
+                        );
+                    }
+                }
             }
         }
     }
@@ -3476,7 +3933,7 @@ impl AgentLoop {
 fn select_tools_for_model(
     mut defs: Vec<ToolDefinition>,
     model_info: &cocode_protocol::ModelInfo,
-) -> Vec<ToolDefinition> {
+) -> Vec<LanguageModelTool> {
     use cocode_protocol::ApplyPatchToolType;
     use cocode_protocol::ConfigShellToolType;
     use cocode_tools::builtin::ApplyPatchTool;
@@ -3531,7 +3988,8 @@ fn select_tools_for_model(
         defs.retain(|d| supported.contains(&d.name));
     }
 
-    defs
+    // Wrap ToolDefinition (LanguageModelFunctionTool) into LanguageModelTool::Function
+    defs.into_iter().map(LanguageModelTool::function).collect()
 }
 
 #[cfg(test)]

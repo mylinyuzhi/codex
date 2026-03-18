@@ -256,3 +256,57 @@ async fn test_permission_unknown_host() {
 fn test_static_http_client_is_accessible() {
     let _ = &*HTTP_CLIENT;
 }
+
+// ========== Redirect helper tests ==========
+
+#[test]
+fn test_extract_hostname_https() {
+    assert_eq!(extract_hostname("https://example.com/path"), "example.com");
+}
+
+#[test]
+fn test_extract_hostname_with_port() {
+    assert_eq!(
+        extract_hostname("https://example.com:8080/path"),
+        "example.com"
+    );
+}
+
+#[test]
+fn test_extract_hostname_http() {
+    assert_eq!(extract_hostname("http://localhost/path"), "localhost");
+}
+
+#[test]
+fn test_extract_hostname_no_scheme() {
+    assert_eq!(extract_hostname("just-a-string"), "");
+}
+
+#[test]
+fn test_extract_hostname_no_path() {
+    assert_eq!(extract_hostname("https://example.com"), "example.com");
+}
+
+#[test]
+fn test_resolve_redirect_url_absolute() {
+    let resolved = resolve_redirect_url("https://example.com/old", "https://other.com/new");
+    assert_eq!(resolved, "https://other.com/new");
+}
+
+#[test]
+fn test_resolve_redirect_url_relative_path() {
+    let resolved = resolve_redirect_url("https://example.com/old/page", "/new-path");
+    assert_eq!(resolved, "https://example.com/new-path");
+}
+
+#[test]
+fn test_resolve_redirect_url_relative_no_leading_slash() {
+    let resolved = resolve_redirect_url("https://example.com/old", "new-path");
+    assert_eq!(resolved, "new-path");
+}
+
+#[test]
+fn test_resolve_redirect_url_preserves_port() {
+    let resolved = resolve_redirect_url("https://example.com:8080/old", "/new");
+    assert_eq!(resolved, "https://example.com:8080/new");
+}

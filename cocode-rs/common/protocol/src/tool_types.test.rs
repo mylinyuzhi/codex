@@ -78,6 +78,29 @@ fn test_serde_roundtrip() {
 }
 
 #[test]
+fn test_restore_deferred_mcp_tools_modifier_serde() {
+    let output =
+        ToolOutput::text("found tools").with_modifier(ContextModifier::RestoreDeferredMcpTools {
+            names: vec![
+                "mcp__github__list_repos".to_string(),
+                "mcp__slack__send_message".to_string(),
+            ],
+        });
+
+    let json = serde_json::to_string(&output).unwrap();
+    let parsed: ToolOutput = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.modifiers.len(), 1);
+    match &parsed.modifiers[0] {
+        ContextModifier::RestoreDeferredMcpTools { names } => {
+            assert_eq!(names.len(), 2);
+            assert_eq!(names[0], "mcp__github__list_repos");
+            assert_eq!(names[1], "mcp__slack__send_message");
+        }
+        other => panic!("Expected RestoreDeferredMcpTools, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_truncate_to_no_op_when_within_limit() {
     let mut output = ToolOutput::text("short text");
     output.truncate_to(100);

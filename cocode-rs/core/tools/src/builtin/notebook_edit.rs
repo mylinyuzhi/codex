@@ -250,6 +250,10 @@ impl Tool for NotebookEditTool {
         false
     }
 
+    fn is_edit_tool(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let notebook_path = input["notebook_path"].as_str().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {
