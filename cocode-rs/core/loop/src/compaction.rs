@@ -11,12 +11,13 @@
 //!
 //! ## Micro-Compact Algorithm
 //!
-//! The micro-compact algorithm runs in 7 phases:
+//! The micro-compact algorithm runs in 8 phases:
 //! 1. Collect tool_use IDs and token counts
 //! 2. Determine which tool results need compaction (keep recent N)
 //! 3. Check thresholds (warning threshold + minimum savings)
 //! 4. Memory attachment cleanup
 //! 5. Content replacement (persist or clear marker)
+//! 5.5. Image clearing for completed exchanges (preserves pending images)
 //! 6. readFileState cleanup
 //! 7. State update and return
 //!
@@ -40,7 +41,6 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use tracing::debug;
 use tracing::info;
-use tracing::warn;
 
 // Re-export commonly used types and constants from protocol for convenience
 pub use cocode_protocol::CompactBoundaryMetadata;
@@ -54,12 +54,6 @@ pub use cocode_protocol::KeepWindowConfig;
 pub use cocode_protocol::MemoryAttachment;
 pub use cocode_protocol::PersistedToolResult;
 pub use cocode_protocol::TokenBreakdown;
-
-// Backwards-compatible re-exports with old names
-pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET as CONTEXT_RESTORATION_BUDGET;
-pub use cocode_protocol::DEFAULT_CONTEXT_RESTORE_MAX_FILES as CONTEXT_RESTORATION_MAX_FILES;
-pub use cocode_protocol::DEFAULT_MICRO_COMPACT_MIN_SAVINGS as MIN_MICRO_COMPACT_SAVINGS;
-pub use cocode_protocol::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP as RECENT_TOOL_RESULTS_TO_KEEP;
 
 // ============================================================================
 // File Tracker LRU Limits (from Claude Code v2.1.38)
@@ -98,166 +92,6 @@ pub const CLEARED_CONTENT_MARKER: &str = "[Old tool result content cleared]";
 
 /// Maximum characters to keep as a preview when clearing content.
 pub const CONTENT_PREVIEW_LENGTH: usize = 2000;
-
-/// Configuration for context compaction behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionConfig {
-    /// Context usage ratio (0.0 - 1.0) at which compaction triggers.
-    #[serde(default = "default_threshold")]
-    pub threshold: f64,
-
-    /// Whether micro-compaction of large tool results is enabled.
-    #[serde(default = "default_micro_compact")]
-    pub micro_compact: bool,
-
-    /// Minimum number of messages to retain after compaction.
-    #[serde(default = "default_min_messages")]
-    pub min_messages_to_keep: i32,
-
-    /// Session memory configuration for Tier 1 compaction.
-    #[serde(default)]
-    pub session_memory: SessionMemoryConfig,
-}
-
-fn default_threshold() -> f64 {
-    0.8
-}
-
-fn default_micro_compact() -> bool {
-    true
-}
-
-fn default_min_messages() -> i32 {
-    4
-}
-
-impl Default for CompactionConfig {
-    fn default() -> Self {
-        Self {
-            threshold: default_threshold(),
-            micro_compact: default_micro_compact(),
-            min_messages_to_keep: default_min_messages(),
-            session_memory: SessionMemoryConfig::default(),
-        }
-    }
-}
-
-/// Configuration for session memory (Tier 1 compaction).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionMemoryConfig {
-    /// Whether session memory is enabled.
-    #[serde(default = "default_session_memory_enabled")]
-    pub enabled: bool,
-
-    /// Whether session memory compact (Tier 1) is enabled.
-    ///
-    /// When false, always falls back to full LLM compact even if
-    /// a cached summary.md is available. Can be controlled via
-    /// `COCODE_ENABLE_SM_COMPACT` environment variable.
-    #[serde(default = "default_true")]
-    pub enable_sm_compact: bool,
-
-    /// Path to the session memory file (summary.md).
-    #[serde(default)]
-    pub summary_path: Option<PathBuf>,
-
-    /// Minimum tokens to save for session memory to be used.
-    #[serde(default = "default_session_memory_min_savings")]
-    pub min_savings_tokens: i32,
-
-    /// Last summarized message ID (for incremental updates).
-    #[serde(default)]
-    pub last_summarized_id: Option<String>,
-}
-
-fn default_session_memory_enabled() -> bool {
-    false
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_session_memory_min_savings() -> i32 {
-    10_000
-}
-
-impl Default for SessionMemoryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_session_memory_enabled(),
-            enable_sm_compact: true,
-            summary_path: None,
-            min_savings_tokens: default_session_memory_min_savings(),
-            last_summarized_id: None,
-        }
-    }
-}
-
-impl SessionMemoryConfig {
-    /// Load configuration with environment variable overrides.
-    ///
-    /// Supported environment variables:
-    /// - `COCODE_ENABLE_SM_COMPACT`: Enable/disable session memory compact (true/false)
-    pub fn with_env_overrides(mut self) -> Self {
-        if let Ok(val) = std::env::var("COCODE_ENABLE_SM_COMPACT")
-            && let Ok(enabled) = val.parse::<bool>()
-        {
-            self.enable_sm_compact = enabled;
-        }
-        self
-    }
-}
-
-/// Result of a compaction operation, summarising what was removed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionResult {
-    /// Number of messages removed during compaction.
-    pub removed_messages: i32,
-
-    /// Approximate token count of the generated summary.
-    pub summary_tokens: i32,
-
-    /// Number of messages that were micro-compacted (tool output trimmed).
-    pub micro_compacted: i32,
-
-    /// The tier of compaction used.
-    pub tier: CompactionTier,
-
-    /// Tokens saved by this compaction.
-    pub tokens_saved: i32,
-
-    /// Trigger type for this compaction.
-    #[serde(default)]
-    pub trigger: CompactTrigger,
-
-    /// Telemetry data for this compaction.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub telemetry: Option<CompactTelemetry>,
-
-    /// Compact boundary metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub boundary_metadata: Option<CompactBoundaryMetadata>,
-
-    /// Post-compact hook output contexts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hook_contexts: Vec<HookAdditionalContext>,
-
-    /// Transcript path for full conversation history reference.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_path: Option<PathBuf>,
-}
-
-/// Which compaction tier was used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CompactionTier {
-    /// Tier 1: Session memory (cached summary.md).
-    SessionMemory,
-    /// Tier 2: Full LLM-based compaction.
-    Full,
-    /// Micro-compaction only (no summarization).
-    Micro,
-}
 
 /// Items to restore after compaction.
 #[derive(Debug, Clone, Default)]
@@ -525,6 +359,47 @@ pub struct MessageInfo {
     pub tool_use_id: Option<String>,
 }
 
+/// Estimate token count from a message's content.
+///
+/// Extracts text length from string or array content blocks and converts
+/// to approximate token count using the canonical `estimate_text_tokens()`.
+fn estimate_message_tokens(msg: &serde_json::Value) -> i32 {
+    let content = msg
+        .get("content")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else {
+                v.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|b| {
+                            b.get("text")
+                                .or_else(|| b.get("content"))
+                                .and_then(|t| t.as_str())
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+            }
+        })
+        .unwrap_or_default();
+    cocode_protocol::estimate_text_tokens(&content)
+}
+
+/// Check if a message is a compact boundary marker.
+///
+/// Boundary messages are user messages whose content starts with
+/// "Conversation compacted." — they mark where a previous compaction occurred.
+fn is_compact_boundary_message(msg: &serde_json::Value) -> bool {
+    let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+    if role != "user" {
+        return false;
+    }
+    msg.get("content")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.starts_with("Conversation compacted."))
+}
+
 /// Result of keep window calculation.
 #[derive(Debug, Clone)]
 pub struct KeepWindowResult {
@@ -596,27 +471,7 @@ pub fn calculate_keep_start_index(
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            // Estimate tokens from content length (~4 chars per token)
-            let content_len = msg
-                .get("content")
-                .and_then(|v| {
-                    if let Some(s) = v.as_str() {
-                        Some(s.len())
-                    } else {
-                        v.as_array().map(|arr| {
-                            arr.iter()
-                                .map(|b| {
-                                    b.get("text")
-                                        .or_else(|| b.get("content"))
-                                        .and_then(|t| t.as_str())
-                                        .map_or(0, str::len)
-                                })
-                                .sum()
-                        })
-                    }
-                })
-                .unwrap_or(0);
-            let tokens = (content_len / 4) as i32;
+            let tokens = estimate_message_tokens(msg);
 
             MessageInfo {
                 index: i as i32,
@@ -758,47 +613,309 @@ pub fn map_message_index_to_keep_turns(
 }
 
 // ============================================================================
-// Micro-Compact Execution
+// Session Memory Boundary Finding
 // ============================================================================
 
-/// Result of a micro-compact operation.
+/// Result of session memory boundary calculation.
 #[derive(Debug, Clone, Default)]
-pub struct MicroCompactResult {
-    /// Number of tool results that were compacted.
-    pub compacted_count: i32,
-    /// Total tokens saved by compaction.
-    pub tokens_saved: i32,
-    /// Tool use IDs that were compacted.
-    pub compacted_ids: Vec<String>,
-    /// UUIDs of memory attachments that were cleared.
-    pub cleared_memory_uuids: Vec<String>,
-    /// Persisted tool results with full metadata.
-    pub persisted_results: Vec<PersistedToolResult>,
-    /// File paths that were persisted (legacy compatibility).
-    pub persisted_files: Vec<PathBuf>,
-    /// File paths from Read tool results that were compacted.
-    ///
-    /// The caller can use this to clean up file state tracking (readFileState).
-    pub cleared_file_paths: Vec<PathBuf>,
-    /// Token breakdown for telemetry.
-    pub token_breakdown: Option<TokenBreakdown>,
-    /// Trigger type for this compaction.
-    pub trigger: CompactTrigger,
+pub struct SessionMemoryBoundaryResult {
+    /// Index of the first message to keep (0-indexed).
+    pub keep_start_index: i32,
+    /// Number of messages in the keep window.
+    pub messages_to_keep: i32,
+    /// Total tokens in the keep window.
+    pub keep_tokens: i32,
+    /// Number of text messages kept.
+    pub text_messages_kept: i32,
 }
 
-/// Information about a tool result candidate for micro-compaction.
-#[derive(Debug, Clone)]
-pub struct ToolResultCandidate {
-    /// Index in the message array.
-    pub index: i32,
-    /// Tool use ID (from the tool_use_id field).
-    pub tool_use_id: Option<String>,
-    /// Tool name (e.g., "Read", "Bash").
-    pub tool_name: Option<String>,
-    /// Estimated token count of the content.
-    pub token_count: i32,
-    /// Whether this is a compactable tool.
-    pub is_compactable: bool,
+impl From<KeepWindowResult> for SessionMemoryBoundaryResult {
+    fn from(r: KeepWindowResult) -> Self {
+        Self {
+            keep_start_index: r.keep_start_index,
+            messages_to_keep: r.messages_to_keep,
+            keep_tokens: r.keep_tokens,
+            text_messages_kept: r.text_messages_kept,
+        }
+    }
+}
+
+/// Find the compaction boundary for session memory compaction.
+///
+/// This implements an anchor-point-based boundary finding algorithm aligned
+/// with Claude Code's `findCompactionBoundary`:
+///
+/// **Phase 1**: Start from the anchor (last_summarized_id) and count forward,
+/// checking if we've accumulated enough messages/tokens after the anchor.
+///
+/// **Phase 2**: If the anchor exists but content after it is insufficient,
+/// walk backward from the anchor to include more messages, stopping at the
+/// last compact boundary message (never crossing a previous compaction point).
+///
+/// **Phase 3 (fallback)**: If anchor is not found or not provided, fall back
+/// to the generic `calculate_keep_start_index()` algorithm.
+///
+/// After determining the raw boundary, `adjust_boundaries_for_tools()` is
+/// called to ensure tool_use/tool_result pairs are not split.
+///
+/// # Arguments
+/// * `messages` - Array of messages with token estimates
+/// * `config` - Keep window configuration (min/max tokens, min text messages)
+/// * `last_summarized_id` - ID of the last message that was summarized (anchor point)
+pub fn find_session_memory_boundary(
+    messages: &[serde_json::Value],
+    config: &cocode_protocol::KeepWindowConfig,
+    last_summarized_id: Option<&str>,
+) -> SessionMemoryBoundaryResult {
+    if messages.is_empty() {
+        return SessionMemoryBoundaryResult::default();
+    }
+
+    // Phase 1: Try anchor-based boundary finding
+    if let Some(anchor_id) = last_summarized_id {
+        // Find the anchor message index
+        let anchor_index = messages.iter().position(|msg| {
+            msg.get("turn_id")
+                .or_else(|| msg.get("id"))
+                .and_then(|v| v.as_str())
+                == Some(anchor_id)
+        });
+
+        if let Some(anchor_idx) = anchor_index {
+            // Count tokens and messages AFTER the anchor (anchor was already summarized)
+            let mut tokens_after_anchor = 0i32;
+            let mut text_messages_after = 0i32;
+
+            for msg in &messages[anchor_idx + 1..] {
+                tokens_after_anchor += estimate_message_tokens(msg);
+
+                let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if role == "user" || role == "assistant" {
+                    let has_tool_use =
+                        msg.get("content")
+                            .and_then(|c| c.as_array())
+                            .is_some_and(|arr| {
+                                arr.iter().any(|b| {
+                                    b.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                                })
+                            });
+                    if !has_tool_use {
+                        text_messages_after += 1;
+                    }
+                }
+            }
+
+            // If there's enough content after the anchor, use it as the keep boundary
+            if tokens_after_anchor >= config.min_tokens
+                && text_messages_after >= config.min_text_messages
+            {
+                let raw_start = (anchor_idx + 1) as i32;
+                let adjusted = adjust_boundaries_for_tools(messages, raw_start);
+                let keep_start = adjusted.min(messages.len() as i32);
+                let messages_to_keep = messages.len() as i32 - keep_start;
+
+                // Count actual tokens in the final keep window
+                let mut actual_tokens = 0i32;
+                let mut actual_text_msgs = 0i32;
+                for msg in &messages[keep_start as usize..] {
+                    actual_tokens += estimate_message_tokens(msg);
+                    let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                    if role == "user" || role == "assistant" {
+                        actual_text_msgs += 1;
+                    }
+                }
+
+                debug!(
+                    anchor_idx,
+                    keep_start,
+                    messages_to_keep,
+                    tokens = actual_tokens,
+                    text_messages = actual_text_msgs,
+                    "Session memory boundary found via anchor"
+                );
+
+                return SessionMemoryBoundaryResult {
+                    keep_start_index: keep_start,
+                    messages_to_keep,
+                    keep_tokens: actual_tokens,
+                    text_messages_kept: actual_text_msgs,
+                };
+            }
+
+            // Phase 2: Content after anchor is insufficient — walk backward from
+            // anchor to include more messages. Stop at the last compact boundary
+            // message to never cross a previous compaction point.
+            let last_boundary_index = {
+                let mut boundary = 0usize;
+                for i in (0..messages.len()).rev() {
+                    if is_compact_boundary_message(&messages[i]) {
+                        boundary = i + 1;
+                        break;
+                    }
+                }
+                boundary
+            };
+
+            let mut start_index = anchor_idx + 1;
+            let mut total_tokens = tokens_after_anchor;
+            let mut text_block_count = text_messages_after;
+
+            for i in (last_boundary_index..=anchor_idx).rev() {
+                let msg = &messages[i];
+                total_tokens += estimate_message_tokens(msg);
+
+                let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if role == "user" || role == "assistant" {
+                    let has_tool_use =
+                        msg.get("content")
+                            .and_then(|c| c.as_array())
+                            .is_some_and(|arr| {
+                                arr.iter().any(|b| {
+                                    b.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                                })
+                            });
+                    if !has_tool_use {
+                        text_block_count += 1;
+                    }
+                }
+
+                start_index = i;
+
+                // Stop if we've hit max_tokens
+                if total_tokens >= config.max_tokens {
+                    break;
+                }
+                // Stop if we've met both minimums
+                if total_tokens >= config.min_tokens && text_block_count >= config.min_text_messages
+                {
+                    break;
+                }
+            }
+
+            let raw_start = start_index as i32;
+            let adjusted = adjust_boundaries_for_tools(messages, raw_start);
+            let keep_start = adjusted.min(messages.len() as i32);
+            let messages_to_keep = messages.len() as i32 - keep_start;
+
+            // Recount tokens in the final window
+            let mut actual_tokens = 0i32;
+            let mut actual_text_msgs = 0i32;
+            for msg in &messages[keep_start as usize..] {
+                actual_tokens += estimate_message_tokens(msg);
+                let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if role == "user" || role == "assistant" {
+                    actual_text_msgs += 1;
+                }
+            }
+
+            debug!(
+                anchor_idx,
+                start_index,
+                keep_start,
+                messages_to_keep,
+                tokens = actual_tokens,
+                text_messages = actual_text_msgs,
+                "Session memory boundary found via backward walk from anchor"
+            );
+
+            return SessionMemoryBoundaryResult {
+                keep_start_index: keep_start,
+                messages_to_keep,
+                keep_tokens: actual_tokens,
+                text_messages_kept: actual_text_msgs,
+            };
+        }
+    }
+
+    // Phase 3: No anchor or anchor not found — fall back to generic calculation
+    calculate_keep_start_index(messages, config).into()
+}
+
+/// Adjust a raw keep boundary to avoid splitting tool_use/tool_result pairs.
+///
+/// Walks backward from `raw_start` to ensure that if a tool_result message
+/// is included, its corresponding tool_use message is also included.
+///
+/// # Arguments
+/// * `messages` - The message array
+/// * `raw_start` - The raw start index to adjust
+///
+/// # Returns
+/// The adjusted start index (may be <= raw_start).
+fn adjust_boundaries_for_tools(messages: &[serde_json::Value], raw_start: i32) -> i32 {
+    if raw_start <= 0 || messages.is_empty() {
+        return raw_start;
+    }
+
+    let start = raw_start as usize;
+    if start >= messages.len() {
+        return raw_start;
+    }
+
+    // Collect tool_use IDs referenced by tool_result messages in the keep window
+    let mut needed_tool_use_ids: HashSet<String> = HashSet::new();
+    for msg in &messages[start..] {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role == "tool" || role == "tool_result" {
+            if let Some(id) = msg.get("tool_use_id").and_then(|v| v.as_str()) {
+                needed_tool_use_ids.insert(id.to_string());
+            }
+        }
+    }
+
+    if needed_tool_use_ids.is_empty() {
+        return raw_start;
+    }
+
+    // Remove IDs that are already satisfied within the keep window
+    for msg in &messages[start..] {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role == "assistant" {
+            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                for block in content {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                            needed_tool_use_ids.remove(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if needed_tool_use_ids.is_empty() {
+        return raw_start;
+    }
+
+    // Walk backward from raw_start to find the tool_use messages
+    let mut adjusted_start = raw_start;
+    for i in (0..start).rev() {
+        let msg = &messages[i];
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role == "assistant" {
+            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                for block in content {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                            if needed_tool_use_ids.remove(id) {
+                                adjusted_start = i as i32;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if needed_tool_use_ids.is_empty() {
+            break;
+        }
+    }
+
+    debug!(
+        raw_start,
+        adjusted_start, "Adjusted boundary for tool pairing"
+    );
+    adjusted_start
 }
 
 /// Collect file paths to keep during compaction.
@@ -851,287 +968,6 @@ pub fn collect_files_to_keep(history: &MessageHistory, keep_recent_turns: i32) -
     );
 
     files_to_keep
-}
-
-/// Execute micro-compaction on a message history.
-///
-/// This implements the 7-phase micro-compact algorithm:
-/// 1. Collect tool_use IDs and token counts
-/// 2. Determine which tool results need compaction (keep recent N)
-/// 3. Check thresholds (warning threshold + minimum savings)
-/// 4. Memory attachment cleanup (placeholder - returns empty)
-/// 5. Content replacement
-/// 6. readFileState cleanup (placeholder)
-/// 7. State update and return
-///
-/// # Arguments
-/// * `messages` - Mutable message history (will be modified in place)
-/// * `context_tokens` - Current token count
-/// * `available_tokens` - Maximum available tokens
-/// * `config` - Compact configuration
-/// * `persist_dir` - Optional directory to persist large results
-///
-/// # Returns
-/// Result of the micro-compaction operation, or None if no compaction was needed.
-pub fn execute_micro_compact(
-    messages: &mut [serde_json::Value],
-    context_tokens: i32,
-    available_tokens: i32,
-    config: &CompactConfig,
-    persist_dir: Option<&PathBuf>,
-) -> Option<MicroCompactResult> {
-    if !config.is_micro_compact_enabled() {
-        debug!("Micro-compact disabled");
-        return None;
-    }
-
-    // Phase 1: Collect tool_use IDs and token counts
-    let candidates = collect_tool_result_candidates(messages);
-    if candidates.is_empty() {
-        debug!("No tool result candidates for micro-compaction");
-        return None;
-    }
-
-    // Phase 2: Determine which tool results to compact (keep recent N)
-    let recent_to_keep = config.recent_tool_results_to_keep as usize;
-    let compactable_candidates: Vec<_> = candidates.iter().filter(|c| c.is_compactable).collect();
-
-    if compactable_candidates.len() <= recent_to_keep {
-        debug!(
-            count = compactable_candidates.len(),
-            keep = recent_to_keep,
-            "Not enough compactable candidates"
-        );
-        return None;
-    }
-
-    // Candidates to compact are all except the most recent N
-    let to_compact_count = compactable_candidates.len() - recent_to_keep;
-    let candidates_to_compact: Vec<_> = compactable_candidates
-        .iter()
-        .take(to_compact_count)
-        .collect();
-
-    // Phase 3: Check thresholds
-    let status = ThresholdStatus::calculate(context_tokens, available_tokens, config);
-    let potential_savings: i32 = candidates_to_compact.iter().map(|c| c.token_count).sum();
-
-    if !status.is_above_warning_threshold {
-        debug!(
-            status = status.status_description(),
-            "Below warning threshold, skipping micro-compact"
-        );
-        return None;
-    }
-
-    if potential_savings < config.micro_compact_min_savings {
-        debug!(
-            potential_savings,
-            min_savings = config.micro_compact_min_savings,
-            "Potential savings below minimum threshold"
-        );
-        return None;
-    }
-
-    info!(
-        candidates = to_compact_count,
-        potential_savings,
-        status = status.status_description(),
-        "Starting micro-compaction"
-    );
-
-    // Phase 4: Memory attachment cleanup
-    // Track memory attachments that need to be cleared to prevent duplication
-    let mut cleared_memory_uuids: Vec<String> = Vec::new();
-    for msg in messages.iter() {
-        // Check for memory attachment type messages
-        if let Some(msg_type) = msg.get("type").and_then(|t| t.as_str())
-            && msg_type == "attachment"
-            && let Some(attachment) = msg.get("attachment")
-            && let Some(att_type) = attachment.get("type").and_then(|t| t.as_str())
-            && att_type == "memory"
-        {
-            // Extract UUID and mark for clearing
-            if let Some(uuid) = msg.get("uuid").and_then(|u| u.as_str())
-                && !cleared_memory_uuids.contains(&uuid.to_string())
-            {
-                cleared_memory_uuids.push(uuid.to_string());
-            }
-        }
-    }
-
-    // Phase 5: Content replacement
-    let mut result = MicroCompactResult::default();
-    result.trigger = CompactTrigger::Auto; // Micro-compact is always auto-triggered
-
-    for candidate in candidates_to_compact {
-        let msg = &mut messages[candidate.index as usize];
-
-        // Get original content for potential persistence
-        let original_content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let original_size = original_content.len() as i64;
-
-        // Phase 6 prep: Track file paths from Read tool results for readFileState cleanup
-        // The caller can use these paths to update their file state tracking
-        if candidate.tool_name.as_deref() == Some(cocode_protocol::ToolName::Read.as_str()) {
-            // Try to extract file path from the tool input or from the message
-            // Messages may have path in different locations depending on format
-            if let Some(path) = msg
-                .get("file_path")
-                .or_else(|| msg.get("path"))
-                .or_else(|| {
-                    msg.get("input")
-                        .and_then(|i| i.get("file_path").or_else(|| i.get("path")))
-                })
-                .and_then(|v| v.as_str())
-            {
-                result.cleared_file_paths.push(PathBuf::from(path));
-            }
-        }
-
-        // Persist large results if directory provided and content is large enough
-        // Large is defined as > 1000 tokens (approximately 4000 chars)
-        let should_persist = original_content.len() > 4000 && persist_dir.is_some();
-
-        let replacement_content = if let (Some(dir), true) = (persist_dir, should_persist) {
-            if let Some(ref tool_use_id) = candidate.tool_use_id {
-                let file_path = dir.join(format!("temp/tool-results/{tool_use_id}.txt"));
-                if let Some(parent) = file_path.parent() {
-                    match std::fs::create_dir_all(parent) {
-                        Ok(()) => {
-                            if std::fs::write(&file_path, &original_content).is_ok() {
-                                // Create persisted result metadata
-                                let persisted = PersistedToolResult {
-                                    path: file_path.clone(),
-                                    original_size,
-                                    original_tokens: candidate.token_count,
-                                    tool_use_id: tool_use_id.clone(),
-                                };
-                                let xml_ref = persisted.to_xml_reference();
-                                result.persisted_results.push(persisted);
-                                result.persisted_files.push(file_path);
-                                xml_ref
-                            } else {
-                                warn!(
-                                    tool_use_id,
-                                    path = ?file_path,
-                                    "Failed to persist tool result"
-                                );
-                                generate_preview(&original_content)
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool_use_id,
-                                path = ?parent,
-                                error = %e,
-                                "Failed to create directory for tool result"
-                            );
-                            generate_preview(&original_content)
-                        }
-                    }
-                } else {
-                    generate_preview(&original_content)
-                }
-            } else {
-                generate_preview(&original_content)
-            }
-        } else {
-            generate_preview(&original_content)
-        };
-
-        // Replace content
-        if let Some(content) = msg.get_mut("content") {
-            *content = serde_json::Value::String(replacement_content);
-        }
-
-        result.compacted_count += 1;
-        result.tokens_saved += candidate.token_count;
-        if let Some(ref id) = candidate.tool_use_id {
-            result.compacted_ids.push(id.clone());
-        }
-    }
-
-    // Phase 6: readFileState cleanup
-    // File paths are now tracked in result.cleared_file_paths
-    // The caller should use these to update their FileTracker state
-
-    // Phase 7: Return result
-    result.cleared_memory_uuids = cleared_memory_uuids;
-
-    info!(
-        compacted = result.compacted_count,
-        tokens_saved = result.tokens_saved,
-        "Micro-compaction complete"
-    );
-
-    Some(result)
-}
-
-/// Generate a preview of content with the cleared marker.
-///
-/// If the content is longer than `CONTENT_PREVIEW_LENGTH`, it is truncated
-/// and the cleared marker is appended. Otherwise, just the marker is returned.
-fn generate_preview(original_content: &str) -> String {
-    if original_content.len() > CONTENT_PREVIEW_LENGTH {
-        format!(
-            "{}...\n\n{}",
-            &original_content[..CONTENT_PREVIEW_LENGTH],
-            CLEARED_CONTENT_MARKER
-        )
-    } else {
-        CLEARED_CONTENT_MARKER.to_string()
-    }
-}
-
-/// Collect information about all tool result messages.
-fn collect_tool_result_candidates(messages: &[serde_json::Value]) -> Vec<ToolResultCandidate> {
-    let mut candidates = Vec::new();
-
-    for (i, msg) in messages.iter().enumerate() {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-
-        // Check for tool result messages (both "tool" and "tool_result" roles)
-        if role != "tool" && role != "tool_result" {
-            continue;
-        }
-
-        // Get tool use ID
-        let tool_use_id = msg
-            .get("tool_use_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        // Get tool name from the message or from a sibling tool_use message
-        let tool_name = msg.get("name").and_then(|v| v.as_str()).map(String::from);
-
-        // Estimate token count from content
-        let content_len = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map_or(0, str::len);
-        let token_count = (content_len / 4) as i32;
-
-        // Check if this tool is compactable
-        let is_compactable = tool_name
-            .as_deref()
-            .map(|n| COMPACTABLE_TOOLS.contains(n))
-            .unwrap_or(false);
-
-        candidates.push(ToolResultCandidate {
-            index: i as i32,
-            tool_use_id,
-            tool_name,
-            token_count,
-            is_compactable,
-        });
-    }
-
-    candidates
 }
 
 // ============================================================================
@@ -1263,52 +1099,16 @@ pub fn format_restoration_with_tasks(
     }
 }
 
-/// Determine whether compaction should be triggered.
-///
-/// Returns `true` when the ratio of `context_tokens` to `max_tokens` meets or
-/// exceeds the configured `threshold`.
-pub fn should_compact(context_tokens: i32, max_tokens: i32, threshold: f64) -> bool {
-    if max_tokens <= 0 {
-        return false;
-    }
-    let usage = context_tokens as f64 / max_tokens as f64;
-    usage >= threshold
-}
-
-/// Identify message indices that are candidates for micro-compaction.
-///
-/// Micro-compaction targets messages with large `tool_result` content that can
-/// be summarised without losing critical information. Returns a list of indices
-/// (0-based) into the provided `messages` slice.
-pub fn micro_compact_candidates(messages: &[serde_json::Value]) -> Vec<i32> {
-    let mut candidates = Vec::new();
-    for (i, msg) in messages.iter().enumerate() {
-        // A message is a micro-compact candidate when it carries a tool_result
-        // role and its content exceeds a reasonable size threshold.
-        let is_tool_result = msg
-            .get("role")
-            .and_then(|v| v.as_str())
-            .is_some_and(|r| r == "tool" || r == "tool_result");
-
-        let content_len = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map_or(0, str::len);
-
-        // 2000 chars is a reasonable threshold for micro-compaction.
-        if is_tool_result && content_len > 2000 {
-            candidates.push(i as i32);
-        }
-    }
-    candidates
-}
-
 /// Try to load a session memory summary (Tier 1 compaction).
 ///
 /// Returns the cached summary if available and sufficient savings would result.
 /// This is zero-cost as it doesn't call the LLM.
-pub fn try_session_memory_compact(config: &SessionMemoryConfig) -> Option<SessionMemorySummary> {
-    if !config.enabled {
+///
+/// Uses `CompactConfig.enable_sm_compact` as the gate and `CompactConfig.summary_path`
+/// as the file location, consolidating what was previously split across
+/// `CompactConfig` and a separate `SessionMemoryConfig`.
+pub fn try_session_memory_compact(config: &CompactConfig) -> Option<SessionMemorySummary> {
+    if !config.enable_sm_compact {
         return None;
     }
 
@@ -1328,8 +1128,19 @@ pub fn try_session_memory_compact(config: &SessionMemoryConfig) -> Option<Sessio
         return None;
     }
 
+    if is_empty_template(&content) {
+        debug!(?path, "Session memory file is an unmodified template");
+        return None;
+    }
+
     // Parse the summary format
-    let summary = parse_session_memory(&content)?;
+    let mut summary = parse_session_memory(&content)?;
+
+    // Truncate oversized sections to prevent SM notes from consuming
+    // disproportionate context. Matches Claude Code's `truncateSections()`.
+    summary.summary =
+        truncate_sections(&summary.summary, SM_MAX_SECTION_TOKENS, SM_MAX_TOTAL_TOKENS);
+    summary.token_estimate = cocode_protocol::estimate_text_tokens(&summary.summary);
 
     info!(
         summary_tokens = summary.token_estimate,
@@ -1338,6 +1149,111 @@ pub fn try_session_memory_compact(config: &SessionMemoryConfig) -> Option<Sessio
     );
 
     Some(summary)
+}
+
+/// Default per-section token limit for session memory notes.
+const SM_MAX_SECTION_TOKENS: i32 = 2000;
+
+/// Default total token limit for session memory notes.
+const SM_MAX_TOTAL_TOKENS: i32 = 12000;
+
+/// Truncate session memory sections to enforce per-section and total token limits.
+///
+/// Matches Claude Code's `truncateSections()`: each markdown section (delimited by
+/// `### ` headers) is capped at `max_section_tokens`, and the total output is capped
+/// at `max_total_tokens`. Uses [`cocode_protocol::estimate_text_tokens`] for budget checks.
+pub fn truncate_sections(summary: &str, max_section_tokens: i32, max_total_tokens: i32) -> String {
+    let mut result = String::with_capacity(summary.len());
+    let mut total_used: i32 = 0;
+    let mut current_section = String::new();
+    let mut in_section = false;
+
+    for line in summary.lines() {
+        if line.starts_with("### ") || line.starts_with("## ") || line.starts_with("# ") {
+            // Flush previous section
+            if in_section {
+                let truncated = truncate_to_token_limit(&current_section, max_section_tokens);
+                let section_tokens = cocode_protocol::estimate_text_tokens(&truncated);
+                if total_used + section_tokens > max_total_tokens {
+                    break;
+                }
+                result.push_str(&truncated);
+                total_used += section_tokens;
+                current_section.clear();
+            }
+            in_section = true;
+            current_section.push_str(line);
+            current_section.push('\n');
+        } else {
+            if in_section {
+                current_section.push_str(line);
+                current_section.push('\n');
+            } else {
+                // Content before the first header — include directly
+                let line_tokens = cocode_protocol::estimate_text_tokens(line);
+                if total_used + line_tokens > max_total_tokens {
+                    break;
+                }
+                result.push_str(line);
+                result.push('\n');
+                total_used += line_tokens;
+            }
+        }
+    }
+
+    // Flush last section
+    if in_section && !current_section.is_empty() {
+        let truncated = truncate_to_token_limit(&current_section, max_section_tokens);
+        let section_tokens = cocode_protocol::estimate_text_tokens(&truncated);
+        if total_used + section_tokens <= max_total_tokens {
+            result.push_str(&truncated);
+        }
+    }
+
+    // Remove trailing newline to match input convention
+    if result.ends_with('\n') && !summary.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+/// Truncate text to fit within a token limit, appending "[truncated]" if needed.
+fn truncate_to_token_limit(text: &str, max_tokens: i32) -> String {
+    let tokens = cocode_protocol::estimate_text_tokens(text);
+    if tokens <= max_tokens {
+        return text.to_string();
+    }
+
+    // Estimate the character budget: ~3 chars per token
+    let char_budget = (max_tokens as usize) * 3;
+    let truncation_marker = "\n[truncated]\n";
+    let usable = char_budget.saturating_sub(truncation_marker.len());
+
+    // Find a clean break point (newline boundary)
+    let break_point = text[..usable.min(text.len())]
+        .rfind('\n')
+        .unwrap_or(usable.min(text.len()));
+
+    let mut result = text[..break_point].to_string();
+    result.push_str(truncation_marker);
+    result
+}
+
+/// Check whether a session memory summary is an unmodified template.
+///
+/// Returns `true` when all non-header, non-empty lines are just "N/A"
+/// (or there are fewer than 3 substantive lines). This matches Claude Code's
+/// `isEmptyTemplate()` check.
+fn is_empty_template(summary: &str) -> bool {
+    let substantive_lines = summary
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('*'))
+        .filter(|l| {
+            let trimmed = l.trim();
+            !trimmed.is_empty() && trimmed != "N/A" && trimmed != "---"
+        })
+        .count();
+    substantive_lines < 3
 }
 
 /// Parsed session memory summary.
@@ -1384,8 +1300,7 @@ fn parse_session_memory(content: &str) -> Option<SessionMemorySummary> {
         return None;
     }
 
-    // Rough token estimate: ~4 chars per token
-    let token_estimate = (summary.len() / 4) as i32;
+    let token_estimate = cocode_protocol::estimate_text_tokens(&summary);
 
     Some(SessionMemorySummary {
         summary,
@@ -1451,7 +1366,7 @@ pub fn build_context_restoration(
         plan,
         skills,
         &FileRestorationConfig {
-            max_files: CONTEXT_RESTORATION_MAX_FILES,
+            max_files: cocode_protocol::DEFAULT_CONTEXT_RESTORE_MAX_FILES,
             max_tokens_per_file: cocode_protocol::DEFAULT_MAX_TOKENS_PER_FILE,
             total_token_budget: budget,
             excluded_patterns: vec![],
@@ -1544,8 +1459,8 @@ pub fn build_context_restoration_with_config(
 
         // Truncate file content if it exceeds per-file limit
         if file.tokens > config.max_tokens_per_file {
-            // Calculate approximate character limit (~4 chars per token)
-            let char_limit = (config.max_tokens_per_file * 4) as usize;
+            // Calculate approximate character limit (~3 chars per token)
+            let char_limit = (config.max_tokens_per_file * 3) as usize;
             if file.content.len() > char_limit {
                 file.content = format!(
                     "{}...\n[Truncated: {} more tokens]",
@@ -1573,10 +1488,9 @@ pub fn build_context_restoration_with_config(
     result
 }
 
-/// Estimate token count for text (rough approximation).
+/// Estimate token count for text using the canonical formula.
 fn estimate_tokens_for_text(text: &str) -> i32 {
-    // ~4 chars per token is a rough estimate
-    (text.len() / 4) as i32
+    cocode_protocol::estimate_text_tokens(text)
 }
 
 /// Format context restoration as a message for the conversation.
@@ -1670,65 +1584,6 @@ pub fn format_summary_with_transcript(
     parts.join("\n")
 }
 
-/// Create an invoked skills attachment for restoration after compaction.
-///
-/// This creates a formatted attachment listing recently invoked skills
-/// that should be restored to maintain context.
-pub fn create_invoked_skills_attachment(
-    invoked_skills: &[InvokedSkillRestoration],
-) -> Option<String> {
-    if invoked_skills.is_empty() {
-        return None;
-    }
-
-    let skills_list: Vec<String> = invoked_skills
-        .iter()
-        .map(|s| {
-            if let Some(args) = &s.args {
-                format!(
-                    "- {} (args: {}, last used turn {})",
-                    s.name, args, s.last_invoked_turn
-                )
-            } else {
-                format!("- {} (last used turn {})", s.name, s.last_invoked_turn)
-            }
-        })
-        .collect();
-
-    Some(format!(
-        "<invoked_skills>\nRecently invoked skills:\n{}\n</invoked_skills>",
-        skills_list.join("\n")
-    ))
-}
-
-/// Create a compact boundary message with metadata.
-///
-/// This message marks where compaction occurred and includes metadata
-/// about the trigger and token counts.
-pub fn create_compact_boundary_message(metadata: &CompactBoundaryMetadata) -> String {
-    let mut content = "Conversation compacted.".to_string();
-
-    content.push_str(&format!(
-        "\nTrigger: {}\nTokens before: {}",
-        metadata.trigger.as_str(),
-        metadata.pre_tokens
-    ));
-
-    if let Some(post) = metadata.post_tokens {
-        content.push_str(&format!("\nTokens after: {post}"));
-    }
-
-    if let Some(path) = &metadata.transcript_path {
-        content.push_str(&format!("\nFull transcript: {}", path.display()));
-    }
-
-    if metadata.recent_messages_preserved {
-        content.push_str("\nRecent messages preserved verbatim.");
-    }
-
-    content
-}
-
 /// Wrap hook additional context as a formatted message.
 ///
 /// Creates the hook_additional_context message format used for
@@ -1762,18 +1617,18 @@ pub fn wrap_hook_additional_context(contexts: &[HookAdditionalContext]) -> Optio
 /// Build token breakdown for telemetry.
 ///
 /// Analyzes messages to calculate token distribution by category.
+#[allow(dead_code)]
 pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
     let mut breakdown = TokenBreakdown::default();
     let mut tool_request_tokens: HashMap<String, i32> = HashMap::new();
     let mut tool_result_tokens: HashMap<String, i32> = HashMap::new();
+    // P5: Track duplicate file reads
+    let mut seen_read_paths: HashSet<String> = HashSet::new();
 
     for msg in messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        let content_len = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map_or(0, str::len);
-        let tokens = (content_len / 4) as i32;
+        let content_text = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let tokens = cocode_protocol::estimate_text_tokens(content_text);
 
         breakdown.total_tokens += tokens;
 
@@ -1785,11 +1640,27 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
                 breakdown.assistant_message_tokens += tokens;
             }
             "tool" | "tool_result" => {
+                let tool_name = msg.get("name").and_then(|v| v.as_str());
                 // Track by tool name
-                if let Some(name) = msg.get("name").and_then(|v| v.as_str()) {
+                if let Some(name) = tool_name {
                     *tool_result_tokens.entry(name.to_string()).or_insert(0) += tokens;
                 }
                 breakdown.local_command_output_tokens += tokens;
+
+                // P5: Detect duplicate Read file paths
+                if tool_name == Some("Read") {
+                    let file_path = msg
+                        .get("file_path")
+                        .or_else(|| msg.get("input").and_then(|i| i.get("file_path")))
+                        .and_then(|v| v.as_str());
+                    if let Some(path) = file_path {
+                        if !seen_read_paths.insert(path.to_string()) {
+                            // Duplicate read
+                            breakdown.duplicate_read_tokens += tokens;
+                            breakdown.duplicate_read_file_count += 1;
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1804,8 +1675,11 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
                     && block_type == "tool_use"
                     && let Some(name) = block.get("name").and_then(|n| n.as_str())
                 {
-                    let input_len = block.get("input").map(|i| i.to_string().len()).unwrap_or(0);
-                    let input_tokens = (input_len / 4) as i32;
+                    let input_text = block
+                        .get("input")
+                        .map(|i| i.to_string())
+                        .unwrap_or_default();
+                    let input_tokens = cocode_protocol::estimate_text_tokens(&input_text);
                     *tool_request_tokens.entry(name.to_string()).or_insert(0) += input_tokens;
                 }
             }
@@ -1940,9 +1814,8 @@ pub fn build_file_read_state(
         }
     }
 
-    // Limit to max_entries (LRU eviction simulation)
-    // The FileTracker will handle this internally once we add LRU support
-    let _ = max_entries; // Will be used when LRU is implemented
+    // Enforce LRU limit: evict oldest entries when count exceeds max_entries
+    tracker.enforce_entry_limit(max_entries);
 
     tracker
 }
@@ -1976,100 +1849,6 @@ fn strip_line_numbers(content: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Build file restoration list from a FileTracker.
-///
-/// This matches Python's `collectFilesToKeep(Ua4)`:
-/// - Sort by timestamp (newest first)
-/// - Max 5 files
-/// - 50k total token budget
-/// - 5k tokens per file
-/// - Exclude internal files (session memory, plan files, etc.)
-///
-/// # Arguments
-/// * `tracker` - The FileTracker to extract files from
-/// * `config` - Compact configuration with restoration limits
-///
-/// # Returns
-/// A vector of FileRestoration items sorted by most recent access.
-pub fn build_file_restoration_from_tracker(
-    tracker: &FileTracker,
-    config: &CompactConfig,
-) -> Vec<FileRestoration> {
-    let mut files: Vec<FileRestoration> = tracker
-        .read_files_with_state()
-        .into_iter()
-        .filter(|(path, state)| {
-            // Skip files without content
-            state.content.is_some()
-            // Skip internal files
-            && !is_internal_file(path, "")
-        })
-        .map(|(path, state)| {
-            let content = state.content.clone().unwrap_or_default();
-            let tokens = (content.len() / 4) as i32; // Rough estimate: 4 chars per token
-            let last_accessed = state
-                .timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-
-            FileRestoration {
-                path,
-                content,
-                priority: 0, // Will be sorted by access time
-                tokens,
-                last_accessed,
-            }
-        })
-        .collect();
-
-    // Sort by last_accessed descending (most recent first)
-    files.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
-
-    // Apply limits
-    let mut result = Vec::new();
-    let mut total_tokens = 0;
-    let max_tokens_per_file = config.max_tokens_per_file;
-    let total_budget = config.context_restore_budget;
-    let max_files = config.context_restore_max_files as usize;
-
-    for mut file in files {
-        if result.len() >= max_files {
-            break;
-        }
-
-        // Truncate if exceeds per-file limit
-        if file.tokens > max_tokens_per_file {
-            let char_limit = (max_tokens_per_file * 4) as usize;
-            if file.content.len() > char_limit {
-                file.content = format!(
-                    "{}...\n[Truncated: {} more tokens]",
-                    &file.content[..char_limit.min(file.content.len())],
-                    file.tokens - max_tokens_per_file
-                );
-                file.tokens = max_tokens_per_file;
-            }
-        }
-
-        // Check total budget
-        if total_tokens + file.tokens > total_budget {
-            break;
-        }
-
-        total_tokens += file.tokens;
-        result.push(file);
-    }
-
-    debug!(
-        files_restored = result.len(),
-        total_tokens,
-        budget = total_budget,
-        "Built file restoration from tracker"
-    );
-
-    result
 }
 
 /// Check if a path is an internal file that should be excluded from restoration.
@@ -2111,107 +1890,6 @@ pub fn is_internal_file(path: &Path, _session_id: &str) -> bool {
     }
 
     false
-}
-
-/// Collect files to restore after compaction by re-reading fresh content.
-///
-/// This implements Claude Code's `collectFilesToKeep (Ua4)` behavior:
-/// - Gets most recently accessed files from tracker
-/// - Re-reads files to get fresh content (not cached)
-/// - Applies token limits (5k per file, 50k total, max 5 files)
-/// - Filters out internal files (session memory, plan files, etc.)
-///
-/// Unlike `build_file_restoration_from_tracker`, this function actually
-/// re-reads file content from disk to ensure the model sees the latest
-/// version after compaction.
-///
-/// # Arguments
-/// * `tracker` - The FileTracker containing read file metadata
-/// * `config` - Compaction configuration with token limits
-///
-/// # Returns
-/// A vector of FileRestoration items with fresh content, sorted by access time.
-pub fn collect_files_to_restore(
-    tracker: &FileTracker,
-    config: &CompactConfig,
-) -> Vec<FileRestoration> {
-    // Get files sorted by most recent access
-    let recent_files = tracker.most_recent_files(FileTracker::MAX_FILES_TO_RESTORE * 2);
-
-    let mut files: Vec<FileRestoration> = recent_files
-        .into_iter()
-        .filter(|path| !is_internal_file(path, ""))
-        .filter_map(|path| {
-            // Re-read file to get fresh content
-            let content = std::fs::read_to_string(&path).ok()?;
-            let tokens = FileTracker::estimate_tokens(&content);
-            let last_accessed = tracker
-                .read_state(&path)
-                .and_then(|state| {
-                    state
-                        .timestamp
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .ok()
-                })
-                .unwrap_or(0);
-
-            Some(FileRestoration {
-                path,
-                content,
-                priority: 0, // Sorted by access time instead
-                tokens: tokens as i32,
-                last_accessed,
-            })
-        })
-        .collect();
-
-    // Sort by last_accessed descending (most recent first)
-    files.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
-
-    // Apply limits
-    let mut result = Vec::new();
-    let mut total_tokens = 0i32;
-    let max_tokens_per_file = config.max_tokens_per_file;
-    let total_budget = config.context_restore_budget;
-    let max_files = config.context_restore_max_files as usize;
-
-    for mut file in files {
-        if result.len() >= max_files {
-            break;
-        }
-
-        // Truncate if exceeds per-file limit
-        if file.tokens > max_tokens_per_file {
-            let char_limit = (max_tokens_per_file * 4) as usize;
-            if file.content.len() > char_limit {
-                file.content = format!(
-                    "{}...\n[Truncated: {} more tokens]",
-                    &file.content[..char_limit.min(file.content.len())],
-                    file.tokens - max_tokens_per_file
-                );
-                file.tokens = max_tokens_per_file;
-            }
-        }
-
-        // Check total budget
-        if total_tokens + file.tokens > total_budget {
-            break;
-        }
-
-        total_tokens += file.tokens;
-        result.push(file);
-    }
-
-    debug!(
-        files_restored = result.len(),
-        total_tokens,
-        budget = total_budget,
-        max_files,
-        "Collected files to restore after compaction"
-    );
-
-    result
 }
 
 #[cfg(test)]

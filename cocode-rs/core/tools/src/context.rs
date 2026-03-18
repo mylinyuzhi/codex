@@ -995,6 +995,23 @@ impl FileTracker {
         state.nested_memory_triggers.remove(path);
     }
 
+    /// Enforce an entry limit by evicting the least-recently-used entries.
+    ///
+    /// Pops LRU entries until the count is at most `max_entries`.
+    pub fn enforce_entry_limit(&self, max_entries: usize) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        while state.read_files.len() > max_entries {
+            if let Some((_path, evicted)) = state.read_files.pop_lru() {
+                if let Some(content) = &evicted.content {
+                    state.current_size_bytes =
+                        state.current_size_bytes.saturating_sub(content.len());
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Clear all tracked files.
     pub fn clear(&self) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
@@ -1277,21 +1294,12 @@ impl FileTracker {
     // Token Estimation (Claude Code v2.1.38 alignment)
     // ========================================================================
 
-    /// Maximum tokens per file during restoration (Claude Code: 5,000).
-    pub const MAX_TOKENS_PER_FILE: usize = 5_000;
-
-    /// Maximum total tokens for all restored files (Claude Code: 50,000).
-    pub const MAX_TOTAL_TOKENS: usize = 50_000;
-
-    /// Maximum number of files to restore after compaction (Claude Code: 5).
-    pub const MAX_FILES_TO_RESTORE: usize = 5;
-
-    /// Estimate token count for content.
+    /// Estimate token count for content using the canonical formula.
     ///
-    /// Uses a simple approximation of ~4 characters per token, which is
-    /// accurate enough for budget estimation during compaction.
+    /// Delegates to `cocode_protocol::estimate_text_tokens` which uses
+    /// `ceil(len / 3.0)` (~3 characters per token).
     pub fn estimate_tokens(content: &str) -> usize {
-        content.len() / 4
+        cocode_protocol::estimate_text_tokens(content) as usize
     }
 
     /// Estimate token count for a tracked file.

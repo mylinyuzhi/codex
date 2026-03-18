@@ -17,7 +17,6 @@ use cocode_hooks::HookHandler;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookSource;
 use cocode_loop::AgentLoop;
-use cocode_loop::CompactionConfig;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
@@ -815,7 +814,6 @@ impl SessionState {
         )
         .config(self.loop_config.clone())
         .fallback_config(FallbackConfig::default())
-        .compaction_config(CompactionConfig::default())
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())
@@ -2317,7 +2315,6 @@ impl SessionState {
                 )
                 .config(child_config)
                 .fallback_config(FallbackConfig::default())
-                .compaction_config(CompactionConfig::default())
                 .hooks(hook_registry.clone())
                 .cancel_token(params.cancel_token)
                 .features(features)
@@ -2562,7 +2559,6 @@ impl SessionState {
         )
         .config(self.loop_config.clone())
         .fallback_config(FallbackConfig::default())
-        .compaction_config(CompactionConfig::default())
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())

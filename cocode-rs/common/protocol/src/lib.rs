@@ -190,6 +190,8 @@ pub use compact_config::DEFAULT_MAX_COMPACT_OUTPUT_TOKENS;
 pub use compact_config::DEFAULT_MAX_SUMMARY_RETRIES;
 pub use compact_config::DEFAULT_TOKEN_SAFETY_MARGIN;
 pub use compact_config::DEFAULT_TOKENS_PER_IMAGE;
+// Canonical token estimation function
+pub use compact_config::estimate_text_tokens;
 pub use path_config::PathConfig;
 pub use plan_config::DEFAULT_PLAN_AGENT_COUNT;
 pub use plan_config::DEFAULT_PLAN_EXPLORE_AGENT_COUNT;

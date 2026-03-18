@@ -2,80 +2,6 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
-fn test_default_compaction_config() {
-    let config = CompactionConfig::default();
-    assert!((config.threshold - 0.8).abs() < f64::EPSILON);
-    assert!(config.micro_compact);
-    assert_eq!(config.min_messages_to_keep, 4);
-}
-
-#[test]
-fn test_should_compact_below_threshold() {
-    assert!(!should_compact(7000, 10000, 0.8));
-}
-
-#[test]
-fn test_should_compact_at_threshold() {
-    assert!(should_compact(8000, 10000, 0.8));
-}
-
-#[test]
-fn test_should_compact_above_threshold() {
-    assert!(should_compact(9500, 10000, 0.8));
-}
-
-#[test]
-fn test_should_compact_zero_max() {
-    assert!(!should_compact(100, 0, 0.8));
-}
-
-#[test]
-fn test_should_compact_negative_max() {
-    assert!(!should_compact(100, -1, 0.8));
-}
-
-#[test]
-fn test_micro_compact_candidates_empty() {
-    let messages: Vec<serde_json::Value> = vec![];
-    assert!(micro_compact_candidates(&messages).is_empty());
-}
-
-#[test]
-fn test_micro_compact_candidates_no_tool_results() {
-    let messages = vec![
-        serde_json::json!({"role": "user", "content": "hello"}),
-        serde_json::json!({"role": "assistant", "content": "hi"}),
-    ];
-    assert!(micro_compact_candidates(&messages).is_empty());
-}
-
-#[test]
-fn test_micro_compact_candidates_small_tool_result() {
-    let messages = vec![serde_json::json!({"role": "tool", "content": "ok"})];
-    assert!(micro_compact_candidates(&messages).is_empty());
-}
-
-#[test]
-fn test_micro_compact_candidates_large_tool_result() {
-    let large_content = "x".repeat(3000);
-    let messages = vec![
-        serde_json::json!({"role": "user", "content": "do something"}),
-        serde_json::json!({"role": "tool", "content": large_content}),
-        serde_json::json!({"role": "assistant", "content": "done"}),
-    ];
-    let candidates = micro_compact_candidates(&messages);
-    assert_eq!(candidates, vec![1]);
-}
-
-#[test]
-fn test_micro_compact_candidates_tool_result_role() {
-    let large_content = "y".repeat(2500);
-    let messages = vec![serde_json::json!({"role": "tool_result", "content": large_content})];
-    let candidates = micro_compact_candidates(&messages);
-    assert_eq!(candidates, vec![0]);
-}
-
-#[test]
 fn test_parse_session_memory_simple() {
     let content = "This is a summary of the conversation.";
     let summary = parse_session_memory(content).unwrap();
@@ -166,28 +92,6 @@ fn test_format_restoration_message_with_content() {
     assert!(msg.contains("<file path=\"/test.rs\">"));
 }
 
-#[test]
-fn test_session_memory_config_default() {
-    let config = SessionMemoryConfig::default();
-    assert!(!config.enabled);
-    assert!(config.summary_path.is_none());
-    assert_eq!(config.min_savings_tokens, 10_000);
-}
-
-#[test]
-fn test_compaction_tier_variants() {
-    let tiers = vec![
-        CompactionTier::SessionMemory,
-        CompactionTier::Full,
-        CompactionTier::Micro,
-    ];
-    for tier in tiers {
-        let json = serde_json::to_string(&tier).unwrap();
-        let back: CompactionTier = serde_json::from_str(&json).unwrap();
-        assert_eq!(tier, back);
-    }
-}
-
 // ========================================================================
 // Phase 2: Threshold Status Tests
 // ========================================================================
@@ -272,227 +176,6 @@ fn test_compactable_tools_set() {
     // Non-compactable tools
     assert!(!COMPACTABLE_TOOLS.contains("Task"));
     assert!(!COMPACTABLE_TOOLS.contains("AskUser"));
-}
-
-// ========================================================================
-// Phase 2: Micro-Compact Execution Tests
-// ========================================================================
-
-#[test]
-fn test_collect_tool_result_candidates() {
-    let messages = vec![
-        serde_json::json!({"role": "user", "content": "hello"}),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-1",
-            "content": "file content here"
-        }),
-        serde_json::json!({"role": "assistant", "content": "done"}),
-        serde_json::json!({
-            "role": "tool_result",
-            "name": "Bash",
-            "tool_use_id": "tool-2",
-            "content": "command output"
-        }),
-    ];
-
-    let candidates = collect_tool_result_candidates(&messages);
-    assert_eq!(candidates.len(), 2);
-
-    assert_eq!(candidates[0].index, 1);
-    assert_eq!(candidates[0].tool_name, Some("Read".to_string()));
-    assert!(candidates[0].is_compactable);
-
-    assert_eq!(candidates[1].index, 3);
-    assert_eq!(candidates[1].tool_name, Some("Bash".to_string()));
-    assert!(candidates[1].is_compactable);
-}
-
-#[test]
-fn test_execute_micro_compact_disabled() {
-    let mut messages = vec![serde_json::json!({"role": "user", "content": "test"})];
-    let mut config = CompactConfig::default();
-    config.disable_micro_compact = true;
-
-    let result = execute_micro_compact(&mut messages, 100000, 200000, &config, None);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_execute_micro_compact_no_candidates() {
-    let mut messages = vec![
-        serde_json::json!({"role": "user", "content": "hello"}),
-        serde_json::json!({"role": "assistant", "content": "hi"}),
-    ];
-    let config = CompactConfig::default();
-
-    let result = execute_micro_compact(&mut messages, 100000, 200000, &config, None);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_execute_micro_compact_below_threshold() {
-    let large_content = "x".repeat(5000);
-    let mut messages = vec![
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-1",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-2",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-3",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-4",
-            "content": large_content
-        }),
-    ];
-    let config = CompactConfig::default();
-
-    // Context usage well below warning threshold
-    let result = execute_micro_compact(&mut messages, 50000, 200000, &config, None);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_execute_micro_compact_success() {
-    // Large content: 50000 chars = ~12500 tokens each
-    // With 5 candidates and keeping 3, we compact 2
-    // Potential savings: 2 * 12500 = 25000 tokens > 20000 min savings
-    let large_content = "x".repeat(50000);
-    let mut messages = vec![
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-1",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-2",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-3",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-4",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-5",
-            "content": large_content
-        }),
-    ];
-    let config = CompactConfig::default();
-
-    // Context usage above warning threshold (167000 for 200K available)
-    let result = execute_micro_compact(&mut messages, 180000, 200000, &config, None);
-
-    assert!(result.is_some());
-    let result = result.unwrap();
-    // Should compact 2 results (5 - 3 recent to keep)
-    assert_eq!(result.compacted_count, 2);
-    assert!(result.tokens_saved > 0);
-
-    // First two messages should have been compacted
-    let content1 = messages[0]["content"].as_str().unwrap();
-    assert!(content1.contains(CLEARED_CONTENT_MARKER));
-
-    let content2 = messages[1]["content"].as_str().unwrap();
-    assert!(content2.contains(CLEARED_CONTENT_MARKER));
-
-    // Last three should be unchanged
-    let content5 = messages[4]["content"].as_str().unwrap();
-    assert!(!content5.contains(CLEARED_CONTENT_MARKER));
-}
-
-#[test]
-fn test_execute_micro_compact_tracks_file_paths() {
-    // Test that micro-compact tracks file paths from Read tool results
-    let large_content = "x".repeat(50000);
-    let mut messages = vec![
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-1",
-            "file_path": "/src/main.rs",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-2",
-            "input": {"file_path": "/src/lib.rs"},
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Bash",
-            "tool_use_id": "tool-3",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-4",
-            "file_path": "/src/test.rs",
-            "content": large_content
-        }),
-        serde_json::json!({
-            "role": "tool",
-            "name": "Read",
-            "tool_use_id": "tool-5",
-            "file_path": "/src/config.rs",
-            "content": large_content
-        }),
-    ];
-    let config = CompactConfig::default();
-
-    // Context usage above warning threshold
-    let result = execute_micro_compact(&mut messages, 180000, 200000, &config, None);
-
-    assert!(result.is_some());
-    let result = result.unwrap();
-
-    // Should compact 2 results (5 - 3 recent to keep)
-    assert_eq!(result.compacted_count, 2);
-
-    // Should track file paths from compacted Read tool results
-    // First two are compacted: tool-1 (Read) and tool-2 (Read)
-    // tool-3 (Bash) was before tool-4 and tool-5 which are kept
-    assert_eq!(result.cleared_file_paths.len(), 2);
-    assert!(
-        result
-            .cleared_file_paths
-            .contains(&PathBuf::from("/src/main.rs"))
-    );
-    assert!(
-        result
-            .cleared_file_paths
-            .contains(&PathBuf::from("/src/lib.rs"))
-    );
 }
 
 // ========================================================================
@@ -729,8 +412,8 @@ async fn test_write_session_memory_creates_parent_dirs() {
 
 #[test]
 fn test_try_session_memory_compact_disabled() {
-    let config = SessionMemoryConfig {
-        enabled: false,
+    let config = CompactConfig {
+        enable_sm_compact: false,
         ..Default::default()
     };
 
@@ -740,8 +423,8 @@ fn test_try_session_memory_compact_disabled() {
 
 #[test]
 fn test_try_session_memory_compact_no_path() {
-    let config = SessionMemoryConfig {
-        enabled: true,
+    let config = CompactConfig {
+        enable_sm_compact: true,
         summary_path: None,
         ..Default::default()
     };
@@ -768,9 +451,9 @@ async fn test_session_memory_roundtrip() {
         .await
         .unwrap();
 
-    // Read via try_session_memory_compact
-    let config = SessionMemoryConfig {
-        enabled: true,
+    // Read via try_session_memory_compact (uses CompactConfig directly)
+    let config = CompactConfig {
+        enable_sm_compact: true,
         summary_path: Some(test_path.clone()),
         ..Default::default()
     };
@@ -786,6 +469,90 @@ async fn test_session_memory_roundtrip() {
 
     // Cleanup
     let _ = std::fs::remove_file(&test_path);
+}
+
+// ========================================================================
+// Truncate Sections Tests
+// ========================================================================
+
+#[test]
+fn test_truncate_sections_within_budget() {
+    let summary = "### Section 1\nShort content.\n### Section 2\nMore content.";
+    let result = truncate_sections(summary, 2000, 12000);
+    // Both per-section and total limits are satisfied — output unchanged
+    assert_eq!(result, summary);
+}
+
+#[test]
+fn test_truncate_sections_enforces_per_section_even_under_total() {
+    // Total is under 12000 tokens, but one section exceeds the 2000 per-section limit.
+    // Per-section enforcement must still apply (no fast-path bypass).
+    let long_section = "x".repeat(8000); // ~2667 tokens, exceeds 2000
+    let summary = format!("### Section 1\n{long_section}");
+    let total_tokens = cocode_protocol::estimate_text_tokens(&summary);
+    assert!(total_tokens <= 12000, "precondition: total under budget");
+
+    let result = truncate_sections(&summary, 2000, 12000);
+    assert!(
+        result.contains("[truncated]"),
+        "oversized section should be truncated even when total is within budget"
+    );
+    assert!(result.len() < summary.len());
+}
+
+#[test]
+fn test_truncate_sections_oversized_section() {
+    // Create sections that together exceed total limit and individually exceed per-section limit
+    let long_content = "x".repeat(20000); // ~6667 tokens, way over 2000 per-section
+    let summary = format!("### Section 1\n{long_content}\n### Section 2\n{long_content}");
+    let result = truncate_sections(&summary, 2000, 12000);
+    // Section 1 should be truncated to fit per-section limit
+    assert!(result.contains("[truncated]"));
+    // Result should be substantially shorter than the input
+    assert!(result.len() < summary.len());
+}
+
+#[test]
+fn test_truncate_sections_total_limit() {
+    // Create multiple sections that together exceed total limit
+    let section_content = "y".repeat(4000); // ~1333 tokens each
+    let summary = format!(
+        "### S1\n{}\n### S2\n{}\n### S3\n{}\n### S4\n{}\n### S5\n{}\n### S6\n{}\n### S7\n{}\n### S8\n{}\n### S9\n{}\n### S10\n{}",
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+        section_content,
+    );
+    let result = truncate_sections(&summary, 2000, 12000);
+    // Should not include all 10 sections (10 * ~1333 = ~13330 > 12000)
+    let section_count = result.matches("### S").count();
+    assert!(
+        section_count < 10,
+        "Expected fewer than 10 sections, got {section_count}"
+    );
+    assert!(
+        section_count >= 8,
+        "Expected at least 8 sections, got {section_count}"
+    );
+}
+
+#[test]
+fn test_truncate_sections_empty() {
+    let result = truncate_sections("", 2000, 12000);
+    assert_eq!(result, "");
+}
+
+#[test]
+fn test_truncate_sections_no_headers() {
+    let content = "Just plain text without any headers.";
+    let result = truncate_sections(content, 2000, 12000);
+    assert_eq!(result, content);
 }
 
 // ========================================================================
@@ -816,78 +583,6 @@ fn test_format_summary_without_transcript() {
     assert!(formatted.contains("30000 tokens"));
     assert!(!formatted.contains("transcript at"));
     assert!(!formatted.contains("Recent messages are preserved"));
-}
-
-#[test]
-fn test_create_invoked_skills_attachment() {
-    let skills = vec![
-        InvokedSkillRestoration {
-            name: "commit".to_string(),
-            last_invoked_turn: 5,
-            args: Some("-m 'fix bug'".to_string()),
-        },
-        InvokedSkillRestoration {
-            name: "review-pr".to_string(),
-            last_invoked_turn: 3,
-            args: None,
-        },
-    ];
-
-    let attachment = create_invoked_skills_attachment(&skills);
-    assert!(attachment.is_some());
-
-    let content = attachment.unwrap();
-    assert!(content.contains("<invoked_skills>"));
-    assert!(content.contains("commit"));
-    assert!(content.contains("-m 'fix bug'"));
-    assert!(content.contains("review-pr"));
-    assert!(content.contains("turn 5"));
-    assert!(content.contains("turn 3"));
-}
-
-#[test]
-fn test_create_invoked_skills_attachment_empty() {
-    let skills: Vec<InvokedSkillRestoration> = vec![];
-    let attachment = create_invoked_skills_attachment(&skills);
-    assert!(attachment.is_none());
-}
-
-#[test]
-fn test_create_compact_boundary_message() {
-    let metadata = CompactBoundaryMetadata {
-        trigger: CompactTrigger::Auto,
-        pre_tokens: 180000,
-        post_tokens: Some(50000),
-        transcript_path: Some(PathBuf::from("/home/user/.claude/session.jsonl")),
-        recent_messages_preserved: true,
-    };
-
-    let message = create_compact_boundary_message(&metadata);
-
-    assert!(message.contains("Conversation compacted"));
-    assert!(message.contains("Trigger: auto"));
-    assert!(message.contains("Tokens before: 180000"));
-    assert!(message.contains("Tokens after: 50000"));
-    assert!(message.contains("session.jsonl"));
-    assert!(message.contains("Recent messages preserved"));
-}
-
-#[test]
-fn test_create_compact_boundary_message_manual() {
-    let metadata = CompactBoundaryMetadata {
-        trigger: CompactTrigger::Manual,
-        pre_tokens: 100000,
-        post_tokens: None,
-        transcript_path: None,
-        recent_messages_preserved: false,
-    };
-
-    let message = create_compact_boundary_message(&metadata);
-
-    assert!(message.contains("Trigger: manual"));
-    assert!(message.contains("Tokens before: 100000"));
-    assert!(!message.contains("Tokens after"));
-    assert!(!message.contains("transcript"));
 }
 
 #[test]
@@ -967,6 +662,34 @@ fn test_build_token_breakdown_empty() {
     assert_eq!(breakdown.total_tokens, 0);
     assert_eq!(breakdown.human_message_tokens, 0);
     assert_eq!(breakdown.assistant_message_tokens, 0);
+}
+
+#[test]
+fn test_build_token_breakdown_duplicate_reads() {
+    let messages = vec![
+        serde_json::json!({
+            "role": "tool",
+            "name": "Read",
+            "file_path": "/src/main.rs",
+            "content": "fn main() {}"
+        }),
+        serde_json::json!({
+            "role": "tool",
+            "name": "Read",
+            "file_path": "/src/main.rs",
+            "content": "fn main() { println!(\"hello\"); }"
+        }),
+        serde_json::json!({
+            "role": "tool",
+            "name": "Read",
+            "file_path": "/src/lib.rs",
+            "content": "pub mod tests;"
+        }),
+    ];
+
+    let breakdown = build_token_breakdown(&messages);
+    assert_eq!(breakdown.duplicate_read_file_count, 1);
+    assert!(breakdown.duplicate_read_tokens > 0);
 }
 
 #[test]
@@ -1071,15 +794,6 @@ fn test_invoked_skill_restoration_from_tool_calls_no_skills() {
 
     let skills = InvokedSkillRestoration::from_tool_calls(&tool_calls);
     assert!(skills.is_empty());
-}
-
-#[test]
-fn test_micro_compact_result_trigger() {
-    let mut result = MicroCompactResult::default();
-    assert_eq!(result.trigger, CompactTrigger::Auto);
-
-    result.trigger = CompactTrigger::Manual;
-    assert_eq!(result.trigger, CompactTrigger::Manual);
 }
 
 // ========================================================================
@@ -1259,4 +973,424 @@ fn test_file_restoration_config_validate() {
         ..Default::default()
     };
     assert!(invalid_config.validate().is_err());
+}
+
+// ============================================================================
+// Session Memory Boundary Finding Tests
+// ============================================================================
+
+#[test]
+fn test_find_session_memory_boundary_empty() {
+    let config = cocode_protocol::KeepWindowConfig::default();
+    let result = find_session_memory_boundary(&[], &config, None);
+    assert_eq!(result.keep_start_index, 0);
+    assert_eq!(result.messages_to_keep, 0);
+}
+
+#[test]
+fn test_find_session_memory_boundary_no_anchor_falls_back() {
+    // Without an anchor, should fall back to calculate_keep_start_index
+    let messages: Vec<serde_json::Value> = (0..10)
+        .map(|i| {
+            serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "x".repeat(2000), // ~500 tokens each
+            })
+        })
+        .collect();
+
+    let config = cocode_protocol::KeepWindowConfig {
+        min_tokens: 1000,
+        min_text_messages: 2,
+        max_tokens: 5000,
+    };
+
+    let result = find_session_memory_boundary(&messages, &config, None);
+    assert!(result.messages_to_keep > 0);
+    assert!(result.keep_tokens >= config.min_tokens);
+}
+
+#[test]
+fn test_find_session_memory_boundary_with_anchor() {
+    let messages: Vec<serde_json::Value> = (0..10)
+        .map(|i| {
+            serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "x".repeat(2000),
+                "turn_id": format!("turn-{i}"),
+            })
+        })
+        .collect();
+
+    let config = cocode_protocol::KeepWindowConfig {
+        min_tokens: 500,
+        min_text_messages: 2,
+        max_tokens: 40000,
+    };
+
+    // Anchor at message 4 — should keep messages from index 5 onward (anchor was summarized)
+    let result = find_session_memory_boundary(&messages, &config, Some("turn-4"));
+    assert!(result.keep_start_index <= 5);
+    assert!(result.messages_to_keep >= 5);
+}
+
+#[test]
+fn test_find_session_memory_boundary_anchor_not_found() {
+    let messages: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "x".repeat(2000),
+                "turn_id": format!("turn-{i}"),
+            })
+        })
+        .collect();
+
+    let config = cocode_protocol::KeepWindowConfig {
+        min_tokens: 500,
+        min_text_messages: 1,
+        max_tokens: 40000,
+    };
+
+    // Non-existent anchor falls back to generic calculation
+    let result = find_session_memory_boundary(&messages, &config, Some("turn-999"));
+    assert!(result.messages_to_keep > 0);
+}
+
+#[test]
+fn test_adjust_boundaries_for_tools_no_tools() {
+    let messages = vec![
+        serde_json::json!({"role": "user", "content": "hello"}),
+        serde_json::json!({"role": "assistant", "content": "hi"}),
+    ];
+    // No tool messages — should not adjust
+    let result = adjust_boundaries_for_tools(&messages, 1);
+    assert_eq!(result, 1);
+}
+
+#[test]
+fn test_adjust_boundaries_for_tools_pairs_tool_use_result() {
+    let messages = vec![
+        serde_json::json!({"role": "user", "content": "read file"}),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tool-1", "name": "Read"}]
+        }),
+        serde_json::json!({"role": "tool", "content": "file content", "tool_use_id": "tool-1"}),
+        serde_json::json!({"role": "assistant", "content": "I see the file"}),
+    ];
+
+    // Raw start at 2 (tool_result) — should pull back to 1 (assistant with tool_use)
+    let result = adjust_boundaries_for_tools(&messages, 2);
+    assert!(result <= 1);
+}
+
+// ============================================================================
+// Token Estimation Tests
+// ============================================================================
+
+#[test]
+fn test_estimate_message_tokens_string_content() {
+    // 300 chars → ceil(300/3) = 100 tokens
+    let msg = serde_json::json!({"role": "user", "content": "x".repeat(300)});
+    assert_eq!(estimate_message_tokens(&msg), 100);
+}
+
+#[test]
+fn test_estimate_message_tokens_array_content() {
+    // Two text blocks: 90 + 60 = 150 chars → ceil(150/3) = 50 tokens
+    let msg = serde_json::json!({
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "x".repeat(90)},
+            {"type": "text", "text": "y".repeat(60)}
+        ]
+    });
+    assert_eq!(estimate_message_tokens(&msg), 50);
+}
+
+#[test]
+fn test_estimate_message_tokens_rounding() {
+    // 1 char → ceil(1/3) = 1 token (not 0)
+    let msg = serde_json::json!({"role": "user", "content": "x"});
+    assert_eq!(estimate_message_tokens(&msg), 1);
+
+    // 2 chars → ceil(2/3) = 1 token
+    let msg = serde_json::json!({"role": "user", "content": "xy"});
+    assert_eq!(estimate_message_tokens(&msg), 1);
+
+    // 3 chars → ceil(3/3) = 1 token
+    let msg = serde_json::json!({"role": "user", "content": "xyz"});
+    assert_eq!(estimate_message_tokens(&msg), 1);
+
+    // 4 chars → ceil(4/3) = 2 tokens
+    let msg = serde_json::json!({"role": "user", "content": "xyzw"});
+    assert_eq!(estimate_message_tokens(&msg), 2);
+}
+
+#[test]
+fn test_estimate_message_tokens_empty() {
+    let msg = serde_json::json!({"role": "user"});
+    assert_eq!(estimate_message_tokens(&msg), 0);
+
+    let msg = serde_json::json!({"role": "user", "content": ""});
+    assert_eq!(estimate_message_tokens(&msg), 0);
+}
+
+#[test]
+fn test_estimate_text_tokens_canonical() {
+    // 300 chars → ceil(300/3) = 100 tokens
+    let text = "x".repeat(300);
+    assert_eq!(cocode_protocol::estimate_text_tokens(&text), 100);
+    // Empty → 0
+    assert_eq!(cocode_protocol::estimate_text_tokens(""), 0);
+    // 1 char → ceil(1/3) = 1
+    assert_eq!(cocode_protocol::estimate_text_tokens("a"), 1);
+}
+
+// ============================================================================
+// Compact Boundary Message Tests
+// ============================================================================
+
+#[test]
+fn test_is_compact_boundary_message() {
+    let boundary = serde_json::json!({
+        "role": "user",
+        "content": "Conversation compacted.\nTrigger: auto\nTokens before: 100000"
+    });
+    assert!(is_compact_boundary_message(&boundary));
+}
+
+#[test]
+fn test_is_compact_boundary_message_non_boundary() {
+    let regular = serde_json::json!({"role": "user", "content": "Hello world"});
+    assert!(!is_compact_boundary_message(&regular));
+
+    let assistant = serde_json::json!({
+        "role": "assistant",
+        "content": "Conversation compacted."
+    });
+    assert!(!is_compact_boundary_message(&assistant));
+}
+
+// ============================================================================
+// Session Memory Boundary Phase 2 Tests
+// ============================================================================
+
+#[test]
+fn test_find_session_memory_boundary_backward_walk_from_anchor() {
+    // Anchor exists but only 1 message after it — insufficient for min_text_messages=3.
+    // Phase 2 should walk backward from the anchor.
+    let messages: Vec<serde_json::Value> = (0..10)
+        .map(|i| {
+            serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "x".repeat(300), // ~100 tokens each
+                "turn_id": format!("turn-{i}"),
+            })
+        })
+        .collect();
+
+    // Place anchor near the end so Phase 1 fails (not enough text after anchor)
+    let config = cocode_protocol::KeepWindowConfig {
+        min_tokens: 200,
+        min_text_messages: 3,
+        max_tokens: 40000,
+    };
+
+    let result = find_session_memory_boundary(&messages, &config, Some("turn-9"));
+    // Should walk backward from index 9 to include enough messages
+    assert!(result.keep_start_index < 9);
+    assert!(result.text_messages_kept >= 3);
+}
+
+#[test]
+fn test_find_session_memory_boundary_respects_compact_boundary() {
+    // A boundary message exists at index 2. Phase 2 should not cross it.
+    let messages = vec![
+        serde_json::json!({"role": "user", "content": "old message 1", "turn_id": "turn-0"}),
+        serde_json::json!({"role": "assistant", "content": "old response", "turn_id": "turn-1"}),
+        serde_json::json!({
+            "role": "user",
+            "content": "Conversation compacted.\nTrigger: auto",
+            "turn_id": "boundary"
+        }),
+        serde_json::json!({"role": "user", "content": "x".repeat(30), "turn_id": "turn-3"}),
+        serde_json::json!({"role": "assistant", "content": "y".repeat(30), "turn_id": "turn-4"}),
+        serde_json::json!({"role": "user", "content": "z".repeat(30), "turn_id": "turn-5"}),
+        serde_json::json!({"role": "assistant", "content": "w".repeat(30), "turn_id": "turn-6"}),
+    ];
+
+    let config = cocode_protocol::KeepWindowConfig {
+        min_tokens: 50,
+        min_text_messages: 3,
+        max_tokens: 40000,
+    };
+
+    // Anchor at turn-6 (last message) — insufficient alone, walk back
+    let result = find_session_memory_boundary(&messages, &config, Some("turn-6"));
+    // Should NOT go before index 3 (boundary at 2 means stop at 3)
+    assert!(
+        result.keep_start_index >= 3,
+        "keep_start_index {} should not cross compact boundary at index 2",
+        result.keep_start_index
+    );
+}
+
+// ============================================================================
+// From<KeepWindowResult> Test
+// ============================================================================
+
+#[test]
+fn test_session_memory_boundary_from_keep_window() {
+    let kwr = KeepWindowResult {
+        keep_start_index: 5,
+        messages_to_keep: 10,
+        keep_tokens: 3000,
+        text_messages_kept: 4,
+    };
+    let smbr: SessionMemoryBoundaryResult = kwr.into();
+    assert_eq!(smbr.keep_start_index, 5);
+    assert_eq!(smbr.messages_to_keep, 10);
+    assert_eq!(smbr.keep_tokens, 3000);
+    assert_eq!(smbr.text_messages_kept, 4);
+}
+
+// ============================================================================
+// Environment Variable Override Tests
+// ============================================================================
+
+#[test]
+fn test_compact_config_with_env_overrides_default() {
+    // Without env vars set, should be unchanged
+    let config = CompactConfig::default().with_env_overrides();
+    assert!(!config.disable_compact);
+    assert!(!config.disable_auto_compact);
+}
+
+// ============================================================================
+// Threshold Recalculation After Compaction Tests (Plan 1.1)
+// ============================================================================
+
+#[test]
+fn test_threshold_status_recalculation_after_token_reduction() {
+    let config = CompactConfig::default();
+    let context_window = 200_000;
+
+    // Before compaction: at blocking limit
+    let pre_compact_tokens = 190_000;
+    let pre_status = ThresholdStatus::calculate(pre_compact_tokens, context_window, &config);
+    assert!(pre_status.is_at_blocking_limit);
+    assert!(pre_status.is_above_auto_compact_threshold);
+
+    // After compaction: tokens reduced significantly
+    let post_compact_tokens = 80_000;
+    let post_status = ThresholdStatus::calculate(post_compact_tokens, context_window, &config);
+    assert!(!post_status.is_at_blocking_limit);
+    assert!(!post_status.is_above_auto_compact_threshold);
+    assert!(!post_status.is_above_warning_threshold);
+
+    // Verify using the stale pre-compaction status would be wrong
+    assert_ne!(
+        pre_status.is_at_blocking_limit,
+        post_status.is_at_blocking_limit
+    );
+}
+
+// ============================================================================
+// Context Restoration Data Extraction Tests (Plan 1.2)
+// ============================================================================
+
+#[test]
+fn test_task_and_skill_restoration_from_tool_calls() {
+    // Simulate tool calls that include both TodoWrite and Skill invocations
+    let tool_calls_with_turns = vec![
+        (
+            "TodoWrite".to_string(),
+            serde_json::json!({
+                "todos": [
+                    {"id": "1", "subject": "Fix bug", "status": "in_progress"},
+                    {"id": "2", "subject": "Write tests", "status": "pending"}
+                ]
+            }),
+            3,
+        ),
+        (
+            "Skill".to_string(),
+            serde_json::json!({
+                "skill": "commit",
+                "args": "-m 'fix: bug'"
+            }),
+            5,
+        ),
+        (
+            "Read".to_string(),
+            serde_json::json!({"file_path": "/test/file.rs"}),
+            6,
+        ),
+    ];
+
+    // Derive tool_calls (without turns) for task status
+    let tool_calls: Vec<(String, serde_json::Value)> = tool_calls_with_turns
+        .iter()
+        .map(|(name, input, _)| (name.clone(), input.clone()))
+        .collect();
+
+    let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
+    let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
+
+    // Verify task status was extracted
+    assert_eq!(task_status.tasks.len(), 2);
+    assert_eq!(task_status.tasks[0].id, "1");
+    assert_eq!(task_status.tasks[0].status, "in_progress");
+
+    // Verify invoked skills were extracted
+    assert_eq!(invoked_skills.len(), 1);
+    assert_eq!(invoked_skills[0].name, "commit");
+    assert_eq!(invoked_skills[0].last_invoked_turn, 5);
+    assert_eq!(invoked_skills[0].args, Some("-m 'fix: bug'".to_string()));
+}
+
+#[test]
+fn test_context_restoration_includes_todos_and_skills() {
+    let files = vec![FileRestoration {
+        path: PathBuf::from("/test/file.rs"),
+        content: "fn main() {}".to_string(),
+        priority: 1,
+        tokens: 100,
+        last_accessed: 1000,
+    }];
+
+    let todos = Some("- [in_progress] 1: Fix bug\n- [pending] 2: Write tests".to_string());
+    let skills = vec!["commit".to_string()];
+
+    let restoration = build_context_restoration(files, todos.clone(), None, skills.clone(), 50000);
+
+    // Verify todos and skills are included
+    assert_eq!(restoration.todos, todos);
+    assert_eq!(restoration.skills, skills);
+    assert_eq!(restoration.files.len(), 1);
+}
+
+// ============================================================================
+// is_empty_template Tests
+// ============================================================================
+
+#[test]
+fn test_is_empty_template_all_na() {
+    let template =
+        "### Session Title\nN/A\n### 1. Current State\nN/A\n### 2. Task Specification\nN/A";
+    assert!(is_empty_template(template));
+}
+
+#[test]
+fn test_is_empty_template_with_content() {
+    let template = "### Session Title\nImplementing compaction\n### 1. Current State\nWorking on P3\n### 2. Task Specification\nFix the compaction system\nMultiple improvements needed";
+    assert!(!is_empty_template(template));
+}
+
+#[test]
+fn test_is_empty_template_empty_sections() {
+    let template = "### Session Title\n\n### 1. Current State\n\n### 2. Task Specification\n";
+    assert!(is_empty_template(template));
 }

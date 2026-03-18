@@ -62,6 +62,9 @@ pub const DEFAULT_MICRO_COMPACT_THRESHOLD: i32 = 40000;
 /// Number of recent tool results to keep during micro-compaction.
 pub const DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP: i32 = 3;
 
+/// Number of recent turns to preserve files from during micro-compaction.
+pub const DEFAULT_MICRO_COMPACT_KEEP_RECENT_TURNS: i32 = 3;
+
 // ============================================================================
 // Full Compact Constants
 // ============================================================================
@@ -77,6 +80,19 @@ pub const DEFAULT_TOKEN_SAFETY_MARGIN: f64 = 1.3333333333333333;
 
 /// Token estimate for images.
 pub const DEFAULT_TOKENS_PER_IMAGE: i32 = 1334;
+
+// ============================================================================
+// Canonical Token Estimation
+// ============================================================================
+
+/// Estimate token count from text length using a single canonical formula.
+///
+/// Uses `ceil(len / 3.0)` which matches Claude Code's `Math.ceil(len * 1.3333)`
+/// at ~0.33 tokens per character. All token estimation in the compaction system
+/// should use this function to avoid inconsistencies.
+pub fn estimate_text_tokens(text: &str) -> i32 {
+    (text.len() as f64 / 3.0).ceil() as i32
+}
 
 // ============================================================================
 // Session Memory Extraction Constants (for background extraction agent)
@@ -268,6 +284,10 @@ pub struct CompactConfig {
     #[serde(default = "default_recent_tool_results_to_keep")]
     pub recent_tool_results_to_keep: i32,
 
+    /// Number of recent turns to preserve files from during micro-compaction.
+    #[serde(default = "default_micro_compact_keep_recent_turns")]
+    pub micro_compact_keep_recent_turns: i32,
+
     // ========================================================================
     // Full Compact
     // ========================================================================
@@ -300,6 +320,21 @@ pub struct CompactConfig {
     /// File restoration configuration with exclusion patterns.
     #[serde(default)]
     pub file_restoration: FileRestorationConfig,
+
+    // ========================================================================
+    // Session Memory Compact (Tier 1) Configuration
+    // ========================================================================
+    /// Whether Tier 1 session memory compact is enabled.
+    ///
+    /// When true and a cached summary.md exists, compaction uses it for
+    /// zero-API-cost context reduction. When false, always falls back to
+    /// full LLM compact. Can be overridden via `COCODE_ENABLE_SM_COMPACT`.
+    #[serde(default = "default_true")]
+    pub enable_sm_compact: bool,
+
+    /// Path to the session memory file (summary.md) for Tier 1 compaction.
+    #[serde(default)]
+    pub summary_path: Option<std::path::PathBuf>,
 
     // ========================================================================
     // Session Memory Extraction Configuration
@@ -741,6 +776,7 @@ impl Default for CompactConfig {
             micro_compact_min_savings: DEFAULT_MICRO_COMPACT_MIN_SAVINGS,
             micro_compact_threshold: DEFAULT_MICRO_COMPACT_THRESHOLD,
             recent_tool_results_to_keep: DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP,
+            micro_compact_keep_recent_turns: DEFAULT_MICRO_COMPACT_KEEP_RECENT_TURNS,
             // Full compact
             max_summary_retries: DEFAULT_MAX_SUMMARY_RETRIES,
             max_compact_output_tokens: DEFAULT_MAX_COMPACT_OUTPUT_TOKENS,
@@ -750,6 +786,9 @@ impl Default for CompactConfig {
             keep_window: KeepWindowConfig::default(),
             // File restoration
             file_restoration: FileRestorationConfig::default(),
+            // Session memory compact (Tier 1)
+            enable_sm_compact: true,
+            summary_path: None,
             // Session memory extraction
             session_memory_extraction: SessionMemoryExtractionConfig::default(),
         }
@@ -904,6 +943,47 @@ impl CompactConfig {
         !self.disable_compact && self.session_memory_extraction.enabled
     }
 
+    /// Apply environment variable overrides to compact config.
+    ///
+    /// Reads environment variables and overrides the corresponding config values.
+    /// This should be called after constructing the config from JSON/defaults.
+    ///
+    /// Supported variables:
+    /// - `COCODE_DISABLE_COMPACT` → disable all compaction (set to "1" or "true")
+    /// - `COCODE_DISABLE_AUTO_COMPACT` → disable auto-compaction only
+    /// - `COCODE_AUTOCOMPACT_PCT_OVERRIDE` → percentage-based threshold (0-100)
+    /// - `COCODE_BLOCKING_LIMIT_OVERRIDE` → custom hard limit
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Ok(val) = std::env::var("COCODE_DISABLE_COMPACT")
+            && (val == "1" || val.eq_ignore_ascii_case("true"))
+        {
+            self.disable_compact = true;
+        }
+        if let Ok(val) = std::env::var("COCODE_DISABLE_AUTO_COMPACT")
+            && (val == "1" || val.eq_ignore_ascii_case("true"))
+        {
+            self.disable_auto_compact = true;
+        }
+        if let Ok(val) = std::env::var("COCODE_AUTOCOMPACT_PCT_OVERRIDE")
+            && let Ok(pct) = val.parse::<i32>()
+            && (0..=100).contains(&pct)
+        {
+            self.auto_compact_pct = Some(pct);
+        }
+        if let Ok(val) = std::env::var("COCODE_BLOCKING_LIMIT_OVERRIDE")
+            && let Ok(limit) = val.parse::<i32>()
+            && limit > 0
+        {
+            self.blocking_limit_override = Some(limit);
+        }
+        if let Ok(val) = std::env::var("COCODE_ENABLE_SM_COMPACT")
+            && let Ok(enabled) = val.parse::<bool>()
+        {
+            self.enable_sm_compact = enabled;
+        }
+        self
+    }
+
     /// Apply model-level overrides to compact config.
     ///
     /// If the model specifies `auto_compact_pct` and this config
@@ -971,6 +1051,10 @@ fn default_micro_compact_threshold() -> i32 {
 
 fn default_recent_tool_results_to_keep() -> i32 {
     DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP
+}
+
+fn default_micro_compact_keep_recent_turns() -> i32 {
+    DEFAULT_MICRO_COMPACT_KEEP_RECENT_TURNS
 }
 
 fn default_max_summary_retries() -> i32 {

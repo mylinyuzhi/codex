@@ -70,7 +70,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::compaction::CompactionConfig;
 use crate::compaction::FileRestoration;
 use crate::compaction::FileRestorationConfig;
 use crate::compaction::InvokedSkillRestoration;
@@ -82,10 +81,13 @@ use crate::compaction::build_compact_instructions;
 use crate::compaction::build_context_restoration_with_config;
 use crate::compaction::build_file_read_state;
 use crate::compaction::calculate_keep_start_index;
+use crate::compaction::find_session_memory_boundary;
 use crate::compaction::format_restoration_message;
+use crate::compaction::format_summary_with_transcript;
 use crate::compaction::is_internal_file;
 use crate::compaction::map_message_index_to_keep_turns;
 use crate::compaction::try_session_memory_compact;
+use crate::compaction::wrap_hook_additional_context;
 use crate::compaction::write_session_memory;
 use crate::error::agent_loop_error;
 use crate::fallback::FallbackConfig;
@@ -127,8 +129,7 @@ pub struct AgentLoop {
     // Config
     config: LoopConfig,
     fallback_config: FallbackConfig,
-    compaction_config: CompactionConfig,
-    /// Protocol-level compact configuration with all threshold constants.
+    /// Compact configuration with all threshold constants and session memory settings.
     compact_config: CompactConfig,
 
     // System reminders
@@ -157,6 +158,17 @@ pub struct AgentLoop {
 
     // Background extraction agent (optional)
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
+    /// Channel for receiving extraction outcomes from background tasks.
+    extraction_result_rx: mpsc::Receiver<crate::session_memory_agent::ExtractionOutcome>,
+    /// Sender cloned into each background extraction task.
+    extraction_result_tx: mpsc::Sender<crate::session_memory_agent::ExtractionOutcome>,
+
+    // Circuit breaker for auto-compaction
+    /// Consecutive compaction failure count. Reset to 0 on success.
+    compact_failure_count: i32,
+    /// When true, auto-compaction is disabled (manual still works).
+    /// Trips after 3 consecutive failures.
+    circuit_breaker_open: bool,
 
     // Agent type tracking (for tier filtering in system reminders)
     /// Whether this is a subagent (spawned by Task tool).
@@ -272,7 +284,6 @@ pub struct AgentLoopBuilder {
     message_history: Option<MessageHistory>,
     config: LoopConfig,
     fallback_config: FallbackConfig,
-    compaction_config: CompactionConfig,
     compact_config: CompactConfig,
     system_reminder_config: SystemReminderConfig,
     hooks: Option<Arc<HookRegistry>>,
@@ -325,7 +336,6 @@ impl AgentLoopBuilder {
             message_history: None,
             config: LoopConfig::default(),
             fallback_config: FallbackConfig::default(),
-            compaction_config: CompactionConfig::default(),
             compact_config: CompactConfig::default(),
             system_reminder_config: SystemReminderConfig::default(),
             hooks: None,
@@ -368,12 +378,7 @@ impl AgentLoopBuilder {
         self
     }
 
-    pub fn compaction_config(mut self, config: CompactionConfig) -> Self {
-        self.compaction_config = config;
-        self
-    }
-
-    /// Set the protocol-level compact configuration.
+    /// Set the compact configuration.
     pub fn compact_config(mut self, config: CompactConfig) -> Self {
         self.compact_config = config;
         self
@@ -622,6 +627,10 @@ impl AgentLoopBuilder {
             .shell_executor
             .unwrap_or_else(|| ShellExecutor::new(cwd));
 
+        // Create the extraction outcome channel (bounded to 4 to avoid unbounded growth)
+        let (extraction_result_tx, extraction_result_rx) =
+            mpsc::channel::<crate::session_memory_agent::ExtractionOutcome>(4);
+
         AgentLoop {
             api_client: self.api_client,
             model_hub: self.model_hub,
@@ -631,7 +640,6 @@ impl AgentLoopBuilder {
             context: self.context,
             config: self.config,
             fallback_config: self.fallback_config,
-            compaction_config: self.compaction_config,
             compact_config: self.compact_config,
             reminder_orchestrator,
             shared_tools_file_tracker,
@@ -645,6 +653,10 @@ impl AgentLoopBuilder {
             total_input_tokens: 0,
             total_output_tokens: 0,
             extraction_agent: self.extraction_agent,
+            extraction_result_rx,
+            extraction_result_tx,
+            compact_failure_count: 0,
+            circuit_breaker_open: false,
             is_subagent: self.is_subagent,
             custom_system_prompt: self.custom_system_prompt,
             // Initially true - the first turn always has user input
@@ -969,7 +981,34 @@ impl AgentLoop {
         // ── STEP 3: Normalize messages ──
         // Messages are already normalized through MessageHistory::messages_for_api().
 
+        // ── STEP 3.5: Drain extraction outcomes from background tasks ──
+        // Fixes bug where extraction_in_progress stayed true forever because
+        // the background tokio::spawn couldn't update auto_compact_tracking.
+        while let Ok(outcome) = self.extraction_result_rx.try_recv() {
+            match outcome {
+                crate::session_memory_agent::ExtractionOutcome::Completed {
+                    summary_tokens,
+                    last_summarized_id,
+                } => {
+                    auto_compact_tracking
+                        .mark_extraction_completed(summary_tokens, &last_summarized_id);
+                    debug!(
+                        summary_tokens,
+                        last_summarized_id, "Extraction outcome received: completed"
+                    );
+                }
+                crate::session_memory_agent::ExtractionOutcome::Failed => {
+                    auto_compact_tracking.mark_extraction_failed();
+                    debug!("Extraction outcome received: failed");
+                }
+            }
+        }
+
         // ── STEP 4: Micro-compaction (PRE-API) ──
+        // NOTE: Deliberate divergence from Claude Code v2.1.76, where `performMicrocompaction`
+        // is a no-op (returns messages unchanged). cocode-rs has micro-compact active by
+        // default because it operates at the MessageHistory level rather than raw JSON,
+        // making tool-result trimming safe and effective.
         if self.config.enable_micro_compaction {
             let (removed, tokens_saved) = self.micro_compact().await;
             if removed > 0 {
@@ -1027,27 +1066,52 @@ impl AgentLoop {
         }
 
         // Trigger auto-compact if above threshold (and auto-compact is enabled)
-        if status.is_above_auto_compact_threshold && self.compact_config.is_auto_compact_enabled() {
+        // Skip if circuit breaker is open (3+ consecutive failures)
+        if status.is_above_auto_compact_threshold
+            && self.compact_config.is_auto_compact_enabled()
+            && !self.circuit_breaker_open
+        {
             // Tier 1: Try session memory first (zero API cost)
             // Only if session memory compact is enabled
-            if self.compaction_config.session_memory.enable_sm_compact {
-                if let Some(summary) =
-                    try_session_memory_compact(&self.compaction_config.session_memory)
-                {
+            let mut needs_llm_compact = true;
+            if self.compact_config.enable_sm_compact {
+                if let Some(summary) = try_session_memory_compact(&self.compact_config) {
                     self.apply_session_memory_summary(summary, &turn_id, auto_compact_tracking)
                         .await?;
-                } else {
-                    // Tier 2: Fall back to LLM-based compaction
-                    self.compact(auto_compact_tracking, &turn_id, query_tracking)
-                        .await?;
+
+                    // Post-compact validation: check if session memory compact was sufficient.
+                    // If post-compact tokens still exceed auto-compact target, fall through
+                    // to Tier 2 (LLM-based compaction).
+                    let post_tokens = self.message_history.estimate_tokens();
+                    let post_estimated =
+                        self.compact_config.estimate_tokens_with_margin(post_tokens);
+                    let target = self.compact_config.auto_compact_target(context_window);
+                    if post_estimated < target {
+                        needs_llm_compact = false;
+                    } else {
+                        warn!(
+                            post_tokens = post_estimated,
+                            target,
+                            "Session memory compact insufficient, falling through to LLM compact"
+                        );
+                    }
                 }
-            } else {
-                // Session memory compact disabled, go directly to Tier 2
-                debug!("Session memory compact disabled, using LLM-based compaction");
+            }
+            if needs_llm_compact {
                 self.compact(auto_compact_tracking, &turn_id, query_tracking)
                     .await?;
             }
         }
+
+        // Recalculate threshold status after auto-compact.
+        // The status from Step 5 is stale if Tier 1 or Tier 2 compact ran,
+        // which could cause a false-positive blocking limit error at Step 8.
+        let estimated_tokens = self.message_history.estimate_tokens();
+        let estimated_with_margin = self
+            .compact_config
+            .estimate_tokens_with_margin(estimated_tokens);
+        let status =
+            ThresholdStatus::calculate(estimated_with_margin, context_window, &self.compact_config);
 
         // ── STEP 6: Initialize state ──
         self.turn_number += 1;
@@ -1200,7 +1264,8 @@ impl AgentLoop {
                     async_responses,
                     contexts: context_hooks,
                     blocking: blocking_hooks,
-                });
+                })
+                .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
 
             // Drain pending compacted large files (one-shot: populated during restoration)
             if !self.pending_compacted_large_files.is_empty() {
@@ -1738,9 +1803,12 @@ impl AgentLoop {
                 let messages = self.message_history.messages_for_api();
                 let conversation_text: String = messages
                     .iter()
-                    .map(|m| format!("{m:?}"))
+                    .map(|m| {
+                        let role = format!("{:?}", m.role).to_lowercase();
+                        format!("[{}]: {}", role, m.text())
+                    })
                     .collect::<Vec<_>>()
-                    .join("\n");
+                    .join("\n\n");
 
                 let current_tokens = estimated_tokens;
                 let tool_calls_since = auto_compact_tracking.tool_calls_since_extraction();
@@ -1753,6 +1821,7 @@ impl AgentLoop {
                 // Clone what we need for the background task
                 let agent = Arc::clone(extraction_agent);
                 let tracking_current_tokens = current_tokens;
+                let outcome_tx = self.extraction_result_tx.clone();
 
                 // Spawn extraction in background (non-blocking)
                 tokio::spawn(async move {
@@ -1772,12 +1841,18 @@ impl AgentLoop {
                                 last_id = %result.last_summarized_id,
                                 "Background extraction completed"
                             );
-                            // Note: We can't update auto_compact_tracking here since
-                            // it's owned by the main loop. The next turn will see
-                            // the updated summary.md file.
+                            let _ = outcome_tx
+                                .send(crate::session_memory_agent::ExtractionOutcome::Completed {
+                                    summary_tokens: result.summary_tokens,
+                                    last_summarized_id: result.last_summarized_id,
+                                })
+                                .await;
                         }
                         Err(e) => {
                             warn!(error = %e, "Background extraction failed");
+                            let _ = outcome_tx
+                                .send(crate::session_memory_agent::ExtractionOutcome::Failed)
+                                .await;
                         }
                     }
                 });
@@ -2251,6 +2326,13 @@ impl AgentLoop {
             return (0, 0);
         }
 
+        // Emit started event before compaction begins
+        self.emit(LoopEvent::MicroCompactionStarted {
+            candidates: 0, // Exact count will be in MicroCompactionApplied
+            potential_savings: 0,
+        })
+        .await;
+
         // Apply micro-compaction using configured recent_tool_results_to_keep
         // Get paths from ContextModifier::FileRead for FileTracker cleanup
         let keep_count = self.compact_config.recent_tool_results_to_keep;
@@ -2261,7 +2343,7 @@ impl AgentLoop {
         if !outcome.cleared_read_paths.is_empty() {
             // Determine how many recent turns to preserve files from
             // This matches Claude Code's collectFilesToKeep behavior
-            let keep_recent_turns = 3; // Keep files from last 3 turns
+            let keep_recent_turns = self.compact_config.micro_compact_keep_recent_turns;
             let files_to_keep =
                 crate::compaction::collect_files_to_keep(&self.message_history, keep_recent_turns);
 
@@ -2482,7 +2564,8 @@ impl AgentLoop {
 
         let outcomes = self.hooks.execute(&hook_ctx).await;
 
-        // Check if any hook rejected compaction
+        // Check if any hook rejected compaction and collect additional context
+        let mut hook_additional_context = Vec::new();
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
             self.emit(LoopEvent::HookExecuted {
@@ -2491,18 +2574,24 @@ impl AgentLoop {
             })
             .await;
 
-            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
-                info!(
-                    hook_name = %outcome.hook_name,
-                    reason = %reason,
-                    "Compaction skipped by hook"
-                );
-                self.emit(LoopEvent::CompactionSkippedByHook {
-                    hook_name: outcome.hook_name.clone(),
-                    reason: reason.clone(),
-                })
-                .await;
-                return Ok(());
+            match &outcome.result {
+                cocode_hooks::HookResult::Reject { reason } => {
+                    info!(
+                        hook_name = %outcome.hook_name,
+                        reason = %reason,
+                        "Compaction skipped by hook"
+                    );
+                    self.emit(LoopEvent::CompactionSkippedByHook {
+                        hook_name: outcome.hook_name.clone(),
+                        reason: reason.clone(),
+                    })
+                    .await;
+                    return Ok(());
+                }
+                cocode_hooks::HookResult::ContinueWithContext { additional_context } => {
+                    hook_additional_context.push(additional_context.clone());
+                }
+                _ => {}
             }
         }
 
@@ -2520,16 +2609,30 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
         let conversation_text: String = messages
             .iter()
-            .map(|m| format!("{m:?}"))
+            .map(|m| {
+                let role = format!("{:?}", m.role).to_lowercase();
+                format!("[{}]: {}", role, m.text())
+            })
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n\n");
 
         // Use the 9-section compact instructions
         let max_output_tokens = self.compact_config.max_compact_output_tokens;
         let system_prompt = build_compact_instructions(max_output_tokens);
 
-        // Fallback to legacy prompt builder if available
-        let (_, user_prompt) = SystemPromptBuilder::build_summarization(&conversation_text, None);
+        // Build user prompt, injecting any PreCompact hook context
+        let (_, mut user_prompt) =
+            SystemPromptBuilder::build_summarization(&conversation_text, None);
+        {
+            let extra: Vec<&str> = hook_additional_context
+                .iter()
+                .filter_map(|c| c.as_deref())
+                .collect();
+            if !extra.is_empty() {
+                let ctx = extra.join("\n\n");
+                user_prompt = format!("{ctx}\n\n---\n\n{user_prompt}");
+            }
+        }
 
         // Use the API client to get a summary with retry mechanism
         let max_retries = self.compact_config.max_summary_retries;
@@ -2619,10 +2722,12 @@ impl AgentLoop {
                 }
             }
 
-            // All retries exhausted
+            // All retries exhausted — update circuit breaker
+            self.compact_failure_count += 1;
             warn!(
                 attempts = attempt,
                 error = %last_error,
+                consecutive_failures = self.compact_failure_count,
                 "Compaction failed after all retries"
             );
             self.emit(LoopEvent::CompactionFailed {
@@ -2630,24 +2735,23 @@ impl AgentLoop {
                 error: last_error,
             })
             .await;
+
+            // Trip circuit breaker after 3 consecutive failures
+            if self.compact_failure_count >= 3 && !self.circuit_breaker_open {
+                self.circuit_breaker_open = true;
+                warn!(
+                    consecutive_failures = self.compact_failure_count,
+                    "Auto-compaction circuit breaker opened"
+                );
+                self.emit(LoopEvent::CompactionCircuitBreakerOpen {
+                    consecutive_failures: self.compact_failure_count,
+                })
+                .await;
+            }
             return Ok(());
         };
 
-        // Extract task status from tool calls before compaction
-        let tool_calls: Vec<(String, serde_json::Value)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
-                turn.tool_calls
-                    .iter()
-                    .map(|tc| (tc.name.clone(), tc.input.clone()))
-            })
-            .collect();
-
-        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
-
-        // Extract invoked skills from tool calls with turn numbers
+        // Extract task status and invoked skills in a single pass over turns
         let tool_calls_with_turns: Vec<(String, serde_json::Value, i32)> = self
             .message_history
             .turns()
@@ -2660,6 +2764,12 @@ impl AgentLoop {
             })
             .collect();
 
+        let tool_calls: Vec<(String, serde_json::Value)> = tool_calls_with_turns
+            .iter()
+            .map(|(name, input, _)| (name.clone(), input.clone()))
+            .collect();
+
+        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
         let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
 
         // Build final summary with task status
@@ -2678,6 +2788,9 @@ impl AgentLoop {
 
             format!("{summary_text}\n\n<task_status>\n{tasks_section}\n</task_status>")
         };
+
+        // Track message count before compaction for accurate removal reporting
+        let turn_count_before = self.message_history.turn_count();
 
         // Calculate keep window using token-based algorithm
         let messages_json = self.message_history.messages_for_api_json();
@@ -2702,8 +2815,16 @@ impl AgentLoop {
         // Get transcript path from context if available
         let transcript_path = self.context.transcript_path.clone();
 
+        // Wrap summary with continuation header and transcript reference
+        let wrapped_summary = format_summary_with_transcript(
+            &final_summary,
+            transcript_path.as_ref(),
+            true, // recent_messages_preserved
+            tokens_before,
+        );
+
         self.message_history.apply_compaction_with_metadata(
-            final_summary.clone(),
+            wrapped_summary,
             keep_turns,
             turn_id,
             tokens_saved,
@@ -2737,6 +2858,9 @@ impl AgentLoop {
         // Update tracking
         tracking.mark_compacted(turn_id, self.turn_number);
 
+        // Reset circuit breaker on successful compaction
+        self.compact_failure_count = 0;
+
         // Calculate post-compaction tokens and update boundary
         let post_tokens = self.message_history.estimate_tokens();
         self.message_history
@@ -2754,8 +2878,9 @@ impl AgentLoop {
         if let Some(otel) = &self.otel_manager {
             otel.counter("cocode.compaction.completed", 1, &[]);
         }
+        let removed_messages = (turn_count_before - self.message_history.turn_count()).max(0);
         self.emit(LoopEvent::CompactionCompleted {
-            removed_messages: 0, // Tracked by MessageHistory
+            removed_messages,
             summary_tokens: post_tokens,
         })
         .await;
@@ -2782,8 +2907,8 @@ impl AgentLoop {
             .await;
 
         // Save to session memory for future Tier 1 compaction
-        if self.compaction_config.session_memory.enabled
-            && let Some(ref path) = self.compaction_config.session_memory.summary_path
+        if self.compact_config.enable_sm_compact
+            && let Some(ref path) = self.compact_config.summary_path
         {
             let summary_content = final_summary;
             let turn_id_owned = turn_id.to_string();
@@ -2815,54 +2940,69 @@ impl AgentLoop {
         Ok(())
     }
 
-    /// Execute SessionStart hooks after compaction.
+    /// Execute PostCompact hooks after compaction.
     ///
-    /// Runs SessionStart hooks with source='compact' to allow them to provide
-    /// additional context for the resumed conversation.
+    /// Fires the dedicated `PostCompact` hook event to allow hooks to provide
+    /// additional context for the resumed conversation after compaction.
+    /// Any additional context provided by hooks is injected into the message
+    /// history as a meta user message so the model can see it on the next turn.
     async fn execute_post_compact_hooks(&mut self, turn_id: &str) {
         let hook_ctx = cocode_hooks::HookContext::new(
-            cocode_hooks::HookEventType::SessionStart,
+            cocode_hooks::HookEventType::PostCompact,
             turn_id.to_string(),
             self.context.environment.cwd.clone(),
-        )
-        .with_source("compact");
+        );
 
         let outcomes = self.hooks.execute(&hook_ctx).await;
 
         let mut hooks_executed = 0;
-        let mut additional_context_count = 0;
+        let mut hook_contexts: Vec<cocode_protocol::HookAdditionalContext> = Vec::new();
 
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
             self.emit(LoopEvent::HookExecuted {
-                hook_type: HookEventType::SessionStart,
+                hook_type: HookEventType::PostCompact,
                 hook_name: outcome.hook_name.clone(),
             })
             .await;
 
             hooks_executed += 1;
 
-            // Check for additional context from hooks
+            // Collect additional context from hooks
             if let cocode_hooks::HookResult::ContinueWithContext { additional_context } =
                 &outcome.result
                 && let Some(ctx) = additional_context
                 && !ctx.is_empty()
             {
-                additional_context_count += 1;
                 debug!(
                     hook_name = %outcome.hook_name,
                     context_len = ctx.len(),
                     "Hook provided additional context"
                 );
+                hook_contexts.push(cocode_protocol::HookAdditionalContext {
+                    content: ctx.clone(),
+                    hook_name: outcome.hook_name.clone(),
+                    suppress_output: false,
+                });
             }
         }
 
         if hooks_executed > 0 {
+            let additional_context_count = hook_contexts.len() as i32;
             self.emit(LoopEvent::PostCompactHooksExecuted {
                 hooks_executed,
                 additional_context_count,
             })
             .await;
+
+            // Inject hook additional context into message history as a meta message
+            if let Some(formatted) = wrap_hook_additional_context(&hook_contexts) {
+                let meta_turn_id = uuid::Uuid::new_v4().to_string();
+                let mut msg = TrackedMessage::user(&formatted, &meta_turn_id);
+                msg.set_meta(true);
+                let turn = Turn::new(self.turn_number, msg);
+                self.message_history.add_turn(turn);
+            }
         }
     }
 
@@ -2957,14 +3097,25 @@ impl AgentLoop {
         &self,
         file_config: &FileRestorationConfig,
     ) -> Vec<FileRestoration> {
-        // Collect files from the file tracker (Layer 2)
-        let tracker = self.shared_tools_file_tracker.lock().await;
-        let tracked_files = tracker.tracked_files();
-        drop(tracker); // Release lock before async operations
+        // Collect files and their last_accessed times in a single lock acquisition
+        let file_info: Vec<(std::path::PathBuf, i64)> = {
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            tracker
+                .tracked_files()
+                .into_iter()
+                .map(|path| {
+                    let last_accessed = tracker
+                        .read_state(&path)
+                        .map(|s| s.read_turn as i64)
+                        .unwrap_or(0);
+                    (path, last_accessed)
+                })
+                .collect()
+        };
 
         let mut files_for_restoration: Vec<FileRestoration> = Vec::new();
 
-        for path in tracked_files {
+        for (path, last_accessed) in file_info {
             // Skip excluded patterns
             let path_str = path.to_string_lossy();
             if file_config.should_exclude(&path_str) {
@@ -2979,7 +3130,7 @@ impl AgentLoop {
 
             // Try to read the file content (re-read at compact time for current content)
             // Truncate to max_tokens_per_file limit to avoid large file overhead
-            let max_chars = (file_config.max_tokens_per_file * 4) as usize;
+            let max_chars = (file_config.max_tokens_per_file * 3) as usize;
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => {
                     // Truncate content if it exceeds per-file limit
@@ -2988,17 +3139,7 @@ impl AgentLoop {
                     } else {
                         (content, false)
                     };
-                    let tokens = (content.len() / 4) as i32; // Rough estimate
-
-                    // Get last access time from file tracker
-                    let tracker = self.shared_tools_file_tracker.lock().await;
-                    let last_accessed = if let Some(state) = tracker.read_state(&path) {
-                        // Use read_turn as a proxy for access time
-                        state.read_turn as i64
-                    } else {
-                        0
-                    };
-                    drop(tracker); // Release lock
+                    let tokens = cocode_protocol::estimate_text_tokens(&content);
 
                     if truncated {
                         debug!(
@@ -3041,9 +3182,19 @@ impl AgentLoop {
         // Get file restoration config
         let file_config = &self.compact_config.file_restoration;
 
-        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
+        // Run file collection and plan reading in parallel (both are async I/O)
+        let plan_path = self.plan_mode_state.plan_file_path.clone();
+        let plan_fut = async {
+            if let Some(path) = &plan_path {
+                tokio::fs::read_to_string(path).await.ok()
+            } else {
+                None
+            }
+        };
+        let (files_for_restoration, plan) =
+            tokio::join!(self.collect_restorable_tracked_files(file_config), plan_fut,);
 
-        // Build todo list from task status
+        // Build todo list from task status (in-memory, negligible cost)
         let todos = if !task_status.tasks.is_empty() {
             let todo_text = task_status
                 .tasks
@@ -3058,14 +3209,6 @@ impl AgentLoop {
 
         // Build skills list from invoked skills
         let skills: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
-
-        // Get plan content if plan file exists (even if plan mode is not active,
-        // the plan may have been approved and should survive compaction)
-        let plan = if let Some(plan_path) = &self.plan_mode_state.plan_file_path {
-            tokio::fs::read_to_string(plan_path).await.ok()
-        } else {
-            None
-        };
 
         // Mark that a plan file reference should be injected on the next turn
         // so the model knows the plan still exists after compaction
@@ -3142,10 +3285,13 @@ impl AgentLoop {
         // Get transcript path from context if available
         let transcript_path = self.context.transcript_path.clone();
 
-        // Calculate keep window using token-based algorithm
+        // Calculate keep window using anchor-based session memory boundary algorithm
         let messages_json = self.message_history.messages_for_api_json();
-        let keep_result =
-            calculate_keep_start_index(&messages_json, &self.compact_config.keep_window);
+        let keep_result = find_session_memory_boundary(
+            &messages_json,
+            &self.compact_config.keep_window,
+            summary.last_summarized_id.as_deref(),
+        );
         let keep_turns = map_message_index_to_keep_turns(
             self.message_history.turn_count(),
             &messages_json,
@@ -3158,11 +3304,20 @@ impl AgentLoop {
             keep_start_index = keep_result.keep_start_index,
             messages_to_keep = keep_result.messages_to_keep,
             keep_tokens = keep_result.keep_tokens,
-            "Calculated keep window for session memory compact"
+            text_messages_kept = keep_result.text_messages_kept,
+            "Calculated keep window for session memory compact (anchor-based)"
+        );
+
+        // Wrap summary with continuation header and transcript reference
+        let wrapped_summary = format_summary_with_transcript(
+            &summary.summary,
+            transcript_path.as_ref(),
+            true, // recent_messages_preserved
+            tokens_before,
         );
 
         self.message_history.apply_compaction_with_metadata(
-            summary.summary.clone(),
+            wrapped_summary,
             keep_turns,
             turn_id,
             tokens_saved,
@@ -3180,6 +3335,15 @@ impl AgentLoop {
         self.message_history
             .update_boundary_post_tokens(post_tokens);
 
+        // Reset circuit breaker on successful Tier 1 compaction
+        self.compact_failure_count = 0;
+        self.circuit_breaker_open = false;
+
+        // Set compaction boundary on the snapshot manager
+        if let Some(ref sm) = self.snapshot_manager {
+            sm.set_compaction_boundary(self.turn_number).await;
+        }
+
         // Emit events
         self.emit(LoopEvent::SessionMemoryCompactApplied {
             saved_tokens: tokens_saved,
@@ -3195,23 +3359,55 @@ impl AgentLoop {
         })
         .await;
 
-        // Keep tracker consistent after session memory compact (Claude Code alignment)
-        // Without this, tracker state becomes stale and large compacted files are never
-        // notified to the model after Tier 1 compaction.
-        let file_config = &self.compact_config.file_restoration;
-        let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
-        let restoration = build_context_restoration_with_config(
-            files_for_restoration,
-            None,
-            None,
-            Vec::new(),
-            file_config,
-        );
-        self.pending_compacted_large_files = restoration.compacted_large_files;
-        if !restoration.files.is_empty() {
-            self.rebuild_trackers_from_restored_files(&restoration.files)
-                .await;
+        // Rebuild FileTracker from remaining messages after compaction
+        {
+            let cwd = self.context.environment.cwd.clone();
+            let tracker = self.shared_tools_file_tracker.lock().await;
+            tracker.clear();
+            let new_tracker = build_file_read_state(&self.message_history, &cwd, LRU_MAX_ENTRIES);
+            for (path, state) in new_tracker.read_files_with_state() {
+                tracker.record_read_with_state(path, state.clone());
+            }
+            debug!(
+                tracked_files = tracker.len(),
+                "FileTracker rebuilt after session memory compact"
+            );
         }
+
+        // Extract task status and invoked skills for context restoration
+        // (same pattern as Tier 2 compact)
+        let tool_calls_with_turns: Vec<(String, serde_json::Value, i32)> = self
+            .message_history
+            .turns()
+            .iter()
+            .flat_map(|turn| {
+                let turn_num = turn.number;
+                turn.tool_calls
+                    .iter()
+                    .map(move |tc| (tc.name.clone(), tc.input.clone(), turn_num))
+            })
+            .collect();
+
+        let tool_calls: Vec<(String, serde_json::Value)> = tool_calls_with_turns
+            .iter()
+            .map(|(name, input, _)| (name.clone(), input.clone()))
+            .collect();
+
+        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
+        let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
+
+        // Emit invoked skills restored event if any skills were found
+        if !invoked_skills.is_empty() {
+            let skill_names: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
+            self.emit(LoopEvent::InvokedSkillsRestored {
+                skills: skill_names,
+            })
+            .await;
+        }
+
+        // Full context restoration: files, todos, plans, skills
+        self.restore_context_after_compaction(&invoked_skills, &task_status)
+            .await;
 
         Ok(())
     }

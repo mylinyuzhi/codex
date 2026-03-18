@@ -451,6 +451,10 @@ pub struct GeneratorContext<'a> {
     /// Whether plan mode exit is pending (triggers one-time exit instructions).
     pub plan_mode_exit_pending: bool,
 
+    // === Compaction state ===
+    /// Whether auto-compaction is enabled for this session.
+    pub is_auto_compact_enabled: bool,
+
     // === Rewind state ===
     /// Information about a rewind that just occurred (consumed once).
     pub rewind_info: Option<RewindContextInfo>,
@@ -603,6 +607,7 @@ pub struct GeneratorContextBuilder<'a> {
     plan_mode_exit_pending: bool,
     rewind_info: Option<RewindContextInfo>,
     mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
+    is_auto_compact_enabled: bool,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -779,6 +784,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn is_auto_compact_enabled(mut self, enabled: bool) -> Self {
+        self.is_auto_compact_enabled = enabled;
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -821,6 +831,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             collab_notifications: self.collab_notifications,
             queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
+            is_auto_compact_enabled: self.is_auto_compact_enabled,
             rewind_info: self.rewind_info,
             mention_read_records: self.mention_read_records,
         }

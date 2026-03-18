@@ -21,6 +21,7 @@ use crate::generators::BudgetUsdGenerator;
 use crate::generators::ChangedFilesGenerator;
 use crate::generators::CollabNotificationsGenerator;
 use crate::generators::CompactFileReferenceGenerator;
+use crate::generators::CompactionReminderGenerator;
 use crate::generators::DelegateModeGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
@@ -113,6 +114,7 @@ impl SystemReminderOrchestrator {
             // New generators for enhanced features
             Arc::new(BudgetUsdGenerator),
             Arc::new(CompactFileReferenceGenerator),
+            Arc::new(CompactionReminderGenerator),
             Arc::new(RewindReminderGenerator),
             // UserPrompt tier
             Arc::new(AtMentionedFilesGenerator),
