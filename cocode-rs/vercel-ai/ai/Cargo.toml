@@ -26,7 +26,13 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+vercel-ai-openai = { path = "../openai" }
+vercel-ai-anthropic = { path = "../anthropic" }
+vercel-ai-google = { path = "../google" }
 
 [lints]
 workspace = true

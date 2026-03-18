@@ -7643,9 +7643,11 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vercel-ai"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "dotenvy",
  "futures",
  "jsonschema",
  "once_cell",
@@ -7659,6 +7661,9 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "vercel-ai-anthropic",
+ "vercel-ai-google",
+ "vercel-ai-openai",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
 ]
