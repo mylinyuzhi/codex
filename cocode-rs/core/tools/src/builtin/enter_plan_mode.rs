@@ -69,7 +69,7 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        ConcurrencySafety::Unsafe
+        ConcurrencySafety::Safe
     }
 
     fn is_read_only(&self) -> bool {

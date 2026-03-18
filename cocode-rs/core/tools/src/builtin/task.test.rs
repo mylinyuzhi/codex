@@ -24,5 +24,9 @@ async fn test_task_tool() {
 fn test_tool_properties() {
     let tool = TaskTool::new();
     assert_eq!(tool.name(), cocode_protocol::ToolName::Task.as_str());
-    assert!(tool.is_concurrent_safe());
+    // Default concurrency is Unsafe (foreground), but background is Safe
+    assert!(!tool.is_concurrent_safe());
+    assert!(!tool.is_concurrency_safe_for(&serde_json::json!({})));
+    assert!(!tool.is_concurrency_safe_for(&serde_json::json!({"run_in_background": false})));
+    assert!(tool.is_concurrency_safe_for(&serde_json::json!({"run_in_background": true})));
 }

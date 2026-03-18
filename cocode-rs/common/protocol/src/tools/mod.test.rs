@@ -51,6 +51,6 @@ fn test_serde() {
 
 #[test]
 fn test_all_count() {
-    // Ensure ALL contains all variants (24 tools)
-    assert_eq!(ToolName::ALL.len(), 24);
+    // Ensure ALL contains all variants (36 tools)
+    assert_eq!(ToolName::ALL.len(), 36);
 }

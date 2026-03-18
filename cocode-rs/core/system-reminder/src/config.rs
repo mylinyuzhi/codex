@@ -78,6 +78,8 @@ pub struct AttachmentSettings {
     pub output_style: bool,
     /// Enable todo/task reminders.
     pub todo_reminders: bool,
+    /// Enable cron job state reminders.
+    pub cron_reminders: bool,
     /// Enable delegate mode instructions.
     pub delegate_mode: bool,
     /// Enable collaboration notifications.
@@ -118,6 +120,7 @@ impl Default for AttachmentSettings {
             invoked_skills: true,
             output_style: true,
             todo_reminders: true,
+            cron_reminders: true,
             delegate_mode: true,
             collab_notifications: true,
             plan_verification: true,

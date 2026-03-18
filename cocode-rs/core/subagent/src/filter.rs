@@ -8,7 +8,13 @@ const SYSTEM_BLOCKED: &[&str] = &[
     ToolName::ExitPlanMode.as_str(),
     ToolName::TaskStop.as_str(),
     ToolName::AskUserQuestion.as_str(),
-    "EnterWorktree",
+    ToolName::EnterWorktree.as_str(),
+    ToolName::ExitWorktree.as_str(),
+    ToolName::CronCreate.as_str(),
+    ToolName::CronDelete.as_str(),
+    ToolName::TeamCreate.as_str(),
+    ToolName::TeamDelete.as_str(),
+    ToolName::SendMessage.as_str(),
 ];
 
 /// Tools safe for async/background execution (no user interaction required).
@@ -24,6 +30,11 @@ const ASYNC_SAFE_TOOLS: &[&str] = &[
     ToolName::NotebookEdit.as_str(),
     ToolName::TaskOutput.as_str(),
     ToolName::Task.as_str(), // Task is async-safe when explicitly allowed via Task(type) syntax
+    ToolName::TaskCreate.as_str(),
+    ToolName::TaskUpdate.as_str(),
+    ToolName::TaskGet.as_str(),
+    ToolName::TaskList.as_str(),
+    ToolName::CronList.as_str(),
 ];
 
 /// Result of tool filtering, including any `Task(type)` restrictions.

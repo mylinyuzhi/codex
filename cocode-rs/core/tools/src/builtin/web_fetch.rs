@@ -26,6 +26,7 @@ const MAX_LINE_WIDTH: usize = 120;
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("Failed to create HTTP client")
 });
@@ -196,6 +197,69 @@ impl Tool for WebFetchTool {
             }
         };
 
+        // Handle redirects — Policy::none() prevents auto-follow to avoid
+        // authorization header leaks and SSRF on cross-host redirects.
+        let response = {
+            let status = response.status();
+            if status == reqwest::StatusCode::MOVED_PERMANENTLY
+                || status == reqwest::StatusCode::TEMPORARY_REDIRECT
+                || status == reqwest::StatusCode::PERMANENT_REDIRECT
+            {
+                let location = response
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok());
+
+                match location {
+                    Some(loc) => {
+                        let resolved = resolve_redirect_url(&fetch_url, loc);
+                        let original_host = extract_hostname(&fetch_url);
+                        let redirect_host = extract_hostname(&resolved);
+
+                        if original_host == redirect_host {
+                            // Same host → follow once
+                            match HTTP_CLIENT
+                                .get(&resolved)
+                                .header("User-Agent", &config.user_agent)
+                                .timeout(Duration::from_secs(config.timeout_secs))
+                                .send()
+                                .await
+                            {
+                                Ok(resp) => resp,
+                                Err(e) => {
+                                    if e.is_timeout() {
+                                        return Ok(ToolOutput::error(format!(
+                                            "[TIMEOUT] Redirect timed out after {} seconds",
+                                            config.timeout_secs
+                                        )));
+                                    }
+                                    return Ok(ToolOutput::error(format!(
+                                        "[NETWORK_ERROR] Redirect failed: {e}"
+                                    )));
+                                }
+                            }
+                        } else {
+                            // Cross-host → return redirect message for model to re-fetch
+                            return Ok(ToolOutput::text(format!(
+                                "The URL has been redirected to a different domain.\n\
+                                 Original: {fetch_url}\n\
+                                 Redirect: {resolved}\n\n\
+                                 To fetch the content, call this tool again with the new URL: {resolved}"
+                            )));
+                        }
+                    }
+                    None => {
+                        return Ok(ToolOutput::error(
+                            "[REDIRECT_ERROR] Redirect response missing Location header"
+                                .to_string(),
+                        ));
+                    }
+                }
+            } else {
+                response
+            }
+        };
+
         // Check HTTP status
         let status = response.status();
         if !status.is_success() {
@@ -264,6 +328,31 @@ impl Tool for WebFetchTool {
             "Content from {fetch_url}:\nPrompt: {prompt}\n\n{truncated}"
         )))
     }
+}
+
+/// Extract hostname from URL, excluding port and path.
+fn extract_hostname(url: &str) -> &str {
+    url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|host_port| host_port.split(':').next())
+        .unwrap_or("")
+}
+
+/// Resolve a redirect Location header to an absolute URL.
+fn resolve_redirect_url(original_url: &str, location: &str) -> String {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return location.to_string();
+    }
+    if location.starts_with('/') {
+        let scheme_end = original_url.find("://").map(|i| i + 3).unwrap_or(0);
+        let host_end = original_url[scheme_end..]
+            .find('/')
+            .map(|i| i + scheme_end)
+            .unwrap_or(original_url.len());
+        return format!("{}{location}", &original_url[..host_end]);
+    }
+    location.to_string()
 }
 
 /// Transform GitHub blob URLs to raw.githubusercontent.com URLs.

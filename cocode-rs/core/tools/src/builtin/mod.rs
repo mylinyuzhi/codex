@@ -24,6 +24,18 @@
 //! - [`LsTool`] - List directory contents with tree-style output
 //! - [`ApplyPatchTool`] - Apply multi-file patches (optional, for GPT-5)
 //! - [`SmartEditTool`] - Edit with LLM correction fallback (feature-gated)
+//! - [`TaskCreateTool`] - Create structured tasks with dependencies (feature-gated)
+//! - [`TaskUpdateTool`] - Update structured task status and metadata (feature-gated)
+//! - [`TaskGetTool`] - Retrieve a single structured task (feature-gated)
+//! - [`TaskListTool`] - List structured tasks with filtering (feature-gated)
+//! - [`EnterWorktreeTool`] - Create isolated git worktrees (feature-gated)
+//! - [`ExitWorktreeTool`] - Exit and clean up git worktrees (feature-gated)
+//! - [`CronCreateTool`] - Schedule recurring cron jobs (feature-gated)
+//! - [`CronDeleteTool`] - Delete scheduled cron jobs (feature-gated)
+//! - [`CronListTool`] - List active cron jobs (feature-gated)
+//! - [`TeamCreateTool`] - Create named agent teams (feature-gated)
+//! - [`TeamDeleteTool`] - Delete agent teams (feature-gated)
+//! - [`SendMessageTool`] - Inter-agent messaging (feature-gated)
 //!
 //! ## Utilities
 //!
@@ -34,10 +46,17 @@ mod prompts;
 mod apply_patch;
 mod ask_user_question;
 mod bash;
+mod cron_create;
+mod cron_delete;
+mod cron_list;
+pub mod cron_scheduler;
+pub mod cron_state;
 mod edit;
 mod edit_strategies;
 mod enter_plan_mode;
+mod enter_worktree;
 mod exit_plan_mode;
+mod exit_worktree;
 mod glob;
 mod grep;
 mod kill_shell;
@@ -48,11 +67,20 @@ mod notebook_edit;
 pub mod path_extraction;
 mod read;
 mod read_many;
+mod send_message;
 mod shell;
 mod skill;
 mod smart_edit;
+pub mod structured_tasks;
 mod task;
+mod task_create;
+mod task_get;
+mod task_list;
 mod task_output;
+mod task_update;
+mod team_create;
+mod team_delete;
+pub mod team_state;
 mod todo_write;
 mod web_fetch;
 mod web_search;
@@ -61,9 +89,14 @@ mod write;
 pub use apply_patch::ApplyPatchTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
+pub use cron_create::CronCreateTool;
+pub use cron_delete::CronDeleteTool;
+pub use cron_list::CronListTool;
 pub use edit::EditTool;
 pub use enter_plan_mode::EnterPlanModeTool;
+pub use enter_worktree::EnterWorktreeTool;
 pub use exit_plan_mode::ExitPlanModeTool;
+pub use exit_worktree::ExitWorktreeTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
@@ -73,11 +106,18 @@ pub use mcp_search::McpSearchTool;
 pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
 pub use read_many::ReadManyFilesTool;
+pub use send_message::SendMessageTool;
 pub use shell::ShellTool;
 pub use skill::SkillTool;
 pub use smart_edit::SmartEditTool;
 pub use task::TaskTool;
+pub use task_create::TaskCreateTool;
+pub use task_get::TaskGetTool;
+pub use task_list::TaskListTool;
 pub use task_output::TaskOutputTool;
+pub use task_update::TaskUpdateTool;
+pub use team_create::TeamCreateTool;
+pub use team_delete::TeamDeleteTool;
 pub use todo_write::TodoWriteTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;
@@ -85,6 +125,15 @@ pub use write::WriteTool;
 
 use crate::registry::ToolRegistry;
 use cocode_protocol::Features;
+
+/// Shared stores returned by `register_builtin_tools()`.
+///
+/// Allows the caller (e.g. `SessionState`) to access shared state
+/// that tools were constructed with.
+pub struct BuiltinStores {
+    /// The shared cron job store used by CronCreate/CronDelete/CronList.
+    pub cron_store: cron_state::CronJobStore,
+}
 
 /// Register all built-in tools with a registry.
 ///
@@ -94,7 +143,10 @@ use cocode_protocol::Features;
 ///
 /// The `features` parameter is used to configure interview-conditional
 /// tool descriptions (e.g., EnterPlanMode).
-pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) {
+///
+/// Returns [`BuiltinStores`] containing shared state handles for the
+/// registered tools (e.g. the cron job store for durable persistence).
+pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) -> BuiltinStores {
     let interview_phase = features.enabled(cocode_protocol::Feature::PlanModeInterview);
 
     registry.register(ReadTool::new());
@@ -120,6 +172,30 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) 
     registry.register(ShellTool::new());
     registry.register(ReadManyFilesTool::new());
     registry.register(SmartEditTool::new());
+    registry.register(EnterWorktreeTool::new());
+    registry.register(ExitWorktreeTool::new());
+
+    // Structured task management tools (shared store)
+    let task_store = structured_tasks::new_task_store();
+    registry.register(TaskCreateTool::new(task_store.clone()));
+    registry.register(TaskUpdateTool::new(task_store.clone()));
+    registry.register(TaskGetTool::new(task_store.clone()));
+    registry.register(TaskListTool::new(task_store));
+
+    // Cron scheduling tools (shared store)
+    let cron_store = cron_state::new_cron_store();
+    registry.register(CronCreateTool::new(cron_store.clone()));
+    registry.register(CronDeleteTool::new(cron_store.clone()));
+    registry.register(CronListTool::new(cron_store.clone()));
+
+    // Team/collaboration tools (shared store + message store)
+    let team_store = team_state::new_team_store();
+    let message_store = team_state::new_message_store();
+    registry.register(TeamCreateTool::new(team_store.clone()));
+    registry.register(TeamDeleteTool::new(team_store.clone()));
+    registry.register(SendMessageTool::new(team_store, message_store));
+
+    BuiltinStores { cron_store }
 }
 
 /// Get a list of built-in tool names.

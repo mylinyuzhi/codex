@@ -85,6 +85,13 @@ pub enum Feature {
     NotebookEdit,
     /// Enable interview-style plan mode (iterative pair-planning).
     PlanModeInterview,
+    /// Enable structured task management (TaskCreate/TaskUpdate/TaskGet/TaskList).
+    /// Mutually exclusive with TodoWrite — when enabled, TodoWrite is hidden.
+    StructuredTasks,
+    /// Enable cron/scheduling tools (CronCreate/CronDelete/CronList).
+    Cron,
+    /// Enable worktree tools (EnterWorktree/ExitWorktree).
+    Worktree,
 }
 
 impl Feature {
@@ -236,14 +243,14 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WebFetch,
         key: "web_fetch",
-        stage: Stage::Experimental,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WebSearch,
         key: "web_search",
-        stage: Stage::Experimental,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Retrieval,
@@ -284,6 +291,24 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PlanModeInterview,
         key: "plan_mode_interview",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StructuredTasks,
+        key: "structured_tasks",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Cron,
+        key: "cron",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Worktree,
+        key: "worktree",
         stage: Stage::Experimental,
         default_enabled: false,
     },

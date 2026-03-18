@@ -106,6 +106,10 @@ impl Tool for ApplyPatchTool {
         false
     }
 
+    fn is_edit_tool(&self) -> bool {
+        true
+    }
+
     #[allow(clippy::unwrap_used)]
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         // TODO(sandbox): Current implementation executes patches directly in-process.

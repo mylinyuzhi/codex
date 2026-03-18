@@ -276,6 +276,74 @@ fn test_defer_mcp_tool_definitions() {
 }
 
 #[test]
+fn test_restore_deferred_tools() {
+    let mut registry = ToolRegistry::new();
+
+    // Register a builtin tool
+    registry.register(TestTool {
+        name: "builtin".to_string(),
+    });
+
+    // Register MCP tools (info only) + executable entry
+    let tools = vec![
+        McpToolInfo {
+            server: "".to_string(),
+            name: "tool_a".to_string(),
+            description: Some("Tool A".to_string()),
+            input_schema: serde_json::json!({}),
+        },
+        McpToolInfo {
+            server: "".to_string(),
+            name: "tool_b".to_string(),
+            description: Some("Tool B".to_string()),
+            input_schema: serde_json::json!({}),
+        },
+    ];
+    registry.register_mcp_server("srv", tools);
+
+    // Simulate executable registration
+    registry.register(TestTool {
+        name: "mcp__srv__tool_a".to_string(),
+    });
+    registry.register(TestTool {
+        name: "mcp__srv__tool_b".to_string(),
+    });
+
+    // Defer all MCP tools
+    let deferred = registry.defer_mcp_tool_definitions();
+    assert_eq!(deferred.len(), 2);
+    assert!(registry.get("mcp__srv__tool_a").is_none());
+    assert!(registry.get("mcp__srv__tool_b").is_none());
+
+    // Restore only tool_a
+    let restored = registry.restore_deferred_tools(&["mcp__srv__tool_a".to_string()]);
+    assert_eq!(restored, vec!["mcp__srv__tool_a"]);
+    assert!(registry.get("mcp__srv__tool_a").is_some());
+    assert!(registry.get("mcp__srv__tool_b").is_none());
+
+    // Restore tool_b
+    let restored = registry.restore_deferred_tools(&["mcp__srv__tool_b".to_string()]);
+    assert_eq!(restored, vec!["mcp__srv__tool_b"]);
+    assert!(registry.get("mcp__srv__tool_b").is_some());
+
+    // Restoring already-restored tool is a no-op
+    let restored = registry.restore_deferred_tools(&["mcp__srv__tool_a".to_string()]);
+    assert!(restored.is_empty());
+
+    // Builtin not affected
+    assert!(registry.get("builtin").is_some());
+}
+
+#[test]
+fn test_restore_deferred_tools_nonexistent() {
+    let mut registry = ToolRegistry::new();
+
+    // Restoring from an empty deferred set returns nothing
+    let restored = registry.restore_deferred_tools(&["mcp__srv__no_such_tool".to_string()]);
+    assert!(restored.is_empty());
+}
+
+#[test]
 fn test_definitions_filtered_excludes_disabled_gate() {
     let mut registry = ToolRegistry::new();
     registry.register(TestTool {
@@ -292,6 +360,55 @@ fn test_definitions_filtered_excludes_disabled_gate() {
     let defs = registry.definitions_filtered(&features);
     assert!(defs.iter().any(|d| d.name == "always_on"));
     assert!(defs.iter().all(|d| d.name != "ls_tool"));
+}
+
+#[test]
+fn test_no_duplicate_mcp_definitions() {
+    let mut registry = ToolRegistry::new();
+
+    // Register MCP tools (info only)
+    let tools = vec![McpToolInfo {
+        server: "".to_string(),
+        name: "mcp_tool".to_string(),
+        description: Some("An MCP tool".to_string()),
+        input_schema: serde_json::json!({}),
+    }];
+    registry.register_mcp_server("srv", tools);
+
+    // Also put a matching executable entry in self.tools (simulates register_mcp_tools_executable)
+    registry.register(TestTool {
+        name: "mcp__srv__mcp_tool".to_string(),
+    });
+
+    // definitions_filtered should not duplicate: one from tools, zero from mcp_tools
+    let features = cocode_protocol::Features::with_defaults();
+    let defs = registry.definitions_filtered(&features);
+    let mcp_count = defs
+        .iter()
+        .filter(|d| d.name == "mcp__srv__mcp_tool")
+        .count();
+    assert_eq!(mcp_count, 1, "MCP tool should appear exactly once");
+
+    // all_definitions should also not duplicate
+    let all_defs = registry.all_definitions();
+    let mcp_count = all_defs
+        .iter()
+        .filter(|d| d.name == "mcp__srv__mcp_tool")
+        .count();
+    assert_eq!(
+        mcp_count, 1,
+        "MCP tool should appear exactly once in all_definitions"
+    );
+
+    // len() should count it once
+    assert_eq!(registry.len(), 1);
+
+    // tool_names() should list it once
+    let names = registry.tool_names();
+    assert_eq!(
+        names.iter().filter(|n| *n == "mcp__srv__mcp_tool").count(),
+        1,
+    );
 }
 
 #[test]

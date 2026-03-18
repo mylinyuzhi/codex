@@ -198,6 +198,14 @@ pub struct AgentLoop {
     /// Latest task list from the most recent TodoWrite tool call.
     current_todos: Option<serde_json::Value>,
 
+    // Structured task state (updated by TaskCreate/TaskUpdate via ContextModifier)
+    /// Latest structured tasks snapshot.
+    current_structured_tasks: Option<serde_json::Value>,
+
+    // Cron job state (updated by CronCreate/CronDelete via ContextModifier)
+    /// Latest cron jobs snapshot.
+    current_cron_jobs: Option<serde_json::Value>,
+
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
     /// Shared via `Arc<Mutex>` so the TUI driver can push commands while the
@@ -256,6 +264,9 @@ pub struct AgentLoop {
     /// token limit. Consumed once on the next turn by the
     /// `CompactFileReferenceGenerator` to notify the model.
     pending_compacted_large_files: Vec<cocode_protocol::CompactedLargeFileRef>,
+
+    /// Path to the cocode home directory for durable cron persistence.
+    cocode_home: Option<std::path::PathBuf>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
@@ -301,6 +312,7 @@ pub struct AgentLoopBuilder {
     /// Named to clarify this is the reminder-level snapshot, distinct from the
     /// shared tools-level tracker.
     reminder_file_tracker_state: Vec<(std::path::PathBuf, FileReadState)>,
+    cocode_home: Option<std::path::PathBuf>,
 }
 
 impl AgentLoopBuilder {
@@ -350,6 +362,7 @@ impl AgentLoopBuilder {
             question_responder: None,
             approval_store: None,
             reminder_file_tracker_state: Vec::new(),
+            cocode_home: None,
         }
     }
 
@@ -551,6 +564,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the cocode home directory for durable cron persistence.
+    pub fn cocode_home(mut self, path: std::path::PathBuf) -> Self {
+        self.cocode_home = Some(path);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     pub fn build(self) -> AgentLoop {
         let model_name = self
@@ -656,6 +675,8 @@ impl AgentLoopBuilder {
             invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             active_skill_allowed_tools: None,
             current_todos: None,
+            current_structured_tasks: None,
+            current_cron_jobs: None,
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,
@@ -670,6 +691,7 @@ impl AgentLoopBuilder {
                 .question_responder
                 .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
             pending_compacted_large_files: Vec::new(),
+            cocode_home: self.cocode_home,
         }
     }
 }
@@ -736,6 +758,16 @@ impl AgentLoop {
     /// Take the current task list (if any) set by a TodoWrite tool call.
     pub fn take_todos(&mut self) -> Option<serde_json::Value> {
         self.current_todos.take()
+    }
+
+    /// Take the current structured tasks (if any) set by TaskCreate/TaskUpdate.
+    pub fn take_structured_tasks(&mut self) -> Option<serde_json::Value> {
+        self.current_structured_tasks.take()
+    }
+
+    /// Take the current cron jobs (if any) set by CronCreate/CronDelete.
+    pub fn take_cron_jobs(&mut self) -> Option<serde_json::Value> {
+        self.current_cron_jobs.take()
     }
 
     /// Take the plan mode state for persistence across loop runs.
@@ -1296,6 +1328,104 @@ impl AgentLoop {
                 builder = builder.rewind_info(rewind_info);
             }
 
+            // Convert structured tasks to TodoItems for the reminder system.
+            // When StructuredTasks feature is enabled, these replace TodoWrite items.
+            // Also include plain todos from TodoWrite for backwards compatibility.
+            {
+                let mut todo_items = Vec::new();
+
+                // Structured tasks → TodoItems
+                if let Some(ref tasks_val) = self.current_structured_tasks {
+                    if let Some(tasks_map) = tasks_val.as_object() {
+                        for (_id, task) in tasks_map {
+                            let status_str = task["status"].as_str().unwrap_or("pending");
+                            let status = match status_str {
+                                "in_progress" => {
+                                    cocode_system_reminder::generator::TodoStatus::InProgress
+                                }
+                                "completed" => {
+                                    cocode_system_reminder::generator::TodoStatus::Completed
+                                }
+                                _ => cocode_system_reminder::generator::TodoStatus::Pending,
+                            };
+                            // Skip deleted tasks
+                            if status_str == "deleted" {
+                                continue;
+                            }
+                            let blocked_by = task["blocked_by"].as_array();
+                            let is_blocked = blocked_by.map_or(false, |arr| !arr.is_empty());
+                            todo_items.push(cocode_system_reminder::generator::TodoItem {
+                                id: task["id"].as_str().unwrap_or("?").to_string(),
+                                subject: task["subject"].as_str().unwrap_or("?").to_string(),
+                                status,
+                                is_blocked,
+                            });
+                        }
+                    }
+                }
+
+                // Plain todos (from TodoWrite) — only when structured tasks are absent
+                if todo_items.is_empty() {
+                    if let Some(ref todos_val) = self.current_todos {
+                        if let Some(arr) = todos_val.as_array() {
+                            for todo in arr {
+                                let status_str = todo["status"].as_str().unwrap_or("pending");
+                                let status = match status_str {
+                                    "in_progress" => {
+                                        cocode_system_reminder::generator::TodoStatus::InProgress
+                                    }
+                                    "completed" => {
+                                        cocode_system_reminder::generator::TodoStatus::Completed
+                                    }
+                                    _ => cocode_system_reminder::generator::TodoStatus::Pending,
+                                };
+                                todo_items.push(cocode_system_reminder::generator::TodoItem {
+                                    id: todo["id"].as_str().unwrap_or("?").to_string(),
+                                    subject: todo["subject"]
+                                        .as_str()
+                                        .or_else(|| todo["content"].as_str())
+                                        .unwrap_or("?")
+                                        .to_string(),
+                                    status,
+                                    is_blocked: false,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                if !todo_items.is_empty() {
+                    builder = builder.todos(todo_items);
+                }
+            }
+
+            // Convert cron jobs to CronJobInfo for the reminder system.
+            {
+                if let Some(ref jobs_val) = self.current_cron_jobs {
+                    if let Some(jobs_map) = jobs_val.as_object() {
+                        let cron_infos: Vec<cocode_system_reminder::CronJobInfo> = jobs_map
+                            .values()
+                            .map(|job| cocode_system_reminder::CronJobInfo {
+                                id: job["id"].as_str().unwrap_or("?").to_string(),
+                                cron: job["cron"].as_str().unwrap_or("?").to_string(),
+                                description: job["description"]
+                                    .as_str()
+                                    .unwrap_or_else(|| job["prompt"].as_str().unwrap_or("?"))
+                                    .chars()
+                                    .take(80)
+                                    .collect(),
+                                one_shot: job["one_shot"].as_bool().unwrap_or(false),
+                                execution_count: job["execution_count"].as_u64().unwrap_or(0)
+                                    as u32,
+                            })
+                            .collect();
+                        if !cron_infos.is_empty() {
+                            builder = builder.cron_jobs(cron_infos);
+                        }
+                    }
+                }
+            }
+
             let gen_ctx = builder.build();
             let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
 
@@ -1455,6 +1585,11 @@ impl AgentLoop {
 
         // Wire question responder for AskUserQuestion tool
         executor = executor.with_question_responder(self.question_responder.clone());
+
+        // Wire cocode_home for durable cron persistence
+        if let Some(ref home) = self.cocode_home {
+            executor = executor.with_cocode_home(home.clone());
+        }
 
         // Share invoked skills tracker with the executor so the driver
         // can read which skills were invoked during tool execution
@@ -1715,10 +1850,25 @@ impl AgentLoop {
             for _ in &tool_calls {
                 auto_compact_tracking.record_tool_call();
             }
-        }
 
-        // ── STEP 14: Check for hook stop ──
-        // Hook execution is deferred to a future session.
+            // ── STEP 14: Check for hook stop ──
+            // If any PostToolUse hook returned `preventContinuation`, halt the loop
+            // after processing this turn's tool results. The tool output itself is
+            // preserved — only the loop continuation is suppressed.
+            if let Some(reason) = results.iter().find_map(|r| r.stop_continuation.as_deref()) {
+                info!(
+                    turn = self.turn_number,
+                    reason = %reason,
+                    "PostToolUse hook requested loop stop (preventContinuation)"
+                );
+                self.set_status(AgentStatus::Idle);
+                return Ok(LoopResult::hook_stopped(
+                    self.turn_number,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                ));
+            }
+        }
 
         // ── STEP 15: Update auto-compact tracking ──
         auto_compact_tracking.turn_counter += 1;
@@ -3043,17 +3193,62 @@ impl AgentLoop {
 
         let files_for_restoration = self.collect_restorable_tracked_files(file_config).await;
 
-        // Build todo list from task status
-        let todos = if !task_status.tasks.is_empty() {
+        // Build todo list from task status, structured tasks, and cron jobs.
+        // Include structured tasks and cron state so they survive compaction.
+        let mut todo_parts: Vec<String> = Vec::new();
+
+        if !task_status.tasks.is_empty() {
             let todo_text = task_status
                 .tasks
                 .iter()
                 .map(|t| format!("- [{}] {}: {}", t.status, t.id, t.subject))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Some(todo_text)
-        } else {
+            todo_parts.push(todo_text);
+        }
+
+        // Include structured tasks state in restoration
+        if let Some(ref tasks_val) = self.current_structured_tasks {
+            if let Some(tasks_map) = tasks_val.as_object() {
+                if !tasks_map.is_empty() {
+                    let mut task_text = String::from("Structured Tasks:\n");
+                    for task in tasks_map.values() {
+                        let status = task["status"].as_str().unwrap_or("pending");
+                        if status == "deleted" {
+                            continue;
+                        }
+                        let id = task["id"].as_str().unwrap_or("?");
+                        let subject = task["subject"].as_str().unwrap_or("?");
+                        task_text.push_str(&format!("- [{status}] {id}: {subject}\n"));
+                    }
+                    todo_parts.push(task_text);
+                }
+            }
+        }
+
+        // Include cron jobs state in restoration
+        if let Some(ref jobs_val) = self.current_cron_jobs {
+            if let Some(jobs_map) = jobs_val.as_object() {
+                if !jobs_map.is_empty() {
+                    let mut cron_text = String::from("Scheduled Cron Jobs:\n");
+                    for job in jobs_map.values() {
+                        let id = job["id"].as_str().unwrap_or("?");
+                        let schedule = job["schedule"].as_str().unwrap_or("?");
+                        let desc = job["description"]
+                            .as_str()
+                            .or_else(|| job["prompt"].as_str())
+                            .unwrap_or("?");
+                        cron_text.push_str(&format!("- {id}: [{schedule}] {desc}\n"));
+                    }
+                    todo_parts.push(cron_text);
+                }
+            }
+        }
+
+        let todos = if todo_parts.is_empty() {
             None
+        } else {
+            Some(todo_parts.join("\n"))
         };
 
         // Build skills list from invoked skills
@@ -3411,6 +3606,38 @@ impl AgentLoop {
                         count = todos.as_array().map_or(0, std::vec::Vec::len),
                         "Applied TodosUpdated modifier"
                     );
+                }
+                ContextModifier::StructuredTasksUpdated { tasks } => {
+                    self.current_structured_tasks = Some(tasks.clone());
+                    debug!("Applied StructuredTasksUpdated modifier");
+                }
+                ContextModifier::CronJobsUpdated { jobs } => {
+                    self.current_cron_jobs = Some(jobs.clone());
+                    debug!("Applied CronJobsUpdated modifier");
+                }
+                ContextModifier::TeamsUpdated { teams } => {
+                    // Teams state is tracked for potential future use
+                    debug!(
+                        count = teams.as_object().map_or(0, |m| m.len()),
+                        "Applied TeamsUpdated modifier"
+                    );
+                }
+                ContextModifier::RestoreDeferredMcpTools { names } => {
+                    // Restore deferred MCP tools into the active registry so
+                    // they become callable on subsequent turns.
+                    if let Some(registry) = Arc::get_mut(&mut self.tool_registry) {
+                        let restored = registry.restore_deferred_tools(names);
+                        debug!(
+                            count = restored.len(),
+                            tools = ?restored,
+                            "Restored deferred MCP tools"
+                        );
+                    } else {
+                        debug!(
+                            count = names.len(),
+                            "Cannot restore deferred MCP tools: registry has other references"
+                        );
+                    }
                 }
             }
         }

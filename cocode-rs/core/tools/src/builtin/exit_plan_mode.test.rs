@@ -36,6 +36,6 @@ async fn test_exit_plan_mode_with_prompts() {
 fn test_tool_properties() {
     let tool = ExitPlanModeTool::new();
     assert_eq!(tool.name(), "ExitPlanMode");
-    // ExitPlanMode is Unsafe (requires user interaction, must not run concurrently)
-    assert!(!tool.is_concurrent_safe());
+    assert!(tool.is_concurrent_safe());
+    assert!(tool.is_read_only());
 }

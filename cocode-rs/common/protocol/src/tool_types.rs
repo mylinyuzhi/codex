@@ -213,6 +213,27 @@ pub enum ContextModifier {
         /// The full task list (as the raw JSON array from TodoWrite input).
         todos: Value,
     },
+    /// Structured task state was updated (TaskCreate/TaskUpdate).
+    StructuredTasksUpdated {
+        /// The full structured tasks map (id → task object).
+        tasks: Value,
+    },
+    /// Cron job state was updated (CronCreate/CronDelete).
+    CronJobsUpdated {
+        /// The full cron jobs map (id → job object).
+        jobs: Value,
+    },
+    /// Team state was updated (TeamCreate/TeamDelete).
+    TeamsUpdated {
+        /// The full teams map (name → team object).
+        teams: Value,
+    },
+    /// Signal that deferred MCP tools should be restored into the registry.
+    /// Contains the qualified names of tools to restore.
+    RestoreDeferredMcpTools {
+        /// Qualified names of MCP tools to restore (e.g., `mcp__server__tool`).
+        names: Vec<String>,
+    },
 }
 
 impl ContextModifier {

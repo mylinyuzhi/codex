@@ -119,6 +119,10 @@ pub enum AttachmentType {
     /// Consumed once and injected as steering to address each message.
     QueuedCommands,
 
+    // === Cron state ===
+    /// Cron job state reminders (survives compaction).
+    CronReminders,
+
     // === Phase 2 (future) ===
     /// Tool result injection.
     ToolResult,
@@ -171,6 +175,7 @@ impl AttachmentType {
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
             | AttachmentType::QueuedCommands
+            | AttachmentType::CronReminders
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::TokenUsage
@@ -215,6 +220,7 @@ impl AttachmentType {
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
             | AttachmentType::QueuedCommands
+            | AttachmentType::CronReminders
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::SessionMemoryContent
@@ -257,6 +263,7 @@ impl AttachmentType {
             AttachmentType::HookBlockingError => "hook_blocking_error",
             AttachmentType::HookAdditionalContext => "hook_additional_context",
             AttachmentType::QueuedCommands => "queued_commands",
+            AttachmentType::CronReminders => "cron_reminders",
             AttachmentType::ToolResult => "tool_result",
             AttachmentType::AsyncAgentStatus => "async_agent_status",
             AttachmentType::SessionMemoryContent => "session_memory",

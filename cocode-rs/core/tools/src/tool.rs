@@ -99,6 +99,14 @@ pub trait Tool: Send + Sync {
         true
     }
 
+    /// Whether this tool is an edit/write tool (for AcceptEdits mode).
+    ///
+    /// Used for `PermissionMode::AcceptEdits` which auto-approves edit tools.
+    /// Default: `false`.
+    fn is_edit_tool(&self) -> bool {
+        false
+    }
+
     /// Maximum result size in characters before truncation.
     ///
     /// Default: 30,000 chars (matches Claude Code default).

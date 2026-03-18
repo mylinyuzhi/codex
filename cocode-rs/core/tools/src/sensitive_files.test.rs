@@ -80,6 +80,30 @@ fn test_service_account() {
 }
 
 #[test]
+fn test_keystore_files() {
+    assert!(is_sensitive_file(Path::new("release.keystore")));
+    assert!(is_sensitive_file(Path::new("debug.jks")));
+    assert!(is_sensitive_file(Path::new("cert.p12")));
+    assert!(is_sensitive_file(Path::new("cert.pfx")));
+}
+
+#[test]
+fn test_ssh_key_name_suffixes() {
+    assert!(is_sensitive_file(Path::new("deploy_rsa")));
+    assert!(is_sensitive_file(Path::new("mykey_dsa")));
+    assert!(is_sensitive_file(Path::new("server_ecdsa")));
+    assert!(is_sensitive_file(Path::new("deploy_ed25519")));
+    // Regular files ending in these shouldn't match accidentally
+    assert!(!is_sensitive_file(Path::new("config_extra")));
+}
+
+#[test]
+fn test_known_hosts() {
+    assert!(is_sensitive_file(Path::new(".ssh/known_hosts")));
+    assert!(is_sensitive_file(Path::new("known_hosts")));
+}
+
+#[test]
 fn test_normal_files_not_sensitive() {
     assert!(!is_sensitive_file(Path::new("src/main.rs")));
     assert!(!is_sensitive_file(Path::new("Cargo.toml")));

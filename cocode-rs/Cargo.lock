@@ -1577,12 +1577,15 @@ name = "cocode-tools"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "chrono",
  "cocode-apply-patch",
  "cocode-config",
  "cocode-error",
  "cocode-file-backup",
  "cocode-file-encoding",
  "cocode-file-ignore",
+ "cocode-git",
  "cocode-hooks",
  "cocode-lsp",
  "cocode-mcp-types",
@@ -1594,6 +1597,7 @@ dependencies = [
  "cocode-shell",
  "cocode-shell-parser",
  "cocode-skill",
+ "futures",
  "globset",
  "grep-regex",
  "grep-searcher",
@@ -1613,6 +1617,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
