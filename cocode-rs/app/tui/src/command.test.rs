@@ -5,7 +5,7 @@ use cocode_protocol::model::ModelSpec;
 #[test]
 fn test_user_command_display() {
     let cmd = UserCommand::SubmitInput {
-        content: vec![ContentBlock::text("Hello, world!")],
+        content: vec![UserContentPart::text("Hello, world!")],
         display_text: "Hello, world!".to_string(),
     };
     assert!(cmd.to_string().contains("SubmitInput"));
@@ -42,7 +42,7 @@ fn test_user_command_display() {
 fn test_long_message_truncation() {
     let long_message = "This is a very long message that should be truncated in display";
     let cmd = UserCommand::SubmitInput {
-        content: vec![ContentBlock::text(long_message)],
+        content: vec![UserContentPart::text(long_message)],
         display_text: long_message.to_string(),
     };
     let display = cmd.to_string();
@@ -53,7 +53,7 @@ fn test_long_message_truncation() {
 #[test]
 fn test_with_correlation_id() {
     let cmd = UserCommand::SubmitInput {
-        content: vec![ContentBlock::text("Hello")],
+        content: vec![UserContentPart::text("Hello")],
         display_text: "Hello".to_string(),
     };
     let (id1, cmd1) = cmd.with_correlation_id();
@@ -79,7 +79,7 @@ fn test_triggers_turn() {
     // Commands that trigger turns
     assert!(
         UserCommand::SubmitInput {
-            content: vec![ContentBlock::text("test")],
+            content: vec![UserContentPart::text("test")],
             display_text: "test".to_string()
         }
         .triggers_turn()

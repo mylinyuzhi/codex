@@ -1,10 +1,11 @@
 //! Retry context for agent loop with exponential backoff.
 //!
-//! This module provides [`RetryContext`] which extends hyper-sdk's retry
-//! capabilities with exponential backoff and retry decisions.
+//! This module provides [`RetryContext`] with exponential backoff and
+//! retry decisions for the vercel-ai based provider pipeline.
 
 use crate::error::ApiError;
 use cocode_error::ErrorExt;
+use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::Duration;
@@ -24,6 +25,11 @@ pub struct RetryConfig {
     /// Backoff multiplier.
     #[serde(default = "default_multiplier")]
     pub multiplier: f64,
+    /// Jitter fraction applied to delays (0.0–1.0). A value of 0.2 means
+    /// ±20% random variation, preventing thundering-herd retries when
+    /// concurrent requests (main + subagents) hit the same rate limit.
+    #[serde(default = "default_jitter")]
+    pub jitter: f64,
 }
 
 fn default_max_retries() -> i32 {
@@ -38,6 +44,9 @@ fn default_max_delay() -> i64 {
 fn default_multiplier() -> f64 {
     2.0
 }
+fn default_jitter() -> f64 {
+    0.2
+}
 
 impl Default for RetryConfig {
     fn default() -> Self {
@@ -46,6 +55,7 @@ impl Default for RetryConfig {
             base_delay_ms: default_base_delay(),
             max_delay_ms: default_max_delay(),
             multiplier: default_multiplier(),
+            jitter: default_jitter(),
         }
     }
 }
@@ -57,6 +67,12 @@ impl RetryConfig {
             max_retries: 0,
             ..Default::default()
         }
+    }
+
+    /// Set jitter fraction (0.0–1.0).
+    pub fn with_jitter(mut self, jitter: f64) -> Self {
+        self.jitter = jitter.clamp(0.0, 1.0);
+        self
     }
 
     /// Set maximum retry attempts.
@@ -144,6 +160,9 @@ impl RetryContext {
     }
 
     /// Calculate the delay before the next retry.
+    ///
+    /// Applies exponential backoff with random jitter (±`jitter` fraction)
+    /// to prevent thundering-herd retries from concurrent requests.
     pub fn calculate_delay(&self, error: &ApiError) -> Duration {
         // Honor retry-after hint if available
         if let Some(delay) = error.retry_after() {
@@ -153,7 +172,16 @@ impl RetryContext {
         // Exponential backoff
         let base = self.config.base_delay_ms as f64;
         let delay_ms = base * self.config.multiplier.powi(self.current_attempt - 1);
-        let delay_ms = delay_ms.min(self.config.max_delay_ms as f64) as i64;
+        let delay_ms = delay_ms.min(self.config.max_delay_ms as f64);
+
+        // Apply jitter: delay * (1.0 ± jitter)
+        let delay_ms = if self.config.jitter > 0.0 {
+            let jitter = self.config.jitter;
+            let factor = 1.0 + rand::rng().random_range(-jitter..jitter);
+            (delay_ms * factor).max(0.0)
+        } else {
+            delay_ms
+        };
 
         Duration::from_millis(delay_ms as u64)
     }

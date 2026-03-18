@@ -4,12 +4,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cocode_api::ApiClient;
+use cocode_api::AssistantContentPart;
 use cocode_api::CollectedResponse;
+use cocode_api::FinishReason;
+use cocode_api::LanguageModelMessage;
+use cocode_api::LanguageModelTool;
 use cocode_api::ModelHub;
 use cocode_api::QueryResultType;
 use cocode_api::RequestBuilder;
 use cocode_api::StreamOptions;
+use cocode_api::TextPart;
+use cocode_api::ToolCall;
+use cocode_api::ToolCallPart;
+use cocode_api::UnifiedFinishReason;
 use cocode_context::ConversationContext;
+use cocode_error::ErrorExt;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
 use cocode_message::MessageHistory;
@@ -52,13 +61,9 @@ use cocode_tools::ModelCallInput;
 use cocode_tools::ModelCallResult;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::StreamingToolExecutor;
+use cocode_tools::ToolDefinition;
 use cocode_tools::ToolExecutionResult;
 use cocode_tools::ToolRegistry;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::FinishReason;
-use hyper_sdk::Message;
-use hyper_sdk::ToolCall;
-use hyper_sdk::ToolDefinition;
 use std::sync::Mutex;
 
 use snafu::ResultExt;
@@ -1434,7 +1439,7 @@ impl AgentLoop {
                         .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
                         .map_err(cocode_error::boxed_err)?;
                     let response = model
-                        .generate_object(input.request)
+                        .do_generate(input.request)
                         .await
                         .map_err(|e| cocode_error::boxed(e, cocode_error::StatusCode::External))?;
                     Ok(ModelCallResult { response })
@@ -1547,7 +1552,7 @@ impl AgentLoop {
             .content
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
+                AssistantContentPart::Text(TextPart { text, .. }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -1556,7 +1561,7 @@ impl AgentLoop {
         let has_tool_calls = collected
             .content
             .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+            .any(|b| matches!(b, AssistantContentPart::ToolCall(_)));
 
         // Add assistant message to history
         if let Some(turn) = self.message_history.current_turn_mut() {
@@ -1574,9 +1579,12 @@ impl AgentLoop {
                 .content
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::ToolUse {
-                        id, name, input, ..
-                    } => Some(hyper_sdk::ToolCall::new(id, name, input.clone())),
+                    AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id,
+                        tool_name,
+                        input,
+                        ..
+                    }) => Some(ToolCall::new(tool_call_id, tool_name, input.clone())),
                     _ => None,
                 })
                 .collect();
@@ -1608,7 +1616,7 @@ impl AgentLoop {
             // ── Handle plan mode transitions ──
             // Check if EnterPlanMode or ExitPlanMode was called
             for tc in &tool_calls {
-                let tc_name = tc.name.as_str();
+                let tc_name = tc.tool_name.as_str();
                 match tc_name {
                     name if name == cocode_protocol::ToolName::EnterPlanMode.as_str() => {
                         // Skip if already in plan mode (prevents pre_plan_mode corruption)
@@ -1619,7 +1627,7 @@ impl AgentLoop {
                             continue;
                         }
                         // Find the result for this tool call to extract plan file path
-                        if let Some(result) = results.iter().find(|r| r.call_id == tc.id)
+                        if let Some(result) = results.iter().find(|r| r.call_id == tc.tool_call_id)
                             && let Ok(output) = &result.result
                         {
                             if let ToolResultContent::Structured(json) = &output.content {
@@ -1663,7 +1671,7 @@ impl AgentLoop {
                         // Extract allowedPrompts from the tool result's structured JSON
                         let allowed_prompts = results
                             .iter()
-                            .find(|r| r.call_id == tc.id)
+                            .find(|r| r.call_id == tc.tool_call_id)
                             .and_then(|r| r.result.as_ref().ok())
                             .and_then(|output| match &output.content {
                                 ToolResultContent::Structured(json) => {
@@ -1819,8 +1827,8 @@ impl AgentLoop {
         }
 
         // ── STEP 18: Recurse or return ──
-        match collected.finish_reason {
-            FinishReason::Stop => {
+        match collected.finish_reason.unified {
+            UnifiedFinishReason::Stop => {
                 // Turn completed with stop - set status to Idle
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1831,13 +1839,13 @@ impl AgentLoop {
                     collected.content,
                 ))
             }
-            FinishReason::ToolCalls => {
+            UnifiedFinishReason::ToolCalls => {
                 // Tool call turns don't have fresh user input - only tool results
                 self.current_turn_has_user_input = false;
                 // Recursive call for next turn (boxed to avoid infinite future size)
                 Box::pin(self.core_message_loop(query_tracking, auto_compact_tracking)).await
             }
-            FinishReason::MaxTokens => {
+            UnifiedFinishReason::Length => {
                 // Output token recovery already handled in step 9
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1902,7 +1910,7 @@ impl AgentLoop {
         // Any tool call outside this set is rejected as NotFound, preventing
         // hallucinated calls to apply_patch (when type=None/Shell) or tools
         // outside experimental_supported_tools.
-        executor.set_allowed_tool_names(tools.iter().map(|d| d.name.clone()).collect());
+        executor.set_allowed_tool_names(tools.iter().map(|d| d.name().to_string()).collect());
 
         // Use RequestBuilder to assemble the final request with context parameters
         let mut builder = RequestBuilder::new(ctx).messages(messages);
@@ -1910,7 +1918,7 @@ impl AgentLoop {
             builder = builder.tools(tools);
         }
         if let Some(max_tokens) = self.config.max_tokens {
-            builder = builder.max_tokens(max_tokens);
+            builder = builder.max_tokens(max_tokens as u64);
         }
 
         let request = builder.build();
@@ -1933,9 +1941,9 @@ impl AgentLoop {
 
         let mut stream = stream_result.context(agent_loop_error::ApiStreamSnafu)?;
 
-        let mut all_content: Vec<ContentBlock> = Vec::new();
+        let mut all_content: Vec<AssistantContentPart> = Vec::new();
         let mut final_usage: Option<TokenUsage> = None;
-        let mut final_finish_reason = FinishReason::Stop;
+        let mut final_finish_reason = FinishReason::stop();
 
         // Stall detection configuration
         let stall_timeout = self.config.stall_detection.stall_timeout;
@@ -2049,26 +2057,32 @@ impl AgentLoop {
                     // Emit text deltas for UI and process tool uses DURING streaming
                     for block in &result.content {
                         match block {
-                            ContentBlock::Text { text } if !text.is_empty() => {
+                            AssistantContentPart::Text(TextPart { text, .. })
+                                if !text.is_empty() =>
+                            {
                                 self.emit(LoopEvent::TextDelta {
                                     turn_id: turn_id.to_string(),
                                     delta: text.clone(),
                                 })
                                 .await;
                             }
-                            ContentBlock::Thinking { content, .. } if !content.is_empty() => {
+                            AssistantContentPart::Reasoning(rp) if !rp.text.is_empty() => {
                                 self.emit(LoopEvent::ThinkingDelta {
                                     turn_id: turn_id.to_string(),
-                                    delta: content.clone(),
+                                    delta: rp.text.clone(),
                                 })
                                 .await;
                             }
-                            ContentBlock::ToolUse {
-                                id, name, input, ..
-                            } => {
+                            AssistantContentPart::ToolCall(ToolCallPart {
+                                tool_call_id,
+                                tool_name,
+                                input,
+                                ..
+                            }) => {
                                 // Start tool execution DURING streaming!
                                 // Safe tools begin immediately; unsafe tools are queued.
-                                let tool_call = ToolCall::new(id, name, input.clone());
+                                let tool_call =
+                                    ToolCall::new(tool_call_id, tool_name, input.clone());
                                 executor.on_tool_complete(tool_call).await;
                             }
                             _ => {}
@@ -2094,8 +2108,16 @@ impl AgentLoop {
                 QueryResultType::Error => {
                     let msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
 
-                    // Check for overload errors and handle fallback
-                    if (msg.contains("overload") || msg.contains("rate_limit"))
+                    // P26: Use structured error classification instead of raw string matching.
+                    // The provider's is_retryable hint (from StreamError) is used as a fast
+                    // path; otherwise fall back to heuristic message classification.
+                    let classified = cocode_api::error::classify_by_message(&msg);
+                    let is_retryable = result
+                        .is_retryable
+                        .unwrap_or_else(|| classified.is_retryable());
+
+                    // Attempt model fallback for retryable overload/rate-limit errors
+                    if is_retryable
                         && self.fallback_state.should_fallback(&self.fallback_config)
                         && let Some(fallback_model) =
                             self.fallback_state.next_model(&self.fallback_config)
@@ -2142,7 +2164,7 @@ impl AgentLoop {
         &self,
         injected_messages: &[InjectedMessage],
         model_info: &cocode_protocol::ModelInfo,
-    ) -> (Vec<Message>, Vec<ToolDefinition>) {
+    ) -> (Vec<LanguageModelMessage>, Vec<LanguageModelTool>) {
         // Build system prompt (use custom prompt if set, otherwise generate from builder)
         let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
             custom.clone()
@@ -2154,7 +2176,7 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
 
         // Build messages with system, reminders, and conversation
-        let mut all_messages = vec![Message::system(&system_prompt)];
+        let mut all_messages = vec![LanguageModelMessage::system(&system_prompt)];
 
         // Inject system reminders as individual messages before the conversation
         // This supports both text reminders and multi-message tool_use/tool_result pairs
@@ -2173,50 +2195,62 @@ impl AgentLoop {
     fn select_tools_for_model(
         &self,
         model_info: &cocode_protocol::ModelInfo,
-    ) -> Vec<ToolDefinition> {
+    ) -> Vec<LanguageModelTool> {
         select_tools_for_model(
             self.tool_registry.definitions_filtered(&self.features),
             model_info,
         )
     }
 
-    /// Convert an injected message to an API Message.
-    fn convert_injected_message(&self, msg: &InjectedMessage) -> Message {
+    /// Convert an injected message to an API message.
+    fn convert_injected_message(&self, msg: &InjectedMessage) -> LanguageModelMessage {
         match msg {
             InjectedMessage::UserText { content, .. } => {
                 // Text reminders become simple user messages
-                Message::user(content.as_str())
+                LanguageModelMessage::user_text(content.as_str())
             }
             InjectedMessage::AssistantBlocks { blocks, .. } => {
                 // Assistant blocks (typically tool_use) become assistant messages
-                let content_blocks: Vec<ContentBlock> =
-                    blocks.iter().map(Self::convert_injected_block).collect();
-                Message::new(hyper_sdk::Role::Assistant, content_blocks)
+                let content_parts: Vec<AssistantContentPart> = blocks
+                    .iter()
+                    .map(Self::convert_injected_block_to_assistant)
+                    .collect();
+                LanguageModelMessage::assistant(content_parts)
             }
             InjectedMessage::UserBlocks { blocks, .. } => {
                 // User blocks (typically tool_result) become user messages
-                let content_blocks: Vec<ContentBlock> =
-                    blocks.iter().map(Self::convert_injected_block).collect();
-                Message::new(hyper_sdk::Role::User, content_blocks)
+                let content_parts: Vec<cocode_api::UserContentPart> = blocks
+                    .iter()
+                    .map(|block| match block {
+                        InjectedBlock::Text(text) => {
+                            cocode_api::UserContentPart::text(text.as_str())
+                        }
+                        InjectedBlock::ToolUse { .. } | InjectedBlock::ToolResult { .. } => {
+                            // Tool-related blocks in user messages are serialized as text
+                            cocode_api::UserContentPart::text(format!("{block:?}"))
+                        }
+                    })
+                    .collect();
+                LanguageModelMessage::user(content_parts)
             }
         }
     }
 
-    /// Convert an injected block to a hyper_sdk ContentBlock.
-    fn convert_injected_block(block: &InjectedBlock) -> ContentBlock {
+    /// Convert an injected block to an AssistantContentPart.
+    fn convert_injected_block_to_assistant(block: &InjectedBlock) -> AssistantContentPart {
         match block {
-            InjectedBlock::Text(text) => ContentBlock::text(text.as_str()),
+            InjectedBlock::Text(text) => AssistantContentPart::text(text.as_str()),
             InjectedBlock::ToolUse { id, name, input } => {
-                ContentBlock::tool_use(id.as_str(), name.as_str(), input.clone())
+                AssistantContentPart::tool_call(id.as_str(), name.as_str(), input.clone())
             }
             InjectedBlock::ToolResult {
                 tool_use_id,
                 content,
-            } => ContentBlock::tool_result(
+            } => AssistantContentPart::ToolResult(cocode_api::ToolResultPart::new(
                 tool_use_id.as_str(),
-                hyper_sdk::ToolResultContent::text(content.as_str()),
-                false,
-            ),
+                "",
+                cocode_api::ToolResultContent::text(content.as_str()),
+            )),
         }
     }
 
@@ -2540,8 +2574,10 @@ impl AgentLoop {
             let last_error: String;
 
             // Build request for each attempt
-            let summary_messages =
-                vec![Message::system(&system_prompt), Message::user(&user_prompt)];
+            let summary_messages = vec![
+                LanguageModelMessage::system(&system_prompt),
+                LanguageModelMessage::user_text(&user_prompt),
+            ];
 
             // Get compact model and build request using ModelHub
             // Use the real session_id from query_tracking
@@ -2554,7 +2590,7 @@ impl AgentLoop {
             // Use RequestBuilder for the summary request
             let summary_request = RequestBuilder::new(ctx)
                 .messages(summary_messages.clone())
-                .max_tokens(max_output_tokens)
+                .max_tokens(max_output_tokens as u64)
                 .build();
 
             match self
@@ -2568,7 +2604,9 @@ impl AgentLoop {
                         .content
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
+                            AssistantContentPart::Text(TextPart { text, .. }) => {
+                                Some(text.as_str())
+                            }
                             _ => None,
                         })
                         .collect();
@@ -3294,17 +3332,13 @@ impl AgentLoop {
         let user_msg = if all_images.is_empty() {
             TrackedMessage::user(&tool_results_text, &next_turn_id)
         } else {
-            let mut content_blocks = vec![ContentBlock::text(&tool_results_text)];
+            let mut content_parts = vec![cocode_api::UserContentPart::text(&tool_results_text)];
             for img in &all_images {
-                content_blocks.push(ContentBlock::Image {
-                    source: hyper_sdk::ImageSource::Base64 {
-                        data: img.data.clone(),
-                        media_type: img.media_type.clone(),
-                    },
-                    detail: None,
-                });
+                content_parts.push(cocode_api::UserContentPart::File(
+                    cocode_api::FilePart::image_base64(&img.data, &img.media_type),
+                ));
             }
-            let message = Message::new(hyper_sdk::Role::User, content_blocks);
+            let message = LanguageModelMessage::user(content_parts);
             TrackedMessage::new(message, &next_turn_id, cocode_message::MessageSource::User)
         };
         let turn = Turn::new(self.turn_number + 1, user_msg);
@@ -3476,7 +3510,7 @@ impl AgentLoop {
 fn select_tools_for_model(
     mut defs: Vec<ToolDefinition>,
     model_info: &cocode_protocol::ModelInfo,
-) -> Vec<ToolDefinition> {
+) -> Vec<LanguageModelTool> {
     use cocode_protocol::ApplyPatchToolType;
     use cocode_protocol::ConfigShellToolType;
     use cocode_tools::builtin::ApplyPatchTool;
@@ -3531,7 +3565,8 @@ fn select_tools_for_model(
         defs.retain(|d| supported.contains(&d.name));
     }
 
-    defs
+    // Wrap ToolDefinition (LanguageModelFunctionTool) into LanguageModelTool::Function
+    defs.into_iter().map(LanguageModelTool::function).collect()
 }
 
 #[cfg(test)]

@@ -8,11 +8,11 @@
 //! MCP tools are registered with the naming convention `mcp__<server>__<tool>` to avoid
 //! name collisions between different MCP servers and built-in tools.
 
+use crate::ToolDefinition;
 use crate::mcp_tool::McpToolWrapper;
 use crate::tool::Tool;
 use cocode_mcp_types::Tool as McpToolDef;
 use cocode_rmcp_client::RmcpClient;
-use hyper_sdk::ToolDefinition;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -154,6 +154,10 @@ impl ToolRegistry {
     }
 
     /// Get a tool by name.
+    ///
+    /// Lookup order: exact name → alias → case-insensitive fallback.
+    /// The case-insensitive fallback handles models (e.g. OpenAI) that sometimes
+    /// return wrong-case tool names like `Bash` instead of `bash`.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         // Check direct name first
         if let Some(tool) = self.tools.get(name) {
@@ -163,6 +167,19 @@ impl ToolRegistry {
         // Check aliases
         if let Some(real_name) = self.aliases.get(name) {
             return self.tools.get(real_name).cloned();
+        }
+
+        // Case-insensitive fallback
+        let lower = name.to_ascii_lowercase();
+        for (key, tool) in &self.tools {
+            if key.to_ascii_lowercase() == lower {
+                return Some(tool.clone());
+            }
+        }
+        for (alias, real_name) in &self.aliases {
+            if alias.to_ascii_lowercase() == lower {
+                return self.tools.get(real_name).cloned();
+            }
         }
 
         None
@@ -207,7 +224,7 @@ impl ToolRegistry {
 
         // MCP tools — always included (no feature gate)
         for mcp_tool in self.mcp_tools.values() {
-            definitions.push(ToolDefinition::full(
+            definitions.push(ToolDefinition::with_description(
                 mcp_tool.qualified_name(),
                 mcp_tool
                     .description
@@ -231,7 +248,7 @@ impl ToolRegistry {
 
         // MCP tools
         for mcp_tool in self.mcp_tools.values() {
-            definitions.push(ToolDefinition::full(
+            definitions.push(ToolDefinition::with_description(
                 mcp_tool.qualified_name(),
                 mcp_tool
                     .description
@@ -253,7 +270,7 @@ impl ToolRegistry {
                     Some(tool.to_definition())
                 } else {
                     self.get_mcp(name).map(|mcp| {
-                        ToolDefinition::full(
+                        ToolDefinition::with_description(
                             mcp.qualified_name(),
                             mcp.description.clone().unwrap_or_default(),
                             mcp.input_schema.clone(),

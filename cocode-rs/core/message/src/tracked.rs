@@ -1,14 +1,16 @@
 //! Tracked messages with metadata for turn tracking.
 //!
-//! This module provides [`TrackedMessage`] which wraps hyper-sdk's [`Message`]
-//! with additional metadata for tracking in the agent loop.
+//! This module provides [`TrackedMessage`] which wraps vercel-ai-provider's
+//! [`LanguageModelMessage`] with additional metadata for tracking in the agent loop.
 
 use chrono::DateTime;
 use chrono::Utc;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::Message;
-use hyper_sdk::Role;
-use hyper_sdk::ToolResultContent;
+use cocode_api::AssistantContentPart;
+use cocode_api::LanguageModelMessage;
+use cocode_api::ToolContentPart;
+use cocode_api::ToolResultContent;
+use cocode_api::ToolResultPart;
+use cocode_api::UserContentPart;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
@@ -76,12 +78,13 @@ impl MessageSource {
 
 /// A message with tracking metadata.
 ///
-/// This wraps hyper-sdk's [`Message`] with additional information needed
-/// for the agent loop, including unique IDs, turn tracking, and timestamps.
+/// This wraps vercel-ai-provider's [`LanguageModelMessage`] with additional
+/// information needed for the agent loop, including unique IDs, turn tracking,
+/// and timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedMessage {
     /// The underlying message.
-    pub inner: Message,
+    pub inner: LanguageModelMessage,
     /// Unique identifier for this message.
     pub uuid: String,
     /// Turn this message belongs to.
@@ -104,7 +107,11 @@ pub struct TrackedMessage {
 
 impl TrackedMessage {
     /// Create a new tracked message.
-    pub fn new(inner: Message, turn_id: impl Into<String>, source: MessageSource) -> Self {
+    pub fn new(
+        inner: LanguageModelMessage,
+        turn_id: impl Into<String>,
+        source: MessageSource,
+    ) -> Self {
         Self {
             inner,
             uuid: Uuid::new_v4().to_string(),
@@ -117,7 +124,11 @@ impl TrackedMessage {
     }
 
     /// Create a new meta message (hidden from user, visible to model).
-    pub fn new_meta(inner: Message, turn_id: impl Into<String>, source: MessageSource) -> Self {
+    pub fn new_meta(
+        inner: LanguageModelMessage,
+        turn_id: impl Into<String>,
+        source: MessageSource,
+    ) -> Self {
         Self {
             inner,
             uuid: Uuid::new_v4().to_string(),
@@ -131,7 +142,11 @@ impl TrackedMessage {
 
     /// Create a user message.
     pub fn user(content: impl Into<String>, turn_id: impl Into<String>) -> Self {
-        Self::new(Message::user(content), turn_id, MessageSource::User)
+        Self::new(
+            LanguageModelMessage::user_text(content),
+            turn_id,
+            MessageSource::User,
+        )
     }
 
     /// Create an assistant message.
@@ -141,7 +156,7 @@ impl TrackedMessage {
         request_id: Option<String>,
     ) -> Self {
         Self::new(
-            Message::assistant(content),
+            LanguageModelMessage::assistant_text(content),
             turn_id,
             MessageSource::assistant(request_id),
         )
@@ -149,12 +164,12 @@ impl TrackedMessage {
 
     /// Create an assistant message with content blocks.
     pub fn assistant_with_content(
-        content: Vec<ContentBlock>,
+        content: Vec<AssistantContentPart>,
         turn_id: impl Into<String>,
         request_id: Option<String>,
     ) -> Self {
         Self::new(
-            Message::new(Role::Assistant, content),
+            LanguageModelMessage::assistant(content),
             turn_id,
             MessageSource::assistant(request_id),
         )
@@ -162,7 +177,11 @@ impl TrackedMessage {
 
     /// Create a system message.
     pub fn system(content: impl Into<String>, turn_id: impl Into<String>) -> Self {
-        Self::new(Message::system(content), turn_id, MessageSource::System)
+        Self::new(
+            LanguageModelMessage::system(content),
+            turn_id,
+            MessageSource::System,
+        )
     }
 
     /// Create a tool result message.
@@ -173,7 +192,11 @@ impl TrackedMessage {
     ) -> Self {
         let call_id = tool_use_id.into();
         Self::new(
-            Message::tool_result(&call_id, ToolResultContent::Text(content.into())),
+            LanguageModelMessage::tool(vec![ToolContentPart::ToolResult(ToolResultPart::new(
+                &call_id,
+                "", // tool_name not always known here
+                ToolResultContent::text(content),
+            ))]),
             turn_id,
             MessageSource::tool(&call_id),
         )
@@ -187,7 +210,14 @@ impl TrackedMessage {
     ) -> Self {
         let call_id = tool_use_id.into();
         Self::new(
-            Message::tool_error(&call_id, error),
+            LanguageModelMessage::tool(vec![ToolContentPart::ToolResult(
+                ToolResultPart::new(
+                    &call_id,
+                    "", // tool_name not always known here
+                    ToolResultContent::error_text(error),
+                )
+                .with_error(),
+            )]),
             turn_id,
             MessageSource::tool(&call_id),
         )
@@ -203,7 +233,7 @@ impl TrackedMessage {
         turn_id: impl Into<String>,
     ) -> Self {
         Self::new_meta(
-            Message::user(content),
+            LanguageModelMessage::user_text(content),
             turn_id,
             MessageSource::system_reminder(reminder_type),
         )
@@ -219,14 +249,40 @@ impl TrackedMessage {
         self.is_meta = is_meta;
     }
 
-    /// Get the message role.
-    pub fn role(&self) -> Role {
-        self.inner.role
+    /// Check if this message is a user message.
+    pub fn is_user(&self) -> bool {
+        self.inner.is_user()
     }
 
-    /// Get the message content blocks.
-    pub fn content(&self) -> &[ContentBlock] {
-        &self.inner.content
+    /// Check if this message is an assistant message.
+    pub fn is_assistant(&self) -> bool {
+        self.inner.is_assistant()
+    }
+
+    /// Check if this message is a system message.
+    pub fn is_system(&self) -> bool {
+        self.inner.is_system()
+    }
+
+    /// Check if this message is a tool message.
+    pub fn is_tool(&self) -> bool {
+        self.inner.is_tool()
+    }
+
+    /// Get the message content as assistant content parts (if assistant message).
+    pub fn assistant_content(&self) -> &[AssistantContentPart] {
+        match &self.inner {
+            LanguageModelMessage::Assistant { content, .. } => content,
+            _ => &[],
+        }
+    }
+
+    /// Get the message content as user content parts (if user message).
+    pub fn user_content(&self) -> &[UserContentPart] {
+        match &self.inner {
+            LanguageModelMessage::User { content, .. } => content,
+            _ => &[],
+        }
     }
 
     /// Get text content from the message.
@@ -240,7 +296,7 @@ impl TrackedMessage {
     }
 
     /// Get tool calls from this message.
-    pub fn tool_calls(&self) -> Vec<hyper_sdk::ToolCall> {
+    pub fn tool_calls(&self) -> Vec<cocode_api::ToolCall> {
         crate::type_guards::get_tool_calls(&self.inner)
     }
 
@@ -255,23 +311,23 @@ impl TrackedMessage {
     }
 
     /// Convert to the underlying message for API requests.
-    pub fn into_message(self) -> Message {
+    pub fn into_message(self) -> LanguageModelMessage {
         self.inner
     }
 
     /// Get a reference to the underlying message.
-    pub fn as_message(&self) -> &Message {
+    pub fn as_message(&self) -> &LanguageModelMessage {
         &self.inner
     }
 }
 
-impl AsRef<Message> for TrackedMessage {
-    fn as_ref(&self) -> &Message {
+impl AsRef<LanguageModelMessage> for TrackedMessage {
+    fn as_ref(&self) -> &LanguageModelMessage {
         &self.inner
     }
 }
 
-impl From<TrackedMessage> for Message {
+impl From<TrackedMessage> for LanguageModelMessage {
     fn from(tracked: TrackedMessage) -> Self {
         tracked.inner
     }

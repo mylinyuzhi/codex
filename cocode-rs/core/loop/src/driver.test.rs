@@ -57,6 +57,14 @@ mod select_tools_for_model_tests {
         ]
     }
 
+    /// Helper to unwrap a LanguageModelTool::Function variant.
+    fn unwrap_function(tool: &LanguageModelTool) -> &ToolDefinition {
+        match tool {
+            LanguageModelTool::Function(f) => f,
+            other => panic!("expected Function variant, got {other:?}"),
+        }
+    }
+
     #[test]
     fn function_variant_replaces_registry_default() {
         let model_info = ModelInfo {
@@ -64,9 +72,10 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-        assert_eq!(ap.parameters["type"], "object");
-        assert!(ap.parameters["properties"]["input"].is_object());
+        let ap = result.iter().find(|d| d.name() == "apply_patch").unwrap();
+        let ap = unwrap_function(ap);
+        assert_eq!(ap.input_schema["type"], "object");
+        assert!(ap.input_schema["properties"]["input"].is_object());
     }
 
     #[test]
@@ -76,9 +85,13 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        let ap = result.iter().find(|d| d.name == "apply_patch").unwrap();
-        assert!(ap.custom_format.is_some());
-        assert_eq!(ap.custom_format.as_ref().unwrap()["type"], "grammar");
+        let ap = result.iter().find(|d| d.name() == "apply_patch").unwrap();
+        let ap = unwrap_function(ap);
+        assert!(ap.provider_options.is_some());
+        let opts = ap.provider_options.as_ref().unwrap();
+        let openai = opts.get("openai").expect("openai provider options");
+        let custom_format = openai.get("custom_format").expect("custom_format key");
+        assert_eq!(custom_format["type"], "grammar");
     }
 
     #[test]
@@ -88,7 +101,7 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        assert!(result.iter().all(|d| d.name != "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "apply_patch"));
         assert_eq!(result.len(), 2); // Read, Edit
     }
 
@@ -99,7 +112,7 @@ mod select_tools_for_model_tests {
             ..Default::default()
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
-        assert!(result.iter().all(|d| d.name != "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "apply_patch"));
         assert_eq!(result.len(), 2);
     }
 
@@ -112,9 +125,9 @@ mod select_tools_for_model_tests {
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|d| d.name == "Read"));
-        assert!(result.iter().any(|d| d.name == "apply_patch"));
-        assert!(result.iter().all(|d| d.name != "Edit"));
+        assert!(result.iter().any(|d| d.name() == "Read"));
+        assert!(result.iter().any(|d| d.name() == "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "Edit"));
     }
 
     #[test]
@@ -138,9 +151,9 @@ mod select_tools_for_model_tests {
         };
         let result = select_tools_for_model(sample_defs(), &model_info);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|d| d.name == "Read"));
-        assert!(result.iter().any(|d| d.name == "apply_patch"));
-        assert!(result.iter().all(|d| d.name != "Edit"));
+        assert!(result.iter().any(|d| d.name() == "Read"));
+        assert!(result.iter().any(|d| d.name() == "apply_patch"));
+        assert!(result.iter().all(|d| d.name() != "Edit"));
     }
 
     #[test]
@@ -169,11 +182,14 @@ mod select_tools_for_model_tests {
     fn static_definitions_match_expected() {
         let func_def = ApplyPatchTool::function_definition();
         assert_eq!(func_def.name, "apply_patch");
-        assert_eq!(func_def.parameters["type"], "object");
+        assert_eq!(func_def.input_schema["type"], "object");
 
         let free_def = ApplyPatchTool::freeform_definition();
         assert_eq!(free_def.name, "apply_patch");
-        assert!(free_def.custom_format.is_some());
-        assert_eq!(free_def.custom_format.as_ref().unwrap()["type"], "grammar");
+        assert!(free_def.provider_options.is_some());
+        let opts = free_def.provider_options.as_ref().unwrap();
+        let openai = opts.get("openai").expect("openai provider options");
+        let custom_format = openai.get("custom_format").expect("custom_format key");
+        assert_eq!(custom_format["type"], "grammar");
     }
 }

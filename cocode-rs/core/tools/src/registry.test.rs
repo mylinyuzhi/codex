@@ -275,6 +275,62 @@ fn test_defer_mcp_tool_definitions() {
     assert!(registry.get("builtin").is_some());
 }
 
+// =========================================================================
+// P22: Case-insensitive tool name fallback
+// =========================================================================
+
+#[test]
+fn test_case_insensitive_tool_lookup() {
+    let mut registry = ToolRegistry::new();
+    registry.register(TestTool {
+        name: "bash".to_string(),
+    });
+
+    // Exact match
+    assert!(registry.get("bash").is_some());
+    // Wrong case from model
+    assert!(registry.get("Bash").is_some());
+    assert!(registry.get("BASH").is_some());
+    assert!(registry.get("bAsH").is_some());
+    // Non-existent
+    assert!(registry.get("nonexistent").is_none());
+}
+
+#[test]
+fn test_case_insensitive_alias_lookup() {
+    let mut registry = ToolRegistry::new();
+    registry.register_with_alias(
+        TestTool {
+            name: "read_file".to_string(),
+        },
+        "Read",
+    );
+
+    // Exact alias match
+    assert!(registry.get("Read").is_some());
+    // Case-insensitive alias
+    assert!(registry.get("read").is_some());
+    assert!(registry.get("READ").is_some());
+}
+
+#[test]
+fn test_exact_match_preferred_over_case_insensitive() {
+    let mut registry = ToolRegistry::new();
+    registry.register(TestTool {
+        name: "Bash".to_string(),
+    });
+    registry.register(TestTool {
+        name: "bash".to_string(),
+    });
+
+    // Exact match should be preferred
+    let tool = registry.get("bash").unwrap();
+    assert_eq!(tool.name(), "bash");
+
+    let tool = registry.get("Bash").unwrap();
+    assert_eq!(tool.name(), "Bash");
+}
+
 #[test]
 fn test_definitions_filtered_excludes_disabled_gate() {
     let mut registry = ToolRegistry::new();

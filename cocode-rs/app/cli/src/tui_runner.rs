@@ -354,7 +354,10 @@ async fn run_agent_driver(
             } => {
                 let message: String = content
                     .iter()
-                    .filter_map(|block| block.as_text())
+                    .filter_map(|block| match block {
+                        cocode_tui::UserContentPart::Text(tp) => Some(tp.text.as_str()),
+                        _ => None,
+                    })
                     .collect::<Vec<_>>()
                     .join("");
 

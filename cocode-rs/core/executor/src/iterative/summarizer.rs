@@ -8,8 +8,8 @@
 //!
 //! This module provides helper functions for creating LLM-powered callbacks:
 //!
-//! - [`create_summarize_fn`] - Creates a summarization callback using hyper-sdk
-//! - [`create_commit_msg_fn`] - Creates a commit message callback using hyper-sdk
+//! - [`create_summarize_fn`] - Creates a summarization callback using vercel-ai
+//! - [`create_commit_msg_fn`] - Creates a commit message callback using vercel-ai
 //!
 //! These helpers use the provided model to generate summaries and commit messages.
 //! The recommended approach is to use the same model as the main conversation.
@@ -18,15 +18,9 @@
 //!
 //! ```ignore
 //! use cocode_executor::iterative::{create_summarize_fn, create_commit_msg_fn};
-//! use hyper_sdk::ModelBuilder;
 //! use std::sync::Arc;
 //!
-//! // Create model
-//! let model = Arc::new(ModelBuilder::new("claude-3-5-sonnet-20241022")
-//!     .api_key("sk-...")
-//!     .build()?);
-//!
-//! // Create callbacks
+//! // Create callbacks with a LanguageModel implementation
 //! let summarize_fn = create_summarize_fn(model.clone());
 //! let commit_msg_fn = create_commit_msg_fn(model);
 //!
@@ -225,14 +219,14 @@ pub async fn generate_commit_message(
     generate_fallback_commit_message(iteration, changed_files)
 }
 
-/// Create a default summarization callback using hyper-sdk.
+/// Create a default summarization callback using vercel-ai.
 ///
 /// This helper creates a [`SummarizeFn`] that uses the provided model to generate
 /// iteration summaries. It's recommended to use the same model as the main conversation.
 ///
 /// # Arguments
 ///
-/// * `model` - A hyper-sdk Model implementation (e.g., from ModelBuilder)
+/// * `model` - A `LanguageModel` implementation
 ///
 /// # Returns
 ///
@@ -241,33 +235,34 @@ pub async fn generate_commit_message(
 /// # Example
 ///
 /// ```ignore
-/// let model = Arc::new(ModelBuilder::new("claude-3-5-sonnet-20241022")
-///     .api_key("sk-...")
-///     .build()?);
 /// let summarize_fn = create_summarize_fn(model);
 /// ```
 pub fn create_summarize_fn<M>(model: Arc<M>) -> SummarizeFn
 where
-    M: hyper_sdk::Model + Send + Sync + 'static,
+    M: cocode_api::LanguageModel + Send + Sync + 'static,
 {
     Arc::new(move |iteration, changed_files, task| {
         let model = model.clone();
         Box::pin(async move {
             let user_prompt = prompts::format_summary_prompt(&task, &changed_files);
 
-            let request = hyper_sdk::GenerateRequest::new(vec![
-                hyper_sdk::Message::system(prompts::ITERATION_SUMMARY_SYSTEM),
-                hyper_sdk::Message::user(&user_prompt),
+            let request = cocode_api::LanguageModelCallOptions::new(vec![
+                cocode_api::LanguageModelMessage::system(prompts::ITERATION_SUMMARY_SYSTEM),
+                cocode_api::LanguageModelMessage::user_text(&user_prompt),
             ]);
 
-            let response = model.generate(request).await.map_err(|e| {
+            let response = model.do_generate(request).await.map_err(|e| {
                 executor_error::SummarizationSnafu {
                     message: format!("LLM summary generation failed: {e}"),
                 }
                 .build()
             })?;
 
-            let text = response.text().trim().to_string();
+            let text = response
+                .text_content()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             if text.is_empty() {
                 return executor_error::SummarizationSnafu {
                     message: "LLM returned empty summary".to_string(),
@@ -281,14 +276,14 @@ where
     })
 }
 
-/// Create a default commit message callback using hyper-sdk.
+/// Create a default commit message callback using vercel-ai.
 ///
 /// This helper creates a [`CommitMessageFn`] that uses the provided model to generate
 /// git commit messages. It's recommended to use the same model as the main conversation.
 ///
 /// # Arguments
 ///
-/// * `model` - A hyper-sdk Model implementation (e.g., from ModelBuilder)
+/// * `model` - A `LanguageModel` implementation
 ///
 /// # Returns
 ///
@@ -297,14 +292,11 @@ where
 /// # Example
 ///
 /// ```ignore
-/// let model = Arc::new(ModelBuilder::new("claude-3-5-sonnet-20241022")
-///     .api_key("sk-...")
-///     .build()?);
 /// let commit_msg_fn = create_commit_msg_fn(model);
 /// ```
 pub fn create_commit_msg_fn<M>(model: Arc<M>) -> CommitMessageFn
 where
-    M: hyper_sdk::Model + Send + Sync + 'static,
+    M: cocode_api::LanguageModel + Send + Sync + 'static,
 {
     Arc::new(move |iteration, task, changed_files, summary| {
         let model = model.clone();
@@ -312,19 +304,23 @@ where
             let user_prompt =
                 prompts::format_commit_msg_prompt(iteration, &task, &changed_files, &summary);
 
-            let request = hyper_sdk::GenerateRequest::new(vec![
-                hyper_sdk::Message::system(prompts::COMMIT_MSG_SYSTEM),
-                hyper_sdk::Message::user(&user_prompt),
+            let request = cocode_api::LanguageModelCallOptions::new(vec![
+                cocode_api::LanguageModelMessage::system(prompts::COMMIT_MSG_SYSTEM),
+                cocode_api::LanguageModelMessage::user_text(&user_prompt),
             ]);
 
-            let response = model.generate(request).await.map_err(|e| {
+            let response = model.do_generate(request).await.map_err(|e| {
                 executor_error::SummarizationSnafu {
                     message: format!("LLM commit message generation failed: {e}"),
                 }
                 .build()
             })?;
 
-            let text = response.text().trim().to_string();
+            let text = response
+                .text_content()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             if text.is_empty() {
                 return executor_error::SummarizationSnafu {
                     message: "LLM returned empty commit message".to_string(),

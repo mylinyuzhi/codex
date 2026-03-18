@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn test_client_config_defaults() {
     let config = ApiClientConfig::default();
-    assert!(config.cache.enabled);
     assert!(config.stall_detection_enabled);
     assert_eq!(config.stall_timeout, Duration::from_secs(30));
 }
@@ -100,8 +99,8 @@ fn test_from_provider_info() {
     assert!(result.is_ok());
 
     let (client, model) = result.unwrap();
-    assert_eq!(model.model_name(), "gpt-4o");
-    assert_eq!(model.provider(), "openai");
+    assert_eq!(model.model_id(), "gpt-4o");
+    assert_eq!(model.provider(), "openai.responses");
     assert!(client.config().fallback.enable_stream_fallback);
 }
 
@@ -112,7 +111,8 @@ fn test_from_provider_info() {
 #[tokio::test]
 async fn test_stream_request_with_fallback_empty_models() {
     let client = ApiClient::new();
-    let request = hyper_sdk::GenerateRequest::new(vec![hyper_sdk::Message::user("test")]);
+    let request =
+        crate::LanguageModelCallOptions::new(vec![crate::LanguageModelMessage::user_text("test")]);
     let result = client
         .stream_request_with_fallback(&[], request, StreamOptions::streaming())
         .await;

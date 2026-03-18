@@ -5,11 +5,13 @@
 
 use crate::tracked::MessageSource;
 use crate::tracked::TrackedMessage;
-use cocode_api::GenerateResponse;
+use cocode_api::AssistantContentPart;
+use cocode_api::CollectedResponse;
+use cocode_api::LanguageModelMessage;
+use cocode_api::ToolContentPart;
 use cocode_api::ToolResultContent;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::Message;
-use hyper_sdk::Role;
+use cocode_api::ToolResultPart;
+use cocode_api::UserContentPart;
 
 /// Create a user message.
 pub fn create_user_message(
@@ -19,13 +21,13 @@ pub fn create_user_message(
     TrackedMessage::user(content, turn_id)
 }
 
-/// Create a user message with multiple content blocks.
+/// Create a user message with multiple content parts.
 pub fn create_user_message_with_content(
-    content: Vec<ContentBlock>,
+    content: Vec<UserContentPart>,
     turn_id: impl Into<String>,
 ) -> TrackedMessage {
     TrackedMessage::new(
-        Message::new(Role::User, content),
+        LanguageModelMessage::user(content),
         turn_id,
         MessageSource::User,
     )
@@ -33,19 +35,19 @@ pub fn create_user_message_with_content(
 
 /// Create an assistant message from API response.
 pub fn create_assistant_message(
-    response: &GenerateResponse,
+    response: &CollectedResponse,
     turn_id: impl Into<String>,
 ) -> TrackedMessage {
     TrackedMessage::new(
-        Message::new(Role::Assistant, response.content.clone()),
+        LanguageModelMessage::assistant(response.content.clone()),
         turn_id,
-        MessageSource::assistant(Some(response.id.clone())),
+        MessageSource::assistant(None),
     )
 }
 
 /// Create an assistant message from content blocks.
 pub fn create_assistant_message_with_content(
-    content: Vec<ContentBlock>,
+    content: Vec<AssistantContentPart>,
     turn_id: impl Into<String>,
     request_id: Option<String>,
 ) -> TrackedMessage {
@@ -79,25 +81,21 @@ pub fn create_tool_result_structured(
     let call_id_str = call_id.into();
     let turn_id_str = turn_id.into();
 
-    let message = if is_error {
-        match content {
-            ToolResultContent::Text(text) => Message::tool_error(&call_id_str, text),
-            ToolResultContent::Json(value) => Message::tool_error(&call_id_str, value.to_string()),
-            ToolResultContent::Blocks(_) => Message::tool_error(&call_id_str, "[complex content]"),
-        }
+    let result_part = if is_error {
+        let error_content = match content {
+            ToolResultContent::Text { value, .. } => ToolResultContent::error_text(value),
+            ToolResultContent::Json { value, .. } => {
+                ToolResultContent::error_text(value.to_string())
+            }
+            ToolResultContent::Content { .. } => ToolResultContent::error_text("[complex content]"),
+            other => other,
+        };
+        ToolResultPart::new(&call_id_str, "", error_content).with_error()
     } else {
-        match content {
-            ToolResultContent::Text(text) => {
-                Message::tool_result(&call_id_str, ToolResultContent::Text(text))
-            }
-            ToolResultContent::Json(value) => {
-                Message::tool_result(&call_id_str, ToolResultContent::Json(value))
-            }
-            ToolResultContent::Blocks(blocks) => {
-                Message::tool_result(&call_id_str, ToolResultContent::Blocks(blocks))
-            }
-        }
+        ToolResultPart::new(&call_id_str, "", content)
     };
+
+    let message = LanguageModelMessage::tool(vec![ToolContentPart::ToolResult(result_part)]);
 
     TrackedMessage::new(message, turn_id_str, MessageSource::tool(&call_id_str))
 }
@@ -119,7 +117,7 @@ pub fn create_subagent_result_message(
 ) -> TrackedMessage {
     let agent_id_str = agent_id.into();
     TrackedMessage::new(
-        Message::user(result), // Subagent results are typically added as user context
+        LanguageModelMessage::user_text(result), // Subagent results are typically added as user context
         turn_id,
         MessageSource::subagent(agent_id_str),
     )
@@ -131,7 +129,7 @@ pub fn create_compaction_summary(
     turn_id: impl Into<String>,
 ) -> TrackedMessage {
     TrackedMessage::new(
-        Message::user(format!(
+        LanguageModelMessage::user_text(format!(
             "<compaction_summary>\n{}\n</compaction_summary>",
             summary.into()
         )),
@@ -178,14 +176,14 @@ impl MessageBuilder {
     }
 
     /// Create an assistant message from response.
-    pub fn assistant_from_response(&self, response: &GenerateResponse) -> TrackedMessage {
+    pub fn assistant_from_response(&self, response: &CollectedResponse) -> TrackedMessage {
         create_assistant_message(response, &self.turn_id)
     }
 
     /// Create an assistant message with content.
     pub fn assistant_with_content(
         &self,
-        content: Vec<ContentBlock>,
+        content: Vec<AssistantContentPart>,
         request_id: Option<String>,
     ) -> TrackedMessage {
         create_assistant_message_with_content(content, &self.turn_id, request_id)

@@ -21,8 +21,9 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use hyper_sdk::ContentBlock;
-use hyper_sdk::ImageSource;
+use cocode_api::DataContent;
+use cocode_api::FilePart;
+use cocode_api::UserContentPart;
 use regex::Regex;
 
 /// Threshold for inline vs disk storage (1KB).
@@ -210,7 +211,7 @@ impl PasteManager {
     /// Returns a vector of content blocks suitable for sending to the API.
     /// Text between pills becomes text blocks, pills become their resolved content.
     #[allow(clippy::expect_used)]
-    pub fn resolve_to_blocks(&self, text: &str) -> Vec<ContentBlock> {
+    pub fn resolve_to_blocks(&self, text: &str) -> Vec<UserContentPart> {
         let mut blocks = Vec::new();
         let mut last_end = 0;
 
@@ -221,7 +222,7 @@ impl PasteManager {
             if full_match.start() > last_end {
                 let text_before = &text[last_end..full_match.start()];
                 if !text_before.is_empty() {
-                    blocks.push(ContentBlock::text(text_before));
+                    blocks.push(UserContentPart::text(text_before));
                 }
             }
 
@@ -233,7 +234,7 @@ impl PasteManager {
                 match &entry.kind {
                     PasteKind::Text => {
                         if let Some(content) = self.get_text_content(entry) {
-                            blocks.push(ContentBlock::text(content));
+                            blocks.push(UserContentPart::text(content));
                         }
                     }
                     PasteKind::Image { media_type } => {
@@ -242,13 +243,10 @@ impl PasteManager {
                                 &base64::engine::general_purpose::STANDARD,
                                 &data,
                             );
-                            blocks.push(ContentBlock::Image {
-                                source: ImageSource::Base64 {
-                                    data: base64_data,
-                                    media_type: media_type.clone(),
-                                },
-                                detail: None,
-                            });
+                            blocks.push(UserContentPart::File(FilePart::new(
+                                DataContent::from_base64(base64_data),
+                                media_type.clone(),
+                            )));
                         }
                     }
                 }
@@ -261,13 +259,13 @@ impl PasteManager {
         if last_end < text.len() {
             let remaining = &text[last_end..];
             if !remaining.is_empty() {
-                blocks.push(ContentBlock::text(remaining));
+                blocks.push(UserContentPart::text(remaining));
             }
         }
 
         // If no pills found, just return the original text
         if blocks.is_empty() && !text.is_empty() {
-            blocks.push(ContentBlock::text(text));
+            blocks.push(UserContentPart::text(text));
         }
 
         blocks

@@ -20,7 +20,6 @@ cocode-otel.workspace = true
 cocode-skill.workspace = true
 cocode-file-backup.workspace = true
 cocode-error.workspace = true
-hyper-sdk.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true

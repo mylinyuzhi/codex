@@ -1,171 +1,145 @@
-//! Factory for creating hyper-sdk providers from protocol config.
+//! Factory for creating vercel-ai providers from protocol config.
 //!
-//! This module bridges cocode-protocol's ProviderInfo to hyper-sdk providers.
-//!
-//! # Example
-//!
-//! ```ignore
-//! use cocode_api::provider_factory::{create_provider, create_model};
-//! use cocode_protocol::{ProviderInfo, ProviderType};
-//!
-//! let info = ProviderInfo::new("OpenAI", ProviderType::Openai, "https://api.openai.com/v1")
-//!     .with_api_key("sk-xxx");
-//!
-//! let provider = create_provider(&info)?;
-//! let model = create_model(&info, "gpt-4o")?;
-//! ```
+//! Bridges cocode-protocol's ProviderInfo to vercel-ai providers.
 
+use crate::LanguageModel;
+use crate::Provider;
 use crate::error::Result;
 use cocode_protocol::ProviderInfo;
 use cocode_protocol::ProviderType;
-use hyper_sdk::AnthropicProvider;
-use hyper_sdk::GeminiProvider;
-use hyper_sdk::Model;
-use hyper_sdk::OpenAICompatProvider;
-use hyper_sdk::OpenAIProvider;
-use hyper_sdk::Provider;
-use hyper_sdk::VolcengineProvider;
-use hyper_sdk::ZaiProvider;
+use cocode_protocol::WireApi;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Build a `reqwest::Client` with the provider's configured timeout.
+fn build_http_client(timeout_secs: i64) -> Arc<reqwest::Client> {
+    Arc::new(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs as u64))
+            .build()
+            .unwrap_or_default(),
+    )
+}
 
 /// Create a provider from ProviderInfo configuration.
-///
-/// This function creates the appropriate hyper-sdk provider based on the
-/// `provider_type` field in the ProviderInfo.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The provider type is not supported
-/// - The provider configuration is invalid (e.g., missing API key)
 pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
+    let client = build_http_client(info.timeout_secs);
+
     let provider: Arc<dyn Provider> = match info.provider_type {
         ProviderType::Openai => {
-            let mut builder = OpenAIProvider::builder()
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
+            let mut settings = vercel_ai_openai::OpenAIProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                client: Some(client),
+                ..Default::default()
+            };
 
             // Handle organization ID from provider options
             if let Some(options) = &info.options
                 && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
             {
-                builder = builder.organization_id(org_id);
+                settings.organization = Some(org_id.to_string());
             }
 
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            Arc::new(vercel_ai_openai::OpenAIProvider::new(settings))
         }
         ProviderType::Anthropic => {
-            let builder = AnthropicProvider::builder()
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
-
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            let settings = vercel_ai_anthropic::AnthropicProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                client: Some(client),
+                ..Default::default()
+            };
+            Arc::new(vercel_ai_anthropic::AnthropicProvider::new(settings))
         }
         ProviderType::Gemini => {
-            let builder = GeminiProvider::builder()
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
-
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            let settings = vercel_ai_google::GoogleGenerativeAIProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                ..Default::default()
+            };
+            Arc::new(vercel_ai_google::create_google_generative_ai(settings))
         }
         ProviderType::Volcengine => {
-            let builder = VolcengineProvider::builder()
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
-
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                name: Some("volcengine".into()),
+                client: Some(client),
+                ..Default::default()
+            };
+            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
+                settings,
+            ))
         }
         ProviderType::Zai => {
-            let mut builder = ZaiProvider::builder()
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
-
-            // Handle use_zhipuai from provider options
-            if let Some(options) = &info.options
-                && let Some(use_zhipuai) = options
-                    .get("use_zhipuai")
-                    .and_then(serde_json::Value::as_bool)
-            {
-                builder = builder.use_zhipuai(use_zhipuai);
-            }
-
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                name: Some("zai".into()),
+                client: Some(client),
+                ..Default::default()
+            };
+            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
+                settings,
+            ))
         }
         ProviderType::OpenaiCompat => {
-            let builder = OpenAICompatProvider::builder(&info.name)
-                .api_key(&info.api_key)
-                .base_url(&info.base_url)
-                .timeout_secs(info.timeout_secs);
-
-            Arc::new(builder.build().map_err(|e| {
-                crate::error::api_error::SdkSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?)
+            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
+                api_key: Some(info.api_key.clone()),
+                base_url: Some(info.base_url.clone()),
+                name: Some(info.name.clone()),
+                client: Some(client),
+                ..Default::default()
+            };
+            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
+                settings,
+            ))
         }
     };
     Ok(provider)
 }
 
 /// Create a model from ProviderInfo for a specific model slug.
-///
-/// This function creates a provider and retrieves a model instance from it.
-/// It handles model aliases (e.g., endpoint IDs for Volcengine) by looking
-/// up the API model name from the ProviderInfo.
-///
-/// # Arguments
-///
-/// * `info` - The provider configuration
-/// * `model_slug` - The model identifier (e.g., "gpt-4o", "claude-sonnet-4")
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - Provider creation fails
-/// - The model is not found or not supported by the provider
-pub fn create_model(info: &ProviderInfo, model_slug: &str) -> Result<Arc<dyn Model>> {
-    let provider = create_provider(info)?;
-
+pub fn create_model(info: &ProviderInfo, model_slug: &str) -> Result<Arc<dyn LanguageModel>> {
     // Get the API model name (handles aliases like endpoint IDs for Volcengine)
     let api_name = info.api_model_name(model_slug).unwrap_or(model_slug);
 
-    provider.model(api_name).map_err(|e| {
+    // P25: For OpenAI, respect wire_api to select Responses vs Chat Completions API.
+    // The ProviderV4::language_model() trait method always defaults to Responses,
+    // so we need to create the model directly for Chat.
+    if info.provider_type == ProviderType::Openai && info.wire_api == WireApi::Chat {
+        return create_openai_chat_model(info, api_name);
+    }
+
+    let provider = create_provider(info)?;
+
+    provider.language_model(api_name).map_err(|e| {
         crate::error::api_error::SdkSnafu {
             message: e.to_string(),
         }
         .build()
     })
+}
+
+/// Create an OpenAI model using the Chat Completions API.
+fn create_openai_chat_model(info: &ProviderInfo, api_name: &str) -> Result<Arc<dyn LanguageModel>> {
+    let client = build_http_client(info.timeout_secs);
+    let mut settings = vercel_ai_openai::OpenAIProviderSettings {
+        api_key: Some(info.api_key.clone()),
+        base_url: Some(info.base_url.clone()),
+        client: Some(client),
+        ..Default::default()
+    };
+
+    if let Some(options) = &info.options
+        && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
+    {
+        settings.organization = Some(org_id.to_string());
+    }
+
+    let provider = vercel_ai_openai::OpenAIProvider::new(settings);
+    Ok(Arc::new(provider.chat(api_name)))
 }
 
 #[cfg(test)]

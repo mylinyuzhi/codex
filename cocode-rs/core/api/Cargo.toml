@@ -8,16 +8,23 @@ license.workspace = true
 cocode-protocol.workspace = true
 cocode-config.workspace = true
 cocode-error.workspace = true
-hyper-sdk.workspace = true
+vercel-ai.workspace = true
+vercel-ai-provider.workspace = true
+vercel-ai-anthropic.workspace = true
+vercel-ai-openai.workspace = true
+vercel-ai-openai-compatible.workspace = true
+vercel-ai-google.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 futures.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 humantime-serde = "1.1"
+rand.workspace = true
 snafu.workspace = true
 async-trait.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+reqwest.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

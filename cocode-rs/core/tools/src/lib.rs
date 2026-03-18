@@ -135,6 +135,7 @@ pub use tool::Tool;
 pub use tool::ToolOutputExt;
 
 // Re-export commonly used types from dependencies
+pub use cocode_api::ToolCall;
 pub use cocode_protocol::AbortReason;
 pub use cocode_protocol::ApprovalDecision;
 pub use cocode_protocol::ConcurrencySafety;
@@ -144,8 +145,13 @@ pub use cocode_protocol::PermissionResult;
 pub use cocode_protocol::ToolOutput;
 pub use cocode_protocol::ToolResultContent;
 pub use cocode_protocol::ValidationResult;
-pub use hyper_sdk::ToolCall;
-pub use hyper_sdk::ToolDefinition;
+
+/// A tool definition for the API.
+///
+/// This is the Vercel AI SDK v4 function tool type (`LanguageModelFunctionTool`).
+/// Fields: `name`, `description: Option<String>`, `input_schema: JSONSchema`,
+/// `input_examples`, `strict`, `provider_options`.
+pub type ToolDefinition = cocode_api::LanguageModelFunctionTool;
 
 /// Prelude module for convenient imports.
 pub mod prelude {

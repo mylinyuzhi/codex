@@ -108,6 +108,9 @@ pub use cocode_protocol::AgentStatus;
 pub use cocode_protocol::CorrelatedEvent;
 pub use cocode_protocol::SubmissionId;
 
+// Re-export content types used in UserCommand
+pub use cocode_api::UserContentPart;
+
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;

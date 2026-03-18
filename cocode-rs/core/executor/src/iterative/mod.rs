@@ -14,7 +14,7 @@
 //! and commit messages. Use `with_summarize_fn` and `with_commit_msg_fn` to provide
 //! LLM-powered callbacks. If not provided, fallback to file-based summaries.
 //!
-//! For creating default LLM callbacks with hyper-sdk, see:
+//! For creating default LLM callbacks with vercel-ai, see:
 //! - [`summarizer::create_summarize_fn`] - Creates a summarization callback
 //! - [`summarizer::create_commit_msg_fn`] - Creates a commit message callback
 

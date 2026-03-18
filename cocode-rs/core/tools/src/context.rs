@@ -155,15 +155,15 @@ pub struct SpawnAgentResult {
 /// Input for a single-shot model call (no agent loop).
 #[derive(Debug, Clone)]
 pub struct ModelCallInput {
-    /// The object request (messages + JSON schema).
-    pub request: hyper_sdk::ObjectRequest,
+    /// The call options (messages + JSON response format).
+    pub request: cocode_api::LanguageModelCallOptions,
 }
 
 /// Result of a single-shot model call.
 #[derive(Debug, Clone)]
 pub struct ModelCallResult {
-    /// The structured object response.
-    pub response: hyper_sdk::ObjectResponse,
+    /// The generate result.
+    pub response: cocode_api::LanguageModelGenerateResult,
 }
 
 /// Lightweight model call callback — single request/response, no agent loop.

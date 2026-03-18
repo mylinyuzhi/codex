@@ -1,12 +1,9 @@
 //! High-level API client wrapper with retry support.
-//!
-//! This module provides [`ApiClient`] which wraps hyper-sdk [`Model`]
-//! calls with additional features needed for the agent loop:
-//! - Retry with exponential backoff
-//! - Stall detection
-//! - Prompt caching support
 
-use crate::cache::PromptCacheConfig;
+use crate::LanguageModel;
+use crate::LanguageModelCallOptions;
+use crate::LanguageModelGenerateResult;
+use crate::LanguageModelStreamPart;
 use crate::error::ApiError;
 use crate::error::Result;
 use crate::provider_factory;
@@ -15,9 +12,6 @@ use crate::retry::RetryContext;
 use crate::retry::RetryDecision;
 use crate::unified_stream::UnifiedStream;
 use cocode_protocol::ProviderInfo;
-use hyper_sdk::GenerateRequest;
-use hyper_sdk::GenerateResponse;
-use hyper_sdk::Model;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -25,6 +19,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::info;
+use vercel_ai::stream::StreamProcessor;
 
 /// Options for a streaming request.
 #[derive(Debug, Clone, Default)]
@@ -32,7 +27,7 @@ pub struct StreamOptions {
     /// Enable streaming (default: true).
     pub streaming: bool,
     /// Event sender for UI updates.
-    pub event_tx: Option<mpsc::Sender<hyper_sdk::StreamUpdate>>,
+    pub event_tx: Option<mpsc::Sender<LanguageModelStreamPart>>,
 }
 
 impl StreamOptions {
@@ -53,7 +48,7 @@ impl StreamOptions {
     }
 
     /// Set the event sender.
-    pub fn with_event_tx(mut self, tx: mpsc::Sender<hyper_sdk::StreamUpdate>) -> Self {
+    pub fn with_event_tx(mut self, tx: mpsc::Sender<LanguageModelStreamPart>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -65,9 +60,6 @@ pub struct ApiClientConfig {
     /// Retry configuration.
     #[serde(default)]
     pub retry: RetryConfig,
-    /// Prompt caching configuration.
-    #[serde(default)]
-    pub cache: PromptCacheConfig,
     /// Stall detection timeout.
     #[serde(default = "default_stall_timeout", with = "humantime_serde")]
     pub stall_timeout: Duration,
@@ -88,30 +80,26 @@ fn default_stall_enabled() -> bool {
 fn default_true() -> bool {
     true
 }
-fn default_fallback_max_tokens() -> Option<i32> {
+fn default_fallback_max_tokens() -> Option<u64> {
     Some(21333)
 }
-fn default_min_output_tokens() -> i32 {
+fn default_min_output_tokens() -> u64 {
     3000
 }
-fn default_max_overflow_attempts() -> i32 {
+fn default_max_overflow_attempts() -> u32 {
     3
 }
 
 /// Configuration for fallback behavior.
-///
-/// Controls automatic fallback from streaming to non-streaming on stream errors,
-/// and context overflow recovery by reducing max_tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FallbackConfig {
     /// Enable automatic fallback from streaming to non-streaming on stream errors.
     #[serde(default = "default_true")]
     pub enable_stream_fallback: bool,
 
-    /// Maximum tokens for fallback requests (prevents timeout).
-    /// Claude Code uses 21333 for this.
+    /// Maximum tokens for fallback requests.
     #[serde(default = "default_fallback_max_tokens")]
-    pub fallback_max_tokens: Option<i32>,
+    pub fallback_max_tokens: Option<u64>,
 
     /// Enable context overflow recovery (auto-reduce max_tokens).
     #[serde(default = "default_true")]
@@ -119,11 +107,11 @@ pub struct FallbackConfig {
 
     /// Minimum output tokens to preserve during overflow recovery.
     #[serde(default = "default_min_output_tokens")]
-    pub min_output_tokens: i32,
+    pub min_output_tokens: u64,
 
     /// Maximum overflow recovery attempts.
     #[serde(default = "default_max_overflow_attempts")]
-    pub max_overflow_attempts: i32,
+    pub max_overflow_attempts: u32,
 }
 
 impl Default for FallbackConfig {
@@ -150,32 +138,27 @@ impl FallbackConfig {
         }
     }
 
-    /// Builder: set stream fallback enabled.
     pub fn with_stream_fallback(mut self, enabled: bool) -> Self {
         self.enable_stream_fallback = enabled;
         self
     }
 
-    /// Builder: set fallback max tokens.
-    pub fn with_fallback_max_tokens(mut self, max_tokens: Option<i32>) -> Self {
+    pub fn with_fallback_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
         self.fallback_max_tokens = max_tokens;
         self
     }
 
-    /// Builder: set overflow recovery enabled.
     pub fn with_overflow_recovery(mut self, enabled: bool) -> Self {
         self.enable_overflow_recovery = enabled;
         self
     }
 
-    /// Builder: set min output tokens for overflow recovery.
-    pub fn with_min_output_tokens(mut self, min_tokens: i32) -> Self {
+    pub fn with_min_output_tokens(mut self, min_tokens: u64) -> Self {
         self.min_output_tokens = min_tokens;
         self
     }
 
-    /// Builder: set max overflow attempts.
-    pub fn with_max_overflow_attempts(mut self, max_attempts: i32) -> Self {
+    pub fn with_max_overflow_attempts(mut self, max_attempts: u32) -> Self {
         self.max_overflow_attempts = max_attempts;
         self
     }
@@ -185,7 +168,6 @@ impl Default for ApiClientConfig {
     fn default() -> Self {
         Self {
             retry: RetryConfig::default(),
-            cache: PromptCacheConfig::default(),
             stall_timeout: default_stall_timeout(),
             stall_detection_enabled: default_stall_enabled(),
             fallback: FallbackConfig::default(),
@@ -194,31 +176,21 @@ impl Default for ApiClientConfig {
 }
 
 impl ApiClientConfig {
-    /// Set the retry configuration.
     pub fn with_retry(mut self, retry: RetryConfig) -> Self {
         self.retry = retry;
         self
     }
 
-    /// Set the cache configuration.
-    pub fn with_cache(mut self, cache: PromptCacheConfig) -> Self {
-        self.cache = cache;
-        self
-    }
-
-    /// Set the stall timeout.
     pub fn with_stall_timeout(mut self, timeout: Duration) -> Self {
         self.stall_timeout = timeout;
         self
     }
 
-    /// Enable or disable stall detection.
     pub fn with_stall_detection(mut self, enabled: bool) -> Self {
         self.stall_detection_enabled = enabled;
         self
     }
 
-    /// Set the fallback configuration.
     pub fn with_fallback(mut self, fallback: FallbackConfig) -> Self {
         self.fallback = fallback;
         self
@@ -227,107 +199,52 @@ impl ApiClientConfig {
 
 /// High-level API client with retry and caching.
 ///
-/// The client does not hold a model. Each request receives the model
-/// as a parameter, allowing callers to choose the model per-request.
-///
-/// # Example
-///
-/// ```ignore
-/// use cocode_api::{ApiClient, StreamOptions};
-/// use hyper_sdk::{OpenAIProvider, Provider, GenerateRequest, Message};
-///
-/// let provider = OpenAIProvider::from_env()?;
-/// let model = provider.model("gpt-4o")?;
-///
-/// let client = ApiClient::new();
-/// let request = GenerateRequest::new(vec![
-///     Message::user("Hello!"),
-/// ]);
-///
-/// let stream = client.stream_request(&*model, request, StreamOptions::streaming()).await?;
-/// ```
+/// Model-agnostic: each request receives the model as a parameter.
 #[derive(Clone)]
 pub struct ApiClient {
     config: ApiClientConfig,
 }
 
 impl ApiClient {
-    /// Create a new API client with default configuration.
     pub fn new() -> Self {
         Self {
             config: ApiClientConfig::default(),
         }
     }
 
-    /// Create a new API client with custom configuration.
     pub fn with_config(config: ApiClientConfig) -> Self {
         Self { config }
     }
 
-    /// Get the current configuration.
     pub fn config(&self) -> &ApiClientConfig {
         &self.config
     }
 
     /// Create an ApiClient with a model from ProviderInfo.
-    ///
-    /// This is a convenience method that creates both the client and model
-    /// from a ProviderInfo configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `info` - Provider configuration
-    /// * `model_slug` - Model identifier (e.g., "gpt-4o", "claude-sonnet-4")
-    /// * `config` - Client configuration
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cocode_api::{ApiClient, ApiClientConfig};
-    /// use cocode_protocol::{ProviderInfo, ProviderType};
-    ///
-    /// let info = ProviderInfo::new("OpenAI", ProviderType::Openai, "https://api.openai.com/v1")
-    ///     .with_api_key("sk-xxx");
-    ///
-    /// let (client, model) = ApiClient::from_provider_info(&info, "gpt-4o", ApiClientConfig::default())?;
-    /// ```
     pub fn from_provider_info(
         info: &ProviderInfo,
         model_slug: &str,
         config: ApiClientConfig,
-    ) -> Result<(Self, Arc<dyn Model>)> {
+    ) -> Result<(Self, Arc<dyn LanguageModel>)> {
         let model = provider_factory::create_model(info, model_slug)?;
         Ok((Self::with_config(config), model))
     }
 
     /// Make a streaming request with retry support.
-    ///
-    /// Returns a [`UnifiedStream`] that can be used to consume the response.
-    ///
-    /// This method implements automatic fallback and recovery mechanisms:
-    ///
-    /// 1. **Stream fallback**: If streaming fails with a stream error and
-    ///    `enable_stream_fallback` is true, automatically retries with non-streaming.
-    ///
-    /// 2. **Context overflow recovery**: If the request fails due to context overflow
-    ///    and `enable_overflow_recovery` is true, automatically reduces `max_tokens`
-    ///    by 25% and retries (up to `max_overflow_attempts` times).
-    ///
-    /// 3. **Standard retry**: For other retryable errors, applies exponential backoff.
     pub async fn stream_request(
         &self,
-        model: &dyn Model,
-        request: GenerateRequest,
+        model: &dyn LanguageModel,
+        request: LanguageModelCallOptions,
         options: StreamOptions,
     ) -> Result<UnifiedStream> {
         let mut retry_ctx = RetryContext::new(self.config.retry.clone());
         let mut current_request = request;
         let mut use_streaming = options.streaming;
-        let mut overflow_attempts = 0;
+        let mut overflow_attempts: u32 = 0;
 
         loop {
             debug!(
-                model = %model.model_name(),
+                model = %model.model_id(),
                 attempt = retry_ctx.current_attempt(),
                 streaming = use_streaming,
                 "Making API request"
@@ -356,13 +273,13 @@ impl ApiClient {
                         && let Some(new_max) = self.try_overflow_recovery(&current_request)
                     {
                         info!(
-                            old = ?current_request.max_tokens,
+                            old = ?current_request.max_output_tokens,
                             new = new_max,
                             attempt = overflow_attempts + 1,
                             max_attempts = self.config.fallback.max_overflow_attempts,
                             "Recovering from context overflow by reducing max_tokens"
                         );
-                        current_request = current_request.max_tokens(new_max);
+                        current_request.max_output_tokens = Some(new_max);
                         overflow_attempts += 1;
                         continue;
                     }
@@ -378,7 +295,7 @@ impl ApiClient {
                         );
                         use_streaming = false;
                         if let Some(max) = self.config.fallback.fallback_max_tokens {
-                            current_request = current_request.max_tokens(max);
+                            current_request.max_output_tokens = Some(max);
                         }
                         continue;
                     }
@@ -413,15 +330,10 @@ impl ApiClient {
     }
 
     /// Attempt to recover from context overflow by reducing max_tokens.
-    ///
-    /// Reduces max_tokens by 25%, but won't go below `min_output_tokens`.
-    /// Returns `None` if reduction would violate the minimum.
-    fn try_overflow_recovery(&self, request: &GenerateRequest) -> Option<i32> {
-        let current_max = request.max_tokens.unwrap_or(8192);
+    fn try_overflow_recovery(&self, request: &LanguageModelCallOptions) -> Option<u64> {
+        let current_max = request.max_output_tokens.unwrap_or(8192);
         let min_tokens = self.config.fallback.min_output_tokens;
-
-        // Reduce by 25%
-        let new_max = (current_max as f32 * 0.75) as i32;
+        let new_max = current_max * 3 / 4;
 
         if new_max >= min_tokens {
             Some(new_max)
@@ -431,25 +343,22 @@ impl ApiClient {
     }
 
     /// Make a non-streaming request with retry support.
-    ///
-    /// Calls `model.generate()` directly in a retry loop, returning the
-    /// hyper-sdk `GenerateResponse` as-is.
     pub async fn generate(
         &self,
-        model: &dyn Model,
-        request: GenerateRequest,
-    ) -> Result<GenerateResponse> {
+        model: &dyn LanguageModel,
+        request: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
         let mut retry_ctx = RetryContext::new(self.config.retry.clone());
 
         loop {
             debug!(
-                model = %model.model_name(),
+                model = %model.model_id(),
                 attempt = retry_ctx.current_attempt(),
                 "Making non-streaming API request"
             );
 
             let result = model
-                .generate(request.clone())
+                .do_generate(request.clone())
                 .await
                 .map_err(ApiError::from);
 
@@ -481,70 +390,35 @@ impl ApiClient {
     /// Internal: make a streaming request.
     async fn do_streaming_request(
         &self,
-        model: &dyn Model,
-        request: &GenerateRequest,
+        model: &dyn LanguageModel,
+        request: &LanguageModelCallOptions,
     ) -> Result<UnifiedStream> {
-        let stream_response = model
-            .stream(request.clone())
+        let stream_result = model
+            .do_stream(request.clone())
             .await
             .map_err(ApiError::from)?;
 
-        let processor = stream_response.into_processor();
+        let mut processor = StreamProcessor::new(stream_result);
 
-        // Apply stall timeout if configured
-        let processor = if self.config.stall_detection_enabled {
-            processor.idle_timeout(self.config.stall_timeout)
-        } else {
-            processor
-        };
+        if self.config.stall_detection_enabled {
+            processor = processor.idle_timeout(self.config.stall_timeout);
+        }
 
         Ok(UnifiedStream::from_stream(processor))
     }
 
     /// Make a streaming request with provider-level failover.
-    ///
-    /// Tries each model in order. For each model, runs the full `stream_request()`
-    /// logic (including retries). On non-retryable error, moves to the next model.
-    /// On success, returns immediately.
-    ///
-    /// If all models fail, returns a `RetriesExhausted` error with combined diagnostics.
-    ///
-    /// # Arguments
-    ///
-    /// * `models` - Ordered list of fallback models to try.
-    /// * `request` - The generate request.
-    /// * `options` - Stream options.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cocode_api::{ApiClient, StreamOptions};
-    /// use hyper_sdk::{OpenAIProvider, AnthropicProvider, Provider, GenerateRequest, Message};
-    ///
-    /// let openai = OpenAIProvider::from_env()?;
-    /// let anthropic = AnthropicProvider::from_env()?;
-    ///
-    /// let primary = openai.model("gpt-4o")?;
-    /// let fallback = anthropic.model("claude-sonnet-4-20250514")?;
-    ///
-    /// let client = ApiClient::new();
-    /// let request = GenerateRequest::new(vec![Message::user("Hello!")]);
-    /// let models: Vec<&dyn hyper_sdk::Model> = vec![&*primary, &*fallback];
-    ///
-    /// let stream = client
-    ///     .stream_request_with_fallback(&models, request, StreamOptions::streaming())
-    ///     .await?;
-    /// ```
     pub async fn stream_request_with_fallback(
         &self,
-        models: &[&dyn Model],
-        request: GenerateRequest,
+        models: &[&dyn LanguageModel],
+        request: LanguageModelCallOptions,
         options: StreamOptions,
     ) -> Result<UnifiedStream> {
         if models.is_empty() {
-            return Err(ApiError::from(hyper_sdk::HyperError::ModelNotFound(
-                "no models provided for fallback".to_string(),
-            )));
+            return Err(crate::error::api_error::InvalidRequestSnafu {
+                message: "no models provided for fallback".to_string(),
+            }
+            .build());
         }
 
         if models.len() == 1 {
@@ -556,7 +430,7 @@ impl ApiClient {
 
         for (i, model) in models.iter().enumerate() {
             info!(
-                model = %model.model_name(),
+                model = %model.model_id(),
                 provider = %model.provider(),
                 index = i,
                 total = models.len(),
@@ -572,12 +446,12 @@ impl ApiClient {
                     all_failures.push(format!(
                         "[{}:{}] {}",
                         model.provider(),
-                        model.model_name(),
+                        model.model_id(),
                         err
                     ));
 
                     info!(
-                        model = %model.model_name(),
+                        model = %model.model_id(),
                         provider = %model.provider(),
                         error = %err,
                         remaining = models.len() - i - 1,
@@ -589,7 +463,6 @@ impl ApiClient {
             }
         }
 
-        // All models failed
         tracing::warn!(
             diagnostics = ?all_failures,
             "All fallback models exhausted"
@@ -607,11 +480,11 @@ impl ApiClient {
     /// Internal: make a non-streaming request.
     async fn do_non_streaming_request(
         &self,
-        model: &dyn Model,
-        request: &GenerateRequest,
+        model: &dyn LanguageModel,
+        request: &LanguageModelCallOptions,
     ) -> Result<UnifiedStream> {
         let response = model
-            .generate(request.clone())
+            .do_generate(request.clone())
             .await
             .map_err(ApiError::from)?;
 
@@ -639,44 +512,32 @@ pub struct ApiClientBuilder {
 }
 
 impl ApiClientBuilder {
-    /// Create a new builder with default configuration.
     pub fn new() -> Self {
         Self {
             config: ApiClientConfig::default(),
         }
     }
 
-    /// Set the retry configuration.
     pub fn retry(mut self, retry: RetryConfig) -> Self {
         self.config.retry = retry;
         self
     }
 
-    /// Set the cache configuration.
-    pub fn cache(mut self, cache: PromptCacheConfig) -> Self {
-        self.config.cache = cache;
-        self
-    }
-
-    /// Set the stall timeout.
     pub fn stall_timeout(mut self, timeout: Duration) -> Self {
         self.config.stall_timeout = timeout;
         self
     }
 
-    /// Enable or disable stall detection.
     pub fn stall_detection(mut self, enabled: bool) -> Self {
         self.config.stall_detection_enabled = enabled;
         self
     }
 
-    /// Set the fallback configuration.
     pub fn fallback(mut self, fallback: FallbackConfig) -> Self {
         self.config.fallback = fallback;
         self
     }
 
-    /// Build the API client.
     pub fn build(self) -> ApiClient {
         ApiClient::with_config(self.config)
     }

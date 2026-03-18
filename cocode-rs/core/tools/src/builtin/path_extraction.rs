@@ -9,14 +9,13 @@
 //! ```no_run
 //! use cocode_tools::builtin::path_extraction::LlmPathExtractor;
 //! use cocode_protocol::model::{ModelRoles, ModelRole, ModelSpec};
-//! use hyper_sdk::HyperClient;
+//! use cocode_api::LanguageModel;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let client = Arc::new(HyperClient::from_env()?);
-//! let model_spec = ModelSpec::new("anthropic", "claude-haiku");
-//!
-//! let extractor = LlmPathExtractor::new(client, model_spec);
+//! // Obtain a model implementing LanguageModel
+//! // let model: Arc<dyn LanguageModel> = ...;
+//! // let extractor = LlmPathExtractor::new(model);
 //! // Use with ShellExecutor::with_path_extractor()
 //! # Ok(())
 //! # }
@@ -27,17 +26,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use cocode_api::LanguageModel;
+use cocode_api::LanguageModelCallOptions;
+use cocode_api::LanguageModelMessage;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelRoles;
-use cocode_protocol::model::ModelSpec;
 use cocode_shell::path_extractor::BoxFuture;
 use cocode_shell::path_extractor::PathExtractionResult;
 use cocode_shell::path_extractor::PathExtractor;
 use cocode_shell::path_extractor::filter_existing_files;
 use cocode_shell::path_extractor::truncate_for_extraction;
-use hyper_sdk::GenerateRequest;
-use hyper_sdk::HyperClient;
-use hyper_sdk::Message;
 use tracing::debug;
 use tracing::warn;
 
@@ -56,49 +54,35 @@ Rules:
 ///
 /// The extractor is designed to be used with `ShellExecutor::with_path_extractor()`.
 pub struct LlmPathExtractor {
-    /// HTTP client for LLM API calls.
-    client: Arc<HyperClient>,
-    /// Model specification (provider + model ID).
-    model_spec: ModelSpec,
+    /// Language model for LLM API calls.
+    model: Arc<dyn LanguageModel>,
 }
 
 impl LlmPathExtractor {
-    /// Create a new LLM path extractor with the given client and model.
-    pub fn new(client: Arc<HyperClient>, model_spec: ModelSpec) -> Self {
-        Self { client, model_spec }
+    /// Create a new LLM path extractor with the given model.
+    pub fn new(model: Arc<dyn LanguageModel>) -> Self {
+        Self { model }
     }
 
     /// Create from ModelRoles - uses Fast role (falls back to Main if not configured).
     ///
     /// Returns `None` if no model is configured (both fast and main are None).
     ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use cocode_tools::builtin::path_extraction::LlmPathExtractor;
-    /// use cocode_protocol::model::{ModelRoles, ModelRole, ModelSpec};
-    /// use hyper_sdk::HyperClient;
-    /// use std::sync::Arc;
-    ///
-    /// # fn example() -> Option<LlmPathExtractor> {
-    /// let client = Arc::new(HyperClient::from_env().ok()?);
-    /// let mut roles = ModelRoles::default();
-    /// roles.set(ModelRole::Main, ModelSpec::new("anthropic", "claude-sonnet-4-20250514"));
-    /// roles.set(ModelRole::Fast, ModelSpec::new("anthropic", "claude-haiku"));
-    ///
-    /// // Uses fast model (claude-haiku)
-    /// LlmPathExtractor::from_model_roles(client, &roles)
-    /// # }
-    /// ```
-    pub fn from_model_roles(client: Arc<HyperClient>, roles: &ModelRoles) -> Option<Self> {
-        // ModelRoles.get(ModelRole::Fast) returns fast if set, otherwise main
-        let model_spec = roles.get(ModelRole::Fast)?.clone();
-        Some(Self::new(client, model_spec))
+    /// The `resolve_fn` callback resolves a `ModelRole` to a concrete `LanguageModel`
+    /// implementation. This avoids a direct dependency on provider wiring.
+    pub fn from_model_roles(
+        roles: &ModelRoles,
+        resolve_fn: impl Fn(&ModelRole) -> Option<Arc<dyn LanguageModel>>,
+    ) -> Option<Self> {
+        // Try Fast role first, fall back to Main
+        let _spec = roles.get(ModelRole::Fast)?;
+        let model = resolve_fn(&ModelRole::Fast)?;
+        Some(Self::new(model))
     }
 
-    /// Returns the model spec being used.
-    pub fn model_spec(&self) -> &ModelSpec {
-        &self.model_spec
+    /// Returns the model ID of the underlying model.
+    pub fn model_id(&self) -> &str {
+        self.model.model_id()
     }
 
     /// Parse paths from LLM response.
@@ -137,7 +121,7 @@ impl LlmPathExtractor {
 impl std::fmt::Debug for LlmPathExtractor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LlmPathExtractor")
-            .field("model_spec", &self.model_spec)
+            .field("model_id", &self.model.model_id())
             .finish()
     }
 }
@@ -165,26 +149,14 @@ impl PathExtractor for LlmPathExtractor {
             let user_message =
                 format!("Command: {command}\n\nOutput:\n{truncated_output}\n\nExtract file paths:");
 
-            // Get model from client
-            let model = match self
-                .client
-                .model(&self.model_spec.provider, &self.model_spec.slug)
-            {
-                Ok(m) => m,
-                Err(e) => {
-                    warn!("Failed to get model for path extraction: {e}");
-                    return Ok(PathExtractionResult::empty());
-                }
-            };
-
-            // Create request
-            let request = GenerateRequest::new(vec![
-                Message::system(PATH_EXTRACTION_PROMPT),
-                Message::user(user_message),
+            // Create request using vercel-ai-provider types
+            let options = LanguageModelCallOptions::new(vec![
+                LanguageModelMessage::system(PATH_EXTRACTION_PROMPT),
+                LanguageModelMessage::user_text(user_message),
             ]);
 
             // Generate response
-            let response = match model.generate(request).await {
+            let result = match self.model.do_generate(options).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("Path extraction API call failed: {e}");
@@ -192,8 +164,8 @@ impl PathExtractor for LlmPathExtractor {
                 }
             };
 
-            // Parse paths from response
-            let response_text = response.text();
+            // Parse paths from response text content
+            let response_text = result.text_content().unwrap_or_default();
             let raw_paths = Self::parse_paths(&response_text);
 
             // Filter to existing files

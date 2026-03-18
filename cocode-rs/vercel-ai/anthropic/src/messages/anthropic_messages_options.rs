@@ -1,9 +1,10 @@
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use vercel_ai_provider::ProviderOptions;
 
 /// Anthropic-specific thinking configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ThinkingConfig {
     /// For Sonnet 4.6, Opus 4.6, and newer models.

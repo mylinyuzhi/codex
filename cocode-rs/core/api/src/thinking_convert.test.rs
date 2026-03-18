@@ -1,5 +1,4 @@
 use super::*;
-use hyper_sdk::options::downcast_options;
 
 fn default_model_info() -> ModelInfo {
     ModelInfo::default()
@@ -13,18 +12,32 @@ fn test_to_anthropic_options_with_budget() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let ant_opts = downcast_options::<AnthropicOptions>(&opts).unwrap();
-    assert_eq!(ant_opts.thinking_budget_tokens, Some(32000));
+    let ant = opts
+        .0
+        .get("anthropic")
+        .expect("should have anthropic entry");
+    let thinking = ant.get("thinking").expect("should have thinking key");
+    assert_eq!(thinking["type"], serde_json::json!("enabled"));
+    assert_eq!(thinking["budgetTokens"], serde_json::json!(32000));
 }
 
 #[test]
-fn test_to_anthropic_options_no_budget() {
-    // Anthropic requires budget_tokens, so effort alone returns None
+fn test_to_anthropic_options_adaptive_no_budget() {
+    // Without budget_tokens, Anthropic should use Adaptive mode (for newer models)
     let level = ThinkingLevel::high();
     let model_info = default_model_info();
     let opts = to_provider_options(&level, &model_info, ProviderType::Anthropic);
 
-    assert!(opts.is_none());
+    assert!(opts.is_some());
+    let opts = opts.unwrap();
+    let ant = opts
+        .0
+        .get("anthropic")
+        .expect("should have anthropic entry");
+    let thinking = ant.get("thinking").expect("should have thinking key");
+    assert_eq!(thinking["type"], serde_json::json!("adaptive"));
+    // Adaptive mode has no budgetTokens field
+    assert!(thinking.get("budgetTokens").is_none());
 }
 
 #[test]
@@ -35,13 +48,11 @@ fn test_to_openai_options_high() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_effort,
-        Some(hyper_sdk::options::openai::ReasoningEffort::High)
+        openai.get("reasoningEffort"),
+        Some(&serde_json::json!("high"))
     );
-    // Should always include encrypted content
-    assert_eq!(openai_opts.include_encrypted_content, Some(true));
 }
 
 #[test]
@@ -52,10 +63,10 @@ fn test_to_openai_options_medium() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_effort,
-        Some(hyper_sdk::options::openai::ReasoningEffort::Medium)
+        openai.get("reasoningEffort"),
+        Some(&serde_json::json!("medium"))
     );
 }
 
@@ -67,10 +78,10 @@ fn test_to_openai_options_low() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_effort,
-        Some(hyper_sdk::options::openai::ReasoningEffort::Low)
+        openai.get("reasoningEffort"),
+        Some(&serde_json::json!("low"))
     );
 }
 
@@ -92,10 +103,10 @@ fn test_to_openai_options_with_reasoning_summary() {
     let opts = to_provider_options(&level, &model_info, ProviderType::Openai);
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_summary,
-        Some(hyper_sdk::options::openai::ReasoningSummary::Detailed)
+        openai.get("reasoningSummary"),
+        Some(&serde_json::json!("detailed"))
     );
 }
 
@@ -107,13 +118,13 @@ fn test_to_gemini_options_high() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let gem_opts = downcast_options::<GeminiOptions>(&opts).unwrap();
-    assert_eq!(
-        gem_opts.thinking_level,
-        Some(hyper_sdk::options::gemini::ThinkingLevel::High)
-    );
-    // Default include_thoughts is true
-    assert_eq!(gem_opts.include_thoughts, Some(true));
+    let gem = opts.0.get("google").expect("should have google entry");
+    let thinking_config = gem
+        .get("thinkingConfig")
+        .expect("should have thinkingConfig key");
+    assert_eq!(thinking_config["thinkingLevel"], serde_json::json!("high"));
+    // Default includeThoughts is true
+    assert_eq!(thinking_config["includeThoughts"], serde_json::json!(true));
 }
 
 #[test]
@@ -134,8 +145,11 @@ fn test_to_gemini_options_include_thoughts_false() {
     let opts = to_provider_options(&level, &model_info, ProviderType::Gemini);
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let gem_opts = downcast_options::<GeminiOptions>(&opts).unwrap();
-    assert_eq!(gem_opts.include_thoughts, Some(false));
+    let gem = opts.0.get("google").expect("should have google entry");
+    let thinking_config = gem
+        .get("thinkingConfig")
+        .expect("should have thinkingConfig key");
+    assert_eq!(thinking_config["includeThoughts"], serde_json::json!(false));
 }
 
 #[test]
@@ -146,11 +160,15 @@ fn test_to_volcengine_options_budget() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let volc_opts = downcast_options::<VolcengineOptions>(&opts).unwrap();
-    assert_eq!(volc_opts.thinking_budget_tokens, Some(16000));
+    let volc = opts
+        .0
+        .get("volcengine")
+        .expect("should have volcengine entry");
+    let thinking = volc.get("thinking").expect("should have thinking key");
+    assert_eq!(thinking["budgetTokens"], serde_json::json!(16000));
     assert_eq!(
-        volc_opts.reasoning_effort,
-        Some(hyper_sdk::options::volcengine::ReasoningEffort::High)
+        volc.get("reasoningEffort"),
+        Some(&serde_json::json!("high"))
     );
 }
 
@@ -162,11 +180,14 @@ fn test_to_volcengine_options_effort_only() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let volc_opts = downcast_options::<VolcengineOptions>(&opts).unwrap();
-    assert!(volc_opts.thinking_budget_tokens.is_none());
+    let volc = opts
+        .0
+        .get("volcengine")
+        .expect("should have volcengine entry");
+    assert!(volc.get("thinking").is_none());
     assert_eq!(
-        volc_opts.reasoning_effort,
-        Some(hyper_sdk::options::volcengine::ReasoningEffort::Medium)
+        volc.get("reasoningEffort"),
+        Some(&serde_json::json!("medium"))
     );
 }
 
@@ -178,8 +199,9 @@ fn test_to_zai_options_with_budget() {
 
     assert!(opts.is_some());
     let opts = opts.unwrap();
-    let zai_opts = downcast_options::<ZaiOptions>(&opts).unwrap();
-    assert_eq!(zai_opts.thinking_budget_tokens, Some(8192));
+    let zai = opts.0.get("zai").expect("should have zai entry");
+    let thinking = zai.get("thinking").expect("should have thinking key");
+    assert_eq!(thinking["budgetTokens"], serde_json::json!(8192));
 }
 
 #[test]
@@ -199,19 +221,19 @@ fn test_xhigh_maps_to_high() {
 
     // OpenAI: XHigh -> High
     let opts = to_provider_options(&level, &model_info, ProviderType::Openai).unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_effort,
-        Some(hyper_sdk::options::openai::ReasoningEffort::High)
+        openai.get("reasoningEffort"),
+        Some(&serde_json::json!("high"))
     );
 
     // Gemini: XHigh -> High
     let opts = to_provider_options(&level, &model_info, ProviderType::Gemini).unwrap();
-    let gem_opts = downcast_options::<GeminiOptions>(&opts).unwrap();
-    assert_eq!(
-        gem_opts.thinking_level,
-        Some(hyper_sdk::options::gemini::ThinkingLevel::High)
-    );
+    let gem = opts.0.get("google").expect("should have google entry");
+    let thinking_config = gem
+        .get("thinkingConfig")
+        .expect("should have thinkingConfig key");
+    assert_eq!(thinking_config["thinkingLevel"], serde_json::json!("high"));
 }
 
 #[test]
@@ -221,25 +243,28 @@ fn test_minimal_maps_to_low() {
 
     // OpenAI: Minimal -> Low
     let opts = to_provider_options(&level, &model_info, ProviderType::Openai).unwrap();
-    let openai_opts = downcast_options::<OpenAIOptions>(&opts).unwrap();
+    let openai = opts.0.get("openai").expect("should have openai entry");
     assert_eq!(
-        openai_opts.reasoning_effort,
-        Some(hyper_sdk::options::openai::ReasoningEffort::Low)
+        openai.get("reasoningEffort"),
+        Some(&serde_json::json!("low"))
     );
 
     // Gemini: Minimal -> Low
     let opts = to_provider_options(&level, &model_info, ProviderType::Gemini).unwrap();
-    let gem_opts = downcast_options::<GeminiOptions>(&opts).unwrap();
-    assert_eq!(
-        gem_opts.thinking_level,
-        Some(hyper_sdk::options::gemini::ThinkingLevel::Low)
-    );
+    let gem = opts.0.get("google").expect("should have google entry");
+    let thinking_config = gem
+        .get("thinkingConfig")
+        .expect("should have thinkingConfig key");
+    assert_eq!(thinking_config["thinkingLevel"], serde_json::json!("low"));
 
     // Volcengine: Minimal is preserved
     let opts = to_provider_options(&level, &model_info, ProviderType::Volcengine).unwrap();
-    let volc_opts = downcast_options::<VolcengineOptions>(&opts).unwrap();
+    let volc = opts
+        .0
+        .get("volcengine")
+        .expect("should have volcengine entry");
     assert_eq!(
-        volc_opts.reasoning_effort,
-        Some(hyper_sdk::options::volcengine::ReasoningEffort::Minimal)
+        volc.get("reasoningEffort"),
+        Some(&serde_json::json!("minimal"))
     );
 }

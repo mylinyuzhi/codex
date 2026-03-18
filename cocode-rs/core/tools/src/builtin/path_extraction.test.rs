@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::model::ModelSpec;
 
 #[test]
 fn test_parse_paths_simple() {

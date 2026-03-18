@@ -14,13 +14,13 @@
 //! │                       cocode-message                            │
 //! ├─────────────────────────────────────────────────────────────────┤
 //! │  MessageHistory       │  Turn              │  TrackedMessage   │
-//! │  - turns              │  - user_message    │  - inner: Message │
+//! │  - turns              │  - user_message    │  - inner: Msg     │
 //! │  - compaction         │  - assistant_msg   │  - uuid           │
 //! │  - token tracking     │  - tool_calls      │  - turn_id        │
 //! │                       │  - usage           │  - source         │
 //! ├───────────────────────┴──────────────────────────────────────────┤
-//! │                          hyper-sdk                               │
-//! │  Message, ContentBlock, Role, ToolCall, ToolResultContent       │
+//! │                       vercel-ai-provider                        │
+//! │  LanguageModelMessage, AssistantContentPart, UserContentPart  │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -128,19 +128,18 @@ pub use type_guards::is_tool_use_block;
 pub use type_guards::is_user_message;
 
 // Re-export commonly used types from dependencies
-pub use cocode_api::ContentBlock;
-pub use cocode_api::Message;
-pub use cocode_api::Role;
+pub use cocode_api::AssistantContentPart;
+pub use cocode_api::LanguageModelMessage;
 pub use cocode_api::ToolCall;
 pub use cocode_api::ToolResultContent;
+pub use cocode_api::UserContentPart;
 pub use cocode_protocol::AbortReason;
 pub use cocode_protocol::TokenUsage;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
-    pub use crate::ContentBlock;
-    pub use crate::Message;
-    pub use crate::Role;
+    pub use crate::AssistantContentPart;
+    pub use crate::LanguageModelMessage;
     pub use crate::TokenUsage;
     pub use crate::factory::MessageBuilder;
     pub use crate::history::HistoryBuilder;

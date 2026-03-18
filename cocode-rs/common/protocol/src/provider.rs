@@ -180,6 +180,10 @@ pub struct ProviderInfo {
     /// Provider-specific SDK client configuration (e.g., organization_id, use_zhipuai).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<serde_json::Value>,
+
+    /// HTTP interceptors to apply to requests for this provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interceptors: Vec<String>,
 }
 
 impl ProviderInfo {
@@ -199,6 +203,7 @@ impl ProviderInfo {
             wire_api: WireApi::default(),
             models: HashMap::new(),
             options: None,
+            interceptors: Vec::new(),
         }
     }
 
@@ -261,6 +266,12 @@ impl ProviderInfo {
     /// Builder: set provider-specific options.
     pub fn with_options(mut self, options: serde_json::Value) -> Self {
         self.options = Some(options);
+        self
+    }
+
+    /// Builder: set HTTP interceptor names.
+    pub fn with_interceptors(mut self, interceptors: Vec<String>) -> Self {
+        self.interceptors = interceptors;
         self
     }
 

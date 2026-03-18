@@ -1,21 +1,14 @@
 use super::*;
-use hyper_sdk::FinishReason;
-use hyper_sdk::TokenUsage;
+use cocode_api::AssistantContentPart;
+use cocode_api::CollectedResponse;
+use cocode_api::FinishReason;
+use cocode_api::ToolResultContent;
 
-fn make_response() -> GenerateResponse {
-    GenerateResponse {
-        id: "resp-123".to_string(),
-        content: vec![ContentBlock::text("Hello!")],
-        finish_reason: FinishReason::Stop,
-        usage: Some(TokenUsage {
-            prompt_tokens: 10,
-            completion_tokens: 5,
-            total_tokens: 15,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
-        }),
-        model: "test-model".to_string(),
+fn make_response() -> CollectedResponse {
+    CollectedResponse {
+        content: vec![AssistantContentPart::text("Hello!")],
+        usage: None,
+        finish_reason: FinishReason::stop(),
     }
 }
 
@@ -31,16 +24,17 @@ fn test_create_assistant_message() {
     let response = make_response();
     let msg = create_assistant_message(&response, "turn-1");
     assert_eq!(msg.text(), "Hello!");
-    assert!(matches!(
-        msg.source,
-        MessageSource::Assistant { request_id: Some(ref id) } if id == "resp-123"
-    ));
 }
 
 #[test]
 fn test_create_tool_result() {
     let msg = create_tool_result_message("call-1", "Success!", "turn-1");
-    assert!(matches!(msg.source, MessageSource::Tool { call_id: ref id } if id == "call-1"));
+    assert!(matches!(
+        msg.source,
+        MessageSource::Tool {
+            call_id: ref id
+        } if id == "call-1"
+    ));
 }
 
 #[test]
@@ -75,12 +69,12 @@ fn test_batch_tool_results() {
     let results = vec![
         (
             "call-1".to_string(),
-            ToolResultContent::Text("Result 1".to_string()),
+            ToolResultContent::text("Result 1"),
             false,
         ),
         (
             "call-2".to_string(),
-            ToolResultContent::Text("Error!".to_string()),
+            ToolResultContent::text("Error!"),
             true,
         ),
     ];

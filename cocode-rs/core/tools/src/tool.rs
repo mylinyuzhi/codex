@@ -3,6 +3,7 @@
 //! This module defines the [`Tool`] trait that all tools must implement,
 //! providing a standardized execution pipeline.
 
+use crate::ToolDefinition;
 use crate::context::ToolContext;
 use crate::error::ToolError;
 use async_trait::async_trait;
@@ -12,7 +13,6 @@ use cocode_protocol::ToolOutput;
 use cocode_protocol::ToolResultContent;
 use cocode_protocol::ValidationError;
 use cocode_protocol::ValidationResult;
-use hyper_sdk::ToolDefinition;
 use serde_json::Value;
 
 /// A tool that can be executed by the agent.
@@ -171,7 +171,7 @@ pub trait Tool: Send + Sync {
 
     /// Convert to a tool definition for the API.
     fn to_definition(&self) -> ToolDefinition {
-        ToolDefinition::full(self.name(), self.description(), self.input_schema())
+        ToolDefinition::with_description(self.name(), self.description(), self.input_schema())
     }
 
     /// Check if this tool is safe to run concurrently.

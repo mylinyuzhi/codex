@@ -83,6 +83,10 @@ pub struct InferenceContext {
     /// merged into ProviderOptions at request build time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_options: Option<HashMap<String, serde_json::Value>>,
+
+    /// HTTP interceptor names from provider config, applied as extra headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interceptor_names: Vec<String>,
 }
 
 impl InferenceContext {
@@ -107,6 +111,7 @@ impl InferenceContext {
             agent_kind,
             original_identity,
             request_options: None,
+            interceptor_names: Vec::new(),
         }
     }
 
@@ -119,6 +124,12 @@ impl InferenceContext {
     /// Set request options for provider SDK passthrough.
     pub fn with_request_options(mut self, opts: HashMap<String, serde_json::Value>) -> Self {
         self.request_options = Some(opts);
+        self
+    }
+
+    /// Set HTTP interceptor names.
+    pub fn with_interceptor_names(mut self, names: Vec<String>) -> Self {
+        self.interceptor_names = names;
         self
     }
 
@@ -214,6 +225,7 @@ impl InferenceContext {
             agent_kind: AgentKind::subagent(&self.session_id, agent_type),
             original_identity: identity,
             request_options: self.request_options.clone(),
+            interceptor_names: self.interceptor_names.clone(),
         }
     }
 }

@@ -29,13 +29,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cocode_api::ApiClient;
+use cocode_api::AssistantContentPart;
+use cocode_api::LanguageModel;
+use cocode_api::LanguageModelCallOptions;
+use cocode_api::LanguageModelMessage;
+use cocode_api::TextPart;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::SessionMemoryExtractionConfig;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::GenerateRequest;
-use hyper_sdk::Message;
-use hyper_sdk::Model;
 use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -70,7 +71,7 @@ pub struct SessionMemoryExtractionAgent {
     /// API client for LLM requests.
     api_client: ApiClient,
     /// Model to use for summarization.
-    model: Arc<dyn Model>,
+    model: Arc<dyn LanguageModel>,
     /// Event sender for emitting extraction events.
     event_tx: mpsc::Sender<LoopEvent>,
     /// Path to the summary.md file.
@@ -82,7 +83,7 @@ impl SessionMemoryExtractionAgent {
     pub fn new(
         config: SessionMemoryExtractionConfig,
         api_client: ApiClient,
-        model: Arc<dyn Model>,
+        model: Arc<dyn LanguageModel>,
         event_tx: mpsc::Sender<LoopEvent>,
         summary_path: PathBuf,
     ) -> Self {
@@ -205,9 +206,12 @@ impl SessionMemoryExtractionAgent {
             format!("Please summarize the following conversation:\n\n{conversation_text}");
 
         // Call LLM for summary
-        let messages = vec![Message::system(&system_prompt), Message::user(&user_prompt)];
-        let mut request = GenerateRequest::new(messages);
-        request.max_tokens = Some(self.config.max_summary_tokens);
+        let messages = vec![
+            LanguageModelMessage::system(&system_prompt),
+            LanguageModelMessage::user_text(&user_prompt),
+        ];
+        let mut request = LanguageModelCallOptions::new(messages);
+        request.max_output_tokens = Some(self.config.max_summary_tokens as u64);
 
         let response = match self.api_client.generate(&*self.model, request).await {
             Ok(r) => r,
@@ -228,7 +232,7 @@ impl SessionMemoryExtractionAgent {
             .content
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
+                AssistantContentPart::Text(TextPart { text, .. }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();

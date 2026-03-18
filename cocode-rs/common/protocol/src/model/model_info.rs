@@ -59,6 +59,10 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
 
+    /// Top-k sampling (e.g. Gemini topK=64, Anthropic top_k).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i64>,
+
     // === Thinking/Reasoning (Unified) ===
     /// Default thinking level for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +161,7 @@ impl ModelInfo {
         // Sampling
         merge_field!(temperature);
         merge_field!(top_p);
+        merge_field!(top_k);
         // Thinking/Reasoning (unified)
         merge_field!(default_thinking_level);
         merge_field!(supported_thinking_levels);

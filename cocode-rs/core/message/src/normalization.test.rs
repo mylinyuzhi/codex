@@ -1,29 +1,27 @@
 use super::*;
 use crate::tracked::MessageSource;
 
-fn make_tracked(role: Role, content: &str, turn_id: &str) -> TrackedMessage {
+fn make_tracked_user(content: &str, turn_id: &str) -> TrackedMessage {
     TrackedMessage::new(
-        match role {
-            Role::User => Message::user(content),
-            Role::Assistant => Message::assistant(content),
-            Role::System => Message::system(content),
-            Role::Tool => panic!("Use specific tool message constructors"),
-        },
+        LanguageModelMessage::user_text(content),
         turn_id,
-        match role {
-            Role::User => MessageSource::User,
-            Role::Assistant => MessageSource::assistant(None),
-            Role::System => MessageSource::System,
-            Role::Tool => panic!("Use specific tool message constructors"),
-        },
+        MessageSource::User,
+    )
+}
+
+fn make_tracked_assistant(content: &str, turn_id: &str) -> TrackedMessage {
+    TrackedMessage::new(
+        LanguageModelMessage::assistant_text(content),
+        turn_id,
+        MessageSource::assistant(None),
     )
 }
 
 #[test]
 fn test_basic_normalization() {
     let messages = vec![
-        make_tracked(Role::User, "Hello", "turn-1"),
-        make_tracked(Role::Assistant, "Hi there!", "turn-1"),
+        make_tracked_user("Hello", "turn-1"),
+        make_tracked_assistant("Hi there!", "turn-1"),
     ];
 
     let normalized = normalize_messages_for_api(&messages, &NormalizationOptions::for_api());
@@ -33,8 +31,8 @@ fn test_basic_normalization() {
 #[test]
 fn test_skip_tombstoned() {
     let mut messages = vec![
-        make_tracked(Role::User, "Hello", "turn-1"),
-        make_tracked(Role::Assistant, "Hi there!", "turn-1"),
+        make_tracked_user("Hello", "turn-1"),
+        make_tracked_assistant("Hi there!", "turn-1"),
     ];
     messages[1].tombstone();
 
@@ -46,8 +44,8 @@ fn test_skip_tombstoned() {
 #[test]
 fn test_merge_consecutive() {
     let messages = vec![
-        make_tracked(Role::User, "Hello", "turn-1"),
-        make_tracked(Role::User, " world", "turn-1"),
+        make_tracked_user("Hello", "turn-1"),
+        make_tracked_user(" world", "turn-1"),
     ];
 
     let options = NormalizationOptions {
@@ -56,16 +54,19 @@ fn test_merge_consecutive() {
     };
     let normalized = normalize_messages_for_api(&messages, &options);
     assert_eq!(normalized.len(), 1);
-    assert_eq!(normalized[0].content.len(), 2);
+    if let LanguageModelMessage::User { content, .. } = &normalized[0] {
+        assert_eq!(content.len(), 2);
+    } else {
+        panic!("Expected user message");
+    }
 }
 
 #[test]
 fn test_strip_thinking_signatures() {
-    let mut tracked = make_tracked(Role::Assistant, "", "turn-1");
-    tracked.inner.content = vec![ContentBlock::Thinking {
-        content: "Let me think...".to_string(),
-        signature: Some("sig123".to_string()),
-    }];
+    let mut tracked = make_tracked_assistant("", "turn-1");
+    tracked.inner = LanguageModelMessage::assistant(vec![AssistantContentPart::Reasoning(
+        ReasoningPart::new("Let me think...").with_metadata(cocode_api::ProviderMetadata::new()),
+    )]);
 
     let options = NormalizationOptions {
         strip_thinking_signatures: true,
@@ -73,10 +74,14 @@ fn test_strip_thinking_signatures() {
     };
     let normalized = normalize_messages_for_api(&[tracked], &options);
 
-    if let ContentBlock::Thinking { signature, .. } = &normalized[0].content[0] {
-        assert!(signature.is_none());
+    if let LanguageModelMessage::Assistant { content, .. } = &normalized[0] {
+        if let AssistantContentPart::Reasoning(rp) = &content[0] {
+            assert!(rp.provider_metadata.is_none());
+        } else {
+            panic!("Expected reasoning block");
+        }
     } else {
-        panic!("Expected thinking block");
+        panic!("Expected assistant message");
     }
 }
 
@@ -88,7 +93,10 @@ fn test_validation_empty() {
 
 #[test]
 fn test_validation_system_not_first() {
-    let messages = vec![Message::user("Hello"), Message::system("Instructions")];
+    let messages = vec![
+        LanguageModelMessage::user_text("Hello"),
+        LanguageModelMessage::system("Instructions"),
+    ];
 
     let result = validate_messages(&messages);
     assert!(matches!(
@@ -100,8 +108,8 @@ fn test_validation_system_not_first() {
 #[test]
 fn test_estimate_tokens() {
     let messages = vec![
-        Message::user("Hello world"),    // ~3 tokens
-        Message::assistant("Hi there!"), // ~2 tokens
+        LanguageModelMessage::user_text("Hello world"), // ~3 tokens
+        LanguageModelMessage::assistant_text("Hi there!"), // ~2 tokens
     ];
 
     let tokens = estimate_tokens(&messages);

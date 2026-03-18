@@ -1353,7 +1353,7 @@ impl SessionState {
     pub fn get_model_for_role(
         &self,
         role: ModelRole,
-    ) -> anyhow::Result<Option<(Arc<dyn hyper_sdk::Model>, ProviderType)>> {
+    ) -> anyhow::Result<Option<(Arc<dyn cocode_api::LanguageModel>, ProviderType)>> {
         match self
             .model_hub
             .get_model_for_role_with_selections(role, &self.session.selections)
@@ -1373,7 +1373,7 @@ impl SessionState {
     /// Get the main model (shorthand for get_model_for_role(ModelRole::Main)).
     ///
     /// Returns the main model using the session's selections.
-    pub fn main_model(&self) -> anyhow::Result<Arc<dyn hyper_sdk::Model>> {
+    pub fn main_model(&self) -> anyhow::Result<Arc<dyn cocode_api::LanguageModel>> {
         self.model_hub
             .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
             .map(|(m, _)| m)
@@ -1441,7 +1441,7 @@ impl SessionState {
         &self,
         role: ModelRole,
         model_info: Option<&cocode_protocol::ModelInfo>,
-    ) -> Option<hyper_sdk::options::ProviderOptions> {
+    ) -> Option<cocode_api::ProviderOptions> {
         let thinking_level = self.thinking_level(role)?;
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
@@ -2681,8 +2681,8 @@ impl SessionState {
         );
 
         let summary_messages = vec![
-            cocode_api::Message::system(&system_prompt),
-            cocode_api::Message::user(&user_prompt),
+            cocode_api::LanguageModelMessage::system(&system_prompt),
+            cocode_api::LanguageModelMessage::user_text(&user_prompt),
         ];
 
         // 3. Call LLM for summary
@@ -2695,7 +2695,7 @@ impl SessionState {
 
         let summary_request = cocode_api::RequestBuilder::new(ctx)
             .messages(summary_messages)
-            .max_tokens(max_output_tokens)
+            .max_tokens(max_output_tokens as u64)
             .build();
 
         let response = self
@@ -2708,7 +2708,7 @@ impl SessionState {
             .content
             .iter()
             .filter_map(|b| match b {
-                hyper_sdk::ContentBlock::Text { text } => Some(text.as_str()),
+                cocode_api::AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
                 _ => None,
             })
             .collect();

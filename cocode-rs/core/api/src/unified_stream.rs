@@ -1,22 +1,15 @@
 //! Unified stream abstraction over streaming and non-streaming responses.
-//!
-//! This module provides [`UnifiedStream`] which provides a consistent interface
-//! for both streaming and non-streaming API responses. The agent loop can use
-//! the same code path regardless of whether streaming is enabled.
 
+use crate::AssistantContentPart;
+use crate::FinishReason;
+use crate::LanguageModelGenerateResult;
+use crate::LanguageModelStreamPart;
+use crate::StreamProcessor;
+use crate::StreamSnapshot;
+use crate::Usage;
 use crate::error::ApiError;
 use crate::error::Result;
 use cocode_protocol::TokenUsage as ProtocolUsage;
-use hyper_sdk::ContentBlock;
-use hyper_sdk::FinishReason;
-use hyper_sdk::GenerateResponse;
-use hyper_sdk::Message;
-use hyper_sdk::ProviderMetadata;
-use hyper_sdk::Role;
-use hyper_sdk::StreamProcessor;
-use hyper_sdk::StreamSnapshot;
-use hyper_sdk::StreamUpdate;
-use hyper_sdk::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -43,20 +36,24 @@ pub struct StreamingQueryResult {
     /// Type of this result.
     pub result_type: QueryResultType,
     /// Completed content blocks (for Assistant type).
-    pub content: Vec<ContentBlock>,
+    pub content: Vec<AssistantContentPart>,
     /// Stream event for UI updates.
-    pub event: Option<StreamUpdate>,
+    pub event: Option<LanguageModelStreamPart>,
     /// Error if result_type is Error.
     pub error: Option<String>,
     /// Token usage (available on Done).
     pub usage: Option<ProtocolUsage>,
     /// Finish reason (available on Done).
     pub finish_reason: Option<FinishReason>,
+    /// Whether the error is retryable (from provider StreamError).
+    pub is_retryable: Option<bool>,
+    /// Error code from the provider (from provider StreamError).
+    pub error_code: Option<String>,
 }
 
 impl StreamingQueryResult {
     /// Create an assistant result with completed content.
-    pub fn assistant(content: Vec<ContentBlock>) -> Self {
+    pub fn assistant(content: Vec<AssistantContentPart>) -> Self {
         Self {
             result_type: QueryResultType::Assistant,
             content,
@@ -64,11 +61,13 @@ impl StreamingQueryResult {
             error: None,
             usage: None,
             finish_reason: None,
+            is_retryable: None,
+            error_code: None,
         }
     }
 
     /// Create an event result for UI updates.
-    pub fn event(update: StreamUpdate) -> Self {
+    pub fn event(update: LanguageModelStreamPart) -> Self {
         Self {
             result_type: QueryResultType::Event,
             content: Vec::new(),
@@ -76,6 +75,8 @@ impl StreamingQueryResult {
             error: None,
             usage: None,
             finish_reason: None,
+            is_retryable: None,
+            error_code: None,
         }
     }
 
@@ -88,6 +89,8 @@ impl StreamingQueryResult {
             error: None,
             usage: None,
             finish_reason: None,
+            is_retryable: None,
+            error_code: None,
         }
     }
 
@@ -100,6 +103,8 @@ impl StreamingQueryResult {
             error: Some(message.into()),
             usage: None,
             finish_reason: None,
+            is_retryable: None,
+            error_code: None,
         }
     }
 
@@ -112,6 +117,8 @@ impl StreamingQueryResult {
             error: None,
             usage,
             finish_reason: Some(finish_reason),
+            is_retryable: None,
+            error_code: None,
         }
     }
 
@@ -124,14 +131,14 @@ impl StreamingQueryResult {
     pub fn has_tool_calls(&self) -> bool {
         self.content
             .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .any(|b| matches!(b, AssistantContentPart::ToolCall(_)))
     }
 
     /// Get tool calls from this result.
-    pub fn tool_calls(&self) -> Vec<&ContentBlock> {
+    pub fn tool_calls(&self) -> Vec<&AssistantContentPart> {
         self.content
             .iter()
-            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .filter(|b| matches!(b, AssistantContentPart::ToolCall(_)))
             .collect()
     }
 }
@@ -141,18 +148,13 @@ enum UnifiedStreamInner {
     /// Streaming mode using StreamProcessor.
     Streaming(StreamProcessor),
     /// Non-streaming mode with a single response.
-    NonStreaming(Option<GenerateResponse>),
+    NonStreaming(Option<LanguageModelGenerateResult>),
 }
 
 /// Unified abstraction for streaming and non-streaming API responses.
-///
-/// This provides a consistent interface for the agent loop to consume API
-/// responses regardless of whether streaming is enabled. In streaming mode,
-/// it yields results as content blocks complete. In non-streaming mode,
-/// it yields a single result with all content.
 pub struct UnifiedStream {
     inner: UnifiedStreamInner,
-    event_tx: Option<mpsc::Sender<StreamUpdate>>,
+    event_tx: Option<mpsc::Sender<LanguageModelStreamPart>>,
 }
 
 impl UnifiedStream {
@@ -165,7 +167,7 @@ impl UnifiedStream {
     }
 
     /// Create a unified stream from a non-streaming response.
-    pub fn from_response(response: GenerateResponse) -> Self {
+    pub fn from_response(response: LanguageModelGenerateResult) -> Self {
         Self {
             inner: UnifiedStreamInner::NonStreaming(Some(response)),
             event_tx: None,
@@ -173,14 +175,12 @@ impl UnifiedStream {
     }
 
     /// Set an event sender for UI updates.
-    pub fn with_event_sender(mut self, tx: mpsc::Sender<StreamUpdate>) -> Self {
+    pub fn with_event_sender(mut self, tx: mpsc::Sender<LanguageModelStreamPart>) -> Self {
         self.event_tx = Some(tx);
         self
     }
 
     /// Get the next result from the stream.
-    ///
-    /// Returns `None` when the stream is complete.
     pub async fn next(&mut self) -> Option<Result<StreamingQueryResult>> {
         match &mut self.inner {
             UnifiedStreamInner::Streaming(processor) => {
@@ -193,20 +193,20 @@ impl UnifiedStream {
     /// Process streaming events from the processor.
     async fn process_streaming_event(
         processor: &mut StreamProcessor,
-        event_tx: &Option<mpsc::Sender<StreamUpdate>>,
+        event_tx: &Option<mpsc::Sender<LanguageModelStreamPart>>,
     ) -> Option<Result<StreamingQueryResult>> {
         loop {
             match processor.next().await {
-                Some(Ok((update, snapshot))) => {
+                Some(Ok((part, snapshot))) => {
                     // Send update to UI if configured
                     if let Some(tx) = event_tx
-                        && let Err(e) = tx.send(update.clone()).await
+                        && let Err(e) = tx.send(part.clone()).await
                     {
                         tracing::debug!("Failed to send stream event to UI: {e}");
                     }
 
                     // Check for completed content
-                    let completed = Self::check_for_completed_content(&update);
+                    let completed = Self::check_for_completed_content(&part, snapshot);
 
                     if let Some(result) = completed {
                         return Some(Ok(result));
@@ -214,13 +214,21 @@ impl UnifiedStream {
 
                     // Check if stream is done
                     if snapshot.is_complete {
-                        let usage = Self::convert_usage(&snapshot);
-                        let finish_reason = snapshot.finish_reason.unwrap_or(FinishReason::Stop);
+                        let usage = Self::convert_usage(snapshot);
+                        let finish_reason = snapshot
+                            .finish_reason
+                            .clone()
+                            .unwrap_or_else(FinishReason::stop);
                         return Some(Ok(StreamingQueryResult::done(usage, finish_reason)));
                     }
 
                     // Continue to next event for deltas
-                    if update.is_delta() {
+                    if matches!(
+                        part,
+                        LanguageModelStreamPart::TextDelta { .. }
+                            | LanguageModelStreamPart::ReasoningDelta { .. }
+                            | LanguageModelStreamPart::ToolInputDelta { .. }
+                    ) {
                         continue;
                     }
                 }
@@ -237,42 +245,59 @@ impl UnifiedStream {
     /// Convert snapshot usage to protocol usage.
     fn convert_usage(snapshot: &StreamSnapshot) -> Option<ProtocolUsage> {
         snapshot.usage.as_ref().map(|u| ProtocolUsage {
-            input_tokens: u.prompt_tokens,
-            output_tokens: u.completion_tokens,
-            cache_read_tokens: u.cache_read_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-            reasoning_tokens: u.reasoning_tokens,
+            input_tokens: u.total_input_tokens() as i64,
+            output_tokens: u.total_output_tokens() as i64,
+            cache_read_tokens: u.input_tokens.cache_read.map(|v| v as i64),
+            cache_creation_tokens: u.input_tokens.cache_write.map(|v| v as i64),
+            reasoning_tokens: u.output_tokens.reasoning.map(|v| v as i64),
         })
     }
 
-    /// Check if the update indicates completed content.
-    fn check_for_completed_content(update: &StreamUpdate) -> Option<StreamingQueryResult> {
-        match update {
-            StreamUpdate::TextDone { text, .. } => {
-                if !text.is_empty() {
-                    Some(StreamingQueryResult::assistant(vec![ContentBlock::text(
-                        text,
-                    )]))
+    /// Check if the event indicates completed content.
+    fn check_for_completed_content(
+        part: &LanguageModelStreamPart,
+        snapshot: &StreamSnapshot,
+    ) -> Option<StreamingQueryResult> {
+        match part {
+            LanguageModelStreamPart::TextEnd { .. } => {
+                if !snapshot.text.is_empty() {
+                    Some(StreamingQueryResult::assistant(vec![
+                        AssistantContentPart::text(&snapshot.text),
+                    ]))
                 } else {
                     None
                 }
             }
-            StreamUpdate::ThinkingDone {
-                content, signature, ..
-            } => Some(StreamingQueryResult::assistant(vec![
-                ContentBlock::Thinking {
-                    content: content.clone(),
-                    signature: signature.clone(),
-                },
+            LanguageModelStreamPart::ReasoningEnd { .. } => snapshot.reasoning.as_ref().map(|r| {
+                StreamingQueryResult::assistant(vec![AssistantContentPart::reasoning(&r.content)])
+            }),
+            LanguageModelStreamPart::ToolCall(tc) => Some(StreamingQueryResult::assistant(vec![
+                AssistantContentPart::tool_call(&tc.tool_call_id, &tc.tool_name, tc.input.clone()),
             ])),
-            StreamUpdate::ToolCallCompleted { tool_call, .. } => {
+            LanguageModelStreamPart::File(file) => Some(StreamingQueryResult::assistant(vec![
+                AssistantContentPart::File(crate::FilePart::new(
+                    crate::DataContent::Base64(file.data.clone()),
+                    &file.media_type,
+                )),
+            ])),
+            LanguageModelStreamPart::ReasoningFile(rf) => {
                 Some(StreamingQueryResult::assistant(vec![
-                    ContentBlock::tool_use(
-                        &tool_call.id,
-                        &tool_call.name,
-                        tool_call.arguments.clone(),
-                    ),
+                    AssistantContentPart::ReasoningFile(crate::ReasoningFilePart::new(
+                        crate::DataContent::Base64(rf.data.clone()),
+                        &rf.media_type,
+                    )),
                 ]))
+            }
+            LanguageModelStreamPart::Source(source) => Some(StreamingQueryResult::assistant(vec![
+                AssistantContentPart::Source(source.clone()),
+            ])),
+            // P20: Propagate stream errors from providers (e.g., Anthropic overloaded mid-stream).
+            // P29: Preserve structured fields (is_retryable, code) for upstream classification.
+            LanguageModelStreamPart::Error { error } => {
+                let mut result = StreamingQueryResult::error(&error.message);
+                result.is_retryable = Some(error.is_retryable);
+                result.error_code = error.code.clone();
+                Some(result)
             }
             _ => None,
         }
@@ -280,27 +305,21 @@ impl UnifiedStream {
 
     /// Handle non-streaming response.
     fn process_non_streaming(
-        response: Option<GenerateResponse>,
+        response: Option<LanguageModelGenerateResult>,
     ) -> Option<Result<StreamingQueryResult>> {
         let response = response?;
 
-        // Build usage
-        let usage = response.usage.as_ref().map(|u| ProtocolUsage {
-            input_tokens: u.prompt_tokens,
-            output_tokens: u.completion_tokens,
-            cache_read_tokens: u.cache_read_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-            reasoning_tokens: u.reasoning_tokens,
-        });
+        let usage = convert_generate_usage(&response.usage);
 
-        // Return all content at once
         Some(Ok(StreamingQueryResult {
             result_type: QueryResultType::Assistant,
             content: response.content,
             event: None,
             error: None,
-            usage,
+            usage: Some(usage),
             finish_reason: Some(response.finish_reason),
+            is_retryable: None,
+            error_code: None,
         }))
     }
 
@@ -308,7 +327,7 @@ impl UnifiedStream {
     pub async fn collect(mut self) -> Result<CollectedResponse> {
         let mut content = Vec::new();
         let mut usage = None;
-        let mut finish_reason = FinishReason::Stop;
+        let mut finish_reason = FinishReason::stop();
 
         while let Some(result) = self.next().await {
             let result = result?;
@@ -316,7 +335,6 @@ impl UnifiedStream {
             match result.result_type {
                 QueryResultType::Assistant => {
                     content.extend(result.content);
-                    // Capture usage from non-streaming responses
                     if result.usage.is_some() {
                         usage = result.usage;
                     }
@@ -326,7 +344,7 @@ impl UnifiedStream {
                 }
                 QueryResultType::Done => {
                     usage = result.usage;
-                    finish_reason = result.finish_reason.unwrap_or(FinishReason::Stop);
+                    finish_reason = result.finish_reason.unwrap_or_else(FinishReason::stop);
                     break;
                 }
                 QueryResultType::Error => {
@@ -363,7 +381,7 @@ impl std::fmt::Debug for UnifiedStream {
 #[derive(Debug, Clone)]
 pub struct CollectedResponse {
     /// All content blocks.
-    pub content: Vec<ContentBlock>,
+    pub content: Vec<AssistantContentPart>,
     /// Token usage.
     pub usage: Option<ProtocolUsage>,
     /// Finish reason.
@@ -376,7 +394,7 @@ impl CollectedResponse {
         self.content
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
+                AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
                 _ => None,
             })
             .collect()
@@ -385,16 +403,16 @@ impl CollectedResponse {
     /// Get thinking content if present.
     pub fn thinking(&self) -> Option<&str> {
         self.content.iter().find_map(|b| match b {
-            ContentBlock::Thinking { content, .. } => Some(content.as_str()),
+            AssistantContentPart::Reasoning(rp) => Some(rp.text.as_str()),
             _ => None,
         })
     }
 
     /// Get tool calls.
-    pub fn tool_calls(&self) -> Vec<&ContentBlock> {
+    pub fn tool_calls(&self) -> Vec<&AssistantContentPart> {
         self.content
             .iter()
-            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .filter(|b| matches!(b, AssistantContentPart::ToolCall(_)))
             .collect()
     }
 
@@ -402,59 +420,41 @@ impl CollectedResponse {
     pub fn has_tool_calls(&self) -> bool {
         self.content
             .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .any(|b| matches!(b, AssistantContentPart::ToolCall(_)))
     }
 
-    /// Convert to a Message for history management.
-    ///
-    /// Creates an assistant message with proper source metadata.
-    /// Use this when the agent loop manages history directly.
-    ///
-    /// # Arguments
-    ///
-    /// * `provider` - Provider name (e.g., "openai", "anthropic")
-    /// * `model` - Model name (e.g., "gpt-4o", "claude-sonnet-4")
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let collected = stream.collect().await?;
-    /// let msg = collected.into_message("anthropic", "claude-sonnet-4");
-    /// history.push(msg);
-    /// ```
-    pub fn into_message(self, provider: &str, model: &str) -> Message {
-        let mut msg = Message::new(Role::Assistant, self.content);
-        msg.metadata = ProviderMetadata::with_source(provider, model);
-        msg
-    }
-
-    /// Convert to GenerateResponse.
-    ///
-    /// Useful when you need the full response structure with ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Response ID
-    /// * `model` - Model name that generated the response
-    pub fn into_response(
-        self,
-        id: impl Into<String>,
-        model: impl Into<String>,
-    ) -> GenerateResponse {
-        GenerateResponse {
-            id: id.into(),
+    /// Convert to a LanguageModelMessage for history.
+    pub fn into_assistant_message(self) -> crate::LanguageModelMessage {
+        crate::LanguageModelMessage::Assistant {
             content: self.content,
-            finish_reason: self.finish_reason,
-            usage: self.usage.map(|u| TokenUsage {
-                prompt_tokens: u.input_tokens,
-                completion_tokens: u.output_tokens,
-                total_tokens: u.input_tokens + u.output_tokens,
-                cache_read_tokens: u.cache_read_tokens,
-                cache_creation_tokens: u.cache_creation_tokens,
-                reasoning_tokens: u.reasoning_tokens,
-            }),
-            model: model.into(),
+            provider_options: None,
         }
+    }
+
+    /// Convert to GenerateResult.
+    pub fn into_generate_result(self) -> LanguageModelGenerateResult {
+        let usage = self
+            .usage
+            .map(|u| {
+                let mut usage = Usage::new(u.input_tokens as u64, u.output_tokens as u64);
+                usage.input_tokens.cache_read = u.cache_read_tokens.map(|v| v as u64);
+                usage.input_tokens.cache_write = u.cache_creation_tokens.map(|v| v as u64);
+                usage.output_tokens.reasoning = u.reasoning_tokens.map(|v| v as u64);
+                usage
+            })
+            .unwrap_or_default();
+        LanguageModelGenerateResult::new(self.content, usage, self.finish_reason)
+    }
+}
+
+/// Convert vercel-ai Usage to protocol TokenUsage.
+pub fn convert_generate_usage(usage: &Usage) -> ProtocolUsage {
+    ProtocolUsage {
+        input_tokens: usage.total_input_tokens() as i64,
+        output_tokens: usage.total_output_tokens() as i64,
+        cache_read_tokens: usage.input_tokens.cache_read.map(|v| v as i64),
+        cache_creation_tokens: usage.input_tokens.cache_write.map(|v| v as i64),
+        reasoning_tokens: usage.output_tokens.reasoning.map(|v| v as i64),
     }
 }
 

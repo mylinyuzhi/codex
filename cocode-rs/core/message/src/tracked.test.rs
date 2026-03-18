@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_user_message() {
     let msg = TrackedMessage::user("Hello", "turn-1");
-    assert_eq!(msg.role(), Role::User);
+    assert!(msg.is_user());
     assert_eq!(msg.turn_id, "turn-1");
     assert_eq!(msg.text(), "Hello");
     assert!(!msg.is_tombstoned());
@@ -13,7 +13,7 @@ fn test_user_message() {
 #[test]
 fn test_assistant_message() {
     let msg = TrackedMessage::assistant("Hi there", "turn-1", Some("req-123".to_string()));
-    assert_eq!(msg.role(), Role::Assistant);
+    assert!(msg.is_assistant());
     assert!(matches!(
         msg.source,
         MessageSource::Assistant { request_id: Some(ref id) } if id == "req-123"
@@ -48,15 +48,19 @@ fn test_uuid_uniqueness() {
 #[test]
 fn test_into_message() {
     let tracked = TrackedMessage::user("Hello", "turn-1");
-    let message: Message = tracked.into();
-    assert_eq!(message.role, Role::User);
+    let message: LanguageModelMessage = tracked.into();
+    assert!(message.is_user());
 }
 
 #[test]
 fn test_assistant_with_content() {
     let content = vec![
-        ContentBlock::text("Let me help"),
-        ContentBlock::tool_use("call_1", "get_weather", serde_json::json!({"city": "NYC"})),
+        AssistantContentPart::text("Let me help"),
+        AssistantContentPart::tool_call(
+            "call_1",
+            "get_weather",
+            serde_json::json!({"city": "NYC"}),
+        ),
     ];
     let msg = TrackedMessage::assistant_with_content(content, "turn-1", None);
     assert!(msg.has_tool_calls());
@@ -70,7 +74,7 @@ fn test_system_reminder_message() {
         "changed_files",
         "turn-1",
     );
-    assert_eq!(msg.role(), Role::User); // System reminders are sent as user messages
+    assert!(msg.is_user()); // System reminders are sent as user messages
     assert!(msg.is_meta()); // But marked as meta
     assert!(matches!(
         msg.source,
@@ -102,7 +106,10 @@ fn test_set_meta() {
 
 #[test]
 fn test_new_meta() {
-    let msg =
-        TrackedMessage::new_meta(Message::user("meta content"), "turn-1", MessageSource::User);
+    let msg = TrackedMessage::new_meta(
+        LanguageModelMessage::user_text("meta content"),
+        "turn-1",
+        MessageSource::User,
+    );
     assert!(msg.is_meta());
 }

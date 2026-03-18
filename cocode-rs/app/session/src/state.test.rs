@@ -1,7 +1,7 @@
 use super::*;
+use cocode_api::AssistantContentPart;
 use cocode_config::json_config::ExtraMarketplaceConfig;
 use cocode_config::json_config::MarketplaceSourceConfig;
-use hyper_sdk::ContentBlock;
 
 #[test]
 fn test_turn_result_from_loop_result() {
@@ -10,7 +10,7 @@ fn test_turn_result_from_loop_result() {
         1000,
         500,
         "Hello!".to_string(),
-        vec![ContentBlock::text("Hello!")],
+        vec![AssistantContentPart::text("Hello!")],
     );
 
     let turn = TurnResult::from_loop_result(&loop_result);

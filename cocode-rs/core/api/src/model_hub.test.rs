@@ -142,7 +142,8 @@ fn test_hub_prepare_main_with_selections_empty_selections_returns_error() {
 
     let result = hub.prepare_main_with_selections(&selections, "session-123", 1);
     assert!(result.is_err());
-    assert!(result.unwrap_err().is_no_model_configured());
+    let err = result.err().unwrap();
+    assert!(err.is_no_model_configured());
 }
 
 #[test]
@@ -161,7 +162,8 @@ fn test_hub_get_model_for_role_with_selections() {
     let result = hub.get_model_for_role_with_selections(ModelRole::Main, &selections);
     assert!(result.is_err());
     // Should be a provider error, not "no model configured"
-    assert!(!result.unwrap_err().is_no_model_configured());
+    let err = result.err().unwrap();
+    assert!(!err.is_no_model_configured());
 }
 
 #[test]
@@ -172,5 +174,6 @@ fn test_hub_get_model_for_role_with_selections_empty_returns_error() {
 
     let result = hub.get_model_for_role_with_selections(ModelRole::Main, &selections);
     assert!(result.is_err());
-    assert!(result.unwrap_err().is_no_model_configured());
+    let err = result.err().unwrap();
+    assert!(err.is_no_model_configured());
 }

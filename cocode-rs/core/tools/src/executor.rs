@@ -10,6 +10,7 @@
 //! - **PostToolUse**: Called after successful tool execution
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
+use crate::ToolCall;
 use crate::context::ApprovalStore;
 use crate::context::FileTracker;
 use crate::context::ModelCallFn;
@@ -30,7 +31,6 @@ use cocode_protocol::PermissionMode;
 use cocode_protocol::ToolOutput;
 use cocode_protocol::ValidationResult;
 use cocode_shell::ShellExecutor;
-use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -513,8 +513,8 @@ impl StreamingToolExecutor {
     /// For safe tools, execution starts immediately.
     /// For unsafe tools, they are queued for later execution.
     pub async fn on_tool_complete(&self, tool_call: ToolCall) {
-        let call_id = &tool_call.id;
-        let name = &tool_call.name;
+        let call_id = &tool_call.tool_call_id;
+        let name = &tool_call.tool_name;
 
         debug!(call_id = %call_id, name = %name, "Tool use complete");
 
@@ -542,7 +542,7 @@ impl StreamingToolExecutor {
         self.emit_event(LoopEvent::ToolUseQueued {
             call_id: call_id.clone(),
             name: name.clone(),
-            input: tool_call.arguments.clone(),
+            input: tool_call.input.clone(),
         })
         .await;
 
@@ -559,7 +559,7 @@ impl StreamingToolExecutor {
             }
         };
 
-        let is_safe = tool.is_concurrency_safe_for(&tool_call.arguments);
+        let is_safe = tool.is_concurrency_safe_for(&tool_call.input);
 
         match is_safe {
             true => {
@@ -589,9 +589,9 @@ impl StreamingToolExecutor {
 
     /// Start tool execution in a background task.
     async fn start_tool_execution(&self, tool_call: ToolCall) {
-        let call_id = tool_call.id.clone();
-        let name = tool_call.name.clone();
-        let original_input = tool_call.arguments.clone();
+        let call_id = tool_call.tool_call_id.clone();
+        let name = tool_call.tool_name.clone();
+        let original_input = tool_call.input.clone();
 
         // Execute pre-hooks before starting the tool
         let pre_hook = match self
@@ -706,7 +706,10 @@ impl StreamingToolExecutor {
             }
         });
 
-        self.active_tasks.lock().await.insert(tool_call.id, handle);
+        self.active_tasks
+            .lock()
+            .await
+            .insert(tool_call.tool_call_id, handle);
     }
 
     /// Execute queued pending tools with dynamic scheduling.
@@ -729,8 +732,8 @@ impl StreamingToolExecutor {
             }
 
             let tool_call = pending_call.tool_call;
-            let call_id = tool_call.id.clone();
-            let name = tool_call.name.clone();
+            let call_id = tool_call.tool_call_id.clone();
+            let name = tool_call.tool_name.clone();
 
             // Reject tools not in the model's allowlist (if set)
             if !self.is_tool_allowed(&name) {
@@ -753,7 +756,7 @@ impl StreamingToolExecutor {
             let is_safe = self
                 .registry
                 .get(&name)
-                .map(|tool| tool.is_concurrency_safe_for(&tool_call.arguments))
+                .map(|tool| tool.is_concurrency_safe_for(&tool_call.input))
                 .unwrap_or(false);
 
             if is_safe {
@@ -777,9 +780,9 @@ impl StreamingToolExecutor {
 
     /// Execute a single tool synchronously (for unsafe tools in the pending queue).
     async fn execute_single_tool(&self, tool_call: ToolCall) {
-        let call_id = tool_call.id.clone();
-        let name = tool_call.name.clone();
-        let original_input = tool_call.arguments.clone();
+        let call_id = tool_call.tool_call_id.clone();
+        let name = tool_call.tool_name.clone();
+        let original_input = tool_call.input.clone();
 
         // Execute pre-hooks before starting the tool
         let pre_hook = match self
@@ -1627,9 +1630,9 @@ async fn execute_tool_inner(
     tool_config: &cocode_protocol::ToolConfig,
     otel_manager: Option<&Arc<cocode_otel::OtelManager>>,
 ) -> Result<ToolOutput> {
-    let call_id = &tool_call.id;
-    let name = &tool_call.name;
-    let input = tool_call.arguments;
+    let call_id = &tool_call.tool_call_id;
+    let name = &tool_call.tool_name;
+    let input = tool_call.input;
 
     // Get the tool
     let tool = registry

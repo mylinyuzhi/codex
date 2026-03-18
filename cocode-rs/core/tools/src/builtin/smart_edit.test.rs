@@ -103,16 +103,16 @@ async fn test_smart_edit_with_mock_model_call() {
     // Set up mock model_call_fn that returns a corrected search/replace
     let mock_fn: crate::context::ModelCallFn = Arc::new(|_input| {
         Box::pin(async {
+            let json = serde_json::json!({
+                "search": "    let x = 1;",
+                "replace": "    let x = 42;",
+                "no_changes_required": false,
+                "explanation": "Fixed variable name in search string"
+            });
             Ok(ModelCallResult {
-                response: hyper_sdk::ObjectResponse::new(
-                    "test-id",
-                    "test-model",
-                    serde_json::json!({
-                        "search": "    let x = 1;",
-                        "replace": "    let x = 42;",
-                        "no_changes_required": false,
-                        "explanation": "Fixed variable name in search string"
-                    }),
+                response: cocode_api::LanguageModelGenerateResult::text(
+                    serde_json::to_string(&json).unwrap(),
+                    cocode_api::Usage::default(),
                 ),
             })
         })
@@ -154,16 +154,16 @@ async fn test_smart_edit_no_changes_required() {
 
     let mock_fn: crate::context::ModelCallFn = Arc::new(|_input| {
         Box::pin(async {
+            let json = serde_json::json!({
+                "search": "",
+                "replace": "",
+                "no_changes_required": true,
+                "explanation": "The edit is already applied"
+            });
             Ok(ModelCallResult {
-                response: hyper_sdk::ObjectResponse::new(
-                    "test-id",
-                    "test-model",
-                    serde_json::json!({
-                        "search": "",
-                        "replace": "",
-                        "no_changes_required": true,
-                        "explanation": "The edit is already applied"
-                    }),
+                response: cocode_api::LanguageModelGenerateResult::text(
+                    serde_json::to_string(&json).unwrap(),
+                    cocode_api::Usage::default(),
                 ),
             })
         })
