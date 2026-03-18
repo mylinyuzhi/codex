@@ -47,6 +47,24 @@ use crate::compaction::write_session_memory;
 use crate::error::AgentLoopError;
 use crate::error::agent_loop_error;
 
+/// Outcome sent from the background extraction task back to the main loop.
+///
+/// The main loop drains these via `try_recv()` at the top of each iteration
+/// to update `AutoCompactTracking`, fixing the bug where `extraction_in_progress`
+/// stayed `true` forever after the first extraction.
+#[derive(Debug, Clone)]
+pub enum ExtractionOutcome {
+    /// Extraction completed successfully.
+    Completed {
+        /// Estimated token count of the summary.
+        summary_tokens: i32,
+        /// ID of the last message that was summarized.
+        last_summarized_id: String,
+    },
+    /// Extraction failed.
+    Failed,
+}
+
 /// Result of a session memory extraction operation.
 #[derive(Debug, Clone)]
 pub struct ExtractionResult {
@@ -248,8 +266,7 @@ impl SessionMemoryExtractionAgent {
             return agent_loop_error::ExtractionEmptySummarySnafu.fail();
         }
 
-        // Estimate summary tokens (~4 chars per token)
-        let summary_tokens = (summary.len() / 4) as i32;
+        let summary_tokens = cocode_protocol::estimate_text_tokens(&summary);
 
         // Write to summary.md
         if let Err(e) = write_session_memory(&self.summary_path, &summary, last_message_id).await {
@@ -288,30 +305,68 @@ impl SessionMemoryExtractionAgent {
     }
 
     /// Build the extraction prompt for incremental summarization.
+    ///
+    /// Uses a 10-section template aligned with Claude Code's session memory format.
+    /// Each section has a ~2,000 token limit with a total limit of ~12,000 tokens.
     fn build_extraction_prompt(&self) -> String {
         format!(
-            r#"You are extracting key information from an ongoing conversation between a user and an AI coding assistant. Create a concise summary that preserves essential context for future reference.
+            r#"You are extracting key information from an ongoing conversation between a user and an AI coding assistant. Your job is to maintain a structured session memory that preserves essential context.
 
 ## Instructions
 
-Generate a focused summary covering:
+Maintain exact structure with all 10 sections below. Write DETAILED, INFO-DENSE content under each section. ONLY update content BELOW the italic descriptions — do not modify section headers or descriptions.
 
-1. **Current Goal**: What is the user trying to accomplish?
-2. **Progress Made**: What has been done so far?
-3. **Key Decisions**: Important technical choices or user preferences.
-4. **Files Modified**: List of files that have been created or changed.
-5. **Pending Items**: What still needs to be done?
+Maximum output: {} tokens. Each section should not exceed 2,000 tokens.
 
-## Format
+## Template
 
-- Use bullet points for clarity
-- Be concise but complete
-- Focus on information needed to continue the work
-- Maximum output: {} tokens
+### Session Title
+*A short, descriptive title for this session (max 10 words).*
+(Summarize the main topic or goal of the conversation.)
 
-## Output
+### 1. Current State
+*Where things stand right now — the latest status of the task/conversation.*
+(What is the user currently working on? What was the most recent action or decision?)
 
-Provide the summary directly without any preamble."#,
+### 2. Task Specification
+*The original goal and requirements as stated or refined by the user.*
+(What was requested? Include any constraints, preferences, or acceptance criteria.)
+
+### 3. Files and Functions
+*Key files, functions, classes, and code locations referenced or modified.*
+(List file paths with brief notes on what was done or what's relevant in each.)
+
+### 4. Workflow
+*Steps taken so far and the overall approach being followed.*
+(Outline the sequence of actions, including any iteration or backtracking.)
+
+### 5. Errors & Corrections
+*Mistakes made, bugs encountered, and how they were resolved.*
+(Document what went wrong and the fix applied — this prevents repeating mistakes.)
+
+### 6. Codebase and System Documentation
+*Architectural patterns, conventions, and system details discovered during the session.*
+(Note any non-obvious design patterns, configuration, or dependencies found.)
+
+### 7. Learnings
+*User preferences, project conventions, and insights discovered during the session.*
+(Technical preferences, coding style, tool choices, or workflow preferences.)
+
+### 8. Key Results
+*Important outputs, decisions, or artifacts produced.*
+(Final or intermediate results: code snippets, config changes, test results, etc.)
+
+### 9. Worklog
+*Chronological log of significant actions taken during the conversation.*
+(Brief timestamped entries: "Implemented X", "Fixed Y", "User requested Z".)
+
+## Format Rules
+
+- Use bullet points within each section
+- Be concise but information-dense — prefer specifics over generalities
+- Include file paths, function names, and error messages verbatim when relevant
+- If a section has no content, write "N/A" rather than omitting it
+- Provide the summary directly without any preamble"#,
             self.config.max_summary_tokens
         )
     }

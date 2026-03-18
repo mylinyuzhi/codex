@@ -98,6 +98,8 @@ pub struct AttachmentSettings {
     pub compact_file_reference: bool,
     /// Enable rewind notifications.
     pub rewind: bool,
+    /// Enable compaction reminder (prevents "context anxiety").
+    pub compaction_reminder: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -130,6 +132,7 @@ impl Default for AttachmentSettings {
             budget_usd: true,
             compact_file_reference: true,
             rewind: true,
+            compaction_reminder: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

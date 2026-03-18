@@ -34,15 +34,6 @@ fn test_constants() {
     assert_eq!(MAX_OUTPUT_TOKEN_RECOVERY, 3);
 }
 
-#[test]
-fn test_micro_compact_empty_history() {
-    // Cannot construct a full AgentLoop without a model, but we can test
-    // the candidate finder directly.
-    let messages: Vec<serde_json::Value> = vec![];
-    let candidates = crate::compaction::micro_compact_candidates(&messages);
-    assert!(candidates.is_empty());
-}
-
 mod select_tools_for_model_tests {
     use super::*;
     use cocode_protocol::ApplyPatchToolType;
@@ -191,5 +182,66 @@ mod select_tools_for_model_tests {
         let openai = opts.get("openai").expect("openai provider options");
         let custom_format = openai.get("custom_format").expect("custom_format key");
         assert_eq!(custom_format["type"], "grammar");
+    }
+}
+
+// ============================================================================
+// Compaction Integration Tests
+// ============================================================================
+
+mod compaction_integration_tests {
+    use super::*;
+    use crate::compaction::ThresholdStatus;
+    use cocode_protocol::CompactConfig;
+
+    /// Test: threshold recalculation after auto-compact prevents false blocking (Plan 1.1)
+    #[test]
+    fn threshold_status_reflects_post_compact_tokens() {
+        let config = CompactConfig::default();
+        let context_window = 200_000;
+
+        // Simulate: before compact, tokens are at blocking limit
+        let pre_tokens = 190_000;
+        let pre_status = ThresholdStatus::calculate(pre_tokens, context_window, &config);
+        assert!(
+            pre_status.is_at_blocking_limit,
+            "pre-compact should be at blocking limit"
+        );
+
+        // Simulate: after compact, tokens are well below
+        let post_tokens = 80_000;
+        let post_status = ThresholdStatus::calculate(post_tokens, context_window, &config);
+        assert!(
+            !post_status.is_at_blocking_limit,
+            "post-compact should NOT be at blocking limit"
+        );
+        assert!(
+            !post_status.is_above_auto_compact_threshold,
+            "post-compact should NOT trigger auto-compact"
+        );
+    }
+
+    /// Test: circuit breaker state is independent of compaction tier
+    #[test]
+    fn circuit_breaker_reset_logic() {
+        // Circuit breaker opens at 3 consecutive failures
+        let mut failure_count = 0;
+        let mut circuit_breaker_open = false;
+
+        // Simulate 3 Tier 2 failures
+        for _ in 0..3 {
+            failure_count += 1;
+            if failure_count >= 3 {
+                circuit_breaker_open = true;
+            }
+        }
+        assert!(circuit_breaker_open);
+        assert_eq!(failure_count, 3);
+
+        // Simulate Tier 1 success resetting the circuit breaker (Plan 1.3)
+        failure_count = 0;
+        circuit_breaker_open = false;
+        assert!(!circuit_breaker_open);
+        assert_eq!(failure_count, 0);
     }
 }

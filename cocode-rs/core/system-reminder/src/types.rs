@@ -146,6 +146,10 @@ pub enum AttachmentType {
     // === Rewind ===
     /// Notification that a rewind occurred (one-time, consumed after generation).
     Rewind,
+
+    // === Compaction reminder ===
+    /// Reminder that auto-compact is enabled (prevents "context anxiety").
+    CompactionReminder,
 }
 
 impl AttachmentType {
@@ -181,7 +185,8 @@ impl AttachmentType {
             | AttachmentType::TokenUsage
             | AttachmentType::BudgetUsd
             | AttachmentType::CompactFileReference
-            | AttachmentType::Rewind => XmlTag::SystemReminder,
+            | AttachmentType::Rewind
+            | AttachmentType::CompactionReminder => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -228,7 +233,8 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd
             | AttachmentType::AlreadyReadFile
             | AttachmentType::CompactFileReference
-            | AttachmentType::Rewind => ReminderTier::MainAgentOnly,
+            | AttachmentType::Rewind
+            | AttachmentType::CompactionReminder => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
@@ -272,6 +278,7 @@ impl AttachmentType {
             AttachmentType::AlreadyReadFile => "already_read_file",
             AttachmentType::CompactFileReference => "compact_file_reference",
             AttachmentType::Rewind => "rewind",
+            AttachmentType::CompactionReminder => "compaction_reminder",
         }
     }
 }

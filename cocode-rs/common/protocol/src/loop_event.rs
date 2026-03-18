@@ -288,6 +288,15 @@ pub enum LoopEvent {
         /// Last error message.
         error: String,
     },
+    /// Auto-compaction circuit breaker opened after consecutive failures.
+    ///
+    /// When 3 consecutive compaction attempts fail, the circuit breaker opens
+    /// and auto-compaction is disabled for the remainder of the session.
+    /// Manual compaction still works.
+    CompactionCircuitBreakerOpen {
+        /// Number of consecutive failures that triggered the breaker.
+        consecutive_failures: i32,
+    },
     /// Memory attachments were cleared during compaction.
     MemoryAttachmentsCleared {
         /// UUIDs of cleared memory attachments.
@@ -965,6 +974,8 @@ pub enum HookEventType {
     SubagentStop,
     /// Before context compaction occurs.
     PreCompact,
+    /// After context compaction completes.
+    PostCompact,
     /// A notification event (informational, no blocking).
     Notification,
     /// When a permission is requested.
@@ -995,6 +1006,7 @@ impl HookEventType {
             Self::SubagentStart => "subagent_start",
             Self::SubagentStop => "subagent_stop",
             Self::PreCompact => "pre_compact",
+            Self::PostCompact => "post_compact",
             Self::Notification => "notification",
             Self::PermissionRequest => "permission_request",
             Self::TeammateIdle => "teammate_idle",
@@ -1027,6 +1039,7 @@ impl std::str::FromStr for HookEventType {
             "SubagentStart" | "subagent_start" => Ok(Self::SubagentStart),
             "SubagentStop" | "subagent_stop" => Ok(Self::SubagentStop),
             "PreCompact" | "pre_compact" => Ok(Self::PreCompact),
+            "PostCompact" | "post_compact" => Ok(Self::PostCompact),
             "Notification" | "notification" => Ok(Self::Notification),
             "PermissionRequest" | "permission_request" => Ok(Self::PermissionRequest),
             "TeammateIdle" | "teammate_idle" => Ok(Self::TeammateIdle),
