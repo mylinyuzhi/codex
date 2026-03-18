@@ -33,9 +33,7 @@ pub async fn run(model: &Arc<dyn LanguageModelV4>) -> Result<()> {
         LanguageModel::from_v4(model.clone()),
         Prompt::messages(vec![LanguageModelV4Message::user(vec![
             UserContentPart::image(image_bytes, "image/png"),
-            UserContentPart::text(
-                "What color is this square? Answer with just the color name.",
-            ),
+            UserContentPart::text("What color is this square? Answer with just the color name."),
         ])])
         .with_system("You are a helpful assistant. Be concise."),
     ))

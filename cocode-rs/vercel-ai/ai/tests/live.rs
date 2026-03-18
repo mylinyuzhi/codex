@@ -215,6 +215,144 @@ async fn test_streaming_tools_google() -> Result<()> {
 }
 
 // ============================================================================
+// StreamProcessor Tests (All Providers)
+// ============================================================================
+
+#[tokio::test]
+async fn test_stream_processor_collect_openai() -> Result<()> {
+    provider_test!("openai", "streaming", suite::stream_processor::run_collect)
+}
+
+#[tokio::test]
+async fn test_stream_processor_collect_anthropic() -> Result<()> {
+    provider_test!(
+        "anthropic",
+        "streaming",
+        suite::stream_processor::run_collect
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_collect_google() -> Result<()> {
+    provider_test!("google", "streaming", suite::stream_processor::run_collect)
+}
+
+#[tokio::test]
+async fn test_stream_processor_into_text_openai() -> Result<()> {
+    provider_test!(
+        "openai",
+        "streaming",
+        suite::stream_processor::run_into_text
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_into_text_anthropic() -> Result<()> {
+    provider_test!(
+        "anthropic",
+        "streaming",
+        suite::stream_processor::run_into_text
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_into_text_google() -> Result<()> {
+    provider_test!(
+        "google",
+        "streaming",
+        suite::stream_processor::run_into_text
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_incremental_openai() -> Result<()> {
+    provider_test!(
+        "openai",
+        "streaming",
+        suite::stream_processor::run_next_incremental
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_incremental_anthropic() -> Result<()> {
+    provider_test!(
+        "anthropic",
+        "streaming",
+        suite::stream_processor::run_next_incremental
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_incremental_google() -> Result<()> {
+    provider_test!(
+        "google",
+        "streaming",
+        suite::stream_processor::run_next_incremental
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_usage_openai() -> Result<()> {
+    provider_test!("openai", "streaming", suite::stream_processor::run_usage)
+}
+
+#[tokio::test]
+async fn test_stream_processor_usage_anthropic() -> Result<()> {
+    provider_test!("anthropic", "streaming", suite::stream_processor::run_usage)
+}
+
+#[tokio::test]
+async fn test_stream_processor_usage_google() -> Result<()> {
+    provider_test!("google", "streaming", suite::stream_processor::run_usage)
+}
+
+#[tokio::test]
+async fn test_stream_processor_tools_openai() -> Result<()> {
+    provider_test!("openai", "tools", suite::stream_processor::run_tool_calls)
+}
+
+#[tokio::test]
+async fn test_stream_processor_tools_anthropic() -> Result<()> {
+    provider_test!(
+        "anthropic",
+        "tools",
+        suite::stream_processor::run_tool_calls
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_tools_google() -> Result<()> {
+    provider_test!("google", "tools", suite::stream_processor::run_tool_calls)
+}
+
+#[tokio::test]
+async fn test_stream_processor_multi_turn_openai() -> Result<()> {
+    provider_test!(
+        "openai",
+        "streaming",
+        suite::stream_processor::run_multi_turn
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_multi_turn_anthropic() -> Result<()> {
+    provider_test!(
+        "anthropic",
+        "streaming",
+        suite::stream_processor::run_multi_turn
+    )
+}
+
+#[tokio::test]
+async fn test_stream_processor_multi_turn_google() -> Result<()> {
+    provider_test!(
+        "google",
+        "streaming",
+        suite::stream_processor::run_multi_turn
+    )
+}
+
+// ============================================================================
 // Vision / Image Understanding Tests (All Providers)
 // ============================================================================
 

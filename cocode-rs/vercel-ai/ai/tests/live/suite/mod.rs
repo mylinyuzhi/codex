@@ -5,6 +5,7 @@
 
 pub mod basic;
 pub mod cross_provider;
+pub mod stream_processor;
 pub mod streaming;
 pub mod tools;
 pub mod vision;
