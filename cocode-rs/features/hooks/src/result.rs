@@ -68,6 +68,17 @@ pub enum HookResult {
         /// The replacement tool output.
         new_output: Value,
     },
+
+    /// Prevent the agent loop from continuing after this tool result (PostToolUse hooks only).
+    ///
+    /// In Claude Code v2.1.76+, a PostToolUse hook can return `{ preventContinuation: true }`
+    /// to halt the agent loop after the current tool result is processed.
+    /// The original tool output is preserved; only the loop continuation is affected.
+    PreventContinuation {
+        /// Optional reason for stopping the loop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
 }
 
 /// A completed hook execution with metadata.

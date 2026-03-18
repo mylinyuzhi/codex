@@ -316,6 +316,21 @@ pub struct MentionReadRecord {
     pub read_turn: i32,
 }
 
+/// Cron job information for system reminders.
+#[derive(Debug, Clone)]
+pub struct CronJobInfo {
+    /// Job ID.
+    pub id: String,
+    /// Cron schedule expression.
+    pub cron: String,
+    /// Job description or prompt snippet.
+    pub description: String,
+    /// Whether this is a one-shot (non-recurring) job.
+    pub one_shot: bool,
+    /// Number of executions so far.
+    pub execution_count: u32,
+}
+
 /// Collaboration notification from another agent.
 #[derive(Debug, Clone)]
 pub struct CollabNotification {
@@ -403,6 +418,10 @@ pub struct GeneratorContext<'a> {
     // === Todo/Tasks ===
     /// Current todo items.
     pub todos: Vec<TodoItem>,
+
+    // === Cron Jobs ===
+    /// Current cron jobs for reminder injection.
+    pub cron_jobs: Vec<CronJobInfo>,
 
     // === Nested memory ===
     /// Paths that trigger nested memory lookup.
@@ -531,6 +550,11 @@ impl<'a> GeneratorContext<'a> {
             .filter(|t| t.status == TodoStatus::InProgress)
     }
 
+    /// Check if there are any cron jobs.
+    pub fn has_cron_jobs(&self) -> bool {
+        !self.cron_jobs.is_empty()
+    }
+
     /// Check if delegate mode is active.
     pub fn in_delegate_mode(&self) -> bool {
         self.is_delegate_mode
@@ -586,6 +610,7 @@ pub struct GeneratorContextBuilder<'a> {
     background_tasks: Vec<BackgroundTaskInfo>,
     diagnostics: Vec<DiagnosticInfo>,
     todos: Vec<TodoItem>,
+    cron_jobs: Vec<CronJobInfo>,
     nested_memory_triggers: HashSet<PathBuf>,
     full_content_flags: HashMap<AttachmentType, bool>,
     hook_state: HookState,
@@ -701,6 +726,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn cron_jobs(mut self, jobs: Vec<CronJobInfo>) -> Self {
+        self.cron_jobs = jobs;
+        self
+    }
+
     pub fn nested_memory_triggers(mut self, triggers: HashSet<PathBuf>) -> Self {
         self.nested_memory_triggers = triggers;
         self
@@ -806,6 +836,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             background_tasks: self.background_tasks,
             diagnostics: self.diagnostics,
             todos: self.todos,
+            cron_jobs: self.cron_jobs,
             nested_memory_triggers: self.nested_memory_triggers,
             full_content_flags: self.full_content_flags,
             hook_state: self.hook_state,

@@ -82,11 +82,12 @@ impl Tool for TodoWriteTool {
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        ConcurrencySafety::Unsafe
+        // Safe: uses atomic replacement of the full task list
+        ConcurrencySafety::Safe
     }
 
     fn is_read_only(&self) -> bool {
-        false
+        true
     }
 
     fn max_result_size_chars(&self) -> i32 {

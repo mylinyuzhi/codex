@@ -61,4 +61,5 @@ fn test_tool_properties() {
     let tool = TaskOutputTool::new();
     assert_eq!(tool.name(), "TaskOutput");
     assert!(tool.is_concurrent_safe());
+    assert!(tool.is_read_only());
 }

@@ -86,5 +86,8 @@ async fn test_todo_write_max_in_progress() {
 fn test_tool_properties() {
     let tool = TodoWriteTool::new();
     assert_eq!(tool.name(), "TodoWrite");
-    assert!(!tool.is_concurrent_safe());
+    // Safe: uses atomic replacement of the full task list
+    assert!(tool.is_concurrent_safe());
+    // Read-only: only modifies in-memory state and emits ContextModifier
+    assert!(tool.is_read_only());
 }

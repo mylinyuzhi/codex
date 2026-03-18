@@ -78,7 +78,11 @@
       "Skill(update-claude-md)",
       "Skill(wt-del)",
       "Skill(squash)",
-      "Bash(export:*)"
+      "Bash(export:*)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//tmp/claude-0/-lyz-codespace-worktrees-codex-feat-tools/39ff80b0-5af0-4eca-9a5a-ed2b08fac02d/tasks/**)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

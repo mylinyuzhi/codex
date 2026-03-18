@@ -378,6 +378,75 @@ Usage:\n\
 - The instruction parameter is required — describe the semantic intent of your edit (e.g., 'rename variable x to y', 'add error handling to function foo').\n\
 - To create a new file, pass an empty string for old_string. The file must not already exist.";
 
+/// Description for the TaskCreate tool.
+pub const TASK_CREATE_DESCRIPTION: &str = "\
+Create a new structured task with subject, description, and optional metadata.\n\
+\n\
+Tasks have a state machine: pending → in_progress → completed/deleted.\n\
+At most one task can be in_progress at a time.\n\
+\n\
+Use this instead of TodoWrite for complex multi-step projects that need:\n\
+- Dependency tracking (blockedBy/blocks)\n\
+- Individual task metadata\n\
+- Incremental updates without rewriting the full list\n\
+\n\
+Returns the generated task ID for use with TaskUpdate/TaskGet.";
+
+/// Description for the TaskUpdate tool.
+pub const TASK_UPDATE_DESCRIPTION: &str = "\
+Update an existing structured task's status, dependencies, or metadata.\n\
+\n\
+Status transitions: pending → in_progress → completed/deleted.\n\
+At most one task can be in_progress at a time.\n\
+\n\
+Dependency management:\n\
+- addBlocks/removeBlocks: manage tasks this task blocks\n\
+- addBlockedBy/removeBlockedBy: manage tasks blocking this task\n\
+\n\
+Metadata is merged (not replaced) when provided.";
+
+/// Description for the TaskGet tool.
+pub const TASK_GET_DESCRIPTION: &str = "\
+Retrieve a single structured task by ID.\n\
+\n\
+Returns the full task object including status, dependencies, and metadata.";
+
+/// Description for the TaskList tool.
+pub const TASK_LIST_DESCRIPTION: &str = "\
+List all structured tasks with optional status filter.\n\
+\n\
+By default shows all non-deleted tasks with their status and dependency info.\n\
+Use status parameter to filter: pending, in_progress, completed, deleted, or all.";
+
+/// Description for the EnterWorktree tool.
+pub const ENTER_WORKTREE_DESCRIPTION: &str = "\
+Create a new git worktree for isolated agent workspaces.\n\
+\n\
+Creates a git worktree with a new branch, optionally with sparse checkout.\n\
+Returns the worktree path, branch name, and previous CWD for later cleanup.\n\
+\n\
+Parameters:\n\
+- branch: Branch name (auto-generated if omitted)\n\
+- path: Custom worktree path (default: ../worktrees/<branch>)\n\
+- base: Base branch/commit (default: HEAD)\n\
+- sparse_paths: Paths for sparse checkout (optional)\n\
+\n\
+Use ExitWorktree to clean up when done.";
+
+/// Description for the ExitWorktree tool.
+pub const EXIT_WORKTREE_DESCRIPTION: &str = "\
+Exit and optionally remove a git worktree.\n\
+\n\
+Actions:\n\
+- remove (default): Remove the worktree and optionally delete its branch\n\
+- keep: Leave the worktree in place for future use\n\
+\n\
+Parameters:\n\
+- worktree_path: Path to the worktree (required)\n\
+- previous_cwd: Previous working directory to restore\n\
+- action: 'keep' or 'remove' (default: remove)\n\
+- delete_branch: Also delete the branch when removing (default: false)";
+
 /// Description for the LSP tool.
 pub const LSP_DESCRIPTION: &str = "\
 Language Server Protocol operations for code intelligence.\n\
@@ -409,3 +478,58 @@ Usage notes:\n\
 - This tool requires LSP servers to be installed and configured\n\
 - Results include file paths and line numbers for easy navigation\n\
 - For call hierarchy, use direction 'incoming' or 'outgoing'";
+
+/// Description for the CronCreate tool.
+pub const CRON_CREATE_DESCRIPTION: &str = "\
+Create a session-scoped recurring task with a standard cron expression.\n\
+\n\
+Cron expressions use 5 fields: minute hour day-of-month month day-of-week.\n\
+Examples:\n\
+- '*/5 * * * *' — every 5 minutes\n\
+- '0 */2 * * *' — every 2 hours\n\
+- '30 9 * * 1-5' — 9:30 AM on weekdays\n\
+\n\
+Options:\n\
+- one_shot: Execute once then auto-delete\n\
+- durable: Persist across sessions to .cocode/scheduled_tasks.json\n\
+\n\
+Jobs auto-expire after 3 days unless durable. The /loop slash command uses CronCreate internally.";
+
+/// Description for the CronDelete tool.
+pub const CRON_DELETE_DESCRIPTION: &str = "\
+Delete a scheduled cron job by its ID.\n\
+\n\
+Use CronList to see all active jobs and their IDs.";
+
+/// Description for the CronList tool.
+pub const CRON_LIST_DESCRIPTION: &str = "\
+List all active scheduled cron jobs.\n\
+\n\
+Shows each job's ID, schedule, prompt, execution count, and metadata.";
+
+/// Description for the TeamCreate tool.
+pub const TEAM_CREATE_DESCRIPTION: &str = "\
+Create a named team for coordinated multi-agent work.\n\
+\n\
+Teams group agents together for communication and coordination.\n\
+Use SendMessage to communicate between agents within a team.\n\
+\n\
+This tool is auto-approved — no user confirmation needed.";
+
+/// Description for the TeamDelete tool.
+pub const TEAM_DELETE_DESCRIPTION: &str = "\
+Delete a named agent team.\n\
+\n\
+Removes the team and its membership records. Running agents are not affected.";
+
+/// Description for the SendMessage tool.
+pub const SEND_MESSAGE_DESCRIPTION: &str = "\
+Send a message to an agent by ID or name.\n\
+\n\
+Used for inter-agent communication within a team. The message is delivered\n\
+to the target agent, which resumes with the message as its next input.\n\
+\n\
+Parameters:\n\
+- to: Agent ID or name (required)\n\
+- message: Content to send (required)\n\
+- team: Optional team scope for validation";

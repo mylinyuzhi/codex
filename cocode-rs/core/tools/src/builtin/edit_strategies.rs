@@ -325,6 +325,81 @@ pub fn pre_correct_escaping(old_string: &str, new_string: &str, content: &str) -
 }
 
 // ---------------------------------------------------------------------------
+// Quote normalization
+// ---------------------------------------------------------------------------
+
+/// Normalize Unicode smart/curly quotes to ASCII straight quotes.
+pub fn normalize_quotes(s: &str) -> String {
+    s.replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
+        .replace('\u{201C}', "\"")
+        .replace('\u{201D}', "\"")
+}
+
+/// Try matching after normalizing smart quotes to ASCII in both content and old_string.
+///
+/// Handles the common case where LLMs generate smart quotes in `old_string`
+/// while the file contains straight quotes (or vice versa). Uses char-level
+/// matching to correctly map positions between original and normalized content.
+pub fn try_quote_normalized_replace(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Option<(String, usize)> {
+    let norm_old = normalize_quotes(old_string);
+    let norm_content = normalize_quotes(content);
+
+    // Skip if normalization didn't change anything
+    if norm_old == old_string && norm_content == content {
+        return None;
+    }
+
+    // Fast path: normalized old_string matches original content directly
+    // (common case: LLM sends smart quotes, file has straight quotes)
+    if norm_old != old_string {
+        if let result @ Some(_) = try_exact_replace(content, &norm_old, new_string, replace_all) {
+            return result;
+        }
+    }
+
+    // Slow path: file has smart quotes — use char-level matching
+    // normalize_quotes is a 1:1 char mapping so char indices correspond
+    let count = norm_content.matches(&norm_old).count();
+    if count == 0 {
+        return None;
+    }
+
+    let norm_old_chars: Vec<char> = norm_old.chars().collect();
+    let content_chars: Vec<char> = content.chars().collect();
+    let norm_content_chars: Vec<char> = norm_content.chars().collect();
+
+    let mut result = String::new();
+    let mut occurrences = 0;
+    let mut i = 0;
+
+    while i < content_chars.len() {
+        if i + norm_old_chars.len() <= norm_content_chars.len()
+            && norm_content_chars[i..i + norm_old_chars.len()] == norm_old_chars[..]
+            && (replace_all || occurrences == 0)
+        {
+            result.push_str(new_string);
+            i += norm_old_chars.len();
+            occurrences += 1;
+        } else {
+            result.push(content_chars[i]);
+            i += 1;
+        }
+    }
+
+    if occurrences > 0 {
+        Some((result, count))
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Trim fallback
 // ---------------------------------------------------------------------------
 
@@ -403,6 +478,26 @@ pub fn try_match(
             }
             .build());
         }
+        return Ok((replaced, MatchStrategy::Exact));
+    }
+
+    // Tier 1.5: Quote normalization (smart quotes → ASCII)
+    if let Some((replaced, count)) =
+        try_quote_normalized_replace(content, old_string, new_string, replace_all)
+    {
+        if !replace_all && count > 1 {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!(
+                    "old_string is not unique in the file ({count} occurrences, after quote normalization). \
+                     Provide more context to make it unique, or use replace_all."
+                ),
+            }
+            .build());
+        }
+        tracing::info!(
+            strategy = "quote-normalized",
+            "Edit matched via smart quote normalization"
+        );
         return Ok((replaced, MatchStrategy::Exact));
     }
 

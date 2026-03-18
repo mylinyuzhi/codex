@@ -20,8 +20,6 @@ fn test_file_checkpointing_default_enabled() {
 fn test_with_defaults_excludes_non_default_features() {
     let features = Features::with_defaults();
 
-    // WebFetch is not default enabled
-    assert!(!features.enabled(Feature::WebFetch));
     // Collab is not default enabled
     assert!(!features.enabled(Feature::Collab));
     // GhostCommit is not default enabled
@@ -109,13 +107,13 @@ fn test_feature_key_method() {
 #[test]
 fn test_feature_stage_method() {
     assert_eq!(Feature::McpResourceTools.stage(), Stage::Stable);
-    assert_eq!(Feature::WebFetch.stage(), Stage::Experimental);
+    assert_eq!(Feature::WebFetch.stage(), Stage::Stable);
 }
 
 #[test]
 fn test_feature_default_enabled_method() {
     assert!(Feature::Ls.default_enabled());
-    assert!(!Feature::WebFetch.default_enabled());
+    assert!(Feature::WebFetch.default_enabled());
 }
 
 #[test]

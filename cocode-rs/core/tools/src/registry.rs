@@ -52,6 +52,13 @@ pub struct ToolRegistry {
     mcp_tools: HashMap<String, McpToolInfo>,
     /// Tool aliases (alternative names).
     aliases: HashMap<String, String>,
+    /// Deferred MCP tool implementations, keyed by qualified name.
+    ///
+    /// When auto-search mode is enabled via [`Self::defer_mcp_tool_definitions`],
+    /// executable MCP tool wrappers are moved here from `tools`. They can be
+    /// selectively restored via [`Self::restore_deferred_tools`] when the model
+    /// discovers them through `McpSearchTool`.
+    deferred_tools: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -212,6 +219,9 @@ impl ToolRegistry {
     ) -> Vec<ToolDefinition> {
         let mut definitions = Vec::new();
 
+        // When StructuredTasks is enabled, TodoWrite is hidden (mutually exclusive)
+        let hide_todo_write = features.enabled(cocode_protocol::Feature::StructuredTasks);
+
         // Built-in tools — skip those gated on a disabled feature
         for tool in self.tools.values() {
             if let Some(feature) = tool.feature_gate()
@@ -219,11 +229,18 @@ impl ToolRegistry {
             {
                 continue;
             }
+            // Mutual exclusion: hide TodoWrite when StructuredTasks is active
+            if hide_todo_write && tool.name() == cocode_protocol::ToolName::TodoWrite.as_str() {
+                continue;
+            }
             definitions.push(tool.to_definition());
         }
 
-        // MCP tools — always included (no feature gate)
-        for mcp_tool in self.mcp_tools.values() {
+        // MCP tools — only include metadata-only entries (no executable wrapper in self.tools)
+        for (qualified_name, mcp_tool) in &self.mcp_tools {
+            if self.tools.contains_key(qualified_name) {
+                continue;
+            }
             definitions.push(ToolDefinition::with_description(
                 mcp_tool.qualified_name(),
                 mcp_tool
@@ -246,8 +263,11 @@ impl ToolRegistry {
             definitions.push(tool.to_definition());
         }
 
-        // MCP tools
-        for mcp_tool in self.mcp_tools.values() {
+        // MCP tools — only metadata-only entries (no executable wrapper in self.tools)
+        for (qualified_name, mcp_tool) in &self.mcp_tools {
+            if self.tools.contains_key(qualified_name) {
+                continue;
+            }
             definitions.push(ToolDefinition::with_description(
                 mcp_tool.qualified_name(),
                 mcp_tool
@@ -282,8 +302,16 @@ impl ToolRegistry {
     }
 
     /// Get the number of registered tools.
+    ///
+    /// MCP tools that have an executable wrapper in `self.tools` are counted once
+    /// (via the tools map), not double-counted from `mcp_tools`.
     pub fn len(&self) -> usize {
-        self.tools.len() + self.mcp_tools.len()
+        let metadata_only = self
+            .mcp_tools
+            .keys()
+            .filter(|name| !self.tools.contains_key(name.as_str()))
+            .count();
+        self.tools.len() + metadata_only
     }
 
     /// Check if the registry is empty.
@@ -292,9 +320,15 @@ impl ToolRegistry {
     }
 
     /// Get all tool names.
+    ///
+    /// MCP tools that have an executable wrapper in `self.tools` appear once.
     pub fn tool_names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.tools.keys().cloned().collect();
-        names.extend(self.mcp_tools.keys().cloned());
+        for name in self.mcp_tools.keys() {
+            if !self.tools.contains_key(name) {
+                names.push(name.clone());
+            }
+        }
         names.sort();
         names
     }
@@ -318,6 +352,7 @@ impl ToolRegistry {
         self.tools.clear();
         self.mcp_tools.clear();
         self.aliases.clear();
+        self.deferred_tools.clear();
     }
 
     /// Calculate total chars of MCP tool descriptions.
@@ -366,18 +401,42 @@ impl ToolRegistry {
     ///
     /// When auto-search mode is enabled, MCP tools are removed from the
     /// executable tools map so they are not sent as tool definitions in API
-    /// requests. The metadata is kept in `mcp_tools` for search.
+    /// requests. The metadata is kept in `mcp_tools` for search, and the
+    /// executable wrappers are moved to `deferred_tools` for later restoration
+    /// via [`Self::restore_deferred_tools`].
     ///
     /// Returns the qualified names of the removed tools.
     pub fn defer_mcp_tool_definitions(&mut self) -> Vec<String> {
         let mcp_tool_names: Vec<String> = self.mcp_tools.keys().cloned().collect();
 
-        // Remove from executable tools map (keep in mcp_tools for metadata)
+        // Move from executable tools map to deferred storage
         for name in &mcp_tool_names {
-            self.tools.remove(name);
+            if let Some(tool) = self.tools.remove(name) {
+                self.deferred_tools.insert(name.clone(), tool);
+            }
         }
 
         mcp_tool_names
+    }
+
+    /// Restore deferred MCP tools into the active executable set.
+    ///
+    /// When `McpSearchTool` discovers tools matching a query, it emits a
+    /// `ContextModifier::RestoreDeferredMcpTools` with the qualified names.
+    /// The driver calls this method to move those tools from the deferred
+    /// storage back into the active `tools` map so they become callable.
+    ///
+    /// Returns the qualified names of the tools that were actually restored.
+    pub fn restore_deferred_tools(&mut self, names: &[String]) -> Vec<String> {
+        let mut restored = Vec::new();
+        for name in names {
+            if let Some(tool) = self.deferred_tools.remove(name) {
+                debug!(tool = %name, "Restoring deferred MCP tool");
+                self.tools.insert(name.clone(), tool);
+                restored.push(name.clone());
+            }
+        }
+        restored
     }
 }
 
@@ -387,6 +446,10 @@ impl std::fmt::Debug for ToolRegistry {
             .field("builtin_tools", &self.tools.keys().collect::<Vec<_>>())
             .field("mcp_tools", &self.mcp_tools.keys().collect::<Vec<_>>())
             .field("aliases", &self.aliases)
+            .field(
+                "deferred_tools",
+                &self.deferred_tools.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }

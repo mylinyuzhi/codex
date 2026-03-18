@@ -975,6 +975,10 @@ pub enum HookEventType {
     TaskCompleted,
     /// When configuration changes at runtime.
     ConfigChange,
+    /// When a git worktree is created.
+    WorktreeCreate,
+    /// When a git worktree is removed.
+    WorktreeRemove,
 }
 
 impl HookEventType {
@@ -996,6 +1000,8 @@ impl HookEventType {
             Self::TeammateIdle => "teammate_idle",
             Self::TaskCompleted => "task_completed",
             Self::ConfigChange => "config_change",
+            Self::WorktreeCreate => "worktree_create",
+            Self::WorktreeRemove => "worktree_remove",
         }
     }
 }

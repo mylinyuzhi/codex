@@ -166,6 +166,15 @@ pub struct HookContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 
+    // -- WorktreeCreate / WorktreeRemove --
+    /// The path to the worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+
+    /// The branch name of the worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+
     /// Additional metadata for the hook execution.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
@@ -208,6 +217,8 @@ impl HookContext {
             config_key: None,
             config_value: None,
             reason: None,
+            worktree_path: None,
+            worktree_branch: None,
             metadata: HashMap::new(),
         }
     }
@@ -408,6 +419,18 @@ impl HookContext {
     /// Sets the session end reason (for `SessionEnd` events).
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
+        self
+    }
+
+    /// Sets the worktree path (for `WorktreeCreate`/`WorktreeRemove` events).
+    pub fn with_worktree_path(mut self, path: impl Into<String>) -> Self {
+        self.worktree_path = Some(path.into());
+        self
+    }
+
+    /// Sets the worktree branch (for `WorktreeCreate` events).
+    pub fn with_worktree_branch(mut self, branch: impl Into<String>) -> Self {
+        self.worktree_branch = Some(branch.into());
         self
     }
 

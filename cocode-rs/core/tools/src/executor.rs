@@ -49,6 +49,22 @@ use tracing::warn;
 /// Default maximum concurrent tool executions.
 pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
 
+/// Action determined by post-hook execution.
+///
+/// Distinguishes between a hook rejecting the output (error) and a hook
+/// providing a replacement output (non-error substitution).
+enum PostHookAction {
+    /// No post-hook intervened — use the original result.
+    None,
+    /// A hook rejected the output — replace with an error.
+    Reject(String),
+    /// A hook provided replacement output (ModifyOutput) — use as-is.
+    ReplaceOutput(ToolOutput),
+    /// A hook requested that the agent loop stop after processing this tool result.
+    /// The original output is preserved — only the loop continuation is affected.
+    StopContinuation(String),
+}
+
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
@@ -137,6 +153,11 @@ pub struct ToolExecutionResult {
     pub name: String,
     /// Execution result.
     pub result: Result<ToolOutput>,
+    /// Additional contexts collected from pre-hook and post-hook `ContinueWithContext` results.
+    pub additional_contexts: Vec<String>,
+    /// When set, a PostToolUse hook requested that the agent loop stop after
+    /// processing this tool result. Contains the reason/hook name.
+    pub stop_continuation: Option<String>,
 }
 
 /// Streaming tool executor that manages concurrent tool execution.
@@ -235,6 +256,8 @@ pub struct StreamingToolExecutor {
     file_backup_store: Option<Arc<cocode_file_backup::FileBackupStore>>,
     /// Optional question responder for AskUserQuestion tool.
     question_responder: Option<Arc<crate::context::QuestionResponder>>,
+    /// Path to the cocode home directory for durable cron persistence.
+    cocode_home: Option<PathBuf>,
 }
 
 /// Result of pre-hook execution.
@@ -287,6 +310,7 @@ impl StreamingToolExecutor {
             task_type_restrictions: None,
             file_backup_store: None,
             question_responder: None,
+            cocode_home: None,
         }
     }
 
@@ -424,6 +448,12 @@ impl StreamingToolExecutor {
         self
     }
 
+    /// Set the cocode home directory for durable cron persistence.
+    pub fn with_cocode_home(mut self, path: PathBuf) -> Self {
+        self.cocode_home = Some(path);
+        self
+    }
+
     /// Set the allowlist of tool names that the model was given.
     ///
     /// Called from the driver after `select_tools_for_model()` resolves the
@@ -534,6 +564,8 @@ impl StreamingToolExecutor {
                     call_id: call_id.clone(),
                     name: name.clone(),
                     result,
+                    additional_contexts: Vec::new(),
+                    stop_continuation: None,
                 });
             return;
         }
@@ -587,77 +619,82 @@ impl StreamingToolExecutor {
         }
     }
 
-    /// Start tool execution in a background task.
-    async fn start_tool_execution(&self, tool_call: ToolCall) {
-        let call_id = tool_call.tool_call_id.clone();
-        let name = tool_call.tool_name.clone();
-        let original_input = tool_call.input.clone();
-
-        // Execute pre-hooks before starting the tool
-        let pre_hook = match self
-            .execute_pre_hooks(&name, &call_id, original_input.clone())
-            .await
-        {
+    /// Run pre-hooks, apply permission overrides, and emit the started event.
+    ///
+    /// Returns the (possibly modified) input and any additional contexts from
+    /// pre-hooks on success, or `None` if a pre-hook rejected the tool call
+    /// (error result is already stored).
+    async fn prepare_execution(
+        &self,
+        call_id: &str,
+        name: &str,
+        original_input: Value,
+    ) -> Option<(Value, Vec<String>)> {
+        let pre_hook = match self.execute_pre_hooks(name, call_id, original_input).await {
             Ok(outcome) => outcome,
             Err(reason) => {
-                // Pre-hook rejected the tool call
                 let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
-                self.emit_completed(&call_id, &result).await;
+                self.emit_completed(call_id, &result).await;
                 self.completed_results
                     .lock()
                     .await
                     .push(ToolExecutionResult {
-                        call_id,
-                        name,
+                        call_id: call_id.to_string(),
+                        name: name.to_string(),
                         result,
+                        additional_contexts: Vec::new(),
+                        stop_continuation: None,
                     });
-                return;
+                return None;
             }
         };
-        let modified_input = pre_hook.input;
 
-        // If a hook granted permission override "allow", pre-approve this tool
         if pre_hook.skip_permission {
             let pattern = format!("hook-override-{call_id}");
             self.approval_store
                 .lock()
                 .await
-                .approve_pattern(&name, &pattern);
+                .approve_pattern(name, &pattern);
         }
 
-        // Log any additional contexts collected from pre-hooks
         for ctx_str in &pre_hook.additional_contexts {
             debug!(tool = %name, "Pre-hook additional context: {ctx_str}");
         }
 
-        // Emit started event
         self.emit_event(LoopEvent::ToolUseStarted {
-            call_id: call_id.clone(),
-            name: name.clone(),
+            call_id: call_id.to_string(),
+            name: name.to_string(),
         })
         .await;
 
-        // Create context for this execution
-        let ctx = self.create_context(&call_id);
+        Some((pre_hook.input, pre_hook.additional_contexts))
+    }
 
-        // Clone what we need for the task
+    /// Start tool execution in a background task.
+    async fn start_tool_execution(&self, tool_call: ToolCall) {
+        let call_id = tool_call.tool_call_id.clone();
+        let name = tool_call.tool_name.clone();
+
+        let (modified_input, pre_hook_contexts) = match self
+            .prepare_execution(&call_id, &name, tool_call.input.clone())
+            .await
+        {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let ctx = self.create_context(&call_id);
         let registry = self.registry.clone();
         let timeout_secs = self.config.default_timeout_secs;
-
-        // Create modified tool call with potentially modified input
         let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
-
-        // Clone hooks for post-hook execution
         let hooks = self.hooks.clone();
         let session_id = self.config.session_id.clone();
         let cwd = self.config.cwd.clone();
-
         let session_dir = self.config.session_dir.clone();
         let tool_config = self.config.tool_config.clone();
         let max_tool_output_chars = self.config.max_tool_output_chars;
         let otel_manager = self.otel_manager.clone();
 
-        // Spawn the execution task
         let handle = tokio::spawn(async move {
             let tool_start = std::time::Instant::now();
             let result = execute_tool(
@@ -671,10 +708,8 @@ impl StreamingToolExecutor {
                 otel_manager.as_ref(),
             )
             .await;
-            let tool_duration = tool_start.elapsed();
 
-            // Execute post-hooks (shared logic with execute_single_tool)
-            let post_rejection = run_post_hooks(
+            let (post_action, post_hook_contexts) = run_post_hooks(
                 hooks.as_deref(),
                 &name,
                 &call_id,
@@ -685,24 +720,31 @@ impl StreamingToolExecutor {
             )
             .await;
 
-            // If a post-hook rejected, replace the tool output with an error
-            let result = if let Some(reason) = post_rejection {
-                Ok(ToolOutput::error(format!(
-                    "PostToolUse hook blocked this tool's output: {reason}"
-                )))
-            } else {
-                result
+            // Extract stop_continuation before passing post_action to finalize.
+            let stop_continuation = match &post_action {
+                PostHookAction::StopContinuation(reason) => Some(reason.clone()),
+                _ => None,
             };
 
-            // Record tool metrics in OTel
-            if let Some(otel) = &otel_manager {
-                otel.tool_result(&name, &call_id, "", tool_duration, result.is_ok(), "");
-            }
+            let result = finalize_tool_result(
+                result,
+                post_action,
+                &name,
+                &call_id,
+                tool_start,
+                &otel_manager,
+            );
+
+            // Merge pre-hook and post-hook additional contexts.
+            let mut additional_contexts = pre_hook_contexts;
+            additional_contexts.extend(post_hook_contexts);
 
             ToolExecutionResult {
                 call_id,
                 name,
                 result,
+                additional_contexts,
+                stop_continuation,
             }
         });
 
@@ -748,6 +790,8 @@ impl StreamingToolExecutor {
                         call_id,
                         name,
                         result,
+                        additional_contexts: Vec::new(),
+                        stop_continuation: None,
                     });
                 continue;
             }
@@ -782,52 +826,15 @@ impl StreamingToolExecutor {
     async fn execute_single_tool(&self, tool_call: ToolCall) {
         let call_id = tool_call.tool_call_id.clone();
         let name = tool_call.tool_name.clone();
-        let original_input = tool_call.input.clone();
 
-        // Execute pre-hooks before starting the tool
-        let pre_hook = match self
-            .execute_pre_hooks(&name, &call_id, original_input.clone())
+        let (modified_input, pre_hook_contexts) = match self
+            .prepare_execution(&call_id, &name, tool_call.input.clone())
             .await
         {
-            Ok(outcome) => outcome,
-            Err(reason) => {
-                let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
-                self.emit_completed(&call_id, &result).await;
-                self.completed_results
-                    .lock()
-                    .await
-                    .push(ToolExecutionResult {
-                        call_id,
-                        name,
-                        result,
-                    });
-                return;
-            }
+            Some(pair) => pair,
+            None => return,
         };
-        let modified_input = pre_hook.input;
 
-        // If a hook granted permission override "allow", pre-approve this tool
-        if pre_hook.skip_permission {
-            let pattern = format!("hook-override-{call_id}");
-            self.approval_store
-                .lock()
-                .await
-                .approve_pattern(&name, &pattern);
-        }
-
-        // Log any additional contexts collected from pre-hooks
-        for ctx_str in &pre_hook.additional_contexts {
-            debug!(tool = %name, "Pre-hook additional context: {ctx_str}");
-        }
-
-        // Emit started event
-        self.emit_event(LoopEvent::ToolUseStarted {
-            call_id: call_id.clone(),
-            name: name.clone(),
-        })
-        .await;
-
-        // Create context and execute with potentially modified input
         let tool_start = std::time::Instant::now();
         let ctx = self.create_context(&call_id);
         let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
@@ -842,31 +849,31 @@ impl StreamingToolExecutor {
             self.otel_manager.as_ref(),
         )
         .await;
-        let tool_duration = tool_start.elapsed();
 
-        // Execute post-hooks
-        let post_rejection = self
+        let (post_action, post_hook_contexts) = self
             .execute_post_hooks(&name, &call_id, &modified_input, &result)
             .await;
 
-        // If a post-hook rejected, replace the tool output with an error
-        let result = if let Some(reason) = post_rejection {
-            Ok(ToolOutput::error(format!(
-                "PostToolUse hook blocked this tool's output: {reason}"
-            )))
-        } else {
-            result
+        // Extract stop_continuation before passing post_action to finalize.
+        let stop_continuation = match &post_action {
+            PostHookAction::StopContinuation(reason) => Some(reason.clone()),
+            _ => None,
         };
 
-        // Record tool metrics in OTel
-        if let Some(otel) = &self.otel_manager {
-            otel.tool_result(&name, &call_id, "", tool_duration, result.is_ok(), "");
-        }
+        let result = finalize_tool_result(
+            result,
+            post_action,
+            &name,
+            &call_id,
+            tool_start,
+            &self.otel_manager,
+        );
 
-        // Emit completed event
+        // Merge pre-hook and post-hook additional contexts.
+        let mut additional_contexts = pre_hook_contexts;
+        additional_contexts.extend(post_hook_contexts);
+
         self.emit_completed(&call_id, &result).await;
-
-        // Store result
         self.completed_results
             .lock()
             .await
@@ -874,6 +881,8 @@ impl StreamingToolExecutor {
                 call_id,
                 name,
                 result,
+                additional_contexts,
+                stop_continuation,
             });
     }
 
@@ -904,43 +913,69 @@ impl StreamingToolExecutor {
                             call_id: call_id.clone(),
                             name: format!("<panicked:{call_id}>"),
                             result,
+                            additional_contexts: Vec::new(),
+                            stop_continuation: None,
                         });
                 }
             }
         }
     }
 
-    /// Wait for one active task to complete and collect its result.
+    /// Wait for whichever active task finishes first and collect its result.
+    ///
+    /// Uses `select_all` to race all active handles so we don't block on an
+    /// arbitrary slow task while faster ones are ready.
     async fn drain_one_active(&self) {
-        // Take one handle from active tasks
-        let entry = {
+        let entries: Vec<(String, JoinHandle<ToolExecutionResult>)> = {
             let mut lock = self.active_tasks.lock().await;
-            let key = lock.keys().next().cloned();
-            key.and_then(|k| lock.remove(&k).map(|h| (k, h)))
+            lock.drain().collect()
         };
 
-        if let Some((call_id, handle)) = entry {
-            match handle.await {
-                Ok(result) => {
-                    self.emit_completed(&result.call_id, &result.result).await;
-                    self.completed_results.lock().await.push(result);
+        if entries.is_empty() {
+            return;
+        }
+
+        let (ids, handles): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
+
+        let (join_result, winner_idx, remaining) = futures::future::select_all(handles).await;
+
+        // Re-insert the handles that didn't finish yet.
+        // `remaining` is in original order with the winner removed.
+        {
+            let mut lock = self.active_tasks.lock().await;
+            let mut orig_idx = 0;
+            for handle in remaining {
+                if orig_idx == winner_idx {
+                    orig_idx += 1;
                 }
-                Err(e) => {
-                    error!(call_id = %call_id, error = %e, "Task panicked");
-                    let result = Err(crate::error::tool_error::InternalSnafu {
-                        message: format!("Tool execution task panicked (call_id: {call_id}): {e}"),
-                    }
-                    .build());
-                    self.emit_completed(&call_id, &result).await;
-                    self.completed_results
-                        .lock()
-                        .await
-                        .push(ToolExecutionResult {
-                            call_id: call_id.clone(),
-                            name: format!("<panicked:{call_id}>"),
-                            result,
-                        });
+                lock.insert(ids[orig_idx].clone(), handle);
+                orig_idx += 1;
+            }
+        }
+
+        let call_id = &ids[winner_idx];
+        match join_result {
+            Ok(result) => {
+                self.emit_completed(&result.call_id, &result.result).await;
+                self.completed_results.lock().await.push(result);
+            }
+            Err(e) => {
+                error!(call_id = %call_id, error = %e, "Task panicked");
+                let result = Err(crate::error::tool_error::InternalSnafu {
+                    message: format!("Tool execution task panicked (call_id: {call_id}): {e}"),
                 }
+                .build());
+                self.emit_completed(call_id, &result).await;
+                self.completed_results
+                    .lock()
+                    .await
+                    .push(ToolExecutionResult {
+                        call_id: call_id.clone(),
+                        name: format!("<panicked:{call_id}>"),
+                        result,
+                        additional_contexts: Vec::new(),
+                        stop_continuation: None,
+                    });
             }
         }
     }
@@ -1088,18 +1123,27 @@ impl StreamingToolExecutor {
             builder = builder.permission_evaluator(evaluator.clone());
         }
 
-        let mut ctx = builder.build();
+        // Add task type restrictions for the Task tool
+        if let Some(ref restrictions) = self.task_type_restrictions {
+            builder = builder.task_type_restrictions(restrictions.clone());
+        }
 
-        // Set task type restrictions for the Task tool
-        ctx.task_type_restrictions = self.task_type_restrictions.clone();
+        // Add file backup store for pre-modify snapshots
+        if let Some(ref store) = self.file_backup_store {
+            builder = builder.file_backup_store(store.clone());
+        }
 
-        // Set file backup store for pre-modify snapshots
-        ctx.file_backup_store = self.file_backup_store.clone();
+        // Add question responder for AskUserQuestion tool
+        if let Some(ref responder) = self.question_responder {
+            builder = builder.question_responder(responder.clone());
+        }
 
-        // Set question responder for AskUserQuestion tool
-        ctx.question_responder = self.question_responder.clone();
+        // Add cocode_home for durable cron persistence
+        if let Some(ref home) = self.cocode_home {
+            builder = builder.cocode_home(home.clone());
+        }
 
-        ctx
+        builder.build()
     }
 
     /// Emit a loop event.
@@ -1235,8 +1279,8 @@ impl StreamingToolExecutor {
                         "Pre-hook system message: {message}"
                     );
                 }
-                HookResult::ModifyOutput { .. } => {
-                    // ModifyOutput is only relevant for PostToolUse, ignore in PreToolUse
+                HookResult::ModifyOutput { .. } | HookResult::PreventContinuation { .. } => {
+                    // ModifyOutput and PreventContinuation are only relevant for PostToolUse, ignore in PreToolUse
                 }
             }
         }
@@ -1249,15 +1293,13 @@ impl StreamingToolExecutor {
     }
 
     /// Execute post-tool-use hooks.
-    ///
-    /// Returns `Some(reason)` if a post-hook rejected.
     async fn execute_post_hooks(
         &self,
         tool_name: &str,
         tool_use_id: &str,
         input: &Value,
         result: &Result<ToolOutput>,
-    ) -> Option<String> {
+    ) -> (PostHookAction, Vec<String>) {
         run_post_hooks(
             self.hooks.as_deref(),
             tool_name,
@@ -1271,13 +1313,40 @@ impl StreamingToolExecutor {
     }
 }
 
+/// Apply a post-hook action and record OTel metrics.
+fn finalize_tool_result(
+    result: Result<ToolOutput>,
+    post_action: PostHookAction,
+    name: &str,
+    call_id: &str,
+    start: std::time::Instant,
+    otel_manager: &Option<Arc<cocode_otel::OtelManager>>,
+) -> Result<ToolOutput> {
+    let result = match post_action {
+        PostHookAction::None | PostHookAction::StopContinuation(_) => result,
+        PostHookAction::Reject(reason) => Ok(ToolOutput::error(format!(
+            "PostToolUse hook blocked this tool's output: {reason}"
+        ))),
+        PostHookAction::ReplaceOutput(output) => Ok(output),
+    };
+
+    if let Some(otel) = otel_manager {
+        otel.tool_result(name, call_id, "", start.elapsed(), result.is_ok(), "");
+    }
+
+    result
+}
+
 /// Shared post-hook execution logic.
 ///
 /// Used by both `start_tool_execution` (spawned safe tools) and
 /// `execute_single_tool` (inline unsafe tools) to ensure consistent behavior.
 ///
-/// Returns `Some(reason)` if a PostToolUse hook rejected the result,
-/// meaning the tool output should be replaced with an error message.
+/// Returns a tuple of:
+/// - [`PostHookAction`] indicating whether the result should be kept,
+///   replaced with an error (Reject), substituted with hook-provided output
+///   (ReplaceOutput), or the loop should halt (StopContinuation).
+/// - `Vec<String>` of additional contexts collected from `ContinueWithContext` hooks.
 async fn run_post_hooks(
     hooks: Option<&HookRegistry>,
     tool_name: &str,
@@ -1286,10 +1355,10 @@ async fn run_post_hooks(
     result: &Result<ToolOutput>,
     session_id: &str,
     cwd: &Path,
-) -> Option<String> {
+) -> (PostHookAction, Vec<String>) {
     let hooks = match hooks {
         Some(h) => h,
-        None => return None,
+        None => return (PostHookAction::None, Vec::new()),
     };
 
     let is_error = result.is_err();
@@ -1317,7 +1386,8 @@ async fn run_post_hooks(
     }
 
     let outcomes = hooks.execute(&ctx).await;
-    let mut rejection_reason = None;
+    let mut action = PostHookAction::None;
+    let mut additional_contexts = Vec::new();
     for outcome in outcomes {
         match outcome.result {
             HookResult::Reject { reason } => {
@@ -1325,9 +1395,9 @@ async fn run_post_hooks(
                     tool = %tool_name,
                     hook = %outcome.hook_name,
                     reason = %reason,
-                    "PostToolUse hook rejected — tool output will be replaced"
+                    "PostToolUse hook rejected — tool output will be replaced with error"
                 );
-                rejection_reason = Some(reason);
+                action = PostHookAction::Reject(reason);
             }
             HookResult::ModifyOutput { new_output } => {
                 debug!(
@@ -1335,17 +1405,33 @@ async fn run_post_hooks(
                     hook = %outcome.hook_name,
                     "PostToolUse hook provided replacement output"
                 );
-                // Use the new output as the replacement message
-                let msg = new_output
+                let text = new_output
                     .as_str()
                     .map(ToString::to_string)
                     .unwrap_or_else(|| new_output.to_string());
-                rejection_reason = Some(msg);
+                action = PostHookAction::ReplaceOutput(ToolOutput::text(text));
+            }
+            HookResult::ContinueWithContext {
+                additional_context, ..
+            } => {
+                if let Some(ctx_str) = additional_context {
+                    additional_contexts.push(ctx_str);
+                }
+            }
+            HookResult::PreventContinuation { reason } => {
+                let reason_text = reason.unwrap_or_else(|| outcome.hook_name.clone());
+                info!(
+                    tool = %tool_name,
+                    hook = %outcome.hook_name,
+                    reason = %reason_text,
+                    "PostToolUse hook requested loop stop — tool output preserved"
+                );
+                action = PostHookAction::StopContinuation(reason_text);
             }
             _ => {}
         }
     }
-    rejection_reason
+    (action, additional_contexts)
 }
 
 /// Execute a single tool with timeout and cancellation support.
@@ -1388,34 +1474,31 @@ async fn execute_tool(
 }
 
 /// Check if a tool name is an edit/write tool (for AcceptEdits mode).
-fn is_edit_tool(name: &str) -> bool {
-    use cocode_protocol::ToolName;
-    name == ToolName::Edit.as_str()
-        || name == ToolName::SmartEdit.as_str()
-        || name == ToolName::Write.as_str()
-        || name == ToolName::NotebookEdit.as_str()
-        || name == "ApplyPatch"
+///
+/// Delegates to the tool's own [`Tool::is_edit_tool`] declaration via registry lookup.
+fn is_edit_tool(registry: &ToolRegistry, name: &str) -> bool {
+    registry.get(name).map_or(false, |t| t.is_edit_tool())
 }
 
 /// Check if a tool name is read-only or a plan mode control tool.
-fn is_read_only_or_plan_tool(name: &str) -> bool {
-    use cocode_protocol::ToolName;
-    name == ToolName::Read.as_str()
-        || name == ToolName::ReadManyFiles.as_str()
-        || name == ToolName::Glob.as_str()
-        || name == ToolName::Grep.as_str()
-        || name == ToolName::LS.as_str()
-        || name == ToolName::Task.as_str()
-        || name == ToolName::TaskOutput.as_str()
-        || name == ToolName::TaskStop.as_str()
-        || name == ToolName::WebFetch.as_str()
-        || name == ToolName::WebSearch.as_str()
-        || name == ToolName::EnterPlanMode.as_str()
-        || name == ToolName::ExitPlanMode.as_str()
-        || name == ToolName::AskUserQuestion.as_str()
-        || name == ToolName::Lsp.as_str()
-        || name == ToolName::McpSearch.as_str()
-        || name == ToolName::TodoWrite.as_str()
+///
+/// Plan control tools are always allowed regardless of the tool's own declaration.
+/// For all other tools, delegates to the tool's [`Tool::is_read_only`] via registry lookup.
+fn is_read_only_or_plan_tool(registry: &ToolRegistry, name: &str) -> bool {
+    // Plan control tools (always allowed in plan mode)
+    const PLAN_CONTROL: &[&str] = &[
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "AskUserQuestion",
+        "TodoWrite",
+        "TaskCreate",
+        "TaskUpdate",
+    ];
+    if PLAN_CONTROL.iter().any(|&t| t == name) {
+        return true;
+    }
+    // Delegate to tool's own declaration
+    registry.get(name).map_or(false, |t| t.is_read_only())
 }
 
 /// Extract file_path from tool input if present.
@@ -1425,6 +1508,28 @@ fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
         .or_else(|| input.get("notebook_path"))
         .and_then(|v| v.as_str())
         .map(std::path::PathBuf::from)
+}
+
+/// Extract the raw value used for approval pattern matching.
+///
+/// For Bash tools, this is the raw command string (e.g., "git push origin main").
+/// For file tools, this is the file path.
+/// For other tools, falls back to the description.
+///
+/// This is separate from `ApprovalRequest.description` (which includes the tool
+/// name prefix like "Bash: git push origin main") so that wildcard patterns
+/// like "git *" match correctly against the raw command, not the prefixed description.
+fn approval_check_value(name: &str, input: &Value, description: &str) -> String {
+    // For shell tools, use the raw command
+    if let Some(cmd) = extract_command_input(name, input) {
+        return cmd;
+    }
+    // For file tools, use the path
+    if let Some(path) = extract_file_path(input) {
+        return path.display().to_string();
+    }
+    // Fallback to description
+    description.to_string()
 }
 
 /// Extract a command prefix pattern for the "allow similar commands" option.
@@ -1461,13 +1566,7 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
     let proposed_prefix_pattern = extract_prefix_pattern(name, input);
 
     cocode_protocol::ApprovalRequest {
-        request_id: format!(
-            "default-{name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ),
+        request_id: format!("default-{name}-{}", uuid::Uuid::new_v4()),
         tool_name: name.to_string(),
         description,
         risks: vec![],
@@ -1584,6 +1683,7 @@ fn apply_permission_mode(
     result: cocode_protocol::PermissionResult,
     mode: PermissionMode,
     tool_name: &str,
+    registry: &ToolRegistry,
 ) -> cocode_protocol::PermissionResult {
     match mode {
         PermissionMode::Bypass => cocode_protocol::PermissionResult::Allowed,
@@ -1598,13 +1698,13 @@ fn apply_permission_mode(
             }
             other => other,
         },
-        PermissionMode::AcceptEdits if is_edit_tool(tool_name) => match result {
+        PermissionMode::AcceptEdits if is_edit_tool(registry, tool_name) => match result {
             cocode_protocol::PermissionResult::NeedsApproval { .. } => {
                 cocode_protocol::PermissionResult::Allowed
             }
             other => other,
         },
-        PermissionMode::Plan if !is_read_only_or_plan_tool(tool_name) => {
+        PermissionMode::Plan if !is_read_only_or_plan_tool(registry, tool_name) => {
             // In plan mode, deny all non-read-only tools (unless already allowed/denied)
             match result {
                 cocode_protocol::PermissionResult::Allowed
@@ -1665,7 +1765,7 @@ async fn execute_tool_inner(
     let pipeline_result = check_permission_pipeline(tool.as_ref(), name, &input, ctx).await;
 
     // Apply permission mode on top
-    let permission = apply_permission_mode(pipeline_result, ctx.permission_mode, name);
+    let permission = apply_permission_mode(pipeline_result, ctx.permission_mode, name, registry);
 
     match permission {
         cocode_protocol::PermissionResult::Allowed => {
@@ -1692,9 +1792,11 @@ async fn execute_tool_inner(
             );
         }
         cocode_protocol::PermissionResult::NeedsApproval { request } => {
-            // Check ApprovalStore first
-            let pattern = &request.description;
-            if ctx.is_approved(name, pattern).await {
+            // Use the raw command/path for approval matching, not the prefixed description.
+            // This ensures wildcard patterns like "git *" match "git push origin main"
+            // rather than failing against "Bash: git push origin main".
+            let pattern = approval_check_value(name, &input, &request.description);
+            if ctx.is_approved(name, &pattern).await {
                 // Already approved for this pattern (exact or wildcard)
                 if let Some(otel) = otel_manager {
                     otel.tool_decision(
@@ -1754,7 +1856,7 @@ async fn execute_tool_inner(
                             );
                         }
                         // Auto-approve: remember in session
-                        ctx.approve_pattern(name, pattern).await;
+                        ctx.approve_pattern(name, &pattern).await;
                     }
                     "deny" => {
                         if let Some(otel) = otel_manager {
@@ -1807,8 +1909,8 @@ async fn execute_tool_inner(
                                 cocode_otel::ToolDecisionSource::User,
                             );
                         }
-                        // Session-only: remember exact description
-                        ctx.approve_pattern(name, pattern).await;
+                        // Session-only: remember exact value
+                        ctx.approve_pattern(name, &pattern).await;
                     }
                     cocode_protocol::ApprovalDecision::ApprovedWithPrefix { prefix_pattern } => {
                         if let Some(otel) = otel_manager {
@@ -1847,12 +1949,11 @@ async fn execute_tool_inner(
 
     // Pre-execute file backup (Tier 1 rewind)
     if !tool.is_read_only() {
-        if let Some(ref backup_store) = ctx.file_backup_store {
-            if let Some(file_path) = extract_file_path(&input) {
-                if let Err(e) = backup_store.backup_before_modify(&file_path).await {
-                    tracing::warn!("File backup failed for {}: {e}", file_path.display());
-                }
-            }
+        if let Some(ref backup_store) = ctx.file_backup_store
+            && let Some(file_path) = extract_file_path(&input)
+            && let Err(e) = backup_store.backup_before_modify(&file_path).await
+        {
+            tracing::warn!("File backup failed for {}: {e}", file_path.display());
         }
     }
 

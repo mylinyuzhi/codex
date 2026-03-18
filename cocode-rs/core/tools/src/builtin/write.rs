@@ -1,5 +1,6 @@
 //! Write tool for creating or overwriting files.
 
+use super::edit_strategies::diff_stats;
 use super::prompts;
 use crate::context::ToolContext;
 use crate::error::Result;
@@ -23,29 +24,6 @@ use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
-
-/// Compute simple diff statistics between original and modified content.
-fn diff_stats(original: &str, modified: &str) -> String {
-    let old_lines: Vec<&str> = original.lines().collect();
-    let new_lines: Vec<&str> = modified.lines().collect();
-
-    let mut changed = 0;
-    let min_len = old_lines.len().min(new_lines.len());
-    for i in 0..min_len {
-        if old_lines[i] != new_lines[i] {
-            changed += 1;
-        }
-    }
-
-    let added = new_lines.len().saturating_sub(old_lines.len()) + changed;
-    let removed = old_lines.len().saturating_sub(new_lines.len()) + changed;
-
-    if added == 0 && removed == 0 {
-        String::new()
-    } else {
-        format!(" (+{added}/-{removed} lines)")
-    }
-}
 
 /// Tool for writing files to the local filesystem.
 ///
@@ -98,6 +76,10 @@ impl Tool for WriteTool {
 
     fn is_read_only(&self) -> bool {
         false
+    }
+
+    fn is_edit_tool(&self) -> bool {
+        true
     }
 
     async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {

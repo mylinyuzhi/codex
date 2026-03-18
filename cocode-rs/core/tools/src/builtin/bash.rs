@@ -235,6 +235,11 @@ impl Tool for BashTool {
                     "type": "boolean",
                     "description": "Run command in background",
                     "default": false
+                },
+                "dangerouslyDisableSandbox": {
+                    "type": "boolean",
+                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+                    "default": false
                 }
             },
             "required": ["command"]
@@ -352,13 +357,7 @@ impl Tool for BashTool {
 
                 return PermissionResult::NeedsApproval {
                     request: ApprovalRequest {
-                        request_id: format!(
-                            "bash-security-{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos())
-                                .unwrap_or(0)
-                        ),
+                        request_id: format!("bash-security-{}", uuid::Uuid::new_v4()),
                         tool_name: cocode_protocol::ToolName::Bash.as_str().to_string(),
                         description,
                         risks,
@@ -372,13 +371,7 @@ impl Tool for BashTool {
         // Non-read-only command with no detected risks → still needs approval
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
-                request_id: format!(
-                    "bash-cmd-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                ),
+                request_id: format!("bash-cmd-{}", uuid::Uuid::new_v4()),
                 tool_name: cocode_protocol::ToolName::Bash.as_str().to_string(),
                 description: if command.len() > 120 {
                     format!("{}...", &command[..120])
@@ -405,6 +398,10 @@ impl Tool for BashTool {
             .unwrap_or(DEFAULT_TIMEOUT_SECS * 1000);
         let timeout_secs = (timeout_ms / 1000).min(MAX_TIMEOUT_SECS);
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
+        let _dangerously_disable_sandbox = input["dangerouslyDisableSandbox"]
+            .as_bool()
+            .unwrap_or(false);
+        // TODO: Pass to shell executor when sandbox mode is implemented
 
         // Emit progress
         let desc = input["description"].as_str().unwrap_or("Executing command");

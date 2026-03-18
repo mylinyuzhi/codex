@@ -180,6 +180,10 @@ impl Tool for EditTool {
         false
     }
 
+    fn is_edit_tool(&self) -> bool {
+        true
+    }
+
     async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         if let Some(path_str) = input.get("file_path").and_then(|v| v.as_str()) {
             let path = ctx.resolve_path(path_str);

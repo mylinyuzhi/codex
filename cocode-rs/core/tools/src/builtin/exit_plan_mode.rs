@@ -73,8 +73,7 @@ impl Tool for ExitPlanModeTool {
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        // Unsafe: must not run concurrently — requires user interaction
-        ConcurrencySafety::Unsafe
+        ConcurrencySafety::Safe
     }
 
     fn is_read_only(&self) -> bool {

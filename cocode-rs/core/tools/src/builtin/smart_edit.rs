@@ -311,6 +311,10 @@ impl Tool for SmartEditTool {
         false
     }
 
+    fn is_edit_tool(&self) -> bool {
+        true
+    }
+
     fn feature_gate(&self) -> Option<Feature> {
         Some(Feature::SmartEdit)
     }

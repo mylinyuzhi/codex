@@ -109,6 +109,7 @@ pub use generator::ApprovedPlanInfo;
 pub use generator::AsyncHookResponseInfo;
 pub use generator::AttachmentGenerator;
 pub use generator::CompactedLargeFile;
+pub use generator::CronJobInfo;
 pub use generator::GeneratorContext;
 pub use generator::GeneratorContextBuilder;
 pub use generator::HookBlockingInfo;
