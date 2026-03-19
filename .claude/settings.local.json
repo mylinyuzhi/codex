@@ -1,18 +1,4 @@
 {
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash /lyz/codespace/codex/.claude/scripts/rust-quality-check.sh",
-            "timeout": 600,
-            "statusMessage": "Running Rust quality checks (fmt + check + clippy + test)..."
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "WebSearch",
@@ -96,9 +82,24 @@
       "Bash(for f:*)",
       "Bash(do echo:*)",
       "Read(//tmp/claude-0/-lyz-codespace-worktrees-codex-feat-tools/39ff80b0-5af0-4eca-9a5a-ed2b08fac02d/tasks/**)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(find . -name \"*.rs\" -exec grep -l \"pub\\(crate\\)\" {})"
     ],
     "deny": [],
     "ask": []
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /lyz/codespace/codex/.claude/scripts/rust-quality-check.sh",
+            "timeout": 600,
+            "statusMessage": "Running Rust quality checks (fmt + check + clippy + test)..."
+          }
+        ]
+      }
+    ]
   }
 }

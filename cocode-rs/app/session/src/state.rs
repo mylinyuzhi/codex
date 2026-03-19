@@ -2690,10 +2690,7 @@ impl SessionState {
         // each message ("Please address this message and continue").
         // The shared Arc<Mutex> means any commands queued by the TUI driver during
         // the turn are visible to the loop immediately — no take-back needed.
-        let result = loop_instance
-            .run_and_process_queue(user_input)
-            .await
-            .map_err(boxed_err)?;
+        let result = loop_instance.run(user_input).await.map_err(boxed_err)?;
 
         // Extract todos state from the loop
         if let Some(todos) = loop_instance.take_todos() {
