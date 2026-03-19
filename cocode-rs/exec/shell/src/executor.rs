@@ -84,6 +84,11 @@ pub struct ShellExecutor {
     snapshot_initialized: bool,
     /// Optional path extractor for extracting file paths from command output.
     path_extractor: Option<Arc<dyn PathExtractor>>,
+    /// Extra environment variables injected by SessionStart hooks.
+    ///
+    /// These are applied to every spawned command as an env overlay,
+    /// avoiding unsafe global mutation via `std::env::set_var`.
+    env_overlay: Arc<StdMutex<std::collections::HashMap<String, String>>>,
 }
 
 impl std::fmt::Debug for ShellExecutor {
@@ -96,6 +101,7 @@ impl std::fmt::Debug for ShellExecutor {
             .field("shell", &self.shell)
             .field("snapshot_initialized", &self.snapshot_initialized)
             .field("path_extractor", &self.path_extractor.is_some())
+            .field("env_overlay_count", &self.env_overlay.lock().unwrap().len())
             .finish()
     }
 }
@@ -113,6 +119,7 @@ impl ShellExecutor {
             shell: None,
             snapshot_initialized: false,
             path_extractor: None,
+            env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -127,6 +134,7 @@ impl ShellExecutor {
             shell: Some(shell),
             snapshot_initialized: false,
             path_extractor: None,
+            env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -163,6 +171,18 @@ impl ShellExecutor {
     /// Returns true if a path extractor is configured and enabled.
     pub fn has_path_extractor(&self) -> bool {
         self.path_extractor.as_ref().is_some_and(|e| e.is_enabled())
+    }
+
+    /// Adds environment variables to the overlay.
+    ///
+    /// These vars will be set on every spawned command, providing a safe
+    /// alternative to mutating global state via `std::env::set_var`.
+    /// Typically called by the hooks bridge after SessionStart hooks produce
+    /// env vars from `COCODE_ENV_FILE`.
+    #[allow(clippy::unwrap_used)]
+    pub fn add_env_overlay(&self, vars: std::collections::HashMap<String, String>) {
+        let mut overlay = self.env_overlay.lock().unwrap();
+        overlay.extend(vars);
     }
 
     /// Starts asynchronous shell snapshotting.
@@ -257,6 +277,7 @@ impl ShellExecutor {
             shell: self.shell.clone(), // Share shell config (Arc snapshot is shared)
             snapshot_initialized: self.snapshot_initialized,
             path_extractor: self.path_extractor.clone(), // Share path extractor
+            env_overlay: self.env_overlay.clone(),       // Share env overlay
         }
     }
 
@@ -479,13 +500,21 @@ impl ShellExecutor {
         );
         let shell_args = [args[0].clone(), args[1].clone(), wrapped_script];
 
-        let child = tokio::process::Command::new(&shell_args[0])
-            .args(&shell_args[1..])
+        let mut cmd = tokio::process::Command::new(&shell_args[0]);
+        cmd.args(&shell_args[1..])
             .current_dir(&cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn();
+            .kill_on_drop(true);
+
+        // Apply env overlay from SessionStart hooks
+        if let Ok(overlay) = self.env_overlay.lock() {
+            for (key, value) in overlay.iter() {
+                cmd.env(key, value);
+            }
+        }
+
+        let child = cmd.spawn();
 
         let mut child = match child {
             Ok(c) => c,
@@ -848,15 +877,25 @@ impl ShellExecutor {
         let bg_task_id = task_id.clone();
         let shell_args = self.get_shell_args(command);
         let shell_args = self.maybe_wrap_shell_lc_with_snapshot(shell_args);
+        let env_overlay_snapshot: std::collections::HashMap<String, String> = self
+            .env_overlay
+            .lock()
+            .map(|o| o.clone())
+            .unwrap_or_default();
 
         tokio::spawn(async move {
-            let child = tokio::process::Command::new(&shell_args[0])
-                .args(&shell_args[1..])
+            let mut cmd = tokio::process::Command::new(&shell_args[0]);
+            cmd.args(&shell_args[1..])
                 .current_dir(&cwd)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn();
+                .kill_on_drop(true);
+
+            for (key, value) in &env_overlay_snapshot {
+                cmd.env(key, value);
+            }
+
+            let child = cmd.spawn();
 
             match child {
                 Ok(mut child) => {
@@ -951,13 +990,21 @@ impl ShellExecutor {
         );
         let args = [args[0].clone(), args[1].clone(), wrapped_script];
 
-        let child = tokio::process::Command::new(&args[0])
-            .args(&args[1..])
+        let mut cmd = tokio::process::Command::new(&args[0]);
+        cmd.args(&args[1..])
             .current_dir(&cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn();
+            .kill_on_drop(true);
+
+        // Apply env overlay from SessionStart hooks
+        if let Ok(overlay) = self.env_overlay.lock() {
+            for (key, value) in overlay.iter() {
+                cmd.env(key, value);
+            }
+        }
+
+        let child = cmd.spawn();
 
         let child = match child {
             Ok(c) => c,

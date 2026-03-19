@@ -3,11 +3,19 @@
 //! Matchers inspect a string value (typically a tool name) to decide whether
 //! the hook applies.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::HookError;
 use crate::error::hook_error::*;
+
+/// Module-level regex cache to avoid recompiling the same pattern on every `matches()` call.
+static REGEX_CACHE: LazyLock<Mutex<HashMap<String, regex::Regex>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A matcher that determines whether a hook should fire for a given value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,13 +48,34 @@ impl HookMatcher {
             Self::Exact { value: expected } => value == expected,
             Self::Wildcard { pattern } => wildcard_matches(pattern, value),
             Self::Or { matchers } => matchers.iter().any(|m| m.matches(value)),
-            Self::Regex { pattern } => match regex::Regex::new(pattern) {
-                Ok(re) => re.is_match(value),
-                Err(e) => {
-                    tracing::warn!("Invalid regex pattern '{pattern}': {e}");
-                    false
+            Self::Regex { pattern } => {
+                // Use cached regex to avoid recompilation on every call
+                if let Ok(mut cache) = REGEX_CACHE.lock() {
+                    if let Some(re) = cache.get(pattern) {
+                        return re.is_match(value);
+                    }
+                    match regex::Regex::new(pattern) {
+                        Ok(re) => {
+                            let result = re.is_match(value);
+                            cache.insert(pattern.clone(), re);
+                            result
+                        }
+                        Err(e) => {
+                            tracing::warn!("Invalid regex pattern '{pattern}': {e}");
+                            false
+                        }
+                    }
+                } else {
+                    // Fallback if lock is poisoned
+                    match regex::Regex::new(pattern) {
+                        Ok(re) => re.is_match(value),
+                        Err(e) => {
+                            tracing::warn!("Invalid regex pattern '{pattern}': {e}");
+                            false
+                        }
+                    }
                 }
-            },
+            }
             Self::All => true,
         }
     }

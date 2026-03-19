@@ -17,6 +17,8 @@ fn make_hook(name: &str) -> HookDefinition {
         once: false,
         status_message: None,
         group_id: None,
+        is_async: false,
+        force_sync_execution: false,
     }
 }
 
@@ -121,6 +123,7 @@ fn test_managed_hooks_only() {
     let settings = HookSettings {
         disable_all_hooks: false,
         allow_managed_hooks_only: true,
+        workspace_trusted: true,
     };
     let hooks = aggregator.build(&settings);
 
@@ -138,6 +141,7 @@ fn test_disable_all_hooks() {
     let settings = HookSettings {
         disable_all_hooks: true,
         allow_managed_hooks_only: false,
+        workspace_trusted: true,
     };
     let hooks = aggregator.build(&settings);
 

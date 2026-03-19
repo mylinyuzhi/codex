@@ -26,6 +26,8 @@ fn make_hook(name: &str, event: HookEventType, matcher: Option<HookMatcher>) -> 
         once: false,
         status_message: None,
         group_id: None,
+        is_async: false,
+        force_sync_execution: false,
     }
 }
 
@@ -44,6 +46,8 @@ fn make_once_hook(name: &str, event: HookEventType) -> HookDefinition {
         once: true,
         status_message: None,
         group_id: None,
+        is_async: false,
+        force_sync_execution: false,
     }
 }
 
@@ -248,4 +252,33 @@ fn test_remove_hooks_by_scope() {
     assert_eq!(registry.len(), 2);
     let hooks = registry.all_hooks();
     assert!(hooks.iter().all(|h| h.name != "h3"));
+}
+
+#[tokio::test]
+async fn test_workspace_untrusted_filters_non_managed() {
+    let registry = HookRegistry::new();
+
+    // Session source (non-managed)
+    let h1 = make_hook("session-hook", HookEventType::SessionStart, None);
+
+    // Policy source (managed)
+    let mut h2 = make_hook("policy-hook", HookEventType::SessionStart, None);
+    h2.source = crate::scope::HookSource::Policy;
+
+    registry.register(h1);
+    registry.register(h2);
+
+    // Mark workspace as untrusted
+    registry.set_settings(HookSettings {
+        disable_all_hooks: false,
+        allow_managed_hooks_only: false,
+        workspace_trusted: false,
+    });
+
+    let ctx = make_ctx(HookEventType::SessionStart, None);
+    let outcomes = registry.execute(&ctx).await;
+
+    // Only managed hook should run
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].hook_name, "policy-hook");
 }

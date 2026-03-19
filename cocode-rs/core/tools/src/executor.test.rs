@@ -658,3 +658,133 @@ async fn test_drain_one_active_picks_fastest() {
         "Slow task should be in results"
     );
 }
+
+// --- Permission aggregation tests (Issue 4) ---
+
+fn make_permission_outcome(decision: &str, reason: Option<&str>) -> HookOutcome {
+    HookOutcome {
+        hook_name: format!("hook-{decision}"),
+        result: HookResult::PermissionOverride {
+            decision: decision.to_string(),
+            reason: reason.map(ToString::to_string),
+        },
+        duration_ms: 10,
+        suppress_output: false,
+    }
+}
+
+fn make_continue_outcome(name: &str) -> HookOutcome {
+    HookOutcome {
+        hook_name: name.to_string(),
+        result: HookResult::Continue,
+        duration_ms: 5,
+        suppress_output: false,
+    }
+}
+
+#[test]
+fn test_permission_aggregation_deny_beats_allow() {
+    let outcomes = vec![
+        make_permission_outcome("allow", None),
+        make_permission_outcome("deny", Some("blocked by policy")),
+    ];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Deny);
+    assert_eq!(reason, Some("blocked by policy".to_string()));
+}
+
+#[test]
+fn test_permission_aggregation_ask_beats_allow() {
+    let outcomes = vec![
+        make_permission_outcome("allow", None),
+        make_permission_outcome("ask", None),
+    ];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Ask);
+    assert!(reason.is_none());
+}
+
+#[test]
+fn test_permission_aggregation_single_allow() {
+    let outcomes = vec![make_permission_outcome("allow", None)];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Allow);
+    assert!(reason.is_none());
+}
+
+#[test]
+fn test_permission_aggregation_no_overrides() {
+    let outcomes = vec![
+        make_continue_outcome("hook-1"),
+        make_continue_outcome("hook-2"),
+    ];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Undefined);
+    assert!(reason.is_none());
+}
+
+#[test]
+fn test_permission_aggregation_empty() {
+    let outcomes: Vec<HookOutcome> = vec![];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Undefined);
+    assert!(reason.is_none());
+}
+
+#[test]
+fn test_permission_aggregation_deny_beats_ask() {
+    let outcomes = vec![
+        make_permission_outcome("ask", None),
+        make_permission_outcome("deny", Some("denied")),
+    ];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Deny);
+    assert_eq!(reason, Some("denied".to_string()));
+}
+
+#[test]
+fn test_permission_aggregation_unknown_decision_is_undefined() {
+    let outcomes = vec![make_permission_outcome("unknown_value", None)];
+    let (level, _) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Undefined);
+}
+
+#[test]
+fn test_permission_aggregation_first_deny_reason_preserved() {
+    // When multiple denies, only the first reason is kept
+    let outcomes = vec![
+        make_permission_outcome("deny", Some("first deny")),
+        make_permission_outcome("deny", Some("second deny")),
+    ];
+    let (level, reason) = aggregate_permission_overrides(&outcomes);
+    assert_eq!(level, PermissionLevel::Deny);
+    assert_eq!(reason, Some("first deny".to_string()));
+}
+
+#[test]
+fn test_permission_level_ordering() {
+    assert!(PermissionLevel::Deny < PermissionLevel::Ask);
+    assert!(PermissionLevel::Ask < PermissionLevel::Allow);
+    assert!(PermissionLevel::Allow < PermissionLevel::Undefined);
+}
+
+#[test]
+fn test_permission_level_from_decision() {
+    assert_eq!(
+        PermissionLevel::from_decision("deny"),
+        PermissionLevel::Deny
+    );
+    assert_eq!(PermissionLevel::from_decision("ask"), PermissionLevel::Ask);
+    assert_eq!(
+        PermissionLevel::from_decision("allow"),
+        PermissionLevel::Allow
+    );
+    assert_eq!(
+        PermissionLevel::from_decision(""),
+        PermissionLevel::Undefined
+    );
+    assert_eq!(
+        PermissionLevel::from_decision("invalid"),
+        PermissionLevel::Undefined
+    );
+}

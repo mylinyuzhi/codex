@@ -169,7 +169,9 @@ impl AgentLoop {
                     .await;
                     return Ok(());
                 }
-                cocode_hooks::HookResult::ContinueWithContext { additional_context } => {
+                cocode_hooks::HookResult::ContinueWithContext {
+                    additional_context, ..
+                } => {
                     hook_additional_context.push(additional_context.clone());
                 }
                 _ => {}
@@ -494,8 +496,9 @@ impl AgentLoop {
             hooks_executed += 1;
 
             // Collect additional context from hooks
-            if let cocode_hooks::HookResult::ContinueWithContext { additional_context } =
-                &outcome.result
+            if let cocode_hooks::HookResult::ContinueWithContext {
+                additional_context, ..
+            } = &outcome.result
                 && let Some(ctx) = additional_context
                 && !ctx.is_empty()
             {

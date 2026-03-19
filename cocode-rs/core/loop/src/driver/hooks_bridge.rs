@@ -36,7 +36,8 @@ impl AgentLoop {
                         .register(task_id.clone(), hook_name.clone());
                 }
                 cocode_hooks::HookResult::ContinueWithContext {
-                    additional_context, ..
+                    additional_context,
+                    env_vars,
                 } => {
                     if let Some(ctx_str) = additional_context {
                         info!(
@@ -44,6 +45,15 @@ impl AgentLoop {
                             event = %ctx.event_type,
                             "Lifecycle hook provided additional context: {ctx_str}"
                         );
+                    }
+                    // Propagate env vars from SessionStart hooks to the shell executor
+                    if !env_vars.is_empty() {
+                        info!(
+                            hook_name = %outcome.hook_name,
+                            count = env_vars.len(),
+                            "SessionStart hook provided env vars for shell overlay"
+                        );
+                        self.shell_executor.add_env_overlay(env_vars.clone());
                     }
                 }
                 cocode_hooks::HookResult::SystemMessage { message } => {

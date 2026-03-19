@@ -23,6 +23,7 @@ use crate::result_persistence;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookContext;
 use cocode_hooks::HookEventType;
+use cocode_hooks::HookOutcome;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookResult;
 use cocode_protocol::AbortReason;
@@ -273,6 +274,61 @@ struct PreHookOutcome {
     additional_contexts: Vec<String>,
 }
 
+/// Permission level for hook-based permission aggregation.
+///
+/// Most-restrictive-wins: deny(0) > ask(1) > allow(2) > undefined(3).
+/// Lower ordinal = more restrictive.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+enum PermissionLevel {
+    Deny = 0,
+    Ask = 1,
+    Allow = 2,
+    Undefined = 3,
+}
+
+impl PermissionLevel {
+    fn from_decision(s: &str) -> Self {
+        match s {
+            "deny" => Self::Deny,
+            "ask" => Self::Ask,
+            "allow" => Self::Allow,
+            _ => Self::Undefined,
+        }
+    }
+}
+
+/// Aggregates permission overrides from hook outcomes.
+///
+/// Uses most-restrictive-wins: deny > ask > allow > undefined.
+/// Returns the aggregated permission level and the first deny reason (if any).
+///
+/// This function extracts the aggregation logic from `execute_pre_hooks()` for
+/// unit testing. The production code uses the same logic inline (interleaved
+/// with other outcome processing).
+#[cfg(test)]
+fn aggregate_permission_overrides(outcomes: &[HookOutcome]) -> (PermissionLevel, Option<String>) {
+    let mut aggregated = PermissionLevel::Undefined;
+    let mut first_deny_reason: Option<String> = None;
+
+    for outcome in outcomes {
+        if let HookResult::PermissionOverride {
+            ref decision,
+            ref reason,
+        } = outcome.result
+        {
+            let level = PermissionLevel::from_decision(decision);
+            if level < aggregated {
+                aggregated = level;
+                if level == PermissionLevel::Deny && first_deny_reason.is_none() {
+                    first_deny_reason = reason.clone();
+                }
+            }
+        }
+    }
+
+    (aggregated, first_deny_reason)
+}
+
 impl StreamingToolExecutor {
     /// Create a new executor.
     pub fn new(
@@ -322,6 +378,9 @@ impl StreamingToolExecutor {
 
     /// Set the hook registry for pre/post tool hooks.
     pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        // Wire the async tracker into the hook registry so background hooks
+        // can deliver results via tracker.complete()
+        hooks.set_async_hook_tracker(self.async_hook_tracker.clone());
         self.hooks = Some(hooks);
         self
     }
@@ -370,6 +429,10 @@ impl StreamingToolExecutor {
 
     /// Set a custom async hook tracker.
     pub fn with_async_hook_tracker(mut self, tracker: Arc<AsyncHookTracker>) -> Self {
+        // Wire to hook registry if already set, so background hooks can deliver results
+        if let Some(ref hooks) = self.hooks {
+            hooks.set_async_hook_tracker(tracker.clone());
+        }
         self.async_hook_tracker = tracker;
         self
     }
@@ -1203,8 +1266,9 @@ impl StreamingToolExecutor {
 
         let outcomes = hooks.execute(&ctx).await;
         let mut current_input = input;
-        let mut skip_permission = false;
         let mut additional_contexts = Vec::new();
+        let mut aggregated_permission = PermissionLevel::Undefined;
+        let mut first_deny_reason: Option<String> = None;
 
         for outcome in outcomes {
             // Emit hook executed event
@@ -1261,15 +1325,13 @@ impl StreamingToolExecutor {
                         reason = ?reason,
                         "Hook returned permission override"
                     );
-                    // "deny" is treated like Reject
-                    if decision == "deny" {
-                        return Err(reason.unwrap_or_else(|| {
-                            "Tool denied by hook permission override".to_string()
-                        }));
-                    }
-                    // "allow" - skip permission checks for this tool call
-                    if decision == "allow" {
-                        skip_permission = true;
+                    let level = PermissionLevel::from_decision(&decision);
+                    // Most-restrictive-wins: lower ordinal = more restrictive
+                    if level < aggregated_permission {
+                        aggregated_permission = level;
+                        if level == PermissionLevel::Deny && first_deny_reason.is_none() {
+                            first_deny_reason = reason;
+                        }
                     }
                 }
                 HookResult::SystemMessage { message } => {
@@ -1285,9 +1347,30 @@ impl StreamingToolExecutor {
             }
         }
 
+        // Apply aggregated permission decision
+        match aggregated_permission {
+            PermissionLevel::Deny => {
+                return Err(first_deny_reason
+                    .unwrap_or_else(|| "Tool denied by hook permission override".to_string()));
+            }
+            PermissionLevel::Ask => {
+                // Explicitly ask — don't skip permission
+            }
+            PermissionLevel::Allow => {
+                return Ok(PreHookOutcome {
+                    input: current_input,
+                    skip_permission: true,
+                    additional_contexts,
+                });
+            }
+            PermissionLevel::Undefined => {
+                // No permission overrides — no change
+            }
+        }
+
         Ok(PreHookOutcome {
             input: current_input,
-            skip_permission,
+            skip_permission: false,
             additional_contexts,
         })
     }

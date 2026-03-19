@@ -3,6 +3,8 @@
 //! After a hook executes, it produces a `HookResult` that determines how the
 //! agent loop should proceed.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -19,6 +21,13 @@ pub enum HookResult {
         /// Additional context to inject into the conversation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         additional_context: Option<String>,
+
+        /// Environment variables to set (from SessionStart COCODE_ENV_FILE).
+        ///
+        /// Instead of mutating global state with `set_var`, env vars are returned
+        /// as data and propagated to ShellExecutor as an env overlay.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        env_vars: HashMap<String, String>,
     },
 
     /// Reject the current action.
@@ -92,6 +101,10 @@ pub struct HookOutcome {
 
     /// Wall-clock duration of hook execution in milliseconds.
     pub duration_ms: i64,
+
+    /// If true, suppress this hook's output from the UI.
+    #[serde(default)]
+    pub suppress_output: bool,
 }
 
 #[cfg(test)]

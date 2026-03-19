@@ -1000,6 +1000,11 @@ pub enum HookEventType {
     WorktreeCreate,
     /// When a git worktree is removed.
     WorktreeRemove,
+    /// Initial setup phase before session starts.
+    ///
+    /// Fired during initialization for hooks that need to run before
+    /// the session is fully established.
+    Setup,
 }
 
 impl HookEventType {
@@ -1024,6 +1029,7 @@ impl HookEventType {
             Self::ConfigChange => "config_change",
             Self::WorktreeCreate => "worktree_create",
             Self::WorktreeRemove => "worktree_remove",
+            Self::Setup => "setup",
         }
     }
 }
@@ -1055,6 +1061,9 @@ impl std::str::FromStr for HookEventType {
             "TeammateIdle" | "teammate_idle" => Ok(Self::TeammateIdle),
             "TaskCompleted" | "task_completed" => Ok(Self::TaskCompleted),
             "ConfigChange" | "config_change" => Ok(Self::ConfigChange),
+            "WorktreeCreate" | "worktree_create" => Ok(Self::WorktreeCreate),
+            "WorktreeRemove" | "worktree_remove" => Ok(Self::WorktreeRemove),
+            "Setup" | "setup" => Ok(Self::Setup),
             other => Err(format!("unknown hook event type: {other}")),
         }
     }

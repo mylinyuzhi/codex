@@ -373,6 +373,7 @@ impl SessionState {
         let hook_settings = cocode_hooks::HookSettings {
             disable_all_hooks: config.disable_all_hooks,
             allow_managed_hooks_only: config.allow_managed_hooks_only,
+            workspace_trusted: true,
         };
 
         let mut aggregator = cocode_hooks::HookAggregator::new();
@@ -2408,6 +2409,8 @@ impl SessionState {
                                 once: false,
                                 status_message: None,
                                 group_id: None, // set by register_group
+                                is_async: false,
+                                force_sync_execution: false,
                             })
                         })
                         .collect();
@@ -3077,6 +3080,8 @@ fn convert_config_hooks(
                     once,
                     status_message,
                     group_id: None,
+                    is_async: false,
+                    force_sync_execution: false,
                 });
             }
         }

@@ -12,12 +12,39 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
 use std::time::Instant;
 
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::result::HookResult;
+
+/// Default timeout for async hooks in seconds.
+pub const DEFAULT_ASYNC_TIMEOUT_SECS: u64 = 15;
+
+/// Acquires a write lock, recovering from poison if necessary.
+fn lock_write<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockWriteGuard<'a, T>> {
+    match lock.write() {
+        Ok(g) => Some(g),
+        Err(poisoned) => {
+            tracing::warn!("{name} lock poisoned, recovering");
+            Some(poisoned.into_inner())
+        }
+    }
+}
+
+/// Acquires a read lock, recovering from poison if necessary.
+fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockReadGuard<'a, T>> {
+    match lock.read() {
+        Ok(g) => Some(g),
+        Err(poisoned) => {
+            tracing::warn!("{name} lock poisoned, recovering");
+            Some(poisoned.into_inner())
+        }
+    }
+}
 
 /// Tracks pending and completed async hooks.
 #[derive(Default)]
@@ -37,6 +64,8 @@ pub struct PendingAsyncHook {
     pub hook_name: String,
     /// When the async task started.
     pub started_at: Instant,
+    /// Timeout in seconds for this async hook.
+    pub timeout_secs: u64,
 }
 
 /// A completed async hook with its result.
@@ -64,15 +93,21 @@ impl AsyncHookTracker {
         Self::default()
     }
 
-    /// Registers a new async hook task.
+    /// Registers a new async hook task with the default timeout.
     pub fn register(&self, task_id: String, hook_name: String) {
-        if let Ok(mut pending) = self.pending.write() {
+        self.register_with_timeout(task_id, hook_name, DEFAULT_ASYNC_TIMEOUT_SECS);
+    }
+
+    /// Registers a new async hook task with a custom timeout.
+    pub fn register_with_timeout(&self, task_id: String, hook_name: String, timeout_secs: u64) {
+        if let Some(mut pending) = lock_write(&self.pending, "pending") {
             pending.insert(
                 task_id.clone(),
                 PendingAsyncHook {
                     task_id,
                     hook_name,
                     started_at: Instant::now(),
+                    timeout_secs,
                 },
             );
         }
@@ -81,7 +116,7 @@ impl AsyncHookTracker {
     /// Marks an async hook as completed with its result.
     pub fn complete(&self, task_id: &str, result: HookResult) {
         // Get and remove the pending hook
-        let pending_hook = if let Ok(mut pending) = self.pending.write() {
+        let pending_hook = if let Some(mut pending) = lock_write(&self.pending, "pending") {
             pending.remove(task_id)
         } else {
             return;
@@ -99,6 +134,7 @@ impl AsyncHookTracker {
             HookResult::Reject { reason } => (true, Some(reason.clone()), None),
             HookResult::ContinueWithContext {
                 additional_context: ctx,
+                ..
             } => (false, None, ctx.clone()),
             _ => (false, None, None),
         };
@@ -113,7 +149,7 @@ impl AsyncHookTracker {
             blocking_reason,
         };
 
-        if let Ok(mut completed_list) = self.completed.write() {
+        if let Some(mut completed_list) = lock_write(&self.completed, "completed") {
             completed_list.push(completed);
         }
     }
@@ -122,7 +158,7 @@ impl AsyncHookTracker {
     ///
     /// Returns the completed hooks for processing (e.g., generating system reminders).
     pub fn take_completed(&self) -> Vec<CompletedAsyncHook> {
-        if let Ok(mut completed) = self.completed.write() {
+        if let Some(mut completed) = lock_write(&self.completed, "completed") {
             std::mem::take(&mut *completed)
         } else {
             Vec::new()
@@ -131,12 +167,16 @@ impl AsyncHookTracker {
 
     /// Returns the number of pending async hooks.
     pub fn pending_count(&self) -> i32 {
-        self.pending.read().map(|p| p.len() as i32).unwrap_or(0)
+        lock_read(&self.pending, "pending")
+            .map(|p| p.len() as i32)
+            .unwrap_or(0)
     }
 
     /// Returns the number of completed but not yet processed hooks.
     pub fn completed_count(&self) -> i32 {
-        self.completed.read().map(|c| c.len() as i32).unwrap_or(0)
+        lock_read(&self.completed, "completed")
+            .map(|c| c.len() as i32)
+            .unwrap_or(0)
     }
 
     /// Checks if there are any pending or completed hooks.
@@ -149,10 +189,39 @@ impl AsyncHookTracker {
     /// This removes the hook from pending without adding it to completed.
     /// Useful when a hook times out or is cancelled.
     pub fn cancel(&self, task_id: &str) -> bool {
-        if let Ok(mut pending) = self.pending.write() {
+        if let Some(mut pending) = lock_write(&self.pending, "pending") {
             pending.remove(task_id).is_some()
         } else {
             false
+        }
+    }
+
+    /// Returns task IDs of expired async hooks (exceeded their timeout).
+    ///
+    /// Call this periodically (e.g., from the system-reminder generator tick)
+    /// to detect timed-out async hooks.
+    pub fn check_expired(&self) -> Vec<String> {
+        if let Some(pending) = lock_read(&self.pending, "pending") {
+            pending
+                .values()
+                .filter(|h| h.started_at.elapsed().as_secs() >= h.timeout_secs)
+                .map(|h| h.task_id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Cancels all pending async hooks and returns the count cancelled.
+    ///
+    /// Used for session-end cleanup to ensure no dangling background hooks.
+    pub fn cancel_all(&self) -> usize {
+        if let Some(mut pending) = lock_write(&self.pending, "pending") {
+            let count = pending.len();
+            pending.clear();
+            count
+        } else {
+            0
         }
     }
 }

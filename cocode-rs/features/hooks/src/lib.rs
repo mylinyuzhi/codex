@@ -38,6 +38,7 @@ pub use aggregator::HookAggregator;
 pub use aggregator::aggregate_hooks;
 pub use async_tracker::AsyncHookTracker;
 pub use async_tracker::CompletedAsyncHook;
+pub use async_tracker::DEFAULT_ASYNC_TIMEOUT_SECS;
 pub use async_tracker::PendingAsyncHook;
 pub use config::load_hooks_from_json;
 pub use context::HookContext;

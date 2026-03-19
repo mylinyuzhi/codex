@@ -187,6 +187,7 @@ impl Tool for TaskTool {
                     }
                     cocode_hooks::HookResult::ContinueWithContext {
                         additional_context: Some(ctx_text),
+                        ..
                     } => {
                         hook_additional_context = Some(ctx_text.clone());
                     }

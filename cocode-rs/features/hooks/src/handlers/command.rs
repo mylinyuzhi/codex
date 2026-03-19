@@ -30,6 +30,8 @@
 //! - Exit code 2: Block the action, stderr becomes the rejection reason
 //! - Any other non-zero: Error (logged but not blocking, returns `Continue`)
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -104,11 +106,38 @@ pub struct HookOutput {
         rename = "updatedToolOutput"
     )]
     pub updated_tool_output: Option<Value>,
+
+    /// A blocking error that prevents the action from proceeding.
+    ///
+    /// When set, the hook blocks execution with this error message.
+    /// Takes precedence over all other fields except `is_async`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "blockingError"
+    )]
+    pub blocking_error: Option<String>,
+
+    /// Whether to prevent the agent loop from continuing after this tool result.
+    ///
+    /// When true (PostToolUse hooks), the agent loop halts after processing the
+    /// current tool result.
+    #[serde(default, rename = "preventContinuation")]
+    pub prevent_continuation: bool,
+
+    /// Whether to suppress this hook's output from the UI.
+    #[serde(default, rename = "suppressOutput")]
+    pub suppress_output: bool,
 }
 
 impl HookOutput {
     /// Converts this output to a HookResult, optionally with a hook name for async results.
     pub fn into_result(self, hook_name: Option<&str>) -> HookResult {
+        // blockingError takes highest precedence (before async)
+        if let Some(error) = self.blocking_error {
+            return HookResult::Reject { reason: error };
+        }
+
         if self.is_async {
             // Generate a unique task ID for async hooks
             let task_id = format!("async-{}", uuid::Uuid::new_v4());
@@ -148,6 +177,7 @@ impl HookOutput {
             if let Some(ctx) = specific.get("additionalContext").and_then(|v| v.as_str()) {
                 return HookResult::ContinueWithContext {
                     additional_context: Some(ctx.to_string()),
+                    env_vars: HashMap::new(),
                 };
             }
         }
@@ -179,6 +209,7 @@ impl HookOutput {
         if self.additional_context.is_some() {
             return HookResult::ContinueWithContext {
                 additional_context: self.additional_context,
+                env_vars: HashMap::new(),
             };
         }
 
@@ -190,6 +221,13 @@ impl HookOutput {
         // system_message → SystemMessage (informational)
         if let Some(message) = self.system_message {
             return HookResult::SystemMessage { message };
+        }
+
+        // preventContinuation → PreventContinuation (PostToolUse hooks)
+        if self.prevent_continuation {
+            return HookResult::PreventContinuation {
+                reason: self.stop_reason,
+            };
         }
 
         HookResult::Continue
@@ -216,12 +254,12 @@ impl CommandHandler {
     ///
     /// The process stdout is parsed as either `HookResult` (legacy) or `HookOutput`
     /// (Claude Code v2.1.7 format). On any error the handler falls back to `Continue`.
-    pub async fn execute(command: &str, ctx: &HookContext) -> HookResult {
+    pub async fn execute(command: &str, ctx: &HookContext) -> (HookResult, bool) {
         let ctx_json = match serde_json::to_string(ctx) {
             Ok(j) => j,
             Err(e) => {
                 warn!("Failed to serialize hook context: {e}");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
@@ -259,7 +297,7 @@ impl CommandHandler {
             Ok(c) => c,
             Err(e) => {
                 warn!("Failed to spawn hook command '{command}': {e}");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
@@ -276,11 +314,14 @@ impl CommandHandler {
             Ok(o) => o,
             Err(e) => {
                 warn!("Failed to wait for hook command: {e}");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
-        // For SessionStart hooks, read back COCODE_ENV_FILE and inject env vars
+        // For SessionStart hooks, read back COCODE_ENV_FILE and return env vars as data.
+        // Instead of mutating global state with unsafe set_var, we return parsed env vars
+        // in the HookResult for the caller to propagate as an env overlay.
+        let mut session_env_vars = HashMap::new();
         if let Some(ref env_file) = env_file_path
             && env_file.is_file()
         {
@@ -295,10 +336,8 @@ impl CommandHandler {
                             // Strip surrounding quotes from value
                             let value = value.trim().trim_matches('"').trim_matches('\'');
                             if !key.is_empty() {
-                                debug!(key, value, "Injecting env var from COCODE_ENV_FILE");
-                                // SAFETY: SessionStart hooks run once at startup before
-                                // concurrent tool execution begins.
-                                unsafe { std::env::set_var(key, value) };
+                                debug!(key, value, "Parsed env var from COCODE_ENV_FILE");
+                                session_env_vars.insert(key.to_string(), value.to_string());
                             }
                         }
                     }
@@ -326,7 +365,7 @@ impl CommandHandler {
                     stderr.trim().to_string()
                 };
                 debug!(command, %reason, "Hook command blocked action (exit code 2)");
-                return HookResult::Reject { reason };
+                return (HookResult::Reject { reason }, false);
             }
 
             // Any other non-zero exit = error, logged but not blocking
@@ -336,32 +375,69 @@ impl CommandHandler {
                 stderr = %stderr,
                 "Hook command exited with error"
             );
-            return HookResult::Continue;
+            return (HookResult::Continue, false);
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         if stdout.trim().is_empty() {
-            return HookResult::Continue;
+            // If we have session env vars but no stdout, return them via ContinueWithContext
+            if !session_env_vars.is_empty() {
+                return (
+                    HookResult::ContinueWithContext {
+                        additional_context: None,
+                        env_vars: session_env_vars,
+                    },
+                    false,
+                );
+            }
+            return (HookResult::Continue, false);
         }
 
-        parse_hook_response(stdout.trim())
+        let (mut result, suppress) = parse_hook_response(stdout.trim());
+
+        // Attach session env vars to the result if we have them
+        if !session_env_vars.is_empty() {
+            result = match result {
+                HookResult::Continue => HookResult::ContinueWithContext {
+                    additional_context: None,
+                    env_vars: session_env_vars,
+                },
+                HookResult::ContinueWithContext {
+                    additional_context,
+                    env_vars: mut existing,
+                } => {
+                    existing.extend(session_env_vars);
+                    HookResult::ContinueWithContext {
+                        additional_context,
+                        env_vars: existing,
+                    }
+                }
+                other => other, // Don't override Reject, ModifyInput, etc.
+            };
+        }
+
+        (result, suppress)
     }
 }
 
 /// Parses hook command output, supporting both `HookResult` and `HookOutput` formats.
-fn parse_hook_response(stdout: &str) -> HookResult {
+///
+/// Returns `(result, suppress_output)`. The `suppress_output` flag is only available
+/// when parsing the `HookOutput` format (which has a `suppressOutput` field).
+fn parse_hook_response(stdout: &str) -> (HookResult, bool) {
     // Try parsing as HookResult first (has "action" field)
     if let Ok(result) = serde_json::from_str::<HookResult>(stdout) {
-        return result;
+        return (result, false);
     }
 
     // Try parsing as HookOutput (Claude Code v2.1.7 format with "continue_execution" field)
     if let Ok(output) = serde_json::from_str::<HookOutput>(stdout) {
-        return output.into();
+        let suppress = output.suppress_output;
+        return (output.into_result(None), suppress);
     }
 
     warn!("Failed to parse hook command output as HookResult or HookOutput");
-    HookResult::Continue
+    (HookResult::Continue, false)
 }
 
 #[cfg(test)]

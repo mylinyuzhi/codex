@@ -3,6 +3,8 @@
 //! A `HookDefinition` describes a single hook: when it fires (event type),
 //! what it matches against (optional matcher), and what it does (handler).
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -66,6 +68,21 @@ pub struct HookDefinition {
     /// so they can be unregistered together when the agent completes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
+
+    /// If true, the hook is backgrounded immediately at dispatch time.
+    ///
+    /// This is the config-based async mode (Claude Code `async: true` in
+    /// settings). The hook spawns as a background tokio task, and execution
+    /// continues without waiting for its result. Contrast with the runtime
+    /// async mode where the hook itself returns `{ "async": true }` on stdout.
+    #[serde(default, rename = "async")]
+    pub is_async: bool,
+
+    /// If true, force synchronous execution even when `is_async` is set.
+    ///
+    /// SessionStart hooks are always forced sync regardless of this flag.
+    #[serde(default, rename = "forceSyncExecution")]
+    pub force_sync_execution: bool,
 }
 
 impl HookDefinition {
@@ -131,6 +148,12 @@ pub enum HookHandler {
     Webhook {
         /// The URL to call.
         url: String,
+        /// Optional per-webhook timeout in seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<i32>,
+        /// Custom HTTP headers to include in the webhook request.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        headers: HashMap<String, String>,
     },
 
     /// An inline function handler (not serializable).
