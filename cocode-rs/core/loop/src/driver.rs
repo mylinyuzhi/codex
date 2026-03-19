@@ -184,7 +184,15 @@ pub struct AgentLoop {
     /// Active skill-level tool restrictions.
     /// Set when a skill with `allowed_tools` is invoked via the Skill tool.
     /// Applied to the executor on the next turn iteration.
+    ///
+    /// **Lifecycle invariant**: set via `SkillAllowedTools` context modifier
+    /// (in `apply_modifiers`), persists across `ToolCalls` recursion, and
+    /// cleared on `Stop`, `Length`, or any other finish reason. A new skill
+    /// invocation replaces the previous restriction.
     active_skill_allowed_tools: Option<std::collections::HashSet<String>>,
+    /// Model override requested by a skill via `ContextModifier::ModelOverride`.
+    /// Applied before the next API call and then cleared.
+    model_override: Option<String>,
 
     // Task list state (updated by TodoWrite tool via ContextModifier)
     /// Latest task list from the most recent TodoWrite tool call.
@@ -1015,6 +1023,11 @@ impl AgentLoop {
         // ── STEP 18: Recurse or return ──
         match collected.finish_reason.unified {
             UnifiedFinishReason::Stop => {
+                // Clear skill-level tool restrictions — the model has finished
+                // processing the skill's instructions (no more tool calls).
+                // Matches CC: contextModifier scope ends when the model stops.
+                self.active_skill_allowed_tools = None;
+
                 // Turn completed with stop - set status to Idle
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1032,6 +1045,9 @@ impl AgentLoop {
                 Box::pin(self.core_message_loop(query_tracking, auto_compact_tracking)).await
             }
             UnifiedFinishReason::Length => {
+                // Clear skill-level tool restrictions — the model hit a token
+                // limit mid-skill, so the skill context is effectively lost.
+                self.active_skill_allowed_tools = None;
                 // Output token recovery already handled in step 9
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1043,6 +1059,7 @@ impl AgentLoop {
                 ))
             }
             other => {
+                self.active_skill_allowed_tools = None;
                 warn!(?other, "Unexpected finish reason");
                 self.set_status(AgentStatus::Idle);
                 Ok(LoopResult::completed(
@@ -1237,15 +1254,30 @@ impl AgentLoop {
 
             // Add available skills to generator context
             if let Some(ref sm) = self.skill_manager {
-                let skill_infos: Vec<SkillInfo> = sm
+                let mut skill_infos: Vec<SkillInfo> = sm
                     .llm_invocable_skills()
                     .into_iter()
                     .map(|skill| SkillInfo {
                         name: skill.name.clone(),
                         description: skill.description.clone(),
                         when_to_use: skill.when_to_use.clone(),
+                        is_bundled: skill.loaded_from == cocode_skill::LoadedFrom::Bundled,
                     })
                     .collect();
+
+                // Activate conditional skills matching files touched this session
+                let touched_paths = reminder_tracker_view.tracked_files();
+                if !touched_paths.is_empty() {
+                    for skill in sm.activate_for_paths(&touched_paths) {
+                        skill_infos.push(SkillInfo {
+                            name: skill.name.clone(),
+                            description: skill.description.clone(),
+                            when_to_use: skill.when_to_use.clone(),
+                            is_bundled: false,
+                        });
+                    }
+                }
+
                 if !skill_infos.is_empty() {
                     builder = builder.available_skills(skill_infos);
                 }
@@ -1259,7 +1291,7 @@ impl AgentLoop {
                         .iter()
                         .map(|skill| InvokedSkillInfo {
                             name: skill.name.clone(),
-                            prompt_content: String::new(),
+                            prompt_content: skill.prompt_content.clone(),
                         })
                         .collect();
                     builder = builder.invoked_skills(skill_infos);

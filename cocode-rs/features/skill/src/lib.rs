@@ -31,6 +31,8 @@ pub mod manager;
 pub mod outcome;
 pub mod scanner;
 pub mod source;
+pub mod substitution;
+pub mod usage;
 pub mod validator;
 
 mod error;
@@ -68,6 +70,13 @@ pub use local::find_local_command;
 pub use hooks::cleanup_skill_hooks;
 pub use hooks::convert_skill_hooks;
 pub use hooks::register_skill_hooks;
+
+// Re-export argument substitution
+pub use substitution::parse_skill_args;
+pub use substitution::substitute_skill_args;
+
+// Re-export usage tracking
+pub use usage::SkillUsageTracker;
 
 // Re-export the error type
 pub use error::Result;

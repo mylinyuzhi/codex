@@ -434,6 +434,7 @@ impl AgentLoopBuilder {
             skill_manager: self.skill_manager,
             invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             active_skill_allowed_tools: None,
+            model_override: None,
             current_todos: None,
             current_structured_tasks: None,
             current_cron_jobs: None,

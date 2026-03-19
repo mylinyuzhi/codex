@@ -77,6 +77,9 @@ fn test_serialize_roundtrip() {
         agent: None,
         argument_hint: None,
         aliases: None,
+        version: None,
+        arguments: None,
+        paths: None,
         hooks: None,
     };
     let serialized = serde_yml::to_string(&iface).expect("serialize");

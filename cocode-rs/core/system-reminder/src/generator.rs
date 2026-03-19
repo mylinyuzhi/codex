@@ -215,6 +215,9 @@ pub struct SkillInfo {
     pub description: String,
     /// Guidance for the LLM on when to invoke this skill.
     pub when_to_use: Option<String>,
+    /// Whether this is a bundled (built-in) skill. Bundled skills get priority
+    /// in budget-aware formatting and are never truncated.
+    pub is_bundled: bool,
 }
 
 /// Information about an invoked skill.

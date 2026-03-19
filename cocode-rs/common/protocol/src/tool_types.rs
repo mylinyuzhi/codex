@@ -228,6 +228,13 @@ pub enum ContextModifier {
         /// The full teams map (name → team object).
         teams: Value,
     },
+    /// A skill requests a model override for inline execution.
+    ModelOverride {
+        /// The model slug to switch to (e.g., "sonnet", "opus", "haiku").
+        model: String,
+        /// The skill that requested the override.
+        skill_name: String,
+    },
     /// Signal that deferred MCP tools should be restored into the registry.
     /// Contains the qualified names of tools to restore.
     RestoreDeferredMcpTools {

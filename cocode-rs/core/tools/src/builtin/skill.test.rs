@@ -25,6 +25,9 @@ fn make_test_skill(name: &str, prompt: &str) -> SkillPromptCommand {
         when_to_use: None,
         argument_hint: None,
         aliases: Vec::new(),
+        version: None,
+        arguments: None,
+        paths: None,
         interface: None,
         command_type: cocode_skill::CommandType::Prompt,
     }
@@ -212,3 +215,79 @@ fn test_tool_properties() {
     assert!(!tool.is_concurrent_safe());
     assert!(!tool.is_read_only());
 }
+
+#[tokio::test]
+async fn test_invoked_skill_tracked() {
+    let tool = SkillTool::new();
+    let mut ctx = make_context();
+
+    let input = serde_json::json!({
+        "skill": "commit"
+    });
+
+    tool.execute(input, &mut ctx).await.unwrap();
+    let invoked = ctx.invoked_skills.lock().await;
+    assert_eq!(invoked.len(), 1);
+    assert_eq!(invoked[0].name, "commit");
+    assert!(!invoked[0].prompt_content.is_empty());
+}
+
+#[tokio::test]
+async fn test_cocode_skill_dir_substitution() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_test_skill("deploy", "Run ${COCODE_SKILL_DIR}/deploy.sh");
+    skill.base_dir = Some(PathBuf::from("/project/skills/deploy"));
+    manager.register(skill);
+
+    let tool = SkillTool::new();
+    let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+        .with_skill_manager(Arc::new(manager));
+
+    let input = serde_json::json!({
+        "skill": "deploy"
+    });
+
+    let result = tool.execute(input, &mut ctx).await.unwrap();
+    let text = match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => t,
+        _ => panic!("Expected text content"),
+    };
+    assert!(text.contains("Run /project/skills/deploy/deploy.sh"));
+}
+
+#[tokio::test]
+async fn test_safe_skill_auto_allowed() {
+    let tool = SkillTool::new();
+    let ctx = make_context();
+
+    let input = serde_json::json!({
+        "skill": "commit"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(matches!(result, PermissionResult::Allowed));
+}
+
+#[tokio::test]
+async fn test_model_override_modifier_emitted() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_test_skill("fast-task", "Do it fast");
+    skill.model = Some("sonnet".to_string());
+    manager.register(skill);
+
+    let tool = SkillTool::new();
+    let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+        .with_skill_manager(Arc::new(manager));
+
+    let input = serde_json::json!({
+        "skill": "fast-task"
+    });
+
+    let result = tool.execute(input, &mut ctx).await.unwrap();
+    let has_model_override = result.modifiers.iter().any(|m| {
+        matches!(m, cocode_protocol::ContextModifier::ModelOverride { model, .. } if model == "sonnet")
+    });
+    assert!(has_model_override);
+}
+
+// parse_skill_args tests moved to cocode-skill/src/substitution.test.rs

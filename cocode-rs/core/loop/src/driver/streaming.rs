@@ -43,9 +43,36 @@ impl AgentLoop {
         // Get model and build request using ModelHub
         // Use the real session_id from query_tracking instead of extracting from turn_id
         let session_id = &query_tracking.chain_id;
+
+        // Apply skill model override if set, then clear it (one-shot).
+        let override_role =
+            self.model_override
+                .take()
+                .and_then(|m| match m.to_lowercase().as_str() {
+                    "sonnet" | "fast" => Some(cocode_protocol::model::ModelRole::Fast),
+                    "opus" | "main" => Some(cocode_protocol::model::ModelRole::Main),
+                    "haiku" => Some(cocode_protocol::model::ModelRole::Fast),
+                    "inherit" => None,
+                    _ => {
+                        warn!(model = %m, "Unknown skill model override, ignoring");
+                        None
+                    }
+                });
+
+        let effective_selections = if let Some(role) = override_role {
+            // Temporarily swap main selection with the role's selection
+            let mut sel = self.selections.clone();
+            if let Some(role_sel) = self.selections.get(role).cloned() {
+                sel.main = Some(role_sel);
+            }
+            sel
+        } else {
+            self.selections.clone()
+        };
+
         let (ctx, model) = self
             .model_hub
-            .prepare_main_with_selections(&self.selections, session_id, self.turn_number)
+            .prepare_main_with_selections(&effective_selections, session_id, self.turn_number)
             .context(agent_loop_error::PrepareMainModelSnafu)?;
 
         // Build messages and tools using existing logic (model-aware filtering)

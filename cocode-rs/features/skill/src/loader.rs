@@ -68,6 +68,24 @@ pub fn load_all_skills(roots: &[PathBuf]) -> Vec<SkillLoadOutcome> {
     outcomes
 }
 
+/// Derive a namespaced skill name from its directory path relative to the root.
+///
+/// If the skill is in a nested directory, the intermediate components become
+/// the namespace, separated by colons. For example:
+/// - `skills/frontend/deploy/SKILL.md` → `"frontend:deploy"`
+/// - `skills/commit/SKILL.md` → `"commit"` (single component, no namespace)
+fn derive_skill_name(skill_dir: &Path, root: &Path) -> Option<String> {
+    let relative = skill_dir.strip_prefix(root).ok()?;
+    let components: Vec<&str> = relative
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    if components.is_empty() {
+        return None;
+    }
+    Some(components.join(":"))
+}
+
 /// Loads a single skill from its directory.
 fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
     let md_path = skill_dir.join(SKILL_MD);
@@ -133,9 +151,16 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
     // Check if skill has hooks
     let has_hooks = interface.hooks.as_ref().is_some_and(|h| !h.is_empty());
 
+    // Use frontmatter name if present; otherwise derive from directory path
+    let skill_name = if !interface.name.is_empty() {
+        interface.name.clone()
+    } else {
+        derive_skill_name(skill_dir, root).unwrap_or_default()
+    };
+
     SkillLoadOutcome::Success {
         skill: SkillPromptCommand {
-            name: interface.name.clone(),
+            name: skill_name,
             description: interface.description.clone(),
             prompt,
             allowed_tools: interface.allowed_tools.clone(),
@@ -151,6 +176,9 @@ fn load_single_skill(skill_dir: &Path, root: &Path) -> SkillLoadOutcome {
             when_to_use: interface.when_to_use.clone(),
             argument_hint: interface.argument_hint.clone(),
             aliases: interface.aliases.clone().unwrap_or_default(),
+            version: interface.version.clone(),
+            arguments: interface.arguments.clone(),
+            paths: interface.paths.clone(),
             // Only keep interface if it has hooks (to save memory)
             interface: if has_hooks { Some(interface) } else { None },
             command_type: CommandType::Prompt,

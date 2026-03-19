@@ -24,6 +24,7 @@ use crate::generators::CompactFileReferenceGenerator;
 use crate::generators::CompactionReminderGenerator;
 use crate::generators::CronRemindersGenerator;
 use crate::generators::DelegateModeGenerator;
+use crate::generators::InvokedSkillsGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
 use crate::generators::OutputStyleGenerator;
@@ -102,7 +103,7 @@ impl SystemReminderOrchestrator {
             Arc::new(SubagentPlanReminderGenerator),
             Arc::new(NestedMemoryGenerator),
             // MainAgentOnly tier
-            Arc::new(AvailableSkillsGenerator),
+            Arc::new(AvailableSkillsGenerator::new()),
             Arc::new(LspDiagnosticsGenerator),
             Arc::new(OutputStyleGenerator),
             Arc::new(TodoRemindersGenerator),
@@ -121,6 +122,7 @@ impl SystemReminderOrchestrator {
             // UserPrompt tier
             Arc::new(AtMentionedFilesGenerator),
             Arc::new(AgentMentionsGenerator),
+            Arc::new(InvokedSkillsGenerator),
         ]
     }
 

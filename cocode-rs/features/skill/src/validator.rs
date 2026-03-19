@@ -123,6 +123,18 @@ pub fn validate_skill(interface: &SkillInterface, prompt: &str) -> Result<(), Ve
         ));
     }
 
+    // Validate version format (if present): non-empty, max 32 chars
+    if let Some(ref version) = interface.version {
+        if version.is_empty() {
+            errors.push("version must not be empty if specified".to_string());
+        } else if version.len() > 32 {
+            errors.push(format!(
+                "version exceeds max length of 32: got {}",
+                version.len()
+            ));
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -131,9 +143,12 @@ pub fn validate_skill(interface: &SkillInterface, prompt: &str) -> Result<(), Ve
 }
 
 /// Checks if a skill name contains only valid characters.
+///
+/// Valid characters: alphanumeric, hyphens, underscores, and colons
+/// (colons are used as namespace separators for nested skill directories).
 fn is_valid_name(name: &str) -> bool {
     name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
 }
 
 #[cfg(test)]

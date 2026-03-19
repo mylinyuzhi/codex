@@ -222,6 +222,14 @@ impl AgentLoop {
                         "Applied TeamsUpdated modifier"
                     );
                 }
+                ContextModifier::ModelOverride { model, skill_name } => {
+                    self.model_override = Some(model.clone());
+                    debug!(
+                        model = %model,
+                        skill = %skill_name,
+                        "Applied ModelOverride modifier"
+                    );
+                }
                 ContextModifier::RestoreDeferredMcpTools { names } => {
                     // Restore deferred MCP tools into the active registry so
                     // they become callable on subsequent turns.
