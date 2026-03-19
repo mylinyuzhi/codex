@@ -42,6 +42,30 @@ pub struct SpawnInput {
     /// to the prompt, allowing continuation of a previous session.
     #[serde(default)]
     pub resume_from: Option<String>,
+
+    /// Display name for the spawned agent.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Team to auto-join the agent to after spawn.
+    #[serde(default)]
+    pub team_name: Option<String>,
+
+    /// Agent execution mode (normal, plan, auto).
+    #[serde(default)]
+    pub mode: Option<String>,
+
+    /// Working directory override for the spawned agent.
+    #[serde(default)]
+    pub cwd: Option<String>,
+
+    /// Isolation mode override (e.g. "worktree").
+    #[serde(default)]
+    pub isolation_override: Option<String>,
+
+    /// Short description of what the agent will do (for TUI display).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[cfg(test)]

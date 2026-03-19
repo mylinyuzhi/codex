@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cocode-config = { path = "../../common/config" }
+cocode-message.workspace = true
 cocode-protocol.workspace = true
 cocode-tools.workspace = true
 cocode-error.workspace = true
@@ -20,6 +21,7 @@ uuid = { workspace = true, features = ["v4"] }
 once_cell.workspace = true
 
 [dev-dependencies]
+cocode-api.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

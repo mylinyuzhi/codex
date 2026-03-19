@@ -217,6 +217,7 @@ impl Tool for TaskTool {
             team_name: input["team_name"].as_str().map(String::from),
             mode: input["mode"].as_str().map(String::from),
             cwd: input["cwd"].as_str().map(String::from),
+            description: Some(description.to_string()),
         };
 
         // Spawn the agent

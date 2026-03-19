@@ -183,6 +183,121 @@ pub enum IsolationMode {
     Worktree,
 }
 
+impl AgentDefinition {
+    /// Merge this definition with a higher-priority override.
+    ///
+    /// Follows CC's merging semantics:
+    /// - Scalar fields (identity, max_turns, color, background, etc.): `other` overrides `self`
+    ///   only if `other` has a non-default value
+    /// - Array fields (tools, disallowed_tools, skills): union (append without duplicates)
+    /// - Optional fields: `other` takes precedence when `Some`
+    /// - Hooks: merged via union
+    pub fn merge_with(&self, other: &AgentDefinition) -> AgentDefinition {
+        let mut merged = self.clone();
+
+        // Scalar overrides: other wins if non-default
+        if !other.description.is_empty() {
+            merged.description = other.description.clone();
+        }
+        if other.identity.is_some() {
+            merged.identity = other.identity.clone();
+        }
+        if other.max_turns.is_some() {
+            merged.max_turns = other.max_turns;
+        }
+        if other.permission_mode.is_some() {
+            merged.permission_mode = other.permission_mode;
+        }
+        if other.fork_context {
+            merged.fork_context = true;
+        }
+        if other.color.is_some() {
+            merged.color = other.color.clone();
+        }
+        if other.critical_reminder.is_some() {
+            merged.critical_reminder = other.critical_reminder.clone();
+        }
+        if other.background {
+            merged.background = true;
+        }
+        if other.memory.is_some() {
+            merged.memory = other.memory;
+        }
+        if other.mcp_servers.is_some() {
+            merged.mcp_servers = other.mcp_servers.clone();
+        }
+        if other.isolation.is_some() {
+            merged.isolation = other.isolation;
+        }
+        if other.use_custom_prompt {
+            merged.use_custom_prompt = true;
+        }
+
+        // Array union: append without duplicates
+        for tool in &other.tools {
+            if !merged.tools.contains(tool) {
+                merged.tools.push(tool.clone());
+            }
+        }
+        for tool in &other.disallowed_tools {
+            if !merged.disallowed_tools.contains(tool) {
+                merged.disallowed_tools.push(tool.clone());
+            }
+        }
+        for skill in &other.skills {
+            if !merged.skills.contains(skill) {
+                merged.skills.push(skill.clone());
+            }
+        }
+
+        // Hooks: merge via union
+        match (&merged.hooks, &other.hooks) {
+            (Some(base), Some(extra)) => {
+                let mut combined = base.clone();
+                combined.extend(extra.iter().cloned());
+                merged.hooks = Some(combined);
+            }
+            (None, Some(hooks)) => {
+                merged.hooks = Some(hooks.clone());
+            }
+            _ => {}
+        }
+
+        // Source: take the higher-priority source
+        if other.source.priority() > merged.source.priority() {
+            merged.source = other.source;
+        }
+
+        merged
+    }
+}
+
+impl Default for AgentDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            agent_type: String::new(),
+            tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            identity: None,
+            max_turns: None,
+            permission_mode: None,
+            fork_context: false,
+            color: None,
+            critical_reminder: None,
+            source: AgentSource::default(),
+            skills: Vec::new(),
+            background: false,
+            memory: None,
+            hooks: None,
+            mcp_servers: None,
+            isolation: None,
+            use_custom_prompt: false,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "definition.test.rs"]
 mod tests;

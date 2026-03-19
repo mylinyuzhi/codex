@@ -846,6 +846,10 @@ impl std::fmt::Display for AbortReason {
 }
 
 /// Progress information from a sub-agent.
+///
+/// Supports two-tier progress reporting:
+/// - `summary`: Accumulated work summary (preserved across updates, like `reportToolProgress`)
+/// - `activity`: Current transient activity (replaced on each update, like `updateTaskProgress`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProgress {
     /// Progress message.
@@ -857,6 +861,12 @@ pub struct AgentProgress {
     /// Total steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_steps: Option<i32>,
+    /// Accumulated work summary (preserved across updates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Current transient activity (replaced on each update).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 /// Type of background task.

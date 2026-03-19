@@ -159,6 +159,10 @@ pub struct SpawnAgentInput {
     /// Working directory for the spawned agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+
+    /// Short description of what the agent will do (for TUI display).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Result of spawning a subagent.

@@ -55,6 +55,7 @@ pub struct AgentLoopBuilder {
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     is_subagent: bool,
     custom_system_prompt: Option<String>,
+    system_prompt_suffix: Option<String>,
     plan_mode_state: Option<cocode_plan_mode::PlanModeState>,
     shell_executor: Option<ShellExecutor>,
     spawn_agent_fn: Option<SpawnAgentFn>,
@@ -108,6 +109,7 @@ impl AgentLoopBuilder {
             extraction_agent: None,
             is_subagent: false,
             custom_system_prompt: None,
+            system_prompt_suffix: None,
             plan_mode_state: None,
             shell_executor: None,
             spawn_agent_fn: None,
@@ -186,6 +188,16 @@ impl AgentLoopBuilder {
     /// Used by subagents with `use_custom_prompt: true` in their definition.
     pub fn custom_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.custom_system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set a suffix to append to the generated system prompt.
+    ///
+    /// Used for `critical_reminder` enforcement (CC's `criticalSystemReminder_EXPERIMENTAL`).
+    /// Appended at the end of the system prompt for highest authority positioning.
+    /// Ignored when `custom_system_prompt` is set (the custom prompt is used as-is).
+    pub fn system_prompt_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.system_prompt_suffix = Some(suffix.into());
         self
     }
 
@@ -426,6 +438,7 @@ impl AgentLoopBuilder {
             circuit_breaker_open: false,
             is_subagent: self.is_subagent,
             custom_system_prompt: self.custom_system_prompt,
+            system_prompt_suffix: self.system_prompt_suffix,
             // Initially true - the first turn always has user input
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),

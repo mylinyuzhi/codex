@@ -1513,8 +1513,10 @@ dependencies = [
 name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
+ "cocode-api",
  "cocode-config",
  "cocode-error",
+ "cocode-message",
  "cocode-protocol",
  "cocode-tools",
  "once_cell",

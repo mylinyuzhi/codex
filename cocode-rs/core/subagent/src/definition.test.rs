@@ -73,25 +73,11 @@ fn test_agent_definition_full() {
 #[test]
 fn test_agent_definition_with_identity() {
     let def = AgentDefinition {
-        name: "explore".to_string(),
-        description: "Explorer".to_string(),
-        agent_type: "explore".to_string(),
-        tools: vec![],
-        disallowed_tools: vec![],
+        agent_type: "explore".into(),
+        name: "explore".into(),
+        description: "Explorer".into(),
         identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
-        max_turns: None,
-        permission_mode: None,
-        fork_context: false,
-        color: None,
-        critical_reminder: None,
-        source: AgentSource::BuiltIn,
-        skills: vec![],
-        background: false,
-        memory: None,
-        hooks: None,
-        mcp_servers: None,
-        isolation: None,
-        use_custom_prompt: false,
+        ..Default::default()
     };
     assert!(matches!(
         def.identity,
@@ -153,4 +139,41 @@ fn test_new_fields_deserialize_defaults() {
     assert!(def.hooks.is_none());
     assert!(def.mcp_servers.is_none());
     assert!(def.isolation.is_none());
+}
+
+#[test]
+fn test_default_impl() {
+    let def = AgentDefinition::default();
+    assert!(def.name.is_empty());
+    assert!(def.description.is_empty());
+    assert!(def.agent_type.is_empty());
+    assert!(def.tools.is_empty());
+    assert!(def.disallowed_tools.is_empty());
+    assert!(def.identity.is_none());
+    assert!(def.max_turns.is_none());
+    assert!(def.permission_mode.is_none());
+    assert!(!def.fork_context);
+    assert!(def.color.is_none());
+    assert!(def.critical_reminder.is_none());
+    assert_eq!(def.source, AgentSource::BuiltIn);
+    assert!(def.skills.is_empty());
+    assert!(!def.background);
+    assert!(def.memory.is_none());
+    assert!(def.hooks.is_none());
+    assert!(def.mcp_servers.is_none());
+    assert!(def.isolation.is_none());
+    assert!(!def.use_custom_prompt);
+}
+
+#[test]
+fn test_default_with_struct_update() {
+    let def = AgentDefinition {
+        agent_type: "bash".into(),
+        name: "bash".into(),
+        description: "Bash executor".into(),
+        ..Default::default()
+    };
+    assert_eq!(def.agent_type, "bash");
+    assert!(def.tools.is_empty());
+    assert!(!def.fork_context);
 }
