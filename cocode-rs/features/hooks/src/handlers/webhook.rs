@@ -30,6 +30,7 @@
 //! On any error (network, timeout, invalid response), the handler returns
 //! `Continue` to allow execution to proceed. Errors are logged at warn level.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use tracing::debug;
@@ -50,8 +51,19 @@ impl WebhookHandler {
     ///
     /// The request includes headers with event metadata for routing/filtering.
     /// On any error, returns `Continue` to avoid blocking execution.
-    pub async fn execute(url: &str, context: &HookContext) -> HookResult {
+    pub async fn execute(url: &str, context: &HookContext) -> (HookResult, bool) {
         Self::execute_with_timeout(url, context, DEFAULT_TIMEOUT_SECS).await
+    }
+
+    /// Execute webhook with custom headers and optional per-webhook timeout.
+    pub async fn execute_with_options(
+        url: &str,
+        context: &HookContext,
+        timeout_secs: Option<u64>,
+        custom_headers: &HashMap<String, String>,
+    ) -> (HookResult, bool) {
+        let effective_timeout = timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        Self::execute_internal(url, context, effective_timeout, custom_headers).await
     }
 
     /// Execute webhook with custom timeout (for testing).
@@ -59,7 +71,17 @@ impl WebhookHandler {
         url: &str,
         context: &HookContext,
         timeout_secs: u64,
-    ) -> HookResult {
+    ) -> (HookResult, bool) {
+        Self::execute_internal(url, context, timeout_secs, &HashMap::new()).await
+    }
+
+    /// Internal execution with all options.
+    async fn execute_internal(
+        url: &str,
+        context: &HookContext,
+        timeout_secs: u64,
+        custom_headers: &HashMap<String, String>,
+    ) -> (HookResult, bool) {
         debug!(url, event_type = %context.event_type, "Executing webhook hook");
 
         let client = match reqwest::Client::builder()
@@ -69,11 +91,11 @@ impl WebhookHandler {
             Ok(c) => c,
             Err(e) => {
                 warn!(url, error = %e, "Failed to create HTTP client for webhook");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
-        let response = match client
+        let mut request = client
             .post(url)
             .header("Content-Type", "application/json")
             .header("User-Agent", "cocode-hooks/1.0")
@@ -82,15 +104,18 @@ impl WebhookHandler {
                 "X-Hook-Tool-Name",
                 context.tool_name.as_deref().unwrap_or(""),
             )
-            .header("X-Hook-Session-Id", &context.session_id)
-            .json(context)
-            .send()
-            .await
-        {
+            .header("X-Hook-Session-Id", &context.session_id);
+
+        // Apply custom headers
+        for (key, value) in custom_headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+
+        let response = match request.json(context).send().await {
             Ok(r) => r,
             Err(e) => {
                 warn!(url, error = %e, "Webhook request failed");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
@@ -101,19 +126,19 @@ impl WebhookHandler {
                 status = %status,
                 "Webhook returned non-success status"
             );
-            return HookResult::Continue;
+            return (HookResult::Continue, false);
         }
 
         let body = match response.text().await {
             Ok(b) => b,
             Err(e) => {
                 warn!(url, error = %e, "Failed to read webhook response body");
-                return HookResult::Continue;
+                return (HookResult::Continue, false);
             }
         };
 
         if body.trim().is_empty() {
-            return HookResult::Continue;
+            return (HookResult::Continue, false);
         }
 
         parse_webhook_response(url, body.trim())
@@ -121,15 +146,19 @@ impl WebhookHandler {
 }
 
 /// Parses webhook response, supporting both `HookResult` and `HookOutput` formats.
-fn parse_webhook_response(url: &str, body: &str) -> HookResult {
+///
+/// Returns `(result, suppress_output)`. The `suppress_output` flag is only available
+/// when parsing the `HookOutput` format (which has a `suppressOutput` field).
+fn parse_webhook_response(url: &str, body: &str) -> (HookResult, bool) {
     // Try parsing as HookResult first (has "action" field)
     if let Ok(result) = serde_json::from_str::<HookResult>(body) {
-        return result;
+        return (result, false);
     }
 
     // Try parsing as HookOutput (Claude Code v2.1.7 format with "continue_execution" field)
     if let Ok(output) = serde_json::from_str::<HookOutput>(body) {
-        return output.into();
+        let suppress = output.suppress_output;
+        return (output.into_result(None), suppress);
     }
 
     warn!(
@@ -137,7 +166,7 @@ fn parse_webhook_response(url: &str, body: &str) -> HookResult {
         body = %body,
         "Failed to parse webhook response as HookResult or HookOutput"
     );
-    HookResult::Continue
+    (HookResult::Continue, false)
 }
 
 #[cfg(test)]

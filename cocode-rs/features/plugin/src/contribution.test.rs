@@ -30,6 +30,9 @@ fn test_contribution_skill() {
         when_to_use: None,
         argument_hint: None,
         aliases: Vec::new(),
+        version: None,
+        arguments: None,
+        paths: None,
         interface: None,
         command_type: cocode_skill::CommandType::Prompt,
     };

@@ -5,22 +5,25 @@ fn test_definition(name: &str) -> AgentDefinition {
         name: name.to_string(),
         description: format!("{name} agent"),
         agent_type: name.to_string(),
-        tools: vec![],
-        disallowed_tools: vec![],
+        ..Default::default()
+    }
+}
+
+fn test_spawn_input(agent_type: &str, prompt: &str) -> SpawnInput {
+    SpawnInput {
+        agent_type: agent_type.to_string(),
+        prompt: prompt.to_string(),
         identity: None,
         max_turns: None,
-        permission_mode: None,
-        fork_context: false,
-        color: None,
-        critical_reminder: None,
-        source: crate::definition::AgentSource::BuiltIn,
-        skills: vec![],
-        background: false,
-        memory: None,
-        hooks: None,
-        mcp_servers: None,
-        isolation: None,
-        use_custom_prompt: false,
+        run_in_background: Some(false),
+        allowed_tools: None,
+        resume_from: None,
+        name: None,
+        team_name: None,
+        mode: None,
+        cwd: None,
+        isolation_override: None,
+        description: None,
     }
 }
 
@@ -62,16 +65,7 @@ async fn test_spawn_full_with_stub() {
     let mut mgr = SubagentManager::new();
     mgr.register_agent_type(test_definition("bash"));
 
-    let input = SpawnInput {
-        agent_type: "bash".to_string(),
-        prompt: "test".to_string(),
-        identity: None,
-        max_turns: None,
-        run_in_background: Some(false),
-        allowed_tools: None,
-        resume_from: None,
-    };
-
+    let input = test_spawn_input("bash", "test");
     let result = mgr.spawn_full(input).await.expect("spawn_full");
     assert!(!result.agent_id.is_empty());
     assert!(result.output.is_some()); // Stub returns output
@@ -83,15 +77,8 @@ async fn test_spawn_full_background() {
     let mut mgr = SubagentManager::new();
     mgr.register_agent_type(test_definition("bash"));
 
-    let input = SpawnInput {
-        agent_type: "bash".to_string(),
-        prompt: "test".to_string(),
-        identity: None,
-        max_turns: None,
-        run_in_background: Some(true),
-        allowed_tools: None,
-        resume_from: None,
-    };
+    let mut input = test_spawn_input("bash", "test");
+    input.run_in_background = Some(true);
 
     let result = mgr.spawn_full(input).await.expect("spawn_full");
     assert!(!result.agent_id.is_empty());
@@ -133,17 +120,17 @@ fn test_get_status_missing() {
 }
 
 #[tokio::test]
-async fn test_critical_reminder_injected_into_prompt() {
+async fn test_critical_reminder_as_system_prompt_suffix() {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let captured_prompt = Arc::new(Mutex::new(String::new()));
-    let captured_prompt_clone = captured_prompt.clone();
+    let captured = Arc::new(Mutex::new((String::new(), None::<String>)));
+    let captured_clone = captured.clone();
 
     let execute_fn: AgentExecuteFn = Box::new(move |params: AgentExecuteParams| {
-        let captured = captured_prompt_clone.clone();
+        let captured = captured_clone.clone();
         Box::pin(async move {
-            *captured.lock().await = params.prompt;
+            *captured.lock().await = (params.prompt, params.system_prompt_suffix);
             Ok("done".to_string())
         })
     });
@@ -154,27 +141,21 @@ async fn test_critical_reminder_injected_into_prompt() {
     let mut mgr = SubagentManager::new().with_execute_fn(execute_fn);
     mgr.register_agent_type(def);
 
-    let input = SpawnInput {
-        agent_type: "explore".to_string(),
-        prompt: "find the config file".to_string(),
-        identity: None,
-        max_turns: None,
-        run_in_background: Some(false),
-        allowed_tools: None,
-        resume_from: None,
-    };
-
+    let input = test_spawn_input("explore", "find the config file");
     let result = mgr.spawn_full(input).await.expect("spawn_full");
     assert!(result.output.is_some());
 
-    let actual_prompt = captured_prompt.lock().await;
-    assert!(
-        actual_prompt.starts_with("CRITICAL: You are read-only."),
-        "Prompt should start with critical_reminder, got: {actual_prompt}"
+    let (actual_prompt, actual_suffix) = captured.lock().await.clone();
+    // Prompt should be unchanged (not prefixed with reminder)
+    assert_eq!(
+        actual_prompt, "find the config file",
+        "Prompt should not contain critical_reminder"
     );
-    assert!(
-        actual_prompt.contains("find the config file"),
-        "Prompt should contain original task"
+    // Suffix should carry the critical_reminder
+    assert_eq!(
+        actual_suffix.as_deref(),
+        Some("CRITICAL: You are read-only."),
+        "system_prompt_suffix should contain critical_reminder"
     );
 }
 
@@ -199,18 +180,149 @@ async fn test_no_critical_reminder_passes_prompt_unchanged() {
     let mut mgr = SubagentManager::new().with_execute_fn(execute_fn);
     mgr.register_agent_type(def);
 
-    let input = SpawnInput {
-        agent_type: "bash".to_string(),
-        prompt: "run ls -la".to_string(),
-        identity: None,
-        max_turns: None,
-        run_in_background: Some(false),
-        allowed_tools: None,
-        resume_from: None,
-    };
-
+    let input = test_spawn_input("bash", "run ls -la");
     mgr.spawn_full(input).await.expect("spawn_full");
 
     let actual_prompt = captured_prompt.lock().await;
     assert_eq!(*actual_prompt, "run ls -la");
+}
+
+#[tokio::test]
+async fn test_background_limit_exceeded() {
+    let mut mgr = SubagentManager::new().with_max_background_agents(2);
+    mgr.register_agent_type(test_definition("bash"));
+
+    // Spawn two background agents (should succeed)
+    for i in 0..2 {
+        let mut input = test_spawn_input("bash", &format!("task {i}"));
+        input.run_in_background = Some(true);
+        mgr.spawn_full(input).await.expect("spawn should succeed");
+    }
+
+    // Third background agent should fail with BackgroundLimit
+    let mut input = test_spawn_input("bash", "one too many");
+    input.run_in_background = Some(true);
+    let err = mgr.spawn_full(input).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::error::SubagentError::BackgroundLimit { limit: 2, .. }
+        ),
+        "Expected BackgroundLimit error, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_foreground_does_not_count_toward_background_limit() {
+    let mut mgr = SubagentManager::new().with_max_background_agents(1);
+    mgr.register_agent_type(test_definition("bash"));
+
+    // Spawn a foreground agent (should not count)
+    let fg_input = test_spawn_input("bash", "foreground task");
+    mgr.spawn_full(fg_input).await.expect("foreground spawn");
+
+    // Background agent should still succeed (limit is 1, no bg agents yet)
+    let mut bg_input = test_spawn_input("bash", "background task");
+    bg_input.run_in_background = Some(true);
+    mgr.spawn_full(bg_input).await.expect("background spawn");
+}
+
+// ── Lifecycle method tests ──
+
+#[tokio::test]
+async fn test_remove_completed_agent() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+    // Agent should be completed (stub)
+    assert_eq!(mgr.get_status(&id), Some(AgentStatus::Completed));
+
+    let removed = mgr.remove_agent(&id);
+    assert!(removed.is_some());
+    assert_eq!(removed.unwrap().id, id);
+    assert!(mgr.get_status(&id).is_none());
+}
+
+#[tokio::test]
+async fn test_remove_running_agent_returns_none() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Manually set to running
+    mgr.agents.get_mut(&id).expect("agent").status = AgentStatus::Running;
+
+    let removed = mgr.remove_agent(&id);
+    assert!(removed.is_none());
+    // Agent should still be tracked
+    assert_eq!(mgr.get_status(&id), Some(AgentStatus::Running));
+}
+
+#[tokio::test]
+async fn test_gc_completed() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    // Spawn 3 agents (all complete as stubs)
+    let id1 = mgr.spawn("bash", "task1").await.expect("spawn");
+    let id2 = mgr.spawn("bash", "task2").await.expect("spawn");
+    let id3 = mgr.spawn("bash", "task3").await.expect("spawn");
+    assert_eq!(mgr.agent_count(), 3);
+
+    // Set one to running
+    mgr.agents.get_mut(&id2).expect("agent").status = AgentStatus::Running;
+
+    let removed = mgr.gc_completed();
+    assert_eq!(removed, 2); // id1 and id3 removed
+    assert_eq!(mgr.agent_count(), 1);
+    assert_eq!(mgr.get_status(&id2), Some(AgentStatus::Running));
+    assert!(mgr.get_status(&id1).is_none());
+    assert!(mgr.get_status(&id3).is_none());
+}
+
+#[tokio::test]
+async fn test_status_counts() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let id1 = mgr.spawn("bash", "t1").await.expect("spawn");
+    let id2 = mgr.spawn("bash", "t2").await.expect("spawn");
+    let id3 = mgr.spawn("bash", "t3").await.expect("spawn");
+
+    // Mix statuses
+    mgr.agents.get_mut(&id1).expect("a").status = AgentStatus::Running;
+    mgr.agents.get_mut(&id2).expect("a").status = AgentStatus::Backgrounded;
+    // id3 stays Completed
+
+    let counts = mgr.status_counts();
+    assert_eq!(counts.get(&AgentStatus::Running), Some(&1));
+    assert_eq!(counts.get(&AgentStatus::Backgrounded), Some(&1));
+    assert_eq!(counts.get(&AgentStatus::Completed), Some(&1));
+    assert_eq!(counts.get(&AgentStatus::Failed), None);
+}
+
+#[tokio::test]
+async fn test_spawn_input_description() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let captured_type = Arc::new(Mutex::new(String::new()));
+    let captured_clone = captured_type.clone();
+
+    let execute_fn: AgentExecuteFn = Box::new(move |params: AgentExecuteParams| {
+        let captured = captured_clone.clone();
+        Box::pin(async move {
+            *captured.lock().await = params.agent_type;
+            Ok("done".to_string())
+        })
+    });
+
+    let mut mgr = SubagentManager::new().with_execute_fn(execute_fn);
+    mgr.register_agent_type(test_definition("explore"));
+
+    let mut input = test_spawn_input("explore", "find stuff");
+    input.description = Some("Search the codebase".to_string());
+
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+    assert!(result.output.is_some());
 }

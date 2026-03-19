@@ -41,13 +41,17 @@ fn test_modify_input_serde() {
 fn test_continue_with_context_serde() {
     let result = HookResult::ContinueWithContext {
         additional_context: Some("Extra context from hook".to_string()),
+        env_vars: HashMap::new(),
     };
     let json = serde_json::to_string(&result).expect("serialize");
     assert!(json.contains("continue_with_context"));
     assert!(json.contains("Extra context from hook"));
 
     let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
-    if let HookResult::ContinueWithContext { additional_context } = parsed {
+    if let HookResult::ContinueWithContext {
+        additional_context, ..
+    } = parsed
+    {
         assert_eq!(
             additional_context,
             Some("Extra context from hook".to_string())
@@ -61,11 +65,34 @@ fn test_continue_with_context_serde() {
 fn test_continue_with_context_none() {
     let result = HookResult::ContinueWithContext {
         additional_context: None,
+        env_vars: HashMap::new(),
     };
     let json = serde_json::to_string(&result).expect("serialize");
     let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
-    if let HookResult::ContinueWithContext { additional_context } = parsed {
+    if let HookResult::ContinueWithContext {
+        additional_context, ..
+    } = parsed
+    {
         assert!(additional_context.is_none());
+    } else {
+        panic!("Expected ContinueWithContext");
+    }
+}
+
+#[test]
+fn test_continue_with_context_env_vars() {
+    let mut env = HashMap::new();
+    env.insert("MY_VAR".to_string(), "my_value".to_string());
+    let result = HookResult::ContinueWithContext {
+        additional_context: None,
+        env_vars: env,
+    };
+    let json = serde_json::to_string(&result).expect("serialize");
+    assert!(json.contains("MY_VAR"));
+
+    let parsed: HookResult = serde_json::from_str(&json).expect("deserialize");
+    if let HookResult::ContinueWithContext { env_vars, .. } = parsed {
+        assert_eq!(env_vars.get("MY_VAR").unwrap(), "my_value");
     } else {
         panic!("Expected ContinueWithContext");
     }
@@ -77,12 +104,27 @@ fn test_hook_outcome() {
         hook_name: "lint-check".to_string(),
         result: HookResult::Continue,
         duration_ms: 42,
+        suppress_output: false,
     };
     let json = serde_json::to_string(&outcome).expect("serialize");
     let parsed: HookOutcome = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed.hook_name, "lint-check");
     assert_eq!(parsed.duration_ms, 42);
+    assert!(!parsed.suppress_output);
     assert!(matches!(parsed.result, HookResult::Continue));
+}
+
+#[test]
+fn test_hook_outcome_suppress_output() {
+    let outcome = HookOutcome {
+        hook_name: "silent-hook".to_string(),
+        result: HookResult::Continue,
+        duration_ms: 10,
+        suppress_output: true,
+    };
+    let json = serde_json::to_string(&outcome).expect("serialize");
+    let parsed: HookOutcome = serde_json::from_str(&json).expect("deserialize");
+    assert!(parsed.suppress_output);
 }
 
 #[test]

@@ -110,7 +110,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
         // Disabled column - show Yes/No/- based on config
         let (disabled_text, disabled_style): (&str, Style) = match server.status {
-            ServerStatus::Disabled => ("Yes", Style::default().yellow()),
+            ServerStatus::Disabled => ("Yes", Style::default().magenta()),
             _ if server.config_level.is_some() => ("No", Style::default().green()),
             _ => ("-", Style::default().dim()),
         };
@@ -171,7 +171,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             " ".into(),
-            "Config changed. Restart TUI to apply changes.".yellow(),
+            "Config changed. Restart TUI to apply changes.".magenta(),
         ]));
     }
 

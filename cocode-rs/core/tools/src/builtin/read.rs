@@ -91,7 +91,7 @@ fn is_device_file(path: &std::path::Path) -> bool {
 
 /// Check first bytes of a file for null bytes indicating binary content.
 fn has_null_bytes(data: &[u8]) -> bool {
-    data.iter().any(|&b| b == 0)
+    data.contains(&0)
 }
 
 /// Format a Jupyter notebook (.ipynb) as human-readable text.
@@ -134,48 +134,47 @@ fn format_notebook(content: &str, path: &std::path::Path) -> std::result::Result
         }
 
         // Cell outputs (for code cells)
-        if cell_type == "code" {
-            if let Some(outputs) = cell["outputs"].as_array() {
-                for out in outputs {
-                    let output_type = out["output_type"].as_str().unwrap_or("");
-                    match output_type {
-                        "stream" => {
-                            if let Some(text) = out["text"].as_array() {
-                                output.push_str("\n[Output]\n");
-                                for line in text {
-                                    if let Some(s) = line.as_str() {
-                                        output.push_str(s);
-                                    }
+        if cell_type == "code"
+            && let Some(outputs) = cell["outputs"].as_array()
+        {
+            for out in outputs {
+                let output_type = out["output_type"].as_str().unwrap_or("");
+                match output_type {
+                    "stream" => {
+                        if let Some(text) = out["text"].as_array() {
+                            output.push_str("\n[Output]\n");
+                            for line in text {
+                                if let Some(s) = line.as_str() {
+                                    output.push_str(s);
                                 }
                             }
                         }
-                        "execute_result" | "display_data" => {
-                            if let Some(data) = out["data"].as_object() {
-                                if let Some(text) = data.get("text/plain") {
-                                    output.push_str("\n[Output]\n");
-                                    if let Some(arr) = text.as_array() {
-                                        for line in arr {
-                                            if let Some(s) = line.as_str() {
-                                                output.push_str(s);
-                                            }
-                                        }
-                                    } else if let Some(s) = text.as_str() {
-                                        output.push_str(s);
-                                    }
-                                }
-                                if data.contains_key("image/png") || data.contains_key("image/jpeg")
-                                {
-                                    output.push_str("\n[Image output]\n");
-                                }
-                            }
-                        }
-                        "error" => {
-                            let ename = out["ename"].as_str().unwrap_or("Error");
-                            let evalue = out["evalue"].as_str().unwrap_or("");
-                            output.push_str(&format!("\n[Error: {ename}: {evalue}]\n"));
-                        }
-                        _ => {}
                     }
+                    "execute_result" | "display_data" => {
+                        if let Some(data) = out["data"].as_object() {
+                            if let Some(text) = data.get("text/plain") {
+                                output.push_str("\n[Output]\n");
+                                if let Some(arr) = text.as_array() {
+                                    for line in arr {
+                                        if let Some(s) = line.as_str() {
+                                            output.push_str(s);
+                                        }
+                                    }
+                                } else if let Some(s) = text.as_str() {
+                                    output.push_str(s);
+                                }
+                            }
+                            if data.contains_key("image/png") || data.contains_key("image/jpeg") {
+                                output.push_str("\n[Image output]\n");
+                            }
+                        }
+                    }
+                    "error" => {
+                        let ename = out["ename"].as_str().unwrap_or("Error");
+                        let evalue = out["evalue"].as_str().unwrap_or("");
+                        output.push_str(&format!("\n[Error: {ename}: {evalue}]\n"));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -422,30 +421,31 @@ impl Tool for ReadTool {
             let total_pages = get_pdf_page_count(&path).await;
 
             // If >10 pages and no explicit pages param, require it
-            if let Some(count) = total_pages {
-                if count > 10 && pages_param.is_none() {
-                    return Err(crate::error::tool_error::InvalidInputSnafu {
-                        message: format!(
-                            "PDF has {count} pages (>10). You must provide the `pages` parameter \
-                             to specify which pages to read (e.g., \"1-5\"). Maximum 20 pages per request."
-                        ),
-                    }
-                    .build());
+            if let Some(count) = total_pages
+                && count > 10
+                && pages_param.is_none()
+            {
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!(
+                        "PDF has {count} pages (>10). You must provide the `pages` parameter \
+                         to specify which pages to read (e.g., \"1-5\"). Maximum 20 pages per request."
+                    ),
                 }
+                .build());
             }
 
             // Validate requested page range does not exceed 20 pages
             let pages_arg = pages_param.unwrap_or("1-20");
-            if let Some(span) = parse_page_span(pages_arg) {
-                if span > 20 {
-                    return Err(crate::error::tool_error::InvalidInputSnafu {
-                        message: format!(
-                            "Requested {span} pages but maximum is 20 per request. \
-                             Narrow your `pages` range."
-                        ),
-                    }
-                    .build());
+            if let Some(span) = parse_page_span(pages_arg)
+                && span > 20
+            {
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!(
+                        "Requested {span} pages but maximum is 20 per request. \
+                         Narrow your `pages` range."
+                    ),
                 }
+                .build());
             }
 
             let output = match tokio::process::Command::new("pdftotext")

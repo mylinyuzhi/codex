@@ -173,12 +173,58 @@ fn test_effective_timeout_normal() {
 fn test_handler_webhook_serde() {
     let handler = HookHandler::Webhook {
         url: "https://example.com/hook".to_string(),
+        timeout: None,
+        headers: HashMap::new(),
     };
     let json = serde_json::to_string(&handler).expect("serialize");
     let parsed: HookHandler = serde_json::from_str(&json).expect("deserialize");
-    if let HookHandler::Webhook { url } = parsed {
+    if let HookHandler::Webhook { url, .. } = parsed {
         assert_eq!(url, "https://example.com/hook");
     } else {
         panic!("Expected Webhook handler");
     }
+}
+
+#[test]
+fn test_handler_webhook_with_headers() {
+    let json = r#"{"type":"webhook","url":"https://example.com","timeout":30,"headers":{"Authorization":"Bearer token"}}"#;
+    let handler: HookHandler = serde_json::from_str(json).expect("deserialize");
+    if let HookHandler::Webhook {
+        url,
+        timeout,
+        headers,
+    } = handler
+    {
+        assert_eq!(url, "https://example.com");
+        assert_eq!(timeout, Some(30));
+        assert_eq!(headers.get("Authorization").unwrap(), "Bearer token");
+    } else {
+        panic!("Expected Webhook handler");
+    }
+}
+
+#[test]
+fn test_async_and_force_sync_fields() {
+    let json = r#"{
+        "name": "async-hook",
+        "event_type": "pre_tool_use",
+        "handler": { "type": "command", "command": "echo" },
+        "async": true,
+        "forceSyncExecution": true
+    }"#;
+    let def: HookDefinition = serde_json::from_str(json).expect("parse");
+    assert!(def.is_async);
+    assert!(def.force_sync_execution);
+}
+
+#[test]
+fn test_async_defaults_to_false() {
+    let json = r#"{
+        "name": "sync-hook",
+        "event_type": "pre_tool_use",
+        "handler": { "type": "command", "command": "echo" }
+    }"#;
+    let def: HookDefinition = serde_json::from_str(json).expect("parse");
+    assert!(!def.is_async);
+    assert!(!def.force_sync_execution);
 }

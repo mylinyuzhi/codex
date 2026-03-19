@@ -109,8 +109,7 @@ fn errors_on_tool_call_in_assistant_message() {
     match result {
         Err(e) => assert!(
             e.to_string().contains("tool-call"),
-            "Error should mention tool-call: {}",
-            e
+            "Error should mention tool-call: {e}",
         ),
         Ok(_) => panic!("Expected error for tool-call in assistant message"),
     }

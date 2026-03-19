@@ -18,6 +18,9 @@ fn make_default_command() -> SkillPromptCommand {
         when_to_use: None,
         argument_hint: None,
         aliases: Vec::new(),
+        version: None,
+        arguments: None,
+        paths: None,
         interface: None,
         command_type: CommandType::Prompt,
     }

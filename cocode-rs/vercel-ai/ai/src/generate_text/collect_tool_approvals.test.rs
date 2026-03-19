@@ -31,7 +31,7 @@ fn test_tool_approval() {
 #[test]
 fn test_tool_approval_request() {
     let tc = make_tool_call("id_1", "tool_a");
-    let request = ToolApprovalRequest::new(tc.clone()).with_description("A test tool");
+    let request = ToolApprovalRequest::new(tc).with_description("A test tool");
 
     assert_eq!(request.tool_call.tool_call_id, "id_1");
     assert_eq!(request.tool_description, Some("A test tool".to_string()));

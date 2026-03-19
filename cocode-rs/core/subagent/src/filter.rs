@@ -1,4 +1,7 @@
+use std::borrow::Cow;
+
 use crate::definition::AgentDefinition;
+use cocode_protocol::PermissionMode;
 use cocode_protocol::ToolName;
 
 /// Tools that are never available to any subagent, regardless of configuration.
@@ -35,6 +38,11 @@ const ASYNC_SAFE_TOOLS: &[&str] = &[
     ToolName::TaskGet.as_str(),
     ToolName::TaskList.as_str(),
     ToolName::CronList.as_str(),
+    ToolName::Skill.as_str(),
+    ToolName::McpSearch.as_str(),
+    ToolName::TodoWrite.as_str(),
+    ToolName::EnterWorktree.as_str(),
+    ToolName::ExitWorktree.as_str(),
 ];
 
 /// Result of tool filtering, including any `Task(type)` restrictions.
@@ -54,28 +62,45 @@ pub struct ToolFilterResult {
 ///
 /// 1. **System blocked** - tools in `SYSTEM_BLOCKED` are always removed,
 ///    UNLESS the allow-list explicitly includes `Task(type1, type2)` which
-///    overrides the Task block with type restrictions.
+///    overrides the Task block with type restrictions. MCP tools (`mcp__*`)
+///    bypass all filtering unconditionally. `ExitPlanMode` is allowed when
+///    `permission_mode` is `Plan`.
 /// 2. **Definition allow-list** - if `definition.tools` is non-empty, only
 ///    those tools are retained. `Task(type1, type2)` normalizes to `Task`.
+///    MCP tools bypass allow-list filtering.
 /// 3. **Definition deny-list** - tools in `definition.disallowed_tools` are
 ///    removed. Also supports `Task(type)` normalization.
 /// 4. **Background filter** - when `background` is `true`, only tools in
-///    `ASYNC_SAFE_TOOLS` are retained.
+///    `ASYNC_SAFE_TOOLS` are retained. MCP tools bypass background filtering.
 pub fn filter_tools_for_agent(
     all_tools: &[String],
     definition: &AgentDefinition,
     background: bool,
+    permission_mode: Option<&PermissionMode>,
 ) -> ToolFilterResult {
     // Parse Task(type) restrictions from allow-list
     let task_type_restrictions = extract_task_restrictions(&definition.tools);
     let has_task_override = task_type_restrictions.is_some();
 
     // Layer 1: system-blocked tools are removed.
-    // Exception: if Task(type) is in the allow-list, "Task" is exempt from blocking.
+    // Exceptions:
+    // - MCP tools (mcp__*) bypass all filtering unconditionally
+    // - Task(type) in allow-list exempts Task from blocking
+    // - ExitPlanMode is allowed when permission_mode is Plan
     let mut result: Vec<String> = all_tools
         .iter()
         .filter(|t| {
             let name = t.as_str();
+            // MCP tools bypass all filtering unconditionally
+            if name.starts_with("mcp__") {
+                return true;
+            }
+            // ExitPlanMode is allowed in Plan permission mode
+            if name == ToolName::ExitPlanMode.as_str()
+                && permission_mode == Some(&PermissionMode::Plan)
+            {
+                return true;
+            }
             if name == ToolName::Task.as_str() && has_task_override {
                 return true; // Task explicitly allowed via Task(type) syntax
             }
@@ -86,27 +111,45 @@ pub fn filter_tools_for_agent(
 
     // Layer 2: apply allow-list if provided.
     if !definition.tools.is_empty() {
-        let normalized_tools: Vec<String> = definition
+        let normalized_tools: Vec<Cow<'_, str>> = definition
             .tools
             .iter()
             .map(|t| normalize_tool_name(t))
             .collect();
-        result.retain(|t| normalized_tools.contains(t));
+        result.retain(|t| {
+            // MCP tools bypass allow-list filtering
+            if t.starts_with("mcp__") {
+                return true;
+            }
+            normalized_tools.iter().any(|nt| nt.as_ref() == t.as_str())
+        });
     }
 
     // Layer 3: apply deny-list.
     if !definition.disallowed_tools.is_empty() {
-        let normalized_deny: Vec<String> = definition
+        let normalized_deny: Vec<Cow<'_, str>> = definition
             .disallowed_tools
             .iter()
             .map(|t| normalize_tool_name(t))
             .collect();
-        result.retain(|t| !normalized_deny.contains(t));
+        result.retain(|t| {
+            // MCP tools bypass deny-list filtering
+            if t.starts_with("mcp__") {
+                return true;
+            }
+            !normalized_deny.iter().any(|nd| nd.as_ref() == t.as_str())
+        });
     }
 
     // Layer 4: background agents can only use async-safe tools.
     if background {
-        result.retain(|t| ASYNC_SAFE_TOOLS.contains(&t.as_str()));
+        result.retain(|t| {
+            // MCP tools bypass background filtering
+            if t.starts_with("mcp__") {
+                return true;
+            }
+            ASYNC_SAFE_TOOLS.contains(&t.as_str())
+        });
     }
 
     ToolFilterResult {
@@ -146,11 +189,11 @@ fn parse_task_restriction(tool: &str) -> Option<Vec<String>> {
 }
 
 /// Normalize a tool name by stripping `Task(...)` to just `Task`.
-fn normalize_tool_name(tool: &str) -> String {
+fn normalize_tool_name(tool: &str) -> Cow<'_, str> {
     if tool.trim().starts_with("Task(") && tool.trim().ends_with(')') {
-        ToolName::Task.as_str().to_string()
+        Cow::Owned(ToolName::Task.as_str().to_string())
     } else {
-        tool.to_string()
+        Cow::Borrowed(tool)
     }
 }
 

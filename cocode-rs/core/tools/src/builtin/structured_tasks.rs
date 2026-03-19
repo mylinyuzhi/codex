@@ -152,11 +152,11 @@ pub fn derive_active_form(subject: &str) -> String {
 
     let lower = trimmed.to_lowercase();
     for (verb, continuous) in VERB_MAP {
-        if let Some(rest) = lower.strip_prefix(verb) {
-            if rest.is_empty() || rest.starts_with(' ') {
-                let original_rest = &trimmed[verb.len()..];
-                return format!("{continuous}{original_rest}");
-            }
+        if let Some(rest) = lower.strip_prefix(verb)
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
+            let original_rest = &trimmed[verb.len()..];
+            return format!("{continuous}{original_rest}");
         }
     }
 

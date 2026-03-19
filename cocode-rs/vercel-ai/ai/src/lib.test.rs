@@ -55,7 +55,7 @@ fn test_prompt_with_messages() {
         LanguageModelV4Message::user_text("Tell me more."),
     ];
 
-    let prompt = Prompt::messages(messages.clone());
+    let prompt = Prompt::messages(messages);
     assert!(prompt.system.is_none());
 
     let model_prompt = prompt.to_model_prompt();

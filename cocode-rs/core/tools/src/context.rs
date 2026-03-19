@@ -18,6 +18,7 @@ use cocode_protocol::WebFetchConfig;
 use cocode_protocol::WebSearchConfig;
 use cocode_shell::ShellExecutor;
 use cocode_skill::SkillManager;
+use cocode_skill::SkillUsageTracker;
 use lru::LruCache;
 use serde::Deserialize;
 use serde::Serialize;
@@ -159,6 +160,10 @@ pub struct SpawnAgentInput {
     /// Working directory for the spawned agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+
+    /// Short description of what the agent will do (for TUI display).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Result of spawning a subagent.
@@ -254,13 +259,18 @@ pub trait PermissionRequester: Send + Sync {
 
 /// Information about an invoked skill.
 ///
-/// Tracks skills that have been invoked during the session for hook cleanup.
+/// Tracks skills that have been invoked during the session for hook cleanup
+/// and system reminder injection.
 #[derive(Debug, Clone)]
 pub struct InvokedSkill {
     /// The skill name.
     pub name: String,
     /// When the skill was invoked.
     pub started_at: Instant,
+    /// The skill's prompt content (after argument substitution).
+    pub prompt_content: String,
+    /// Base directory of the skill (for relative path resolution).
+    pub path: Option<PathBuf>,
 }
 
 /// Stored approvals for tools.
@@ -1045,7 +1055,10 @@ impl FileTracker {
     ///
     /// Pops LRU entries until the count is at most `max_entries`.
     pub fn enforce_entry_limit(&self, max_entries: usize) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.read_files.len() > max_entries {
             if let Some((_path, evicted)) = state.read_files.pop_lru() {
                 if let Some(content) = &evicted.content {
@@ -1108,10 +1121,10 @@ impl FileTracker {
         }
 
         // Auto memory files (MEMORY.md or project memory)
-        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-            if filename == "MEMORY.md" || filename.starts_with("memory-") {
-                return true;
-            }
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+            && (filename == "MEMORY.md" || filename.starts_with("memory-"))
+        {
+            return true;
         }
 
         // Tool result persistence files
@@ -1440,6 +1453,8 @@ pub struct ToolContext {
     pub lsp_manager: Option<Arc<LspServerManager>>,
     /// Optional skill manager for executing named skills.
     pub skill_manager: Option<Arc<SkillManager>>,
+    /// Optional skill usage tracker for recording invocations.
+    pub skill_usage_tracker: Option<Arc<SkillUsageTracker>>,
     /// Optional hook registry for skill hook integration.
     pub hook_registry: Option<Arc<HookRegistry>>,
     /// Skills that have been invoked (for hook cleanup).
@@ -1515,6 +1530,7 @@ impl ToolContext {
             shell_executor,
             lsp_manager: None,
             skill_manager: None,
+            skill_usage_tracker: None,
             hook_registry: None,
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
@@ -1631,6 +1647,12 @@ impl ToolContext {
     /// Set the skill manager.
     pub fn with_skill_manager(mut self, manager: Arc<SkillManager>) -> Self {
         self.skill_manager = Some(manager);
+        self
+    }
+
+    /// Set the skill usage tracker.
+    pub fn with_skill_usage_tracker(mut self, tracker: Arc<SkillUsageTracker>) -> Self {
+        self.skill_usage_tracker = Some(tracker);
         self
     }
 
@@ -1912,6 +1934,7 @@ pub struct ToolContextBuilder {
     shell_executor: Option<ShellExecutor>,
     lsp_manager: Option<Arc<LspServerManager>>,
     skill_manager: Option<Arc<SkillManager>>,
+    skill_usage_tracker: Option<Arc<SkillUsageTracker>>,
     hook_registry: Option<Arc<HookRegistry>>,
     invoked_skills: Arc<Mutex<Vec<InvokedSkill>>>,
     session_dir: Option<PathBuf>,
@@ -1952,6 +1975,7 @@ impl ToolContextBuilder {
             shell_executor: None,
             lsp_manager: None,
             skill_manager: None,
+            skill_usage_tracker: None,
             hook_registry: None,
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
@@ -2189,6 +2213,7 @@ impl ToolContextBuilder {
             shell_executor,
             lsp_manager: self.lsp_manager,
             skill_manager: self.skill_manager,
+            skill_usage_tracker: self.skill_usage_tracker,
             hook_registry: self.hook_registry,
             invoked_skills: self.invoked_skills,
             session_dir: self.session_dir,

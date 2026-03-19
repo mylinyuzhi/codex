@@ -83,6 +83,25 @@ pub struct SkillInterface {
     #[serde(default)]
     pub aliases: Option<Vec<String>>,
 
+    /// Version string for the skill (e.g., "1.0.0").
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Named argument definitions for structured argument parsing.
+    ///
+    /// When defined, `$1`, `$2`, etc. (positional) and `${args.name}` (named)
+    /// placeholders in the prompt body are substituted from the parsed arguments.
+    #[serde(default)]
+    pub arguments: Option<Vec<ArgumentDef>>,
+
+    /// Glob patterns that activate this skill conditionally.
+    ///
+    /// When set, the skill is only active when files matching one of these
+    /// patterns are being operated on. Skills with `paths` are stored
+    /// separately and not shown in the default skill listing.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+
     /// Hooks that are registered when this skill starts and removed when it ends.
     ///
     /// The key is the event type (e.g., "PreToolUse", "PostToolUse"), and the
@@ -92,6 +111,25 @@ pub struct SkillInterface {
     /// the skill finishes executing.
     #[serde(default)]
     pub hooks: Option<HashMap<String, Vec<SkillHookConfig>>>,
+}
+
+/// Named argument definition for structured argument parsing.
+///
+/// Each entry defines a named argument that maps to a `${args.name}` placeholder
+/// in the prompt body. Arguments are matched by position when provided as a
+/// whitespace-separated string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArgumentDef {
+    /// Argument name (used in `${args.name}` substitution).
+    pub name: String,
+
+    /// Human-readable description shown in help output.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Whether the argument is required.
+    #[serde(default)]
+    pub required: bool,
 }
 
 /// Hook configuration within a skill's `SKILL.md` frontmatter.

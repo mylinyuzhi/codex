@@ -134,6 +134,8 @@ fn convert_single_hook(
         once: config.once,
         status_message: None,
         group_id: None,
+        is_async: false,
+        force_sync_execution: false,
     })
 }
 

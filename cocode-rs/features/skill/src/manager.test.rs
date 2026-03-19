@@ -1,4 +1,5 @@
 use super::*;
+use crate::interface::ArgumentDef;
 
 fn make_skill(name: &str, prompt: &str) -> SkillPromptCommand {
     SkillPromptCommand {
@@ -18,6 +19,9 @@ fn make_skill(name: &str, prompt: &str) -> SkillPromptCommand {
         when_to_use: None,
         argument_hint: None,
         aliases: Vec::new(),
+        version: None,
+        arguments: None,
+        paths: None,
         interface: None,
         command_type: CommandType::Prompt,
     }
@@ -280,4 +284,124 @@ fn test_execution_result_fields() {
     assert_eq!(result.context, SkillContext::Fork);
     assert_eq!(result.agent, Some("deploy-agent".to_string()));
     assert_eq!(result.base_dir, Some(PathBuf::from("/skills/deploy")));
+}
+
+#[test]
+fn test_simple_glob_match() {
+    // *.ext matches extension
+    assert!(simple_glob_match("*.rs", "main.rs"));
+    assert!(simple_glob_match("*.rs", "src/lib.rs"));
+    assert!(!simple_glob_match("*.rs", "main.ts"));
+
+    // **/*.ext matches nested paths
+    assert!(simple_glob_match("**/*.rs", "a/b/c.rs"));
+    assert!(simple_glob_match("**/*.ts", "src/components/App.ts"));
+    assert!(!simple_glob_match("**/*.rs", "file.ts"));
+
+    // **/filename matches by suffix
+    assert!(simple_glob_match("**/Cargo.toml", "crate/Cargo.toml"));
+    assert!(simple_glob_match("**/Cargo.toml", "Cargo.toml"));
+
+    // Exact match
+    assert!(simple_glob_match("Cargo.toml", "Cargo.toml"));
+    assert!(simple_glob_match("Cargo.toml", "sub/Cargo.toml"));
+
+    // Backslash normalization
+    assert!(simple_glob_match("**\\*.rs", "src\\main.rs"));
+}
+
+#[test]
+fn test_conditional_skills() {
+    let mut manager = SkillManager::new();
+    manager.register(make_skill("normal", "Normal skill"));
+
+    let mut conditional = make_skill("rust-lint", "Lint Rust files");
+    conditional.paths = Some(vec!["**/*.rs".to_string()]);
+    manager.register(conditional);
+
+    assert_eq!(manager.conditional_skills().len(), 1);
+    assert_eq!(manager.conditional_skills()[0].name, "rust-lint");
+
+    // Conditional skills excluded from llm_invocable
+    let invocable = manager.llm_invocable_skills();
+    assert!(!invocable.iter().any(|s| s.name == "rust-lint"));
+}
+
+#[test]
+fn test_activate_for_paths() {
+    let mut manager = SkillManager::new();
+
+    let mut rs_skill = make_skill("rust-lint", "Lint Rust");
+    rs_skill.paths = Some(vec!["**/*.rs".to_string()]);
+    manager.register(rs_skill);
+
+    let mut ts_skill = make_skill("ts-lint", "Lint TypeScript");
+    ts_skill.paths = Some(vec!["**/*.ts".to_string()]);
+    manager.register(ts_skill);
+
+    let activated = manager.activate_for_paths(&[PathBuf::from("src/main.rs")]);
+    assert_eq!(activated.len(), 1);
+    assert_eq!(activated[0].name, "rust-lint");
+
+    let activated = manager.activate_for_paths(&[PathBuf::from("src/app.ts")]);
+    assert_eq!(activated.len(), 1);
+    assert_eq!(activated[0].name, "ts-lint");
+
+    let activated = manager.activate_for_paths(&[PathBuf::from("readme.md")]);
+    assert!(activated.is_empty());
+}
+
+#[test]
+fn test_execute_skill_with_positional_args() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_skill("greet", "Hello $1, welcome to $2");
+    skill.arguments = Some(vec![
+        ArgumentDef {
+            name: "name".to_string(),
+            description: None,
+            required: false,
+        },
+        ArgumentDef {
+            name: "place".to_string(),
+            description: None,
+            required: false,
+        },
+    ]);
+    manager.register(skill);
+
+    let result = execute_skill(&manager, "/greet Alice Wonderland").unwrap();
+    assert!(result.prompt.contains("Hello Alice, welcome to Wonderland"));
+}
+
+#[test]
+fn test_execute_skill_with_named_args() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_skill("deploy", "Deploy ${args.env} with ${args.tag}");
+    skill.arguments = Some(vec![
+        ArgumentDef {
+            name: "env".to_string(),
+            description: None,
+            required: false,
+        },
+        ArgumentDef {
+            name: "tag".to_string(),
+            description: None,
+            required: false,
+        },
+    ]);
+    manager.register(skill);
+
+    let result = execute_skill(&manager, "/deploy prod v1.2.3").unwrap();
+    assert!(result.prompt.contains("Deploy prod with v1.2.3"));
+}
+
+#[test]
+fn test_execute_skill_with_cocode_skill_dir() {
+    let mut manager = SkillManager::new();
+    let mut skill = make_skill("run", "Execute ${COCODE_SKILL_DIR}/run.sh");
+    skill.base_dir = Some(PathBuf::from("/skills/runner"));
+    manager.register(skill);
+
+    let result = execute_skill(&manager, "/run").unwrap();
+    assert!(result.prompt.contains("Execute /skills/runner/run.sh"));
 }

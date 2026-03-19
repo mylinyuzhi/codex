@@ -104,6 +104,9 @@ impl SkillManager {
                         when_to_use: None,
                         argument_hint: None,
                         aliases: Vec::new(),
+                        version: None,
+                        arguments: None,
+                        paths: None,
                         interface: None,
                         command_type: bundled.command_type,
                     },
@@ -209,6 +212,42 @@ impl SkillManager {
         self.skills.values()
     }
 
+    /// Get skills that are conditional on file paths.
+    ///
+    /// Returns skills that have `paths` glob patterns defined. These
+    /// are excluded from the default LLM-invocable listing and only
+    /// activated when matching files are operated on.
+    pub fn conditional_skills(&self) -> Vec<&SkillPromptCommand> {
+        self.skills.values().filter(|s| s.paths.is_some()).collect()
+    }
+
+    /// Activate conditional skills matching the given file paths.
+    ///
+    /// Returns the skills whose `paths` glob patterns match at least one
+    /// of the provided paths. Uses simple suffix/extension matching:
+    /// patterns like `*.rs` match any `.rs` file, `**/*.ts` matches nested `.ts` files.
+    pub fn activate_for_paths(
+        &self,
+        touched_paths: &[std::path::PathBuf],
+    ) -> Vec<&SkillPromptCommand> {
+        self.skills
+            .values()
+            .filter(|s| {
+                let Some(ref patterns) = s.paths else {
+                    return false;
+                };
+                for pattern in patterns {
+                    for path in touched_paths {
+                        if simple_glob_match(pattern, &path.to_string_lossy()) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            })
+            .collect()
+    }
+
     /// Get skills that can be invoked by the LLM via the Skill tool.
     ///
     /// Two-layer filter aligned with Claude Code's `getLLMInvocableSkills()`:
@@ -224,6 +263,8 @@ impl SkillManager {
                 // Layer 2: field filter (aligned with getLLMInvocableSkills)
                     && !s.disable_model_invocation
                     && s.source != SkillSource::Builtin
+                    // Layer 3: exclude conditional skills (activated via paths only)
+                    && s.paths.is_none()
                     && (s.loaded_from == LoadedFrom::Bundled
                         || !s.description.is_empty()
                         || s.when_to_use.is_some())
@@ -416,24 +457,13 @@ pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecuti
         return None;
     }
 
-    // Build the prompt, potentially incorporating arguments
-    // If prompt contains $ARGUMENTS placeholder, replace it; otherwise append args
-    let mut prompt = if skill.prompt.contains("$ARGUMENTS") {
-        skill.prompt.replace("$ARGUMENTS", args)
-    } else if args.is_empty() {
-        skill.prompt.clone()
-    } else {
-        // Append arguments to the prompt (fallback)
-        format!("{}\n\nArguments: {}", skill.prompt, args)
-    };
-
-    // Inject base directory prefix if available
-    if let Some(ref base_dir) = skill.base_dir {
-        prompt = format!(
-            "Base directory for this skill: {}\n\n{prompt}",
-            base_dir.display()
-        );
-    }
+    // Build the prompt with full argument substitution (shared with SkillTool)
+    let prompt = crate::substitution::substitute_skill_args(
+        &skill.prompt,
+        args,
+        skill.arguments.as_deref(),
+        skill.base_dir.as_deref(),
+    );
 
     Some(SkillExecutionResult {
         skill_name: skill.name.clone(),
@@ -446,6 +476,38 @@ pub fn execute_skill(manager: &SkillManager, input: &str) -> Option<SkillExecuti
         base_dir: skill.base_dir.clone(),
         interface: skill.interface.clone(),
     })
+}
+
+/// Simple glob matching for conditional skill path patterns.
+///
+/// Supported patterns (prefix-based only):
+/// - `**/*.ext` — matches any file with the given extension at any depth
+/// - `**/filename` — matches a specific filename at any depth
+/// - `*.ext` — matches any file with the given extension
+/// - `literal` — exact match or suffix match after `/`
+///
+/// NOT supported: mid-pattern `**` (e.g., `src/**/test.rs`).
+fn simple_glob_match(pattern: &str, path: &str) -> bool {
+    // Normalize separators
+    let pattern = pattern.replace('\\', "/");
+    let path = path.replace('\\', "/");
+
+    // Handle common patterns
+    if let Some(rest) = pattern.strip_prefix("**/") {
+        // **/*.ext → match suffix
+        if let Some(ext) = rest.strip_prefix('*') {
+            return path.ends_with(ext);
+        }
+        return path.ends_with(rest) || path.contains(&format!("/{rest}"));
+    }
+
+    if let Some(ext) = pattern.strip_prefix('*') {
+        // *.ext → match extension
+        return path.ends_with(ext);
+    }
+
+    // Exact or prefix match
+    path == pattern || path.ends_with(&format!("/{pattern}"))
 }
 
 #[cfg(test)]

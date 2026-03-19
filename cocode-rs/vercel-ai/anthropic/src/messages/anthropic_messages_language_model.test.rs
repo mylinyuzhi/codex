@@ -170,8 +170,7 @@ fn skills_without_code_execution_tool_produces_warning() {
             Warning::Other { message }
                 if message.contains("code execution tool is required when using skills")
         )),
-        "expected skills validation warning, got: {:?}",
-        warnings
+        "expected skills validation warning, got: {warnings:?}",
     );
 }
 
@@ -212,8 +211,7 @@ fn skills_with_code_execution_tool_no_warning() {
             Warning::Other { message }
                 if message.contains("code execution tool is required")
         )),
-        "should not warn when code_execution tool is present: {:?}",
-        warnings
+        "should not warn when code_execution tool is present: {warnings:?}",
     );
 }
 
@@ -238,8 +236,7 @@ fn known_model_clamps_max_tokens_with_warning() {
             w,
             Warning::Unsupported { feature, .. } if feature == "maxOutputTokens"
         )),
-        "expected maxOutputTokens warning, got: {:?}",
-        warnings
+        "expected maxOutputTokens warning, got: {warnings:?}",
     );
 }
 
@@ -285,8 +282,7 @@ fn json_response_format_without_schema_warns() {
                 if feature == "responseFormat"
                 && details.as_deref().unwrap_or("").contains("requires a schema")
         )),
-        "expected responseFormat warning, got: {:?}",
-        warnings
+        "expected responseFormat warning, got: {warnings:?}",
     );
 }
 
@@ -319,8 +315,7 @@ fn thinking_budget_default_uses_compatibility_warning() {
             w,
             Warning::Compatibility { feature, .. } if feature == "extended thinking"
         )),
-        "expected Compatibility warning for thinking budget, got: {:?}",
-        warnings
+        "expected Compatibility warning for thinking budget, got: {warnings:?}",
     );
     // Should NOT have Warning::Other for this
     assert!(!warnings.iter().any(|w| matches!(
@@ -434,7 +429,6 @@ fn context_management_unknown_strategy_warns() {
             w,
             Warning::Other { message } if message.contains("Unknown context management strategy")
         )),
-        "expected unknown strategy warning, got: {:?}",
-        warnings
+        "expected unknown strategy warning, got: {warnings:?}",
     );
 }

@@ -846,6 +846,10 @@ impl std::fmt::Display for AbortReason {
 }
 
 /// Progress information from a sub-agent.
+///
+/// Supports two-tier progress reporting:
+/// - `summary`: Accumulated work summary (preserved across updates, like `reportToolProgress`)
+/// - `activity`: Current transient activity (replaced on each update, like `updateTaskProgress`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProgress {
     /// Progress message.
@@ -857,6 +861,12 @@ pub struct AgentProgress {
     /// Total steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_steps: Option<i32>,
+    /// Accumulated work summary (preserved across updates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Current transient activity (replaced on each update).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 /// Type of background task.
@@ -990,6 +1000,11 @@ pub enum HookEventType {
     WorktreeCreate,
     /// When a git worktree is removed.
     WorktreeRemove,
+    /// Initial setup phase before session starts.
+    ///
+    /// Fired during initialization for hooks that need to run before
+    /// the session is fully established.
+    Setup,
 }
 
 impl HookEventType {
@@ -1014,6 +1029,7 @@ impl HookEventType {
             Self::ConfigChange => "config_change",
             Self::WorktreeCreate => "worktree_create",
             Self::WorktreeRemove => "worktree_remove",
+            Self::Setup => "setup",
         }
     }
 }
@@ -1045,6 +1061,9 @@ impl std::str::FromStr for HookEventType {
             "TeammateIdle" | "teammate_idle" => Ok(Self::TeammateIdle),
             "TaskCompleted" | "task_completed" => Ok(Self::TaskCompleted),
             "ConfigChange" | "config_change" => Ok(Self::ConfigChange),
+            "WorktreeCreate" | "worktree_create" => Ok(Self::WorktreeCreate),
+            "WorktreeRemove" | "worktree_remove" => Ok(Self::WorktreeRemove),
+            "Setup" | "setup" => Ok(Self::Setup),
             other => Err(format!("unknown hook event type: {other}")),
         }
     }

@@ -14,6 +14,9 @@ fn make_interface_with_hooks(hooks: HashMap<String, Vec<SkillHookConfig>>) -> Sk
         agent: None,
         argument_hint: None,
         aliases: None,
+        version: None,
+        arguments: None,
+        paths: None,
         hooks: Some(hooks),
     }
 }
@@ -70,6 +73,9 @@ fn test_convert_skill_hooks_empty() {
         agent: None,
         argument_hint: None,
         aliases: None,
+        version: None,
+        arguments: None,
+        paths: None,
         hooks: None,
     };
     let defs = convert_skill_hooks(&interface);

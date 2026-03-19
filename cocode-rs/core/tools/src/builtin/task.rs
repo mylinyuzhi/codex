@@ -152,17 +152,16 @@ impl Tool for TaskTool {
         }
 
         // Check Task(type) restrictions: only allow spawning permitted agent types
-        if let Some(ref restrictions) = ctx.task_type_restrictions {
-            if !restrictions.iter().any(|t| t == subagent_type) {
-                return Err(crate::error::tool_error::InvalidInputSnafu {
-                    message: format!(
-                        "Agent type '{subagent_type}' is not allowed. Permitted types: {}",
-                        restrictions.join(", ")
-                    ),
-                }
-                .build()
-                .into());
+        if let Some(ref restrictions) = ctx.task_type_restrictions
+            && !restrictions.iter().any(|t| t == subagent_type)
+        {
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: format!(
+                    "Agent type '{subagent_type}' is not allowed. Permitted types: {}",
+                    restrictions.join(", ")
+                ),
             }
+            .build());
         }
 
         // Execute SubagentStart hooks before spawning (non-blocking per CC semantics)
@@ -186,10 +185,11 @@ impl Tool for TaskTool {
                             "SubagentStart hook rejected (non-blocking)"
                         );
                     }
-                    cocode_hooks::HookResult::ContinueWithContext { additional_context } => {
-                        if let Some(ctx_text) = additional_context {
-                            hook_additional_context = Some(ctx_text.clone());
-                        }
+                    cocode_hooks::HookResult::ContinueWithContext {
+                        additional_context: Some(ctx_text),
+                        ..
+                    } => {
+                        hook_additional_context = Some(ctx_text.clone());
                     }
                     _ => {}
                 }
@@ -218,6 +218,7 @@ impl Tool for TaskTool {
             team_name: input["team_name"].as_str().map(String::from),
             mode: input["mode"].as_str().map(String::from),
             cwd: input["cwd"].as_str().map(String::from),
+            description: Some(description.to_string()),
         };
 
         // Spawn the agent

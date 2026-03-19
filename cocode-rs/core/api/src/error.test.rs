@@ -504,7 +504,7 @@ fn make_api_call_error_with_body(
         message: message.to_string(),
         url: "https://api.example.com/v1/messages".to_string(),
         status_code,
-        response_body: response_body.map(|s| s.to_string()),
+        response_body: response_body.map(ToString::to_string),
         cause: None,
         is_retryable: false,
         retry_after: None,

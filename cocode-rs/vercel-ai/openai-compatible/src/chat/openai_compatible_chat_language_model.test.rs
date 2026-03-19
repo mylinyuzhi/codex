@@ -85,7 +85,7 @@ fn get_args_applies_transform_body() {
     let config = Arc::new(OpenAICompatibleConfig {
         provider: "custom.chat".into(),
         base_url: "https://api.example.com/v1".into(),
-        headers: Arc::new(|| HashMap::new()),
+        headers: Arc::new(HashMap::new),
         query_params: None,
         client: None,
         include_usage: true,
@@ -130,7 +130,7 @@ fn config_url_with_query_params() {
     let config = OpenAICompatibleConfig {
         provider: "test.chat".into(),
         base_url: "https://api.example.com/v1".into(),
-        headers: Arc::new(|| HashMap::new()),
+        headers: Arc::new(HashMap::new),
         query_params: Some(HashMap::from([("api-version".into(), "2024-01".into())])),
         client: None,
         include_usage: true,

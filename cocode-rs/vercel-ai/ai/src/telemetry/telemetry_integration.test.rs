@@ -39,7 +39,7 @@ async fn test_error_tracking_integration() {
     };
 
     let error: Box<dyn std::error::Error + Send + Sync> =
-        Box::new(std::io::Error::new(std::io::ErrorKind::Other, "test error"));
+        Box::new(std::io::Error::other("test error"));
     integration.on_error(&*error).await;
 
     assert!(error_seen.load(Ordering::SeqCst));

@@ -14,6 +14,9 @@ fn valid_interface() -> SkillInterface {
         agent: None,
         argument_hint: None,
         aliases: None,
+        version: None,
+        arguments: None,
+        paths: None,
         hooks: None,
     }
 }
@@ -235,5 +238,12 @@ fn test_valid_with_all_new_fields() {
     iface.agent = Some("my-agent".to_string());
     iface.argument_hint = Some("<file>".to_string());
     iface.aliases = Some(vec!["alias1".to_string()]);
+    assert!(validate_skill(&iface, VALID_PROMPT).is_ok());
+}
+
+#[test]
+fn test_valid_name_with_colons() {
+    let mut iface = valid_interface();
+    iface.name = "frontend:deploy".to_string();
     assert!(validate_skill(&iface, VALID_PROMPT).is_ok());
 }

@@ -73,10 +73,10 @@ impl Tool for CronDeleteTool {
         };
 
         // Persist durable jobs to disk (removed job may have been durable)
-        if let Some(ref home) = ctx.cocode_home {
-            if let Err(e) = cron_state::save_durable_jobs(&self.store, home).await {
-                tracing::warn!(error = %e, "Failed to save durable cron jobs");
-            }
+        if let Some(ref home) = ctx.cocode_home
+            && let Err(e) = cron_state::save_durable_jobs(&self.store, home).await
+        {
+            tracing::warn!(error = %e, "Failed to save durable cron jobs");
         }
 
         ctx.emit_progress(format!("Deleted cron job {id}")).await;

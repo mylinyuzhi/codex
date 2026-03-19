@@ -33,6 +33,10 @@ struct HookJsonEntry {
     timeout_secs: i32,
     #[serde(default)]
     once: bool,
+    #[serde(default, rename = "async")]
+    is_async: bool,
+    #[serde(default, rename = "forceSyncExecution")]
+    force_sync_execution: bool,
 }
 
 fn default_enabled() -> bool {
@@ -76,6 +80,10 @@ enum HookHandlerJson {
     },
     Webhook {
         url: String,
+        #[serde(default)]
+        timeout: Option<i32>,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
     },
 }
 
@@ -115,7 +123,15 @@ impl From<HookHandlerJson> for HookHandler {
                 prompt,
                 timeout,
             },
-            HookHandlerJson::Webhook { url } => HookHandler::Webhook { url },
+            HookHandlerJson::Webhook {
+                url,
+                timeout,
+                headers,
+            } => HookHandler::Webhook {
+                url,
+                timeout,
+                headers,
+            },
         }
     }
 }
@@ -133,6 +149,8 @@ impl From<HookJsonEntry> for HookDefinition {
             once: entry.once,
             status_message: None,
             group_id: None,
+            is_async: entry.is_async,
+            force_sync_execution: entry.force_sync_execution,
         }
     }
 }

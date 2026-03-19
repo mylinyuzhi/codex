@@ -9,12 +9,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
 use std::time::Instant;
 
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::async_tracker::AsyncHookTracker;
 use crate::context::HookContext;
 use crate::definition::HookDefinition;
 use crate::definition::HookHandler;
@@ -43,6 +46,28 @@ pub type HookAgentFn = Arc<
         + Sync,
 >;
 
+/// Acquires a write lock, recovering from poison if necessary.
+fn lock_write<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockWriteGuard<'a, T>> {
+    match lock.write() {
+        Ok(g) => Some(g),
+        Err(poisoned) => {
+            warn!("{name} lock poisoned, recovering");
+            Some(poisoned.into_inner())
+        }
+    }
+}
+
+/// Acquires a read lock, recovering from poison if necessary.
+fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockReadGuard<'a, T>> {
+    match lock.read() {
+        Ok(g) => Some(g),
+        Err(poisoned) => {
+            warn!("{name} lock poisoned, recovering");
+            Some(poisoned.into_inner())
+        }
+    }
+}
+
 /// Central registry that stores hooks and dispatches events.
 ///
 /// The registry supports one-shot hooks (`once: true`) which are automatically
@@ -62,6 +87,11 @@ pub struct HookRegistry {
     model_call_fn: RwLock<Option<HookModelCallFn>>,
     /// Optional agent spawn callback for Agent handler verification mode.
     agent_fn: RwLock<Option<HookAgentFn>>,
+    /// Optional async hook tracker for completing background hook tasks.
+    ///
+    /// When set, background hooks will call `tracker.complete()` when they finish,
+    /// allowing their results to be delivered via system reminders.
+    async_tracker: RwLock<Option<Arc<AsyncHookTracker>>>,
 }
 
 impl Default for HookRegistry {
@@ -79,36 +109,48 @@ impl HookRegistry {
             settings: RwLock::new(HookSettings::default()),
             model_call_fn: RwLock::new(None),
             agent_fn: RwLock::new(None),
+            async_tracker: RwLock::new(None),
+        }
+    }
+
+    /// Sets the async hook tracker for completing background hook tasks.
+    ///
+    /// When set, hooks that are backgrounded via config-based async will call
+    /// `tracker.complete()` when they finish, enabling result delivery via
+    /// system reminders.
+    pub fn set_async_hook_tracker(&self, tracker: Arc<AsyncHookTracker>) {
+        if let Some(mut slot) = lock_write(&self.async_tracker, "async_tracker") {
+            *slot = Some(tracker);
         }
     }
 
     /// Sets the LLM callback for Prompt handler verification mode.
     pub fn set_model_call_fn(&self, f: HookModelCallFn) {
-        if let Ok(mut slot) = self.model_call_fn.write() {
+        if let Some(mut slot) = lock_write(&self.model_call_fn, "model_call_fn") {
             *slot = Some(f);
         }
     }
 
     /// Sets the agent spawn callback for Agent handler verification mode.
     pub fn set_agent_fn(&self, f: HookAgentFn) {
-        if let Ok(mut slot) = self.agent_fn.write() {
+        if let Some(mut slot) = lock_write(&self.agent_fn, "agent_fn") {
             *slot = Some(f);
         }
     }
 
     /// Returns a clone of the model call callback if set.
     fn get_model_call_fn(&self) -> Option<HookModelCallFn> {
-        self.model_call_fn.read().ok().and_then(|slot| slot.clone())
+        lock_read(&self.model_call_fn, "model_call_fn").and_then(|slot| slot.clone())
     }
 
     /// Returns a clone of the agent callback if set.
     fn get_agent_fn(&self) -> Option<HookAgentFn> {
-        self.agent_fn.read().ok().and_then(|slot| slot.clone())
+        lock_read(&self.agent_fn, "agent_fn").and_then(|slot| slot.clone())
     }
 
     /// Updates the hook settings (e.g., `disable_all_hooks`, `allow_managed_hooks_only`).
     pub fn set_settings(&self, new_settings: HookSettings) {
-        if let Ok(mut settings) = self.settings.write() {
+        if let Some(mut settings) = lock_write(&self.settings, "settings") {
             *settings = new_settings;
         }
     }
@@ -121,7 +163,7 @@ impl HookRegistry {
             once = hook.once,
             "Registered hook"
         );
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             hooks.push(hook);
         }
     }
@@ -140,14 +182,14 @@ impl HookRegistry {
     pub fn register_inline(&self, hook: HookDefinition, handler: InlineHandler) {
         let name = hook.name.clone();
         self.register(hook);
-        if let Ok(mut handlers) = self.inline_handlers.write() {
+        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
             handlers.insert(name, handler);
         }
     }
 
     /// Returns all hooks registered for a given event type.
     pub fn hooks_for_event(&self, event_type: &HookEventType) -> Vec<HookDefinition> {
-        if let Ok(hooks) = self.hooks.read() {
+        if let Some(hooks) = lock_read(&self.hooks, "hooks") {
             hooks
                 .iter()
                 .filter(|h| h.enabled && h.event_type == *event_type)
@@ -169,7 +211,7 @@ impl HookRegistry {
     /// They are NOT removed on timeout or failure, allowing retry.
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
         // Check settings at execution time (Issue C fix: previously only checked during aggregation)
-        if let Ok(settings) = self.settings.read() {
+        if let Some(settings) = lock_read(&self.settings, "settings") {
             if settings.disable_all_hooks {
                 return Vec::new();
             }
@@ -178,19 +220,18 @@ impl HookRegistry {
         // Get matching hooks (clone to release lock during execution)
         // The match target varies by event type (tool_name, source, notification_type, etc.)
         let match_target = ctx.match_target();
-        let allow_managed_only = self
-            .settings
-            .read()
-            .map(|s| s.allow_managed_hooks_only)
-            .unwrap_or(false);
+        let (allow_managed_only, workspace_trusted) = lock_read(&self.settings, "settings")
+            .map(|s| (s.allow_managed_hooks_only, s.workspace_trusted))
+            .unwrap_or((false, true));
 
-        let matching: Vec<HookDefinition> = if let Ok(hooks) = self.hooks.read() {
+        let matching: Vec<HookDefinition> = if let Some(hooks) = lock_read(&self.hooks, "hooks") {
             hooks
                 .iter()
                 .filter(|h| h.enabled && h.event_type == ctx.event_type)
                 .filter(|h| {
-                    // When allow_managed_hooks_only is set, skip non-managed hooks
-                    if allow_managed_only && !h.source.is_managed() {
+                    // When allow_managed_hooks_only is set, or workspace is untrusted,
+                    // skip non-managed hooks
+                    if (allow_managed_only || !workspace_trusted) && !h.source.is_managed() {
                         return false;
                     }
                     true
@@ -210,7 +251,7 @@ impl HookRegistry {
 
         // Pre-execute inline handlers synchronously (closures can't be sent across threads)
         let mut inline_results: HashMap<String, HookResult> = HashMap::new();
-        if let Ok(handlers) = self.inline_handlers.read() {
+        if let Some(handlers) = lock_read(&self.inline_handlers, "inline_handlers") {
             for hook in &matching {
                 if matches!(hook.handler, HookHandler::Inline) {
                     if let Some(handler) = handlers.get(&hook.name) {
@@ -221,9 +262,22 @@ impl HookRegistry {
             }
         }
 
-        // Snapshot callbacks for use in spawned tasks
+        // Snapshot callbacks and tracker for use in spawned tasks
         let model_call_fn = self.get_model_call_fn();
         let agent_fn = self.get_agent_fn();
+        let async_tracker =
+            lock_read(&self.async_tracker, "async_tracker").and_then(|slot| slot.clone());
+
+        // Stable-sort matched hooks by handler type for deterministic result aggregation.
+        // Command(0) > Webhook(1) > Prompt(2) > Agent(3) > Inline(4)
+        let mut matching = matching;
+        matching.sort_by_key(|h| match &h.handler {
+            HookHandler::Command { .. } => 0,
+            HookHandler::Webhook { .. } => 1,
+            HookHandler::Prompt { .. } => 2,
+            HookHandler::Agent { .. } => 3,
+            HookHandler::Inline => 4,
+        });
 
         // Execute all matching hooks in parallel
         let futures: Vec<_> = matching
@@ -236,14 +290,87 @@ impl HookRegistry {
                 let ctx = ctx.clone();
                 let model_call_fn = model_call_fn.clone();
                 let agent_fn = agent_fn.clone();
+                // Config-based async: background the hook immediately unless forced sync
+                // or SessionStart (always sync).
+                let should_background = hook.is_async
+                    && !hook.force_sync_execution
+                    && ctx.event_type != HookEventType::SessionStart;
                 // Use pre-computed inline result if available
                 let inline_result = inline_results.remove(&hook_name);
+                let async_tracker = async_tracker.clone();
                 async move {
+                    // If config-based async, return Async immediately
+                    if should_background {
+                        let task_id = format!("async-{}", uuid::Uuid::new_v4());
+                        info!(
+                            hook_name = %hook_name,
+                            task_id = %task_id,
+                            "Backgrounding config-async hook"
+                        );
+
+                        // Spawn the actual execution in a background task
+                        let bg_hook_name = hook_name.clone();
+                        let bg_task_id = task_id.clone();
+                        let bg_tracker = async_tracker.clone();
+                        tokio::spawn(async move {
+                            let start = Instant::now();
+                            let timeout = tokio::time::Duration::from_secs(timeout_secs as u64);
+                            let result = tokio::time::timeout(
+                                timeout,
+                                execute_handler(
+                                    &handler,
+                                    &ctx,
+                                    model_call_fn.as_ref(),
+                                    agent_fn.as_ref(),
+                                ),
+                            )
+                            .await;
+
+                            let duration_ms = start.elapsed().as_millis() as i64;
+                            match result {
+                                Ok((r, _suppress)) => {
+                                    info!(
+                                        hook_name = %bg_hook_name,
+                                        task_id = %bg_task_id,
+                                        duration_ms,
+                                        "Background hook completed"
+                                    );
+                                    // Deliver result to async tracker for system reminder delivery
+                                    if let Some(tracker) = bg_tracker {
+                                        tracker.complete(&bg_task_id, r);
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!(
+                                        hook_name = %bg_hook_name,
+                                        task_id = %bg_task_id,
+                                        timeout_secs,
+                                        "Background hook timed out"
+                                    );
+                                }
+                            }
+                        });
+
+                        return (
+                            HookOutcome {
+                                hook_name: hook_name.clone(),
+                                result: HookResult::Async {
+                                    task_id,
+                                    hook_name: hook_name.clone(),
+                                },
+                                duration_ms: 0,
+                                suppress_output: false,
+                            },
+                            false, // Don't remove one-shot hooks for async
+                            hook_name,
+                        );
+                    }
+
                     let start = Instant::now();
                     let timeout = tokio::time::Duration::from_secs(timeout_secs as u64);
                     let result = if let Some(r) = inline_result {
                         // Inline handler already executed synchronously
-                        Ok(r)
+                        Ok((r, false))
                     } else {
                         tokio::time::timeout(
                             timeout,
@@ -259,10 +386,10 @@ impl HookRegistry {
 
                     let duration_ms = start.elapsed().as_millis() as i64;
 
-                    let (result, is_success) = match result {
-                        Ok(r) => {
+                    let (result, is_success, suppress_output) = match result {
+                        Ok((r, suppress)) => {
                             let success = !matches!(r, HookResult::Reject { .. });
-                            (r, success)
+                            (r, success, suppress)
                         }
                         Err(_) => {
                             warn!(
@@ -270,7 +397,7 @@ impl HookRegistry {
                                 timeout_secs,
                                 "Hook timed out"
                             );
-                            (HookResult::Continue, false)
+                            (HookResult::Continue, false, false)
                         }
                     };
 
@@ -287,6 +414,7 @@ impl HookRegistry {
                             hook_name: hook_name.clone(),
                             result,
                             duration_ms,
+                            suppress_output,
                         },
                         once && is_success,
                         hook_name,
@@ -322,7 +450,7 @@ impl HookRegistry {
     /// preventing accidental removal of non-one-shot hooks with the same name.
     fn remove_once_hooks_by_name(&self, names: &[String]) {
         let names_set: HashSet<_> = names.iter().collect();
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             let before = hooks.len();
             hooks.retain(|h| !(h.once && names_set.contains(&h.name)));
             let removed = before - hooks.len();
@@ -334,7 +462,7 @@ impl HookRegistry {
             }
         }
         // Also clean up inline handlers for removed one-shot hooks
-        if let Ok(mut handlers) = self.inline_handlers.write() {
+        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
             for name in names {
                 handlers.remove(name);
             }
@@ -344,7 +472,7 @@ impl HookRegistry {
     /// Removes all hooks from a specific source (e.g., when a skill ends).
     pub fn remove_hooks_by_source_name(&self, source_name: &str) {
         let mut removed_names = Vec::new();
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             let before = hooks.len();
             hooks.retain(|h| {
                 if h.source.name() == Some(source_name) {
@@ -367,7 +495,7 @@ impl HookRegistry {
         }
         // Clean up inline handlers for removed hooks
         if !removed_names.is_empty() {
-            if let Ok(mut handlers) = self.inline_handlers.write() {
+            if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
                 for name in &removed_names {
                     handlers.remove(name);
                 }
@@ -377,7 +505,7 @@ impl HookRegistry {
 
     /// Removes all hooks with the specified scope.
     pub fn remove_hooks_by_scope(&self, scope: crate::scope::HookScope) {
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             let before = hooks.len();
             hooks.retain(|h| h.source.scope() != scope);
             let removed = before - hooks.len();
@@ -389,17 +517,19 @@ impl HookRegistry {
 
     /// Removes all registered hooks.
     pub fn clear(&self) {
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             hooks.clear();
         }
-        if let Ok(mut handlers) = self.inline_handlers.write() {
+        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
             handlers.clear();
         }
     }
 
     /// Returns the number of registered hooks.
     pub fn len(&self) -> usize {
-        self.hooks.read().map(|h| h.len()).unwrap_or(0)
+        lock_read(&self.hooks, "hooks")
+            .map(|h| h.len())
+            .unwrap_or(0)
     }
 
     /// Returns `true` if no hooks are registered.
@@ -409,7 +539,9 @@ impl HookRegistry {
 
     /// Returns a copy of all registered hooks.
     pub fn all_hooks(&self) -> Vec<HookDefinition> {
-        self.hooks.read().map(|h| h.clone()).unwrap_or_default()
+        lock_read(&self.hooks, "hooks")
+            .map(|h| h.clone())
+            .unwrap_or_default()
     }
 
     /// Registers a group of hooks with a shared group ID.
@@ -417,7 +549,7 @@ impl HookRegistry {
     /// Used by subagent hooks: all hooks in the group share the same
     /// `group_id` so they can be unregistered together when the agent completes.
     pub fn register_group(&self, group_id: &str, hooks: impl IntoIterator<Item = HookDefinition>) {
-        if let Ok(mut all) = self.hooks.write() {
+        if let Some(mut all) = lock_write(&self.hooks, "hooks") {
             for mut hook in hooks {
                 hook.group_id = Some(group_id.to_string());
                 info!(
@@ -435,7 +567,7 @@ impl HookRegistry {
     ///
     /// Used to clean up subagent hooks when the agent completes.
     pub fn unregister_group(&self, group_id: &str) {
-        if let Ok(mut hooks) = self.hooks.write() {
+        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
             let before = hooks.len();
             hooks.retain(|h| h.group_id.as_deref() != Some(group_id));
             let removed = before - hooks.len();
@@ -447,19 +579,22 @@ impl HookRegistry {
 }
 
 /// Dispatches execution to the appropriate handler.
+///
+/// Returns `(result, suppress_output)`. The `suppress_output` flag is only set
+/// by Command and Webhook handlers (which can parse `HookOutput.suppressOutput`).
 async fn execute_handler(
     handler: &HookHandler,
     ctx: &HookContext,
     model_call_fn: Option<&HookModelCallFn>,
     agent_fn: Option<&HookAgentFn>,
-) -> HookResult {
+) -> (HookResult, bool) {
     match handler {
         HookHandler::Command { command } => {
             // Pass full HookContext to command handler for env vars and stdin JSON
             handlers::command::CommandHandler::execute(command, ctx).await
         }
         HookHandler::Prompt { template, model } => {
-            if model.is_some() {
+            let result = if model.is_some() {
                 // LLM verification mode: query the model via callback
                 if let Some(call_fn) = model_call_fn {
                     let config = handlers::prompt::PromptVerificationConfig::default();
@@ -496,12 +631,13 @@ async fn execute_handler(
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
                 handlers::prompt::PromptHandler::execute(template, &arguments)
-            }
+            };
+            (result, false)
         }
         HookHandler::Agent {
             max_turns, prompt, ..
         } => {
-            if let Some(spawn_fn) = agent_fn {
+            let result = if let Some(spawn_fn) = agent_fn {
                 // Real agent execution via callback
                 let (config, default_prompt) =
                     handlers::agent::AgentHandler::prepare_verification_request(ctx, *max_turns);
@@ -532,14 +668,27 @@ async fn execute_handler(
             } else {
                 // No agent callback — stub behavior
                 handlers::agent::AgentHandler::execute(*max_turns)
-            }
+            };
+            (result, false)
         }
-        HookHandler::Webhook { url } => handlers::webhook::WebhookHandler::execute(url, ctx).await,
+        HookHandler::Webhook {
+            url,
+            timeout,
+            headers,
+        } => {
+            handlers::webhook::WebhookHandler::execute_with_options(
+                url,
+                ctx,
+                timeout.map(|t| t as u64),
+                headers,
+            )
+            .await
+        }
         HookHandler::Inline => {
             // Inline handlers are pre-executed synchronously in execute().
             // If we reach here, no inline handler was registered for this hook.
             warn!("Inline hook definition has no registered handler closure");
-            HookResult::Continue
+            (HookResult::Continue, false)
         }
     }
 }

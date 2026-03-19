@@ -373,6 +373,7 @@ impl SessionState {
         let hook_settings = cocode_hooks::HookSettings {
             disable_all_hooks: config.disable_all_hooks,
             allow_managed_hooks_only: config.allow_managed_hooks_only,
+            workspace_trusted: true,
         };
 
         let mut aggregator = cocode_hooks::HookAggregator::new();
@@ -862,6 +863,7 @@ impl SessionState {
                             team_name: None,
                             mode: None,
                             cwd: None,
+                            description: None,
                         };
                         let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
                         Ok(result.output.unwrap_or_default())
@@ -890,6 +892,7 @@ impl SessionState {
                             team_name: None,
                             mode: None,
                             cwd: None,
+                            description: None,
                         };
                         let result = spawn_fn(input).await.map_err(|e| e.to_string())?;
                         Ok(result.output.unwrap_or_default())
@@ -1117,6 +1120,12 @@ impl SessionState {
             run_in_background: Some(false),
             allowed_tools,
             resume_from: None,
+            name: None,
+            team_name: None,
+            mode: None,
+            cwd: None,
+            isolation_override: None,
+            description: None,
         };
 
         let mut mgr = self.subagent_manager.lock().await;
@@ -1945,11 +1954,8 @@ impl SessionState {
         use cocode_system_reminder::build_file_read_state_from_modifiers;
 
         // Build iterator of (tool_name, modifiers, turn_number, is_completed)
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
+        let state = build_file_read_state_from_modifiers(
+            self.message_history.turns().iter().flat_map(|turn| {
                 turn.tool_calls.iter().map(move |tc| {
                     (
                         tc.name.as_str(),
@@ -1958,10 +1964,9 @@ impl SessionState {
                         tc.status.is_terminal(),
                     )
                 })
-            })
-            .collect();
-
-        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+            }),
+            100,
+        );
         self.reminder_file_tracker_state = state;
     }
 
@@ -2019,7 +2024,7 @@ impl SessionState {
 
         // 1. Rebuild from retained history turns
         let retained_turns = self.message_history.turns();
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> =
+        let rebuilt = build_file_read_state_from_modifiers(
             retained_turns
                 .iter()
                 .filter(|turn| turn.number < boundary_turn)
@@ -2032,9 +2037,9 @@ impl SessionState {
                             tc.status.is_terminal(),
                         )
                     })
-                })
-                .collect();
-        let rebuilt = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+                }),
+            100,
+        );
 
         // 2. Prune existing state: keep entries before boundary, filter internal files
         let plan_path = self.plan_mode_state.plan_file_path.as_ref();
@@ -2043,7 +2048,7 @@ impl SessionState {
             .iter()
             .filter(|(_, s)| s.read_turn < boundary_turn)
             .filter(|(p, _)| {
-                !should_skip_tracked_file(p, plan_path.map(|v| v.as_path()), None, &[])
+                !should_skip_tracked_file(p, plan_path.map(std::path::PathBuf::as_path), None, &[])
             })
             .cloned()
             .collect();
@@ -2067,11 +2072,8 @@ impl SessionState {
         use cocode_system_reminder::build_file_read_state_from_modifiers;
         use cocode_system_reminder::should_skip_tracked_file;
 
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
+        let state = build_file_read_state_from_modifiers(
+            self.message_history.turns().iter().flat_map(|turn| {
                 turn.tool_calls.iter().map(move |tc| {
                     (
                         tc.name.as_str(),
@@ -2080,18 +2082,17 @@ impl SessionState {
                         tc.status.is_terminal(),
                     )
                 })
-            })
-            .collect();
-
-        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+            }),
+            100,
+        );
         let plan_path = self.plan_mode_state.plan_file_path.as_ref();
         self.reminder_file_tracker_state = state
             .into_iter()
             .filter(|(p, _)| {
                 !should_skip_tracked_file(
                     p,
-                    plan_path.map(|v| v.as_path()),
-                    session_memory_path.map(|v| v.as_path()),
+                    plan_path.map(std::path::PathBuf::as_path),
+                    session_memory_path.map(std::path::PathBuf::as_path),
                     &[],
                 )
             })
@@ -2148,46 +2149,57 @@ impl SessionState {
             let parent_event_tx = parent_event_tx.clone();
 
             Box::pin(async move {
+                // ── CWD override from spawn input ──────────────────────
+                let base_working_dir = if let Some(ref cwd_override) = params.cwd {
+                    std::path::PathBuf::from(cwd_override)
+                } else {
+                    working_dir.clone()
+                };
+
                 // ── G5: Worktree isolation ──────────────────────────────
-                let (effective_working_dir, worktree_path) =
-                    if params.isolation == Some(IsolationMode::Worktree) {
-                        let wt_path = working_dir.join(".cocode").join("worktrees").join(format!(
+                let (effective_working_dir, worktree_path) = if params.isolation
+                    == Some(IsolationMode::Worktree)
+                {
+                    let wt_path = base_working_dir
+                        .join(".cocode")
+                        .join("worktrees")
+                        .join(format!(
                             "{}-{}",
                             params.agent_type,
                             uuid::Uuid::new_v4().simple()
                         ));
-                        let output = tokio::process::Command::new("git")
-                            .args(["worktree", "add", "--detach", &wt_path.to_string_lossy()])
-                            .current_dir(&working_dir)
-                            .output()
-                            .await;
-                        match output {
-                            Ok(o) if o.status.success() => {
-                                tracing::info!(
-                                    path = %wt_path.display(),
-                                    agent_type = %params.agent_type,
-                                    "Created git worktree for agent isolation"
-                                );
-                                (wt_path.clone(), Some(wt_path))
-                            }
-                            Ok(o) => {
-                                tracing::warn!(
-                                    stderr = %String::from_utf8_lossy(&o.stderr),
-                                    "Failed to create worktree, falling back to shared CWD"
-                                );
-                                (working_dir.clone(), None)
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "Failed to run git worktree command, falling back to shared CWD"
-                                );
-                                (working_dir.clone(), None)
-                            }
+                    let output = tokio::process::Command::new("git")
+                        .args(["worktree", "add", "--detach", &wt_path.to_string_lossy()])
+                        .current_dir(&base_working_dir)
+                        .output()
+                        .await;
+                    match output {
+                        Ok(o) if o.status.success() => {
+                            tracing::info!(
+                                path = %wt_path.display(),
+                                agent_type = %params.agent_type,
+                                "Created git worktree for agent isolation"
+                            );
+                            (wt_path.clone(), Some(wt_path))
                         }
-                    } else {
-                        (working_dir.clone(), None)
-                    };
+                        Ok(o) => {
+                            tracing::warn!(
+                                stderr = %String::from_utf8_lossy(&o.stderr),
+                                "Failed to create worktree, falling back to shared CWD"
+                            );
+                            (base_working_dir.clone(), None)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to run git worktree command, falling back to shared CWD"
+                            );
+                            (base_working_dir.clone(), None)
+                        }
+                    }
+                } else {
+                    (base_working_dir.clone(), None)
+                };
 
                 // Fork shell executor for isolated CWD tracking
                 let forked_shell = shell_executor.fork_for_subagent(effective_working_dir.clone());
@@ -2397,6 +2409,8 @@ impl SessionState {
                                 once: false,
                                 status_message: None,
                                 group_id: None, // set by register_group
+                                is_async: false,
+                                force_sync_execution: false,
                             })
                         })
                         .collect();
@@ -2441,13 +2455,35 @@ impl SessionState {
                     builder = builder.custom_system_prompt(custom_prompt.clone());
                 }
 
+                // Apply system prompt suffix (critical_reminder at system prompt level)
+                if let Some(ref suffix) = params.system_prompt_suffix {
+                    builder = builder.system_prompt_suffix(suffix.clone());
+                }
+
                 // Fork parent context if requested
                 if params.fork_context {
                     builder = builder.message_history(message_history.clone());
                 }
 
                 let mut loop_instance = builder.build();
-                let result = loop_instance.run(&effective_prompt).await;
+
+                // ── Agent identity propagation ─────────────────────────
+                let parent = cocode_subagent::current_agent();
+                let parent_id = parent.as_ref().map(|a| a.agent_id.clone());
+                let parent_depth = parent.as_ref().map_or(0, |a| a.depth);
+                let identity = cocode_subagent::AgentIdentity {
+                    agent_id: uuid::Uuid::new_v4().to_string(),
+                    agent_type: params.agent_type.clone(),
+                    parent_agent_id: parent_id,
+                    depth: parent_depth + 1,
+                    name: params.name.clone(),
+                    team_name: None,
+                    color: params.color.clone(),
+                    plan_mode_required: params.plan_mode_required,
+                };
+                let result = cocode_subagent::CURRENT_AGENT
+                    .scope(identity, loop_instance.run(&effective_prompt))
+                    .await;
 
                 // ── G3: Unregister agent-scoped hooks ──────────────────
                 if has_agent_hooks {
@@ -2462,7 +2498,7 @@ impl SessionState {
                 if let Some(ref wt_path) = worktree_path {
                     let remove_output = tokio::process::Command::new("git")
                         .args(["worktree", "remove", "--force", &wt_path.to_string_lossy()])
-                        .current_dir(&working_dir)
+                        .current_dir(&base_working_dir)
                         .output()
                         .await;
                     match remove_output {
@@ -2564,6 +2600,12 @@ impl SessionState {
                     run_in_background: input.run_in_background,
                     allowed_tools: input.allowed_tools,
                     resume_from: input.resume_from,
+                    name: input.name,
+                    team_name: input.team_name,
+                    mode: input.mode,
+                    cwd: input.cwd,
+                    isolation_override: input.isolation,
+                    description: input.description,
                 };
 
                 let mut mgr = subagent_manager.lock().await;
@@ -2698,10 +2740,7 @@ impl SessionState {
         // each message ("Please address this message and continue").
         // The shared Arc<Mutex> means any commands queued by the TUI driver during
         // the turn are visible to the loop immediately — no take-back needed.
-        let result = loop_instance
-            .run_and_process_queue(user_input)
-            .await
-            .map_err(boxed_err)?;
+        let result = loop_instance.run(user_input).await.map_err(boxed_err)?;
 
         // Extract todos state from the loop
         if let Some(todos) = loop_instance.take_todos() {
@@ -3041,6 +3080,8 @@ fn convert_config_hooks(
                     once,
                     status_message,
                     group_id: None,
+                    is_async: false,
+                    force_sync_execution: false,
                 });
             }
         }

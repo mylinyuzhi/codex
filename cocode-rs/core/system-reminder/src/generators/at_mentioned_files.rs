@@ -185,7 +185,7 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                 Err(e) => {
                     // Handle directories
                     if resolved_path.is_dir() {
-                        match list_directory(&resolved_path) {
+                        match list_directory(resolved_path) {
                             Ok(listing) => {
                                 content.push_str(&format!(
                                     "Called the Read tool with the following input: {{\"file_path\":\"{file_path_str}\"}}\n"

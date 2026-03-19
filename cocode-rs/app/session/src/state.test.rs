@@ -222,6 +222,7 @@ fn test_rebuild_file_tracker_from_modifiers() {
     use cocode_protocol::ContextModifier;
     use cocode_protocol::FileReadKind;
     use cocode_system_reminder::build_file_read_state_from_modifiers;
+    use std::path::Path;
     use std::path::PathBuf;
 
     // Create tool call modifiers
@@ -251,18 +252,14 @@ fn test_rebuild_file_tracker_from_modifiers() {
     assert_eq!(state.len(), 2);
 
     // Find file1 (full content)
-    let file1 = state
-        .iter()
-        .find(|(p, _)| *p == PathBuf::from("/file1.txt"));
+    let file1 = state.iter().find(|(p, _)| p == Path::new("/file1.txt"));
     assert!(file1.is_some());
     let (_, state1) = file1.unwrap();
     assert!(!state1.is_partial());
     assert_eq!(state1.content.as_deref(), Some("content1"));
 
     // Find file2 (partial content)
-    let file2 = state
-        .iter()
-        .find(|(p, _)| *p == PathBuf::from("/file2.txt"));
+    let file2 = state.iter().find(|(p, _)| p == Path::new("/file2.txt"));
     assert!(file2.is_some());
     let (_, state2) = file2.unwrap();
     assert!(state2.is_partial());

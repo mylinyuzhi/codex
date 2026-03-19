@@ -8,6 +8,7 @@ use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use cocode_skill::SkillContext;
 use cocode_skill::register_skill_hooks;
@@ -68,6 +69,36 @@ impl Tool for SkillTool {
         false
     }
 
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        // Auto-allow skills that have no unsafe properties (no allowed_tools, no hooks).
+        // Skills with tool restrictions or hooks need user approval.
+        let skill_name = match input["skill"].as_str() {
+            Some(name) => name,
+            None => return PermissionResult::Passthrough,
+        };
+
+        let skill = match ctx
+            .skill_manager
+            .as_ref()
+            .and_then(|sm| sm.find_by_name_or_alias(skill_name))
+        {
+            Some(s) => s,
+            None => return PermissionResult::Passthrough,
+        };
+
+        let has_allowed_tools = skill.allowed_tools.is_some();
+        let has_hooks = skill
+            .interface
+            .as_ref()
+            .is_some_and(|i| i.hooks.as_ref().is_some_and(|h| !h.is_empty()));
+
+        if !has_allowed_tools && !has_hooks {
+            PermissionResult::Allowed
+        } else {
+            PermissionResult::Passthrough
+        }
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let skill_name = input["skill"].as_str().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {
@@ -105,22 +136,13 @@ impl Tool for SkillTool {
             )));
         }
 
-        // Build the prompt with argument substitution
-        let mut prompt = if skill.prompt.contains("$ARGUMENTS") {
-            skill.prompt.replace("$ARGUMENTS", args)
-        } else if args.is_empty() {
-            skill.prompt.clone()
-        } else {
-            format!("{}\n\nArguments: {}", skill.prompt, args)
-        };
-
-        // Inject base directory prefix if available
-        if let Some(ref base_dir) = skill.base_dir {
-            prompt = format!(
-                "Base directory for this skill: {}\n\n{prompt}",
-                base_dir.display()
-            );
-        }
+        // Build the prompt with full argument substitution (shared with execute_skill)
+        let prompt = cocode_skill::substitute_skill_args(
+            &skill.prompt,
+            args,
+            skill.arguments.as_deref(),
+            skill.base_dir.as_deref(),
+        );
 
         // Check for fork context — spawn subagent instead of inline execution
         if skill.context == SkillContext::Fork {
@@ -141,6 +163,7 @@ impl Tool for SkillTool {
                     team_name: None,
                     mode: None,
                     cwd: None,
+                    description: None,
                 };
 
                 // Emit SubagentSpawned event for TUI visibility
@@ -194,13 +217,20 @@ impl Tool for SkillTool {
                     tracing::debug!(skill_name, hook_count, "Registered skill hooks");
                 }
             }
-
-            // Track the invoked skill for later cleanup
-            ctx.invoked_skills.lock().await.push(InvokedSkill {
-                name: skill_name.to_string(),
-                started_at: Instant::now(),
-            });
         }
+
+        // Record usage for scoring
+        if let Some(ref tracker) = ctx.skill_usage_tracker {
+            tracker.track(skill_name);
+        }
+
+        // Track every inline invocation for system reminder injection
+        ctx.invoked_skills.lock().await.push(InvokedSkill {
+            name: skill_name.to_string(),
+            started_at: Instant::now(),
+            prompt_content: prompt.clone(),
+            path: skill.base_dir.clone(),
+        });
 
         // Build the output with optional tool restriction modifier
         let mut output = ToolOutput::text(format!(
@@ -216,6 +246,19 @@ impl Tool for SkillTool {
                     skill_name: skill_name.to_string(),
                     allowed_tools: allowed_tools.clone(),
                 });
+        }
+
+        // For inline skills with a model override, emit a ModelOverride modifier
+        // (fork context handles model via SpawnAgentInput.model)
+        if skill.context != SkillContext::Fork {
+            if let Some(ref model) = skill.model {
+                output
+                    .modifiers
+                    .push(cocode_protocol::ContextModifier::ModelOverride {
+                        model: model.clone(),
+                        skill_name: skill_name.to_string(),
+                    });
+            }
         }
 
         Ok(output)

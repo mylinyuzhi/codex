@@ -104,6 +104,18 @@ pub struct SkillPromptCommand {
     #[serde(default)]
     pub aliases: Vec<String>,
 
+    /// Version string for the skill (e.g., "1.0.0").
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Named argument definitions for structured argument parsing.
+    #[serde(default)]
+    pub arguments: Option<Vec<crate::interface::ArgumentDef>>,
+
+    /// Glob patterns that activate this skill conditionally.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+
     /// Optional interface with hook definitions.
     /// Populated from SKILL.md frontmatter when hooks are defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]

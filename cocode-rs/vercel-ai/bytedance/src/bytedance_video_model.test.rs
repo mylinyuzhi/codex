@@ -8,7 +8,7 @@ fn make_config() -> ByteDanceVideoModelConfig {
     ByteDanceVideoModelConfig {
         provider: "bytedance".to_string(),
         base_url: "https://ark.ap-southeast.bytepluses.com/api/v3".to_string(),
-        headers: Arc::new(|| HashMap::new()),
+        headers: Arc::new(HashMap::new),
         client: None,
         poll_interval: None,
         poll_timeout: None,

@@ -71,7 +71,7 @@ fn headers_include_anthropic_version() {
     let config = provider.make_config();
     let headers = config.get_headers();
     assert_eq!(
-        headers.get("anthropic-version").map(|s| s.as_str()),
+        headers.get("anthropic-version").map(String::as_str),
         Some("2023-06-01")
     );
 }
@@ -85,7 +85,7 @@ fn headers_use_x_api_key_by_default() {
     let config = provider.make_config();
     let headers = config.get_headers();
     assert_eq!(
-        headers.get("x-api-key").map(|s| s.as_str()),
+        headers.get("x-api-key").map(String::as_str),
         Some("sk-ant-123")
     );
     assert!(!headers.contains_key("Authorization"));
@@ -100,7 +100,7 @@ fn headers_use_bearer_when_auth_token_provided() {
     let config = provider.make_config();
     let headers = config.get_headers();
     assert_eq!(
-        headers.get("Authorization").map(|s| s.as_str()),
+        headers.get("Authorization").map(String::as_str),
         Some("Bearer my-token")
     );
     assert!(!headers.contains_key("x-api-key"));
@@ -118,7 +118,7 @@ fn custom_headers_override_defaults() {
     let config = provider.make_config();
     let headers = config.get_headers();
     assert_eq!(
-        headers.get("anthropic-version").map(|s| s.as_str()),
+        headers.get("anthropic-version").map(String::as_str),
         Some("2024-01-01")
     );
 }

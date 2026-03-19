@@ -126,7 +126,7 @@ fn parse_simple_interval(input: &str) -> Option<String> {
         b's' => {
             // Seconds: minimum granularity is 1 minute for cron, round up
             // For <60s, use every-minute; for >=60s, convert to minutes
-            let mins = (value + 59) / 60; // round up
+            let mins = value.div_ceil(60);
             if mins >= 60 {
                 Some("0 * * * *".to_string()) // every hour
             } else {
@@ -214,10 +214,10 @@ fn validate_cron_field(field: &str, min: u32, max: u32) -> bool {
 
         if range_part == "*" || range_part == "?" {
             // Wildcard — valid. Step (if any) must fit within range.
-            if let Some(s) = step {
-                if s > max - min + 1 {
-                    return false;
-                }
+            if let Some(s) = step
+                && s > max - min + 1
+            {
+                return false;
             }
             continue;
         }

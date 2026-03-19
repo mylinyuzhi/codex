@@ -22,6 +22,18 @@ fn test_register_and_complete() {
 }
 
 #[test]
+fn test_register_with_custom_timeout() {
+    let tracker = AsyncHookTracker::new();
+
+    tracker.register_with_timeout("task-1".to_string(), "hook".to_string(), 60);
+    assert_eq!(tracker.pending_count(), 1);
+
+    // Should not be expired immediately
+    let expired = tracker.check_expired();
+    assert!(expired.is_empty());
+}
+
+#[test]
 fn test_complete_with_reject() {
     let tracker = AsyncHookTracker::new();
 
@@ -51,6 +63,7 @@ fn test_complete_with_context() {
         "task-1",
         HookResult::ContinueWithContext {
             additional_context: Some("Extra info".to_string()),
+            env_vars: std::collections::HashMap::new(),
         },
     );
 
@@ -89,6 +102,42 @@ fn test_cancel_unknown() {
     let tracker = AsyncHookTracker::new();
     let cancelled = tracker.cancel("unknown");
     assert!(!cancelled);
+}
+
+#[test]
+fn test_cancel_all() {
+    let tracker = AsyncHookTracker::new();
+
+    tracker.register("task-1".to_string(), "hook-1".to_string());
+    tracker.register("task-2".to_string(), "hook-2".to_string());
+    tracker.register("task-3".to_string(), "hook-3".to_string());
+
+    assert_eq!(tracker.pending_count(), 3);
+
+    let cancelled = tracker.cancel_all();
+    assert_eq!(cancelled, 3);
+    assert_eq!(tracker.pending_count(), 0);
+}
+
+#[test]
+fn test_cancel_all_empty() {
+    let tracker = AsyncHookTracker::new();
+    let cancelled = tracker.cancel_all();
+    assert_eq!(cancelled, 0);
+}
+
+#[test]
+fn test_check_expired_with_zero_timeout() {
+    let tracker = AsyncHookTracker::new();
+
+    // Register with zero timeout — should be expired once any time passes
+    tracker.register_with_timeout("task-1".to_string(), "hook".to_string(), 0);
+
+    // Sleep long enough that elapsed().as_secs() >= 0 (which is always true)
+    // The check is `>=`, so a 0-timeout hook is expired immediately.
+    let expired = tracker.check_expired();
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0], "task-1");
 }
 
 #[test]
