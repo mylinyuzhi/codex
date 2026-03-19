@@ -136,14 +136,18 @@ fn test_auto_compact_target() {
     assert_eq!(target, 160000);
 
     // Without percentage override, target = available - min_tokens_to_preserve
-    let mut config_no_pct = CompactConfig::default();
-    config_no_pct.auto_compact_pct = None;
+    let config_no_pct = CompactConfig {
+        auto_compact_pct: None,
+        ..CompactConfig::default()
+    };
     let target = config_no_pct.auto_compact_target(available);
     assert_eq!(target, available - DEFAULT_MIN_TOKENS_TO_PRESERVE);
 
     // High percentage should be capped at available - min_tokens_to_preserve
-    let mut config_high_pct = CompactConfig::default();
-    config_high_pct.auto_compact_pct = Some(99);
+    let config_high_pct = CompactConfig {
+        auto_compact_pct: Some(99),
+        ..CompactConfig::default()
+    };
     let target = config_high_pct.auto_compact_target(available);
     // 99% = 198000, but capped at 200000 - 13000 = 187000
     assert_eq!(target, 187000);
@@ -159,8 +163,10 @@ fn test_blocking_limit() {
     assert_eq!(limit, available - DEFAULT_MIN_BLOCKING_OFFSET);
 
     // With override
-    let mut config_with_override = CompactConfig::default();
-    config_with_override.blocking_limit_override = Some(180000);
+    let config_with_override = CompactConfig {
+        blocking_limit_override: Some(180000),
+        ..CompactConfig::default()
+    };
     let limit = config_with_override.blocking_limit(available);
     assert_eq!(limit, 180000);
 }

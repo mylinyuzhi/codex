@@ -7,7 +7,7 @@ fn model_id_and_provider() {
         GoogleGenerativeAIEmbeddingModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );

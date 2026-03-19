@@ -1677,7 +1677,7 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
                 {
                     let input_text = block
                         .get("input")
-                        .map(|i| i.to_string())
+                        .map(ToString::to_string)
                         .unwrap_or_default();
                     let input_tokens = cocode_protocol::estimate_text_tokens(&input_text);
                     *tool_request_tokens.entry(name.to_string()).or_insert(0) += input_tokens;

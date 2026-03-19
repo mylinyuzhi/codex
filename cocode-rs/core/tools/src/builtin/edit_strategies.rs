@@ -330,10 +330,8 @@ pub fn pre_correct_escaping(old_string: &str, new_string: &str, content: &str) -
 
 /// Normalize Unicode smart/curly quotes to ASCII straight quotes.
 pub fn normalize_quotes(s: &str) -> String {
-    s.replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
-        .replace('\u{201C}', "\"")
-        .replace('\u{201D}', "\"")
+    s.replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201C}', '\u{201D}'], "\"")
 }
 
 /// Try matching after normalizing smart quotes to ASCII in both content and old_string.
@@ -357,10 +355,10 @@ pub fn try_quote_normalized_replace(
 
     // Fast path: normalized old_string matches original content directly
     // (common case: LLM sends smart quotes, file has straight quotes)
-    if norm_old != old_string {
-        if let result @ Some(_) = try_exact_replace(content, &norm_old, new_string, replace_all) {
-            return result;
-        }
+    if norm_old != old_string
+        && let result @ Some(_) = try_exact_replace(content, &norm_old, new_string, replace_all)
+    {
+        return result;
     }
 
     // Slow path: file has smart quotes — use char-level matching

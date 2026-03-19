@@ -517,17 +517,7 @@ fn test_truncate_sections_total_limit() {
     // Create multiple sections that together exceed total limit
     let section_content = "y".repeat(4000); // ~1333 tokens each
     let summary = format!(
-        "### S1\n{}\n### S2\n{}\n### S3\n{}\n### S4\n{}\n### S5\n{}\n### S6\n{}\n### S7\n{}\n### S8\n{}\n### S9\n{}\n### S10\n{}",
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
-        section_content,
+        "### S1\n{section_content}\n### S2\n{section_content}\n### S3\n{section_content}\n### S4\n{section_content}\n### S5\n{section_content}\n### S6\n{section_content}\n### S7\n{section_content}\n### S8\n{section_content}\n### S9\n{section_content}\n### S10\n{section_content}",
     );
     let result = truncate_sections(&summary, 2000, 12000);
     // Should not include all 10 sections (10 * ~1333 = ~13330 > 12000)

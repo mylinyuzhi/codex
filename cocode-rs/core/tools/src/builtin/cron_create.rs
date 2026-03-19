@@ -142,12 +142,11 @@ impl Tool for CronCreateTool {
         };
 
         // Persist durable jobs to disk
-        if input["durable"].as_bool().unwrap_or(false) {
-            if let Some(ref home) = ctx.cocode_home {
-                if let Err(e) = cron_state::save_durable_jobs(&self.store, home).await {
-                    tracing::warn!(error = %e, "Failed to save durable cron jobs");
-                }
-            }
+        if input["durable"].as_bool().unwrap_or(false)
+            && let Some(ref home) = ctx.cocode_home
+            && let Err(e) = cron_state::save_durable_jobs(&self.store, home).await
+        {
+            tracing::warn!(error = %e, "Failed to save durable cron jobs");
         }
 
         ctx.emit_progress(format!("Created cron job {job_id}: {schedule}"))

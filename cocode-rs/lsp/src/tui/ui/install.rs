@@ -31,12 +31,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(line.as_str().green().bold()));
         } else if line.starts_with("$") {
             // Command being executed
-            lines.push(Line::from(line.as_str().yellow()));
+            lines.push(Line::from(line.as_str().bold()));
         } else if line.starts_with("Added '") {
             // Config file updated
             lines.push(Line::from(line.as_str().green()));
         } else if line.starts_with("Warning:") {
-            lines.push(Line::from(line.as_str().yellow()));
+            lines.push(Line::from(line.as_str().magenta()));
         } else {
             lines.push(Line::from(line.as_str().dim()));
         }

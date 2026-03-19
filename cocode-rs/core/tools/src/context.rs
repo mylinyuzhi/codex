@@ -1045,7 +1045,10 @@ impl FileTracker {
     ///
     /// Pops LRU entries until the count is at most `max_entries`.
     pub fn enforce_entry_limit(&self, max_entries: usize) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.read_files.len() > max_entries {
             if let Some((_path, evicted)) = state.read_files.pop_lru() {
                 if let Some(content) = &evicted.content {
@@ -1108,10 +1111,10 @@ impl FileTracker {
         }
 
         // Auto memory files (MEMORY.md or project memory)
-        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-            if filename == "MEMORY.md" || filename.starts_with("memory-") {
-                return true;
-            }
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+            && (filename == "MEMORY.md" || filename.starts_with("memory-"))
+        {
+            return true;
         }
 
         // Tool result persistence files

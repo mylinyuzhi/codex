@@ -5,7 +5,7 @@ fn test_as_str_roundtrip() {
     for tool in ToolName::ALL {
         let s = tool.as_str();
         let parsed = ToolName::from_str(s);
-        assert_eq!(parsed, Some(*tool), "Failed to roundtrip {:?}", tool);
+        assert_eq!(parsed, Some(*tool), "Failed to roundtrip {tool:?}");
     }
 }
 

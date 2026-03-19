@@ -35,7 +35,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         // Severity indicator
         let severity_span = match diag.severity {
             DiagnosticSeverityLevel::Error => "E".red().bold(),
-            DiagnosticSeverityLevel::Warning => "W".yellow().bold(),
+            DiagnosticSeverityLevel::Warning => "W".magenta().bold(),
             DiagnosticSeverityLevel::Info => "I".cyan(),
             DiagnosticSeverityLevel::Hint => "H".dim(),
         };

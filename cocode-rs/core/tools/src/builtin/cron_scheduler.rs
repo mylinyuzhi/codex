@@ -60,12 +60,11 @@ impl CronScheduler {
                 let now = Local::now();
                 let had_removals = Self::check_and_fire(&store, &on_fire, now).await;
                 // Persist durable jobs if any one-shot jobs were removed
-                if had_removals {
-                    if let Some(ref home) = cocode_home {
-                        if let Err(e) = super::cron_state::save_durable_jobs(&store, home).await {
-                            tracing::warn!(error = %e, "Failed to save durable cron jobs after scheduler tick");
-                        }
-                    }
+                if had_removals
+                    && let Some(ref home) = cocode_home
+                    && let Err(e) = super::cron_state::save_durable_jobs(&store, home).await
+                {
+                    tracing::warn!(error = %e, "Failed to save durable cron jobs after scheduler tick");
                 }
             }
         });

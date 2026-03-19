@@ -117,7 +117,7 @@ pub async fn run_usage(model: &Arc<dyn LanguageModelV4>) -> Result<()> {
     let usage = snapshot
         .usage
         .as_ref()
-        .expect("Expected usage in completed snapshot");
+        .ok_or_else(|| anyhow::anyhow!("Expected usage in completed snapshot"))?;
     assert!(
         usage.total_input_tokens() > 0,
         "Expected non-zero input tokens"

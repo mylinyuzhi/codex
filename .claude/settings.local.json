@@ -1,4 +1,18 @@
 {
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /lyz/codespace/codex/.claude/scripts/rust-quality-check.sh",
+            "timeout": 600,
+            "statusMessage": "Running Rust quality checks (fmt + check + clippy + test)..."
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "WebSearch",

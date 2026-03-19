@@ -894,7 +894,7 @@ fn tool_result_content_image_data() {
         provider_options: None,
     }];
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
-    assert!(warnings.is_empty(), "{:?}", warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
     let content = messages[0]["content"].as_array().unwrap();
     let parts = content[0]["content"].as_array().unwrap();
     assert_eq!(parts[0]["type"], "image");
@@ -924,7 +924,7 @@ fn tool_result_content_image_url() {
         provider_options: None,
     }];
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
-    assert!(warnings.is_empty(), "{:?}", warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
     let parts = messages[0]["content"].as_array().unwrap()[0]["content"]
         .as_array()
         .unwrap();
@@ -954,7 +954,7 @@ fn tool_result_content_file_url() {
         provider_options: None,
     }];
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
-    assert!(warnings.is_empty(), "{:?}", warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
     let parts = messages[0]["content"].as_array().unwrap()[0]["content"]
         .as_array()
         .unwrap();
@@ -1057,7 +1057,7 @@ fn tool_result_content_custom_tool_reference() {
         provider_options: None,
     }];
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
-    assert!(warnings.is_empty(), "{:?}", warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
     let parts = messages[0]["content"].as_array().unwrap()[0]["content"]
         .as_array()
         .unwrap();
@@ -1157,8 +1157,7 @@ fn contiguous_system_messages_no_warning() {
     let (_, _, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(
         warnings.is_empty(),
-        "should not warn for contiguous system messages: {:?}",
-        warnings
+        "should not warn for contiguous system messages: {warnings:?}",
     );
 }
 
@@ -1254,8 +1253,7 @@ fn reasoning_with_signature_does_not_warn() {
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(
         warnings.is_empty(),
-        "should not warn when signature present: {:?}",
-        warnings
+        "should not warn when signature present: {warnings:?}",
     );
     let content = messages[0]["content"].as_array().unwrap();
     assert_eq!(content[0]["type"], "thinking");
@@ -1279,8 +1277,7 @@ fn reasoning_with_redacted_data_does_not_warn() {
     let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(
         warnings.is_empty(),
-        "should not warn when redactedData present: {:?}",
-        warnings
+        "should not warn when redactedData present: {warnings:?}",
     );
     let content = messages[0]["content"].as_array().unwrap();
     assert_eq!(content[0]["type"], "redacted_thinking");

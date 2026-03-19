@@ -598,10 +598,8 @@ impl AgentLoopBuilder {
         // 3. This ensures consistency with both history and persisted state at startup
         let shared_tools_file_tracker = {
             let history_state = if let Some(ref mh) = self.message_history {
-                let tool_calls: Vec<(&str, &[ContextModifier], i32, bool)> = mh
-                    .turns()
-                    .iter()
-                    .flat_map(|turn| {
+                cocode_system_reminder::build_file_read_state_from_modifiers(
+                    mh.turns().iter().flat_map(|turn| {
                         turn.tool_calls.iter().map(move |tc| {
                             (
                                 tc.name.as_str(),
@@ -610,10 +608,7 @@ impl AgentLoopBuilder {
                                 tc.status.is_terminal(),
                             )
                         })
-                    })
-                    .collect();
-                cocode_system_reminder::build_file_read_state_from_modifiers(
-                    tool_calls.into_iter(),
+                    }),
                     crate::compaction::LRU_MAX_ENTRIES,
                 )
             } else {
@@ -1225,7 +1220,7 @@ impl AgentLoop {
         let user_prompt_text: Option<String> = self
             .message_history
             .current_turn()
-            .map(|turn| turn.user_message.text().to_string());
+            .map(|turn| turn.user_message.text());
 
         // Capture data needed for GeneratorContext before locking
         let is_main_agent = !self.is_subagent;
@@ -1961,10 +1956,7 @@ impl AgentLoop {
                 let messages = self.message_history.messages_for_api();
                 let conversation_text: String = messages
                     .iter()
-                    .map(|m| {
-                        let role = format!("{:?}", m.role).to_lowercase();
-                        format!("[{}]: {}", role, m.text())
-                    })
+                    .map(format_language_model_message)
                     .collect::<Vec<_>>()
                     .join("\n\n");
 
@@ -2793,10 +2785,7 @@ impl AgentLoop {
         let messages = self.message_history.messages_for_api();
         let conversation_text: String = messages
             .iter()
-            .map(|m| {
-                let role = format!("{:?}", m.role).to_lowercase();
-                format!("[{}]: {}", role, m.text())
-            })
+            .map(format_language_model_message)
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -3848,7 +3837,7 @@ impl AgentLoop {
                 ContextModifier::TeamsUpdated { teams } => {
                     // Teams state is tracked for potential future use
                     debug!(
-                        count = teams.as_object().map_or(0, |m| m.len()),
+                        count = teams.as_object().map_or(0, serde_json::Map::len),
                         "Applied TeamsUpdated modifier"
                     );
                 }
@@ -3990,6 +3979,46 @@ fn select_tools_for_model(
 
     // Wrap ToolDefinition (LanguageModelFunctionTool) into LanguageModelTool::Function
     defs.into_iter().map(LanguageModelTool::function).collect()
+}
+
+/// Format a `LanguageModelMessage` as `[role]: text` for conversation summaries.
+fn format_language_model_message(m: &LanguageModelMessage) -> String {
+    match m {
+        LanguageModelMessage::System { content, .. } => format!("[system]: {content}"),
+        LanguageModelMessage::User { content, .. } => {
+            let text: String = content
+                .iter()
+                .filter_map(|part| match part {
+                    cocode_api::UserContentPart::Text(tp) => Some(tp.text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[user]: {text}")
+        }
+        LanguageModelMessage::Assistant { content, .. } => {
+            let text: String = content
+                .iter()
+                .filter_map(|part| match part {
+                    AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[assistant]: {text}")
+        }
+        LanguageModelMessage::Tool { content, .. } => {
+            let text: String = content
+                .iter()
+                .filter_map(|part| match part {
+                    cocode_api::ToolContentPart::ToolResult(r) => Some(r.tool_name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[tool]: {text}")
+        }
+    }
 }
 
 #[cfg(test)]

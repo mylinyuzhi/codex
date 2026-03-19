@@ -62,7 +62,7 @@ fn test_filter_active_tools_no_filter() {
         LanguageModelV4FunctionTool::new("tool_a", serde_json::json!({})),
     )];
     let result = filter_active_tools(&Some(tools), &None);
-    assert_eq!(result.as_ref().map(|t| t.len()), Some(1));
+    assert_eq!(result.as_ref().map(Vec::len), Some(1));
 }
 
 #[test]
@@ -79,5 +79,5 @@ fn test_filter_active_tools_with_filter() {
     ];
     let active = vec!["tool_a".to_string()];
     let result = filter_active_tools(&Some(tools), &Some(active));
-    assert_eq!(result.as_ref().map(|t| t.len()), Some(1));
+    assert_eq!(result.as_ref().map(Vec::len), Some(1));
 }

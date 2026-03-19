@@ -150,10 +150,10 @@ impl Tool for TaskUpdateTool {
             })?;
 
             // Apply status update
-            if let Some(status_str) = input["status"].as_str() {
-                if let Some(new_status) = TaskStatus::parse(status_str) {
-                    task.status = new_status;
-                }
+            if let Some(status_str) = input["status"].as_str()
+                && let Some(new_status) = TaskStatus::parse(status_str)
+            {
+                task.status = new_status;
             }
 
             // Update other fields

@@ -8,7 +8,7 @@ fn gemini_model_detection() {
         GoogleGenerativeAIImageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );
@@ -24,7 +24,7 @@ fn imagen_model_detection() {
         GoogleGenerativeAIImageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );
@@ -42,7 +42,7 @@ fn custom_max_images() {
         GoogleGenerativeAIImageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );
@@ -57,7 +57,7 @@ fn model_id_and_provider() {
         GoogleGenerativeAIImageModelConfig {
             provider: "google.generative-ai".to_string(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );
@@ -74,7 +74,7 @@ fn gemini_model_prefix_detection() {
         GoogleGenerativeAIImageModelConfig {
             provider: "test".to_string(),
             base_url: "https://test".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );
@@ -87,7 +87,7 @@ fn gemini_model_prefix_detection() {
         GoogleGenerativeAIImageModelConfig {
             provider: "test".to_string(),
             base_url: "https://test".to_string(),
-            headers: Arc::new(|| HashMap::new()),
+            headers: Arc::new(HashMap::new),
             client: None,
         },
     );

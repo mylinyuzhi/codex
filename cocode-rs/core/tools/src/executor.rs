@@ -1412,11 +1412,10 @@ async fn run_post_hooks(
                 action = PostHookAction::ReplaceOutput(ToolOutput::text(text));
             }
             HookResult::ContinueWithContext {
-                additional_context, ..
+                additional_context: Some(ctx_str),
+                ..
             } => {
-                if let Some(ctx_str) = additional_context {
-                    additional_contexts.push(ctx_str);
-                }
+                additional_contexts.push(ctx_str);
             }
             HookResult::PreventContinuation { reason } => {
                 let reason_text = reason.unwrap_or_else(|| outcome.hook_name.clone());
@@ -1477,7 +1476,7 @@ async fn execute_tool(
 ///
 /// Delegates to the tool's own [`Tool::is_edit_tool`] declaration via registry lookup.
 fn is_edit_tool(registry: &ToolRegistry, name: &str) -> bool {
-    registry.get(name).map_or(false, |t| t.is_edit_tool())
+    registry.get(name).is_some_and(|t| t.is_edit_tool())
 }
 
 /// Check if a tool name is read-only or a plan mode control tool.
@@ -1494,11 +1493,11 @@ fn is_read_only_or_plan_tool(registry: &ToolRegistry, name: &str) -> bool {
         "TaskCreate",
         "TaskUpdate",
     ];
-    if PLAN_CONTROL.iter().any(|&t| t == name) {
+    if PLAN_CONTROL.contains(&name) {
         return true;
     }
     // Delegate to tool's own declaration
-    registry.get(name).map_or(false, |t| t.is_read_only())
+    registry.get(name).is_some_and(|t| t.is_read_only())
 }
 
 /// Extract file_path from tool input if present.
@@ -1948,13 +1947,12 @@ async fn execute_tool_inner(
     }
 
     // Pre-execute file backup (Tier 1 rewind)
-    if !tool.is_read_only() {
-        if let Some(ref backup_store) = ctx.file_backup_store
-            && let Some(file_path) = extract_file_path(&input)
-            && let Err(e) = backup_store.backup_before_modify(&file_path).await
-        {
-            tracing::warn!("File backup failed for {}: {e}", file_path.display());
-        }
+    if !tool.is_read_only()
+        && let Some(ref backup_store) = ctx.file_backup_store
+        && let Some(file_path) = extract_file_path(&input)
+        && let Err(e) = backup_store.backup_before_modify(&file_path).await
+    {
+        tracing::warn!("File backup failed for {}: {e}", file_path.display());
     }
 
     // Execute

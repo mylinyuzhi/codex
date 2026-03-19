@@ -100,7 +100,7 @@ pub fn build_file_read_state_from_modifiers<'a>(
             {
                 let entry = build_read_state_from_modifier(
                     content.clone(),
-                    file_mtime_ms.map(|ms| ms_to_system_time(ms)),
+                    file_mtime_ms.map(ms_to_system_time),
                     turn_number,
                     *offset,
                     *limit,

@@ -289,7 +289,7 @@ fn test_app_config_resolve_features_without_features() {
 
     // Should return defaults
     assert!(features.enabled(Feature::Ls));
-    assert!(!features.enabled(Feature::WebFetch));
+    assert!(features.enabled(Feature::WebFetch));
 }
 
 #[test]

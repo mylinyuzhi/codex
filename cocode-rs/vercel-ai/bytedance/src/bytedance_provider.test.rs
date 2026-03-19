@@ -84,8 +84,7 @@ fn language_model_returns_error() {
     let err = result.err().expect("should be an error");
     assert!(
         err.to_string().contains("does not support language models"),
-        "Error message was: {}",
-        err
+        "Error message was: {err}",
     );
 }
 
@@ -100,8 +99,7 @@ fn embedding_model_returns_error() {
     assert!(
         err.to_string()
             .contains("does not support embedding models"),
-        "Error message was: {}",
-        err
+        "Error message was: {err}",
     );
 }
 
@@ -115,7 +113,6 @@ fn image_model_returns_error() {
     let err = result.err().expect("should be an error");
     assert!(
         err.to_string().contains("does not support image models"),
-        "Error message was: {}",
-        err
+        "Error message was: {err}",
     );
 }

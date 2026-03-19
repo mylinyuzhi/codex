@@ -1945,11 +1945,8 @@ impl SessionState {
         use cocode_system_reminder::build_file_read_state_from_modifiers;
 
         // Build iterator of (tool_name, modifiers, turn_number, is_completed)
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
+        let state = build_file_read_state_from_modifiers(
+            self.message_history.turns().iter().flat_map(|turn| {
                 turn.tool_calls.iter().map(move |tc| {
                     (
                         tc.name.as_str(),
@@ -1958,10 +1955,9 @@ impl SessionState {
                         tc.status.is_terminal(),
                     )
                 })
-            })
-            .collect();
-
-        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+            }),
+            100,
+        );
         self.reminder_file_tracker_state = state;
     }
 
@@ -2019,7 +2015,7 @@ impl SessionState {
 
         // 1. Rebuild from retained history turns
         let retained_turns = self.message_history.turns();
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> =
+        let rebuilt = build_file_read_state_from_modifiers(
             retained_turns
                 .iter()
                 .filter(|turn| turn.number < boundary_turn)
@@ -2032,9 +2028,9 @@ impl SessionState {
                             tc.status.is_terminal(),
                         )
                     })
-                })
-                .collect();
-        let rebuilt = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+                }),
+            100,
+        );
 
         // 2. Prune existing state: keep entries before boundary, filter internal files
         let plan_path = self.plan_mode_state.plan_file_path.as_ref();
@@ -2043,7 +2039,7 @@ impl SessionState {
             .iter()
             .filter(|(_, s)| s.read_turn < boundary_turn)
             .filter(|(p, _)| {
-                !should_skip_tracked_file(p, plan_path.map(|v| v.as_path()), None, &[])
+                !should_skip_tracked_file(p, plan_path.map(std::path::PathBuf::as_path), None, &[])
             })
             .cloned()
             .collect();
@@ -2067,11 +2063,8 @@ impl SessionState {
         use cocode_system_reminder::build_file_read_state_from_modifiers;
         use cocode_system_reminder::should_skip_tracked_file;
 
-        let tool_calls: Vec<(&str, &[cocode_protocol::ContextModifier], i32, bool)> = self
-            .message_history
-            .turns()
-            .iter()
-            .flat_map(|turn| {
+        let state = build_file_read_state_from_modifiers(
+            self.message_history.turns().iter().flat_map(|turn| {
                 turn.tool_calls.iter().map(move |tc| {
                     (
                         tc.name.as_str(),
@@ -2080,18 +2073,17 @@ impl SessionState {
                         tc.status.is_terminal(),
                     )
                 })
-            })
-            .collect();
-
-        let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 100);
+            }),
+            100,
+        );
         let plan_path = self.plan_mode_state.plan_file_path.as_ref();
         self.reminder_file_tracker_state = state
             .into_iter()
             .filter(|(p, _)| {
                 !should_skip_tracked_file(
                     p,
-                    plan_path.map(|v| v.as_path()),
-                    session_memory_path.map(|v| v.as_path()),
+                    plan_path.map(std::path::PathBuf::as_path),
+                    session_memory_path.map(std::path::PathBuf::as_path),
                     &[],
                 )
             })
