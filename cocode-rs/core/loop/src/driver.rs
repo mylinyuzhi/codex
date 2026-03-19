@@ -160,6 +160,11 @@ pub struct AgentLoop {
     /// instead of the standard multi-section generated prompt. This allows agent definitions
     /// to provide focused, minimal prompts without inheriting the parent's full instructions.
     custom_system_prompt: Option<String>,
+    /// Optional suffix appended to the generated system prompt.
+    ///
+    /// Used for `critical_reminder` enforcement at system prompt level
+    /// (highest authority). Ignored when `custom_system_prompt` is set.
+    system_prompt_suffix: Option<String>,
     /// Whether the current turn has user input.
     /// When false, UserPrompt tier reminders are skipped.
     current_turn_has_user_input: bool,

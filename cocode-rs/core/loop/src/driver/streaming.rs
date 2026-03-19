@@ -341,7 +341,13 @@ impl AgentLoop {
         let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
             custom.clone()
         } else {
-            SystemPromptBuilder::build(&self.context)
+            let mut prompt = SystemPromptBuilder::build(&self.context);
+            // Append system prompt suffix (critical_reminder) for highest authority
+            if let Some(ref suffix) = self.system_prompt_suffix {
+                prompt.push_str("\n\n");
+                prompt.push_str(suffix);
+            }
+            prompt
         };
 
         // Get conversation messages

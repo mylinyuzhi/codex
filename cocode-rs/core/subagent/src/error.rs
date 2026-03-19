@@ -77,6 +77,13 @@ pub enum SubagentError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    #[snafu(display("Background agent limit reached ({limit} concurrent background agents)"))]
+    BackgroundLimit {
+        limit: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for SubagentError {
@@ -90,6 +97,7 @@ impl ErrorExt for SubagentError {
             SubagentError::AgentNotFound { .. } => StatusCode::InvalidArguments,
             SubagentError::AgentInvalidState { .. } => StatusCode::InvalidArguments,
             SubagentError::Execute { source, .. } => source.status_code(),
+            SubagentError::BackgroundLimit { .. } => StatusCode::ResourcesExhausted,
         }
     }
 

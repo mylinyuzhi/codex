@@ -13,6 +13,8 @@ fn create_test_subagents() -> Vec<SubagentInstance> {
                 message: Some("Reading files...".to_string()),
                 current_step: Some(2),
                 total_steps: Some(5),
+                summary: None,
+                activity: None,
             }),
             result: None,
             output_file: None,

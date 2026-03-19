@@ -17,6 +17,10 @@ pub struct SpawnAgentInput {
     /// Maximum number of turns the agent may execute.
     #[serde(default)]
     pub max_turns: Option<i32>,
+
+    /// Short description of what the agent will do (for TUI display).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[cfg(test)]

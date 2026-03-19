@@ -8,6 +8,7 @@ fn test_spawn_agent_input_defaults() {
     assert_eq!(input.prompt, "hello");
     assert!(input.tools.is_empty());
     assert!(input.max_turns.is_none());
+    assert!(input.description.is_none());
 }
 
 #[test]
@@ -17,6 +18,7 @@ fn test_spawn_agent_input_full() {
         prompt: "build feature".to_string(),
         tools: vec!["Bash".to_string(), "Edit".to_string()],
         max_turns: Some(20),
+        description: None,
     };
     let json = serde_json::to_string(&input).expect("serialize");
     let back: SpawnAgentInput = serde_json::from_str(&json).expect("deserialize");

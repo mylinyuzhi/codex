@@ -163,6 +163,7 @@ impl Tool for SkillTool {
                     team_name: None,
                     mode: None,
                     cwd: None,
+                    description: None,
                 };
 
                 // Emit SubagentSpawned event for TUI visibility
