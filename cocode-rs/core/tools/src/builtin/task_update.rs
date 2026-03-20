@@ -12,6 +12,18 @@ use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
+/// Which dependency array to modify on a related task.
+enum DepField {
+    Blocks,
+    BlockedBy,
+}
+
+/// Whether to add or remove the current task's ID.
+enum DepOp {
+    Add,
+    Remove,
+}
+
 pub struct TaskUpdateTool {
     store: StructuredTaskStore,
 }
@@ -111,48 +123,113 @@ impl Tool for TaskUpdateTool {
             .build()
         })?;
 
-        let snapshot = {
-            let mut store = self.store.lock().await;
-
-            // Validate status transition before mutating
-            if let Some(status_str) = input["status"].as_str() {
-                let new_status = TaskStatus::parse(status_str).ok_or_else(|| {
+        // Parse new status once (if provided) — reused for validation, hooks, and mutation.
+        let new_status = input["status"]
+            .as_str()
+            .map(|s| {
+                TaskStatus::parse(s).ok_or_else(|| {
                     crate::error::tool_error::InvalidInputSnafu {
-                        message: format!("Invalid status: {status_str}"),
+                        message: format!("Invalid status: {s}"),
                     }
                     .build()
-                })?;
+                })
+            })
+            .transpose()?;
 
-                // Enforce max 1 in_progress
-                if matches!(new_status, TaskStatus::InProgress) {
-                    let already_in_progress = store
-                        .get(id)
-                        .is_some_and(|t| matches!(t.status, TaskStatus::InProgress));
-                    if !already_in_progress
-                        && store
-                            .values()
-                            .any(|t| t.id != id && matches!(t.status, TaskStatus::InProgress))
-                    {
+        // Phase 4A: Execute TaskCompleted hooks BEFORE mutating the store.
+        // Hooks can reject the transition.
+        if matches!(new_status, Some(TaskStatus::Completed)) {
+            let subject = {
+                let store = self.store.lock().await;
+                store.get(id).map(|t| t.subject.clone()).unwrap_or_default()
+            };
+            if let Some(hooks) = &ctx.hook_registry {
+                let hook_ctx = cocode_hooks::HookContext::new(
+                    cocode_hooks::HookEventType::TaskCompleted,
+                    ctx.session_id.clone(),
+                    ctx.cwd.clone(),
+                )
+                .with_task_id(id)
+                .with_task_subject(&subject);
+                let outcomes = hooks.execute(&hook_ctx).await;
+                for outcome in &outcomes {
+                    if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
                         return Err(crate::error::tool_error::InvalidInputSnafu {
-                            message: "At most 1 task can be in_progress at a time",
+                            message: format!(
+                                "TaskCompleted hook '{}' rejected: {reason}",
+                                outcome.hook_name
+                            ),
                         }
                         .build());
                     }
                 }
             }
+        }
 
-            // Get mutable ref to the task (single borrow for all mutations)
-            let task = store.get_mut(id).ok_or_else(|| {
-                crate::error::tool_error::InvalidInputSnafu {
+        let snapshot = {
+            let mut store = self.store.lock().await;
+
+            // Validate status transition
+            if let Some(new_status) = new_status {
+                let current_status = store
+                    .get(id)
+                    .ok_or_else(|| {
+                        crate::error::tool_error::InvalidInputSnafu {
+                            message: format!("Task not found: {id}"),
+                        }
+                        .build()
+                    })?
+                    .status;
+
+                if !current_status.can_transition_to(new_status) {
+                    return Err(crate::error::tool_error::InvalidInputSnafu {
+                        message: format!(
+                            "Invalid status transition: {} → {}",
+                            current_status.as_str(),
+                            new_status.as_str()
+                        ),
+                    }
+                    .build());
+                }
+
+                // Enforce max 1 in_progress
+                if matches!(new_status, TaskStatus::InProgress)
+                    && !matches!(current_status, TaskStatus::InProgress)
+                    && store
+                        .values()
+                        .any(|t| t.id != id && matches!(t.status, TaskStatus::InProgress))
+                {
+                    return Err(crate::error::tool_error::InvalidInputSnafu {
+                        message: "At most 1 task can be in_progress at a time",
+                    }
+                    .build());
+                }
+            } else {
+                // Even without status change, ensure task exists
+                if !store.contains_key(id) {
+                    return Err(crate::error::tool_error::InvalidInputSnafu {
+                        message: format!("Task not found: {id}"),
+                    }
+                    .build());
+                }
+            }
+
+            // Collect bidirectional dependency changes to apply to other tasks.
+            // We'll collect (target_id, field, add_or_remove, this_task_id) tuples.
+            let id_owned = id.to_string();
+            let mut dep_changes: Vec<(String, DepField, DepOp)> = Vec::new();
+
+            // Get mutable ref to the primary task for all mutations.
+            // Safety: task existence was validated above.
+            let Some(task) = store.get_mut(id) else {
+                return Err(crate::error::tool_error::InvalidInputSnafu {
                     message: format!("Task not found: {id}"),
                 }
-                .build()
-            })?;
+                .build());
+            };
 
             // Apply status update
-            if let Some(status_str) = input["status"].as_str()
-                && let Some(new_status) = TaskStatus::parse(status_str)
-            {
+            if let Some(new_status) = new_status {
                 task.status = new_status;
             }
 
@@ -170,14 +247,16 @@ impl Tool for TaskUpdateTool {
                 task.owner = Some(owner.to_string());
             }
 
-            // Update dependencies
+            // Update dependencies (with bidirectional tracking)
             if let Some(add_blocks) = input["addBlocks"].as_array() {
                 for v in add_blocks {
                     if let Some(s) = v.as_str() {
                         let s = s.to_string();
                         if !task.blocks.contains(&s) {
-                            task.blocks.push(s);
+                            task.blocks.push(s.clone());
                         }
+                        // Inverse: add id to target's blocked_by
+                        dep_changes.push((s, DepField::BlockedBy, DepOp::Add));
                     }
                 }
             }
@@ -186,8 +265,10 @@ impl Tool for TaskUpdateTool {
                     if let Some(s) = v.as_str() {
                         let s = s.to_string();
                         if !task.blocked_by.contains(&s) {
-                            task.blocked_by.push(s);
+                            task.blocked_by.push(s.clone());
                         }
+                        // Inverse: add id to source's blocks
+                        dep_changes.push((s, DepField::Blocks, DepOp::Add));
                     }
                 }
             }
@@ -197,6 +278,10 @@ impl Tool for TaskUpdateTool {
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect();
                 task.blocks.retain(|b| !remove.contains(b));
+                for target in remove {
+                    // Inverse: remove id from target's blocked_by
+                    dep_changes.push((target, DepField::BlockedBy, DepOp::Remove));
+                }
             }
             if let Some(remove_blocked_by) = input["removeBlockedBy"].as_array() {
                 let remove: Vec<String> = remove_blocked_by
@@ -204,16 +289,61 @@ impl Tool for TaskUpdateTool {
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect();
                 task.blocked_by.retain(|b| !remove.contains(b));
+                for source in remove {
+                    // Inverse: remove id from source's blocks
+                    dep_changes.push((source, DepField::Blocks, DepOp::Remove));
+                }
             }
 
-            // Update metadata (merge)
+            // Update metadata (merge, with null key deletion)
             if let Some(meta) = input.get("metadata") {
                 if let (Value::Object(existing), Value::Object(new)) = (&mut task.metadata, meta) {
                     for (k, v) in new {
-                        existing.insert(k.clone(), v.clone());
+                        if v.is_null() {
+                            existing.remove(k);
+                        } else {
+                            existing.insert(k.clone(), v.clone());
+                        }
                     }
                 } else if !meta.is_null() {
                     task.metadata = meta.clone();
+                }
+            }
+
+            let is_deleted = matches!(new_status, Some(TaskStatus::Deleted));
+
+            // End mutable borrow on primary task before iterating other tasks
+            let _ = task;
+
+            // Apply bidirectional dependency changes to other tasks
+            for (target_id, field, op) in dep_changes {
+                if let Some(target) = store.get_mut(&target_id) {
+                    let arr = match field {
+                        DepField::Blocks => &mut target.blocks,
+                        DepField::BlockedBy => &mut target.blocked_by,
+                    };
+                    match op {
+                        DepOp::Add => {
+                            if !arr.contains(&id_owned) {
+                                arr.push(id_owned.clone());
+                            }
+                        }
+                        DepOp::Remove => {
+                            arr.retain(|x| x != &id_owned);
+                        }
+                    }
+                }
+            }
+
+            // Cascading cleanup on deletion: remove this task's ID from all
+            // other tasks' blocks/blocked_by arrays.
+            if is_deleted {
+                for (tid, other) in store.iter_mut() {
+                    if tid == id {
+                        continue;
+                    }
+                    other.blocks.retain(|x| x != id);
+                    other.blocked_by.retain(|x| x != id);
                 }
             }
 

@@ -62,39 +62,31 @@ impl Tool for TaskListTool {
 
         let store = self.store.lock().await;
 
+        // Build set of completed task IDs for smart blocker filtering
+        let completed_ids: std::collections::HashSet<String> = store
+            .values()
+            .filter(|t| matches!(t.status, structured_tasks::TaskStatus::Completed))
+            .map(|t| t.id.clone())
+            .collect();
+
         if status_filter == "all" {
-            // Show all non-deleted tasks
-            let summary = structured_tasks::format_task_summary(&store);
+            let summary =
+                structured_tasks::format_task_summary_filtered(&store, Some(&completed_ids));
             return Ok(ToolOutput::text(summary));
         }
 
-        // Filter by specific status — build summary directly to avoid cloning
+        // Filter by specific status using shared format_single_task
         let target_status = structured_tasks::TaskStatus::parse(status_filter);
         let mut summary = String::new();
-        let mut count = 0;
         for task in store.values() {
             if target_status.is_some_and(|s| task.status != s) {
                 continue;
             }
-            if matches!(task.status, structured_tasks::TaskStatus::Deleted) {
-                continue;
+            if let Some(line) = structured_tasks::format_single_task(task, Some(&completed_ids)) {
+                summary.push_str(&line);
             }
-            let marker = match task.status {
-                structured_tasks::TaskStatus::Completed => "[x]",
-                structured_tasks::TaskStatus::InProgress => "[>]",
-                structured_tasks::TaskStatus::Pending => "[ ]",
-                structured_tasks::TaskStatus::Deleted => continue,
-            };
-            summary.push_str(&format!("{marker} {}: {}\n", task.id, task.subject));
-            if !task.blocked_by.is_empty() {
-                summary.push_str(&format!("    blocked by: {}\n", task.blocked_by.join(", ")));
-            }
-            if !task.blocks.is_empty() {
-                summary.push_str(&format!("    blocks: {}\n", task.blocks.join(", ")));
-            }
-            count += 1;
         }
-        if count == 0 {
+        if summary.is_empty() {
             summary = "No tasks.".to_string();
         }
         Ok(ToolOutput::text(summary))

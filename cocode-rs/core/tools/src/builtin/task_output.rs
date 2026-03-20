@@ -86,44 +86,60 @@ impl Tool for TaskOutputTool {
             .is_running(task_id)
             .await;
 
+        // Resolve command name for richer headers
+        let command_label = ctx
+            .shell_executor
+            .background_registry
+            .get_command(task_id)
+            .await;
+
+        // Format header with optional command
+        let header = |status: &str| -> String {
+            match &command_label {
+                Some(cmd) => format!("Task {task_id} ({status}): {cmd}"),
+                None => format!("Task {task_id} ({status})"),
+            }
+        };
+
         if is_shell_running {
             // Shell task is running
             if block {
                 let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
-                let start = std::time::Instant::now();
 
-                loop {
-                    if ctx.is_cancelled() {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (cancelled):\n{output}"
-                        )));
+                // Use Notify-based waiting instead of polling
+                if let Some(notify) = ctx
+                    .shell_executor
+                    .background_registry
+                    .get_completed_notify(task_id)
+                    .await
+                {
+                    tokio::select! {
+                        _ = notify.notified() => { /* completed */ }
+                        _ = tokio::time::sleep(timeout_duration) => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header(&format!("still running, timeout after {timeout_ms}ms"))
+                            )));
+                        }
+                        _ = ctx.cancel_token.cancelled() => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header("cancelled")
+                            )));
+                        }
                     }
-                    if !ctx
-                        .shell_executor
-                        .background_registry
-                        .is_running(task_id)
-                        .await
-                    {
-                        break;
-                    }
-                    if start.elapsed() >= timeout_duration {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (still running, timeout after {timeout_ms}ms):\n{output}"
-                        )));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
 
@@ -143,12 +159,10 @@ impl Tool for TaskOutputTool {
             } else {
                 "completed"
             };
-            return Ok(ToolOutput::text(format!(
-                "Task {task_id} ({status}):\n{output}"
-            )));
+            return Ok(ToolOutput::text(format!("{}:\n{output}", header(status))));
         }
 
-        // Check if we can still get shell output (task may have completed)
+        // Check if we can still get shell output (task may have completed/stopped)
         if let Some(output) = ctx
             .shell_executor
             .background_registry
@@ -156,7 +170,8 @@ impl Tool for TaskOutputTool {
             .await
         {
             return Ok(ToolOutput::text(format!(
-                "Task {task_id} (completed):\n{output}"
+                "{}:\n{output}",
+                header("completed")
             )));
         }
 
@@ -226,17 +241,24 @@ impl Tool for TaskOutputTool {
 }
 
 /// Parse agent JSONL content and format as a ToolOutput.
+///
+/// Agent output files are JSONL (one JSON object per line). We parse the last
+/// non-empty line for final status. Falls back to single-JSON parsing for
+/// backward compatibility, then raw content.
 fn format_agent_output(task_id: &str, content: &str) -> ToolOutput {
-    if let Ok(entry) = serde_json::from_str::<serde_json::Value>(content) {
-        let status = entry["status"].as_str().unwrap_or("unknown");
-        let output = entry["output"]
-            .as_str()
-            .or_else(|| entry["error"].as_str())
-            .unwrap_or(content);
-        ToolOutput::text(format!("Agent {task_id} ({status}):\n{output}"))
-    } else {
-        ToolOutput::text(format!("Agent {task_id}:\n{content}"))
+    // Try JSONL: parse last non-empty line
+    let last_line = content.lines().rev().find(|l| !l.trim().is_empty());
+    if let Some(line) = last_line {
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            let status = entry["status"].as_str().unwrap_or("unknown");
+            let output = entry["output"]
+                .as_str()
+                .or_else(|| entry["error"].as_str())
+                .unwrap_or(content);
+            return ToolOutput::text(format!("Agent {task_id} ({status}):\n{output}"));
+        }
     }
+    ToolOutput::text(format!("Agent {task_id}:\n{content}"))
 }
 
 #[cfg(test)]
