@@ -6,7 +6,7 @@
 //!    for known safe commands without shell operators.
 //!
 //! 2. **Enhanced detection** (`analyze_command_safety`): Deep security analysis
-//!    using shell-parser that detects 14 different risk types across two phases.
+//!    using shell-parser that detects 24 different risk types across two phases.
 //!
 //! # Security Analysis
 //!
@@ -194,6 +194,20 @@ fn analyze_security_result(
         };
     }
 
+    // Deny-phase risks → always denied (injection vectors)
+    if analysis.is_auto_denied() {
+        let deny_risks: Vec<SecurityRisk> = analysis
+            .risks
+            .into_iter()
+            .filter(|r| r.phase == RiskPhase::Deny)
+            .collect();
+        let reasons: Vec<String> = deny_risks.iter().map(|r| r.message.clone()).collect();
+        return SafetyResult::Denied {
+            reason: reasons.join("; "),
+            risks: deny_risks,
+        };
+    }
+
     // Check if approval is required (Ask phase risks)
     if analysis.requires_approval() {
         return SafetyResult::RequiresApproval {
@@ -202,17 +216,8 @@ fn analyze_security_result(
         };
     }
 
-    // Has risks but all in Allow phase with low severity
-    // These are informational and don't require approval
-    let has_high_risk = analysis.risks.iter().any(|r| r.level >= RiskLevel::High);
-
-    if has_high_risk {
-        SafetyResult::RequiresApproval {
-            risks: analysis.risks,
-            max_level: analysis.max_level.unwrap_or(RiskLevel::Medium),
-        }
-    } else if cmd.try_extract_safe_commands().is_some() {
-        // Low/medium Allow-phase risks with safe command structure
+    // Remaining risks without Deny or Ask phase classification
+    if cmd.try_extract_safe_commands().is_some() {
         SafetyResult::Safe {
             via_whitelist: false,
         }
