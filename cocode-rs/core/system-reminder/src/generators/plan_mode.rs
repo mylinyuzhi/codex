@@ -319,6 +319,14 @@ Follow this 5-phase workflow:
 - Use ExitPlanMode when ready for user approval
 - This is critical — your turn should only end with either using the AskUserQuestion tool OR calling ExitPlanMode. Do not stop unless it's for these 2 reasons
 
+## Available Tools in Plan Mode
+
+Read-only tools you CAN use: Read, Glob, Grep, Bash (read-only commands like ls, git status, git log), WebFetch, WebSearch, LSP, AskUserQuestion, Task (Explore and Plan subagent types only)
+
+Write-only exception: Write and Edit tools ONLY for the plan file above.
+
+Tools you CANNOT use: Bash (write commands), Edit/Write (non-plan files), NotebookEdit, or any tool that modifies the system.
+
 ## Important
 
 - End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval)
@@ -386,6 +394,10 @@ Call ExitPlanMode when ready.
 Your turn should only end by either:
 - Using AskUserQuestion to gather more information
 - Calling ExitPlanMode when the plan is ready for approval
+
+## Available Tools in Plan Mode
+
+Read-only: Read, Glob, Grep, Bash (read-only commands only), WebFetch, WebSearch, LSP, AskUserQuestion, Task (Explore/Plan subagents only). Write/Edit ONLY for the plan file.
 
 **Important:** Use AskUserQuestion ONLY to clarify requirements or choose between approaches. Use ExitPlanMode to request plan approval. Do NOT ask about plan approval in any other way."#;
 

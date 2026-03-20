@@ -5,9 +5,9 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_plan_mode::is_safe_file;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use serde::Deserialize;
 use serde::Serialize;
@@ -254,6 +254,30 @@ impl Tool for NotebookEditTool {
         true
     }
 
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        if let Some(path_str) = input.get("notebook_path").and_then(|v| v.as_str()) {
+            let path = ctx.resolve_path(path_str);
+
+            if !ctx.plan_mode_allows_write(&path) {
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Plan mode: cannot edit '{}'. Only the plan file can be modified.",
+                        path.display()
+                    ),
+                };
+            }
+
+            // Auto-allow plan file writes (bypasses NeedsApproval and mode override)
+            if ctx.is_plan_mode
+                && cocode_plan_mode::is_safe_file(&path, ctx.plan_file_path.as_deref())
+            {
+                return PermissionResult::Allowed;
+            }
+        }
+
+        PermissionResult::Passthrough
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let notebook_path = input["notebook_path"].as_str().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {
@@ -292,7 +316,7 @@ impl Tool for NotebookEditTool {
         }
 
         // Plan mode check
-        if ctx.is_plan_mode && !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
+        if !ctx.plan_mode_allows_write(&path) {
             return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
                         "Plan mode: cannot edit '{}'. Only the plan file can be modified during plan mode.",

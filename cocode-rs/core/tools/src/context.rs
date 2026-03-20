@@ -1692,6 +1692,17 @@ impl ToolContext {
         self
     }
 
+    /// Check if a write to the given path is allowed in plan mode.
+    ///
+    /// Returns `true` if not in plan mode, or if the path is the plan file.
+    /// Returns `false` if in plan mode and the path is not the plan file.
+    pub fn plan_mode_allows_write(&self, path: &Path) -> bool {
+        if !self.is_plan_mode {
+            return true;
+        }
+        cocode_plan_mode::is_safe_file(path, self.plan_file_path.as_deref())
+    }
+
     /// Spawn a subagent using the configured callback.
     ///
     /// Returns an error if no spawn callback is configured.

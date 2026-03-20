@@ -13,7 +13,6 @@ use cocode_file_encoding::detect_line_ending;
 use cocode_file_encoding::normalize_line_endings;
 use cocode_file_encoding::preserve_trailing_newline;
 use cocode_file_encoding::write_with_format_async;
-use cocode_plan_mode::is_safe_file;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
@@ -97,16 +96,20 @@ impl Tool for WriteTool {
             }
 
             // Plan mode: only plan file allowed
-            if ctx.is_plan_mode
-                && let Some(ref plan_file) = ctx.plan_file_path
-                && path != *plan_file
-            {
+            if !ctx.plan_mode_allows_write(&path) {
                 return PermissionResult::Denied {
                     reason: format!(
                         "Plan mode: cannot write to '{}'. Only the plan file can be modified.",
                         path.display()
                     ),
                 };
+            }
+
+            // Auto-allow plan file writes (bypasses NeedsApproval and mode override)
+            if ctx.is_plan_mode
+                && cocode_plan_mode::is_safe_file(&path, ctx.plan_file_path.as_deref())
+            {
+                return PermissionResult::Allowed;
             }
 
             // Sensitive file → NeedsApproval (high severity)
@@ -194,7 +197,7 @@ impl Tool for WriteTool {
         let path = ctx.resolve_path(file_path);
 
         // Plan mode check: only allow writes to the plan file
-        if ctx.is_plan_mode && !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
+        if !ctx.plan_mode_allows_write(&path) {
             return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
                         "Plan mode: cannot write to '{}'. Only the plan file can be modified during plan mode.",

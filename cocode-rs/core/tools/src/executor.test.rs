@@ -768,6 +768,134 @@ fn test_permission_level_ordering() {
     assert!(PermissionLevel::Allow < PermissionLevel::Undefined);
 }
 
+// --- apply_permission_mode Plan mode tests ---
+
+/// A non-read-only tool for plan mode tests.
+struct WriteLikeTool;
+
+#[async_trait]
+impl Tool for WriteLikeTool {
+    fn name(&self) -> &str {
+        "write_like_tool"
+    }
+    fn description(&self) -> &str {
+        "A non-read-only tool"
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
+        Ok(ToolOutput::text("write result"))
+    }
+}
+
+#[test]
+fn test_plan_mode_respects_tool_allowed() {
+    let mut registry = ToolRegistry::new();
+    registry.register(WriteLikeTool);
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Allowed,
+        PermissionMode::Plan,
+        "write_like_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Plan mode should respect tool's explicit Allowed, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_plan_mode_denies_needs_approval() {
+    let mut registry = ToolRegistry::new();
+    registry.register(WriteLikeTool);
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::NeedsApproval {
+            request: cocode_protocol::ApprovalRequest {
+                request_id: "test".to_string(),
+                tool_name: "write_like_tool".to_string(),
+                description: "test".to_string(),
+                risks: vec![],
+                allow_remember: false,
+                proposed_prefix_pattern: None,
+            },
+        },
+        PermissionMode::Plan,
+        "write_like_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Plan mode should deny NeedsApproval for non-read-only tools, got: {result:?}"
+    );
+}
+
+// --- is_read_only_or_plan_tool tests ---
+
+/// A read-only tool for plan mode tests.
+struct ReadOnlyTool;
+
+#[async_trait]
+impl Tool for ReadOnlyTool {
+    fn name(&self) -> &str {
+        "read_only_tool"
+    }
+    fn description(&self) -> &str {
+        "A read-only tool"
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
+        Ok(ToolOutput::text("read result"))
+    }
+}
+
+#[test]
+fn test_is_read_only_or_plan_tool_plan_control_tools() {
+    let registry = ToolRegistry::new();
+
+    // Plan control tools should always return true, even without registry entries
+    assert!(is_read_only_or_plan_tool(&registry, "EnterPlanMode"));
+    assert!(is_read_only_or_plan_tool(&registry, "ExitPlanMode"));
+    assert!(is_read_only_or_plan_tool(&registry, "AskUserQuestion"));
+    assert!(is_read_only_or_plan_tool(&registry, "TodoWrite"));
+    assert!(is_read_only_or_plan_tool(&registry, "TaskCreate"));
+    assert!(is_read_only_or_plan_tool(&registry, "TaskUpdate"));
+}
+
+#[test]
+fn test_is_read_only_or_plan_tool_read_only() {
+    let mut registry = ToolRegistry::new();
+    registry.register(ReadOnlyTool);
+
+    assert!(is_read_only_or_plan_tool(&registry, "read_only_tool"));
+}
+
+#[test]
+fn test_is_read_only_or_plan_tool_non_read_only() {
+    let mut registry = ToolRegistry::new();
+    registry.register(WriteLikeTool);
+
+    assert!(!is_read_only_or_plan_tool(&registry, "write_like_tool"));
+}
+
+#[test]
+fn test_is_read_only_or_plan_tool_unknown() {
+    let registry = ToolRegistry::new();
+
+    // Unknown tools are not read-only or plan tools
+    assert!(!is_read_only_or_plan_tool(&registry, "nonexistent_tool"));
+}
+
 #[test]
 fn test_permission_level_from_decision() {
     assert_eq!(

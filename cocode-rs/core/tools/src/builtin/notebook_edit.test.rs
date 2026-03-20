@@ -255,6 +255,101 @@ async fn test_delete_cell_by_number() {
     assert_eq!(notebook.cells[0].cell_type, "code");
 }
 
+// ── Plan mode tests ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_plan_mode_blocks_non_plan_file() {
+    let dir = TempDir::new().unwrap();
+    let notebook_path = dir.path().join("test.ipynb");
+    std::fs::write(&notebook_path, create_test_notebook()).unwrap();
+    let plan_file = dir.path().join("plan.md");
+    std::fs::write(&plan_file, "# Plan").unwrap();
+
+    let tool = NotebookEditTool::new();
+    let mut ctx = make_context().with_plan_mode(true, Some(plan_file));
+    ctx.record_file_read(&notebook_path).await;
+
+    let input = serde_json::json!({
+        "notebook_path": notebook_path.to_str().unwrap(),
+        "cell_id": "cell-2",
+        "new_source": "print('modified')",
+        "edit_mode": "replace"
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("Plan mode"));
+}
+
+#[tokio::test]
+async fn test_check_permission_non_plan_file_denied_in_plan_mode() {
+    let dir = TempDir::new().unwrap();
+    let notebook_path = dir.path().join("test.ipynb");
+    let plan_file = dir.path().join("plan.md");
+
+    let tool = NotebookEditTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file));
+
+    let input = serde_json::json!({
+        "notebook_path": notebook_path.to_str().unwrap(),
+        "cell_id": "cell-2",
+        "new_source": "print('modified')",
+        "edit_mode": "replace"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Non-plan notebook edit in plan mode should be denied, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_plan_file_auto_allowed() {
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.ipynb");
+    std::fs::write(&plan_file, create_test_notebook()).unwrap();
+
+    let tool = NotebookEditTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file.clone()));
+
+    let input = serde_json::json!({
+        "notebook_path": plan_file.to_str().unwrap(),
+        "cell_id": "cell-2",
+        "new_source": "print('modified')",
+        "edit_mode": "replace"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Plan file notebook edit should be auto-allowed, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_not_plan_mode_passthrough() {
+    let dir = TempDir::new().unwrap();
+    let notebook_path = dir.path().join("test.ipynb");
+
+    let tool = NotebookEditTool::new();
+    let ctx = make_context(); // not in plan mode
+
+    let input = serde_json::json!({
+        "notebook_path": notebook_path.to_str().unwrap(),
+        "cell_id": "cell-2",
+        "new_source": "print('modified')",
+        "edit_mode": "replace"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Passthrough),
+        "Not in plan mode should passthrough, got: {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_cell_number_out_of_bounds() {
     let dir = TempDir::new().unwrap();

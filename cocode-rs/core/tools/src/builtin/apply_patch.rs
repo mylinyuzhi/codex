@@ -16,9 +16,9 @@ use cocode_apply_patch::ApplyPatchFileChange;
 use cocode_apply_patch::MaybeApplyPatchVerified;
 use cocode_apply_patch::apply_patch as execute_patch;
 use cocode_apply_patch::maybe_parse_apply_patch_verified;
-use cocode_plan_mode::is_safe_file;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
@@ -121,6 +121,48 @@ impl Tool for ApplyPatchTool {
         true
     }
 
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        if !ctx.is_plan_mode {
+            return PermissionResult::Passthrough;
+        }
+
+        // In plan mode: parse the patch and check all target paths
+        let patch_input = if input.is_string() {
+            input.as_str().map(ToString::to_string)
+        } else {
+            input
+                .get("input")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+        };
+
+        let Some(patch_str) = patch_input else {
+            return PermissionResult::Passthrough;
+        };
+
+        let argv = vec!["apply_patch".to_string(), patch_str];
+        let cwd = ctx.cwd.clone();
+
+        match maybe_parse_apply_patch_verified(&argv, &cwd) {
+            MaybeApplyPatchVerified::Body(action) => {
+                for path in action.changes().keys() {
+                    if !ctx.plan_mode_allows_write(path) {
+                        return PermissionResult::Denied {
+                            reason: format!(
+                                "Plan mode: cannot modify '{}'. Only the plan file can be modified.",
+                                path.display()
+                            ),
+                        };
+                    }
+                }
+                // All paths are plan-safe → auto-allow
+                PermissionResult::Allowed
+            }
+            // Parse failures: let execute() handle the error
+            _ => PermissionResult::Passthrough,
+        }
+    }
+
     #[allow(clippy::unwrap_used)]
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         // TODO(sandbox): Current implementation executes patches directly in-process.
@@ -168,7 +210,7 @@ impl Tool for ApplyPatchTool {
                 // 3. Plan mode check: only allow modifications to plan file
                 if ctx.is_plan_mode {
                     for path in action.changes().keys() {
-                        if !is_safe_file(path, ctx.plan_file_path.as_deref()) {
+                        if !ctx.plan_mode_allows_write(path) {
                             return Err(tool_error::ExecutionFailedSnafu {
                                 message: format!(
                                     "Plan mode: cannot modify '{}'. Only the plan file can be modified.",
