@@ -69,7 +69,7 @@ async fn test_spawn_background() {
         .spawn_background("echo background-test")
         .await
         .expect("spawn");
-    assert!(task_id.starts_with("bg-"));
+    assert!(task_id.starts_with("b"));
 
     // Wait a bit for the background task to complete
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -92,12 +92,16 @@ fn test_truncate_output_large() {
 }
 
 #[test]
-fn test_uuid_simple_uniqueness() {
-    let a = uuid_simple();
+fn test_shell_task_id_format() {
+    let a = generate_shell_task_id();
+    assert!(
+        a.starts_with('b'),
+        "Shell task ID should start with 'b', got: {a}"
+    );
     // Small sleep to ensure different timestamp
     std::thread::sleep(std::time::Duration::from_millis(1));
-    let b = uuid_simple();
-    assert_ne!(a, b);
+    let b = generate_shell_task_id();
+    assert_ne!(a, b, "IDs should be unique");
 }
 
 #[tokio::test]

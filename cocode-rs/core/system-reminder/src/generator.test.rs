@@ -80,6 +80,10 @@ fn test_background_task_info() {
         status: BackgroundTaskStatus::Running,
         exit_code: None,
         has_new_output: true,
+        progress_message: None,
+        is_completion_notification: false,
+        delta_summary: None,
+        description: None,
     };
 
     assert_eq!(task.task_type, BackgroundTaskType::Shell);

@@ -212,6 +212,8 @@ pub struct StreamingToolExecutor {
     spawn_agent_fn: Option<SpawnAgentFn>,
     /// Shared registry of cancellation tokens for background agents.
     agent_cancel_tokens: crate::context::AgentCancelTokens,
+    /// Shared set of agent IDs killed via TaskStop.
+    killed_agents: crate::context::KilledAgents,
     /// Base directory for background agent output files.
     agent_output_dir: Option<PathBuf>,
     /// Optional model call function for single-shot LLM calls.
@@ -259,6 +261,8 @@ pub struct StreamingToolExecutor {
     question_responder: Option<Arc<crate::context::QuestionResponder>>,
     /// Path to the cocode home directory for durable cron persistence.
     cocode_home: Option<PathBuf>,
+    /// Shared per-task byte offsets for incremental output reading.
+    output_offsets: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
 }
 
 /// Result of pre-hook execution.
@@ -352,6 +356,7 @@ impl StreamingToolExecutor {
             shell_executor,
             spawn_agent_fn: None,
             agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            killed_agents: Arc::new(Mutex::new(HashSet::new())),
             agent_output_dir: None,
             model_call_fn: None,
             skill_manager: None,
@@ -367,6 +372,7 @@ impl StreamingToolExecutor {
             file_backup_store: None,
             question_responder: None,
             cocode_home: None,
+            output_offsets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -412,6 +418,12 @@ impl StreamingToolExecutor {
     /// Set the shared agent cancel token registry.
     pub fn with_agent_cancel_tokens(mut self, tokens: crate::context::AgentCancelTokens) -> Self {
         self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the shared killed agents registry.
+    pub fn with_killed_agents(mut self, killed: crate::context::KilledAgents) -> Self {
+        self.killed_agents = killed;
         self
     }
 
@@ -1121,6 +1133,11 @@ impl StreamingToolExecutor {
         &self.agent_cancel_tokens
     }
 
+    /// Get the shared killed agents registry.
+    pub fn killed_agents(&self) -> &crate::context::KilledAgents {
+        &self.killed_agents
+    }
+
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
@@ -1143,8 +1160,10 @@ impl StreamingToolExecutor {
             builder = builder.spawn_agent_fn(spawn_fn.clone());
         }
 
-        // Share agent cancel tokens registry
-        builder = builder.agent_cancel_tokens(self.agent_cancel_tokens.clone());
+        // Share agent cancel tokens and killed agents registries
+        builder = builder
+            .agent_cancel_tokens(self.agent_cancel_tokens.clone())
+            .killed_agents(self.killed_agents.clone());
 
         // Add agent_output_dir if available
         if let Some(ref dir) = self.agent_output_dir {
@@ -1205,6 +1224,9 @@ impl StreamingToolExecutor {
         if let Some(ref home) = self.cocode_home {
             builder = builder.cocode_home(home.clone());
         }
+
+        // Share output offsets across tool contexts for delta reads
+        builder = builder.output_offsets(self.output_offsets.clone());
 
         builder.build()
     }

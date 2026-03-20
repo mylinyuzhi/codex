@@ -77,6 +77,15 @@ impl BackgroundTaskRegistry {
         let tasks = self.tasks.lock().await;
         tasks.contains_key(task_id)
     }
+
+    /// Returns a snapshot of all tracked tasks as (id, command) pairs.
+    pub async fn list_tasks(&self) -> Vec<(String, String)> {
+        let tasks = self.tasks.lock().await;
+        tasks
+            .iter()
+            .map(|(id, p)| (id.clone(), p.command.clone()))
+            .collect()
+    }
 }
 
 impl Default for BackgroundTaskRegistry {

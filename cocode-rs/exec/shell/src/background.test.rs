@@ -79,3 +79,37 @@ async fn test_default() {
     let registry = BackgroundTaskRegistry::default();
     assert!(!registry.is_running("anything").await);
 }
+
+#[tokio::test]
+async fn test_list_tasks() {
+    let registry = BackgroundTaskRegistry::new();
+
+    // Empty registry
+    assert!(registry.list_tasks().await.is_empty());
+
+    // Register two tasks
+    registry
+        .register("t1".to_string(), make_process("t1", "echo hello"))
+        .await;
+    registry
+        .register("t2".to_string(), make_process("t2", "sleep 10"))
+        .await;
+
+    let tasks = registry.list_tasks().await;
+    assert_eq!(tasks.len(), 2);
+
+    // Check both entries are present (order is not guaranteed)
+    let ids: Vec<&str> = tasks.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(ids.contains(&"t1"));
+    assert!(ids.contains(&"t2"));
+
+    // Verify command is included
+    let t1 = tasks.iter().find(|(id, _)| id == "t1").expect("t1");
+    assert_eq!(t1.1, "echo hello");
+
+    // Stop one task — it should be removed from the list
+    registry.stop("t1").await;
+    let tasks = registry.list_tasks().await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].0, "t2");
+}

@@ -155,3 +155,14 @@ fn test_stage_beta_methods() {
     assert_eq!(Stage::Stable.beta_menu_name(), None);
     assert_eq!(Stage::Experimental.beta_menu_description(), None);
 }
+
+#[test]
+fn test_background_tasks_feature_defaults() {
+    let features = Features::with_defaults();
+
+    // BackgroundTasks should be enabled by default (Stable, default_enabled: true)
+    assert!(features.enabled(Feature::BackgroundTasks));
+    assert_eq!(Feature::BackgroundTasks.key(), "background_tasks");
+    assert_eq!(Feature::BackgroundTasks.stage(), Stage::Stable);
+    assert!(Feature::BackgroundTasks.default_enabled());
+}

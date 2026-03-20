@@ -68,6 +68,14 @@ pub struct BackgroundTaskInfo {
     pub exit_code: Option<i32>,
     /// Whether there's new output since last check.
     pub has_new_output: bool,
+    /// Latest progress message from the agent (if running).
+    pub progress_message: Option<String>,
+    /// Whether this is a completion notification (bypasses throttle).
+    pub is_completion_notification: bool,
+    /// Summary of new output since last report (for completed agents).
+    pub delta_summary: Option<String>,
+    /// Human-readable description of the task.
+    pub description: Option<String>,
 }
 
 /// Type of background task.

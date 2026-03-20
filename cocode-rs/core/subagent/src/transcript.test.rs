@@ -219,3 +219,59 @@ async fn test_resume_with_empty_entries_filtered() {
     assert_eq!(filtered[0]["prompt"], "task1");
     assert_eq!(filtered[1]["prompt"], "task3");
 }
+
+// ── read_from_offset tests ──
+
+#[tokio::test]
+async fn test_read_from_offset_basic() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("offset.jsonl");
+
+    let recorder = TranscriptRecorder::new(path.clone());
+    recorder
+        .record(&serde_json::json!({"turn": 1, "text": "first"}))
+        .await
+        .expect("record");
+    recorder
+        .record(&serde_json::json!({"turn": 2, "text": "second"}))
+        .await
+        .expect("record");
+
+    // Read from the beginning
+    let (entries, new_offset) = read_from_offset(&path, 0).await.expect("read");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["turn"], 1);
+    assert_eq!(entries[1]["turn"], 2);
+    assert!(new_offset > 0);
+
+    // Append another entry
+    recorder
+        .record(&serde_json::json!({"turn": 3, "text": "third"}))
+        .await
+        .expect("record");
+
+    // Read from the previous offset — should only get the new entry
+    let (entries, final_offset) = read_from_offset(&path, new_offset).await.expect("read");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["turn"], 3);
+    assert!(final_offset > new_offset);
+}
+
+#[tokio::test]
+async fn test_read_from_offset_at_end() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("at_end.jsonl");
+
+    let recorder = TranscriptRecorder::new(path.clone());
+    recorder
+        .record(&serde_json::json!({"data": "entry"}))
+        .await
+        .expect("record");
+
+    let (_, offset) = read_from_offset(&path, 0).await.expect("read");
+
+    // Reading at the end should return empty
+    let (entries, same_offset) = read_from_offset(&path, offset).await.expect("read");
+    assert!(entries.is_empty());
+    assert_eq!(same_offset, offset);
+}

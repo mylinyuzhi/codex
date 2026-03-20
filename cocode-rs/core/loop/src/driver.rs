@@ -37,6 +37,9 @@ use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::ApprovedPlanInfo;
 use cocode_system_reminder::AsyncHookResponseInfo;
+use cocode_system_reminder::BackgroundTaskInfo;
+use cocode_system_reminder::BackgroundTaskStatus;
+use cocode_system_reminder::BackgroundTaskType;
 use cocode_system_reminder::GeneratorContext;
 use cocode_system_reminder::HookBlockingInfo;
 use cocode_system_reminder::HookContextInfo;
@@ -272,6 +275,18 @@ pub struct AgentLoop {
 
     /// Path to the cocode home directory for durable cron persistence.
     cocode_home: Option<std::path::PathBuf>,
+
+    /// Shared set of agent IDs killed via TaskStop (persists across turns).
+    killed_agents: cocode_tools::context::KilledAgents,
+
+    /// Per-turn background agent task info pushed by the session layer.
+    ///
+    /// Set via [`set_background_agent_tasks`] before each turn so that
+    /// `generate_system_reminders()` can populate the `background_tasks`
+    /// field in `GeneratorContext`. Combined with shell background tasks
+    /// collected directly from the registry, this closes the feedback loop
+    /// between the subagent manager and the unified tasks system reminder.
+    background_agent_tasks: Vec<cocode_system_reminder::BackgroundTaskInfo>,
 }
 
 impl AgentLoop {
@@ -346,6 +361,19 @@ impl AgentLoop {
     /// Take the current cron jobs (if any) set by CronCreate/CronDelete.
     pub fn take_cron_jobs(&mut self) -> Option<serde_json::Value> {
         self.current_cron_jobs.take()
+    }
+
+    /// Set background agent task info for the next turn's system reminders.
+    ///
+    /// Called by the session/executor layer before each turn with the latest
+    /// agent snapshot from `SubagentManager::agent_infos()`. These are
+    /// combined with shell background tasks from the registry to populate
+    /// the `background_tasks` field in `GeneratorContext`.
+    pub fn set_background_agent_tasks(
+        &mut self,
+        tasks: Vec<cocode_system_reminder::BackgroundTaskInfo>,
+    ) {
+        self.background_agent_tasks = tasks;
     }
 
     /// Take the plan mode state for persistence across loop runs.
@@ -1187,6 +1215,36 @@ impl AgentLoop {
         let mention_read_records =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::<MentionReadRecord>::new()));
 
+        // Collect background tasks for system reminder feedback loop:
+        // 1. Shell background tasks from the registry
+        // 2. Agent background tasks pushed by the session layer
+        let background_tasks = {
+            let mut tasks: Vec<BackgroundTaskInfo> = Vec::new();
+
+            // Shell background tasks
+            // Note: the registry only contains running tasks — completed/stopped
+            // tasks are removed on `stop()`, so Running is always correct here.
+            for (id, command) in self.shell_executor.background_registry.list_tasks().await {
+                tasks.push(BackgroundTaskInfo {
+                    task_id: id,
+                    task_type: BackgroundTaskType::Shell,
+                    command,
+                    status: BackgroundTaskStatus::Running,
+                    exit_code: None,
+                    has_new_output: false,
+                    progress_message: None,
+                    is_completion_notification: false,
+                    delta_summary: None,
+                    description: None,
+                });
+            }
+
+            // Agent background tasks (pushed by session layer)
+            tasks.extend(self.background_agent_tasks.drain(..));
+
+            tasks
+        };
+
         // Generate system reminders with derived tracker view (lock NOT held)
         let injected_messages = {
             let mut builder = GeneratorContext::builder()
@@ -1207,6 +1265,11 @@ impl AgentLoop {
                     blocking: blocking_hooks,
                 })
                 .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
+
+            // Wire background tasks into the generator context
+            if !background_tasks.is_empty() {
+                builder = builder.background_tasks(background_tasks);
+            }
 
             // Drain pending compacted large files (one-shot: populated during restoration)
             if !self.pending_compacted_large_files.is_empty() {
@@ -1517,6 +1580,9 @@ impl AgentLoop {
         .with_async_hook_tracker(self.async_hook_tracker.clone())
         .with_shell_executor(self.shell_executor.clone())
         .with_otel_manager(self.otel_manager.clone());
+
+        // Share killed agents registry (persists across turns)
+        executor = executor.with_killed_agents(self.killed_agents.clone());
 
         // Wire file backup store from snapshot manager for Tier 1 rewind
         if let Some(ref sm) = self.snapshot_manager {

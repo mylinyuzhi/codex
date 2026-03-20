@@ -128,8 +128,16 @@ impl Tool for TaskTool {
         })?;
         let subagent_type = input["subagent_type"].as_str().unwrap_or("general-purpose");
 
-        // Parse optional fields
-        let run_in_background = input["run_in_background"].as_bool();
+        // Parse optional fields, gated by BackgroundTasks feature flag
+        let run_in_background = if ctx
+            .features
+            .enabled(cocode_protocol::Feature::BackgroundTasks)
+        {
+            input["run_in_background"].as_bool()
+        } else {
+            // Feature disabled: force foreground execution
+            Some(false)
+        };
         let model = input["model"].as_str().map(String::from);
         let max_turns = input["max_turns"].as_i64().map(|n| n as i32);
         let allowed_tools = input["allowed_tools"].as_array().map(|arr| {

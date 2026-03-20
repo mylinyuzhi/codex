@@ -222,6 +222,13 @@ pub enum LoopEvent {
         /// Result from the task.
         result: String,
     },
+    /// All running agents were killed (e.g., via Ctrl+F).
+    AllAgentsKilled {
+        /// Number of agents killed.
+        count: usize,
+        /// IDs of the killed agents.
+        agent_ids: Vec<String>,
+    },
 
     // ========== Compaction ==========
     /// Context usage warning - above warning threshold but below auto-compact.

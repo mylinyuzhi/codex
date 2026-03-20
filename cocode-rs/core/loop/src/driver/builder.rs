@@ -78,6 +78,8 @@ pub struct AgentLoopBuilder {
     /// shared tools-level tracker.
     reminder_file_tracker_state: Vec<(std::path::PathBuf, FileReadState)>,
     cocode_home: Option<std::path::PathBuf>,
+    /// Shared set of agent IDs killed via TaskStop (persists across turns).
+    killed_agents: cocode_tools::context::KilledAgents,
 }
 
 impl AgentLoopBuilder {
@@ -128,6 +130,7 @@ impl AgentLoopBuilder {
             approval_store: None,
             reminder_file_tracker_state: Vec::new(),
             cocode_home: None,
+            killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -334,6 +337,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the shared killed agents registry (persists across turns).
+    pub fn killed_agents(mut self, killed: cocode_tools::context::KilledAgents) -> Self {
+        self.killed_agents = killed;
+        self
+    }
+
     /// Set the cocode home directory for durable cron persistence.
     pub fn cocode_home(mut self, path: std::path::PathBuf) -> Self {
         self.cocode_home = Some(path);
@@ -466,6 +475,8 @@ impl AgentLoopBuilder {
                 .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
             pending_compacted_large_files: Vec::new(),
             cocode_home: self.cocode_home,
+            background_agent_tasks: Vec::new(),
+            killed_agents: self.killed_agents,
         }
     }
 }

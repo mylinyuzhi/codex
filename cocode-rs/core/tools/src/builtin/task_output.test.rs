@@ -63,3 +63,187 @@ fn test_tool_properties() {
     assert!(tool.is_concurrent_safe());
     assert!(tool.is_read_only());
 }
+
+// ── delta read tests ──
+
+#[tokio::test]
+async fn test_delta_read_first_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.jsonl");
+
+    // Write some entries
+    tokio::fs::write(
+        &path,
+        concat!(
+            r#"{"type":"progress","message":"Starting"}"#,
+            "\n",
+            r#"{"status":"completed","output":"Done"}"#,
+            "\n"
+        ),
+    )
+    .await
+    .unwrap();
+
+    let offsets = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        u64,
+    >::new()));
+
+    let result = read_agent_output_delta("a1", &path, &offsets).await;
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("a1"), "Should contain task ID");
+            assert!(t.contains("completed"), "Should show status");
+            assert!(t.contains("Starting"), "Should include progress");
+            assert!(t.contains("Done"), "Should include output");
+            assert!(
+                !t.contains("(new)"),
+                "First read should not show delta label"
+            );
+        }
+        _ => panic!("Expected text content"),
+    }
+
+    // Offset should be recorded
+    let off = offsets.lock().await;
+    assert!(*off.get("a1").unwrap() > 0);
+}
+
+#[tokio::test]
+async fn test_delta_read_incremental() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.jsonl");
+
+    // Write initial entry
+    tokio::fs::write(
+        &path,
+        r#"{"status":"running","output":"Step 1"}"#.to_owned() + "\n",
+    )
+    .await
+    .unwrap();
+
+    let offsets = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        u64,
+    >::new()));
+
+    // First read
+    let _ = read_agent_output_delta("a2", &path, &offsets).await;
+
+    // Append new entry
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .await
+        .unwrap();
+    file.write_all((r#"{"status":"completed","output":"Step 2"}"#.to_owned() + "\n").as_bytes())
+        .await
+        .unwrap();
+
+    // Second read should only get new entry
+    let result = read_agent_output_delta("a2", &path, &offsets).await;
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("(new)"), "Delta read should show (new) label");
+            assert!(t.contains("Step 2"), "Should contain new entry");
+            assert!(!t.contains("Step 1"), "Should not contain old entry");
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[tokio::test]
+async fn test_delta_read_no_new_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.jsonl");
+
+    tokio::fs::write(
+        &path,
+        r#"{"status":"running","output":"Only"}"#.to_owned() + "\n",
+    )
+    .await
+    .unwrap();
+
+    let offsets = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        u64,
+    >::new()));
+
+    // First read
+    let _ = read_agent_output_delta("a3", &path, &offsets).await;
+
+    // Second read with no new data
+    let result = read_agent_output_delta("a3", &path, &offsets).await;
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("no new output"), "Should indicate no new output");
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+// ── format_agent_output tests ──
+
+#[test]
+fn test_format_agent_output_single_entry() {
+    let content = r#"{"status":"completed","agent_id":"a1","output":"Done"}"#;
+    let result = format_agent_output("a1", content);
+    assert!(!result.is_error);
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("a1"));
+            assert!(t.contains("completed"));
+            assert!(t.contains("Done"));
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[test]
+fn test_format_agent_output_multi_entry_jsonl() {
+    let content = concat!(
+        r#"{"type":"progress","agent_id":"a1","message":"Starting"}"#,
+        "\n",
+        r#"{"type":"turn_result","agent_id":"a1","text":"Step 1"}"#,
+        "\n",
+        r#"{"status":"completed","agent_id":"a1","output":"All done"}"#,
+        "\n"
+    );
+    let result = format_agent_output("a1", content);
+    assert!(!result.is_error);
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("completed"), "Should show last status");
+            assert!(t.contains("Starting"), "Should include progress message");
+            assert!(t.contains("Step 1"), "Should include turn text");
+            assert!(t.contains("All done"), "Should include final output");
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[test]
+fn test_format_agent_output_empty_content() {
+    let result = format_agent_output("a1", "");
+    assert!(!result.is_error);
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("a1"));
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+#[test]
+fn test_format_agent_output_error_entries() {
+    let content = r#"{"status":"failed","agent_id":"a1","error":"Something broke"}"#;
+    let result = format_agent_output("a1", content);
+    match &result.content {
+        cocode_protocol::ToolResultContent::Text(t) => {
+            assert!(t.contains("failed"));
+            assert!(t.contains("[error] Something broke"));
+        }
+        _ => panic!("Expected text content"),
+    }
+}
