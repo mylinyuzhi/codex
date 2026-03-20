@@ -81,35 +81,123 @@ async fn test_default() {
 }
 
 #[tokio::test]
-async fn test_list_tasks() {
+async fn test_get_completed_notify_returns_handle() {
     let registry = BackgroundTaskRegistry::new();
+    let process = make_process("task-n", "sleep 1");
+    let completed = Arc::clone(&process.completed);
 
-    // Empty registry
+    registry.register("task-n".to_string(), process).await;
+
+    // Should return a notify handle
+    let notify = registry.get_completed_notify("task-n").await;
+    assert!(notify.is_some());
+
+    // Should be None for non-existent task
+    let missing = registry.get_completed_notify("no-such").await;
+    assert!(missing.is_none());
+
+    // Notifying via original handle should wake the returned handle.
+    // Must register the notified() future BEFORE calling notify_waiters().
+    let notify = notify.unwrap();
+    let waiter = notify.notified();
+    tokio::pin!(waiter);
+    // Enable the waiter to be woken
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(1), &mut waiter).await;
+    completed.notify_waiters();
+    tokio::time::timeout(std::time::Duration::from_millis(100), waiter)
+        .await
+        .expect("notify should have fired");
+}
+
+// ── GAP 4: Output preservation after stop ─────────────────────
+
+#[tokio::test]
+async fn test_output_preserved_after_stop() {
+    let registry = BackgroundTaskRegistry::new();
+    let process = make_process("task-persist", "long running cmd");
+    let output_ref = Arc::clone(&process.output);
+
+    registry.register("task-persist".to_string(), process).await;
+
+    // Simulate output
+    {
+        let mut out = output_ref.lock().await;
+        out.push_str("line 1\nline 2\n");
+    }
+
+    // Stop the task
+    assert!(registry.stop("task-persist").await);
+    assert!(!registry.is_running("task-persist").await);
+
+    // Output should still be retrievable
+    let output = registry.get_output("task-persist").await;
+    assert_eq!(output, Some("line 1\nline 2\n".to_string()));
+}
+
+#[tokio::test]
+async fn test_get_command_active_task() {
+    let registry = BackgroundTaskRegistry::new();
+    let process = make_process("task-cmd", "npm test");
+
+    registry.register("task-cmd".to_string(), process).await;
+    assert_eq!(
+        registry.get_command("task-cmd").await,
+        Some("npm test".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_get_command_after_stop() {
+    let registry = BackgroundTaskRegistry::new();
+    let process = make_process("task-cmd2", "cargo build");
+
+    registry.register("task-cmd2".to_string(), process).await;
+    registry.stop("task-cmd2").await;
+
+    assert_eq!(
+        registry.get_command("task-cmd2").await,
+        Some("cargo build".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_get_command_nonexistent() {
+    let registry = BackgroundTaskRegistry::new();
+    assert!(registry.get_command("missing").await.is_none());
+}
+
+// ── list_tasks ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_tasks_empty() {
+    let registry = BackgroundTaskRegistry::new();
     assert!(registry.list_tasks().await.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_tasks_with_active_and_completed() {
+    let registry = BackgroundTaskRegistry::new();
 
     // Register two tasks
     registry
-        .register("t1".to_string(), make_process("t1", "echo hello"))
+        .register("t1".to_string(), make_process("t1", "npm test"))
         .await;
     registry
-        .register("t2".to_string(), make_process("t2", "sleep 10"))
+        .register("t2".to_string(), make_process("t2", "cargo build"))
         .await;
 
-    let tasks = registry.list_tasks().await;
-    assert_eq!(tasks.len(), 2);
+    // Stop one
+    registry.stop("t2").await;
 
-    // Check both entries are present (order is not guaranteed)
-    let ids: Vec<&str> = tasks.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(ids.contains(&"t1"));
-    assert!(ids.contains(&"t2"));
+    let snapshots = registry.list_tasks().await;
+    assert_eq!(snapshots.len(), 2);
 
-    // Verify command is included
-    let t1 = tasks.iter().find(|(id, _)| id == "t1").expect("t1");
-    assert_eq!(t1.1, "echo hello");
-
-    // Stop one task — it should be removed from the list
-    registry.stop("t1").await;
-    let tasks = registry.list_tasks().await;
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].0, "t2");
+    let active: Vec<_> = snapshots.iter().filter(|s| s.is_running).collect();
+    let completed: Vec<_> = snapshots.iter().filter(|s| !s.is_running).collect();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, "t1");
+    assert_eq!(active[0].command, "npm test");
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].id, "t2");
+    assert_eq!(completed[0].command, "cargo build");
 }

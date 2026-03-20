@@ -74,6 +74,8 @@ pub fn read_plan_file(session_id: &str, agent_id: Option<&str>) -> Option<String
 
 /// Check if a path is a plan file (for permission exceptions).
 ///
+/// Delegates to [`crate::state::is_safe_file`] for consistent path normalization.
+///
 /// # Arguments
 ///
 /// * `path` - The path to check
@@ -83,8 +85,7 @@ pub fn read_plan_file(session_id: &str, agent_id: Option<&str>) -> Option<String
 ///
 /// `true` if the paths match (allowing Write/Edit tool usage in plan mode).
 pub fn is_plan_file(path: &Path, plan_path: &Path) -> bool {
-    // Normalize paths for comparison
-    path == plan_path
+    crate::state::is_safe_file(path, Some(plan_path))
 }
 
 /// Ensure the plan directory exists.
@@ -94,11 +95,9 @@ pub fn is_plan_file(path: &Path, plan_path: &Path) -> bool {
 /// Returns an error if directory creation fails.
 pub fn ensure_plan_dir() -> Result<PathBuf> {
     let plan_dir = get_plan_dir();
-    if !plan_dir.exists() {
-        std::fs::create_dir_all(&plan_dir).context(plan_mode_error::CreateDirSnafu {
-            message: format!("failed to create {}", plan_dir.display()),
-        })?;
-    }
+    std::fs::create_dir_all(&plan_dir).context(plan_mode_error::CreateDirSnafu {
+        message: format!("failed to create {}", plan_dir.display()),
+    })?;
     Ok(plan_dir)
 }
 

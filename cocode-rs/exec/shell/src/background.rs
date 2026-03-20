@@ -24,10 +24,32 @@ pub struct BackgroundProcess {
     pub cancel_token: CancellationToken,
 }
 
+/// Preserved state of a completed/stopped background task.
+#[derive(Debug, Clone)]
+struct CompletedTask {
+    /// The command that was executed.
+    command: String,
+    /// Final accumulated output.
+    output: String,
+}
+
+/// Snapshot of a background task's state for external consumers.
+#[derive(Debug, Clone)]
+pub struct BackgroundTaskSnapshot {
+    /// Task ID.
+    pub id: String,
+    /// Command being executed.
+    pub command: String,
+    /// Whether the task is still running.
+    pub is_running: bool,
+}
+
 /// Registry for tracking background shell processes.
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskRegistry {
     tasks: Arc<Mutex<HashMap<String, BackgroundProcess>>>,
+    /// Completed/stopped tasks with preserved output.
+    completed_tasks: Arc<Mutex<HashMap<String, CompletedTask>>>,
 }
 
 impl BackgroundTaskRegistry {
@@ -35,6 +57,7 @@ impl BackgroundTaskRegistry {
     pub fn new() -> Self {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            completed_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -45,22 +68,59 @@ impl BackgroundTaskRegistry {
     }
 
     /// Returns the accumulated output for the given task, if it exists.
+    ///
+    /// Checks active tasks first, then falls back to completed tasks.
     pub async fn get_output(&self, task_id: &str) -> Option<String> {
-        let tasks = self.tasks.lock().await;
-        let process = tasks.get(task_id)?;
-        let output = process.output.lock().await;
-        Some(output.clone())
+        // Check active tasks first
+        {
+            let tasks = self.tasks.lock().await;
+            if let Some(process) = tasks.get(task_id) {
+                let output = process.output.lock().await;
+                return Some(output.clone());
+            }
+        }
+        // Fallback to completed tasks
+        let completed = self.completed_tasks.lock().await;
+        completed.get(task_id).map(|c| c.output.clone())
+    }
+
+    /// Returns the command for the given task, if it exists.
+    ///
+    /// Checks active tasks first, then falls back to completed tasks.
+    pub async fn get_command(&self, task_id: &str) -> Option<String> {
+        {
+            let tasks = self.tasks.lock().await;
+            if let Some(process) = tasks.get(task_id) {
+                return Some(process.command.clone());
+            }
+        }
+        let completed = self.completed_tasks.lock().await;
+        completed.get(task_id).map(|c| c.command.clone())
     }
 
     /// Signals the task to stop and removes it from the registry.
     ///
-    /// Cancels the task's token (which triggers `kill_on_drop` on the child
-    /// process) and notifies waiters.
+    /// Captures the final output before removal so it can still be retrieved
+    /// via [`get_output`](Self::get_output) after the task is stopped.
     ///
     /// Returns true if the task was found and removed, false otherwise.
     pub async fn stop(&self, task_id: &str) -> bool {
-        let mut tasks = self.tasks.lock().await;
-        if let Some(process) = tasks.remove(task_id) {
+        let process = {
+            let mut tasks = self.tasks.lock().await;
+            tasks.remove(task_id)
+        };
+
+        if let Some(process) = process {
+            // Capture final output before cancellation
+            let final_output = process.output.lock().await.clone();
+            self.completed_tasks.lock().await.insert(
+                task_id.to_string(),
+                CompletedTask {
+                    command: process.command.clone(),
+                    output: final_output,
+                },
+            );
+
             // Cancel the token — the spawned task uses select! on this
             // and will drop the Child, triggering kill_on_drop.
             process.cancel_token.cancel();
@@ -78,13 +138,39 @@ impl BackgroundTaskRegistry {
         tasks.contains_key(task_id)
     }
 
-    /// Returns a snapshot of all tracked tasks as (id, command) pairs.
-    pub async fn list_tasks(&self) -> Vec<(String, String)> {
+    /// Returns the completion `Notify` handle for the given task, if registered.
+    pub async fn get_completed_notify(&self, task_id: &str) -> Option<Arc<Notify>> {
         let tasks = self.tasks.lock().await;
-        tasks
-            .iter()
-            .map(|(id, p)| (id.clone(), p.command.clone()))
-            .collect()
+        tasks.get(task_id).map(|p| Arc::clone(&p.completed))
+    }
+
+    /// Returns a snapshot of all tasks (both active and completed).
+    pub async fn list_tasks(&self) -> Vec<BackgroundTaskSnapshot> {
+        let mut snapshots = Vec::new();
+
+        {
+            let tasks = self.tasks.lock().await;
+            for (id, process) in tasks.iter() {
+                snapshots.push(BackgroundTaskSnapshot {
+                    id: id.clone(),
+                    command: process.command.clone(),
+                    is_running: true,
+                });
+            }
+        }
+
+        {
+            let completed = self.completed_tasks.lock().await;
+            for (id, task) in completed.iter() {
+                snapshots.push(BackgroundTaskSnapshot {
+                    id: id.clone(),
+                    command: task.command.clone(),
+                    is_running: false,
+                });
+            }
+        }
+
+        snapshots
     }
 }
 

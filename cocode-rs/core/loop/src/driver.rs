@@ -49,6 +49,7 @@ use cocode_system_reminder::InvokedSkillInfo;
 use cocode_system_reminder::MentionReadRecord;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SkillInfo;
+use cocode_system_reminder::StructuredTaskInfo;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::create_injected_messages;
 use cocode_tools::ApprovalStore;
@@ -1222,14 +1223,17 @@ impl AgentLoop {
             let mut tasks: Vec<BackgroundTaskInfo> = Vec::new();
 
             // Shell background tasks
-            // Note: the registry only contains running tasks — completed/stopped
-            // tasks are removed on `stop()`, so Running is always correct here.
-            for (id, command) in self.shell_executor.background_registry.list_tasks().await {
+            for snapshot in self.shell_executor.background_registry.list_tasks().await {
+                let status = if snapshot.is_running {
+                    BackgroundTaskStatus::Running
+                } else {
+                    BackgroundTaskStatus::Completed
+                };
                 tasks.push(BackgroundTaskInfo {
-                    task_id: id,
+                    task_id: snapshot.id,
                     task_type: BackgroundTaskType::Shell,
-                    command,
-                    status: BackgroundTaskStatus::Running,
+                    command: snapshot.command,
+                    status,
                     exit_code: None,
                     has_new_output: false,
                     progress_message: None,
@@ -1396,46 +1400,96 @@ impl AgentLoop {
                 builder = builder.rewind_info(rewind_info);
             }
 
-            // Convert structured tasks to TodoItems for the reminder system.
-            // When StructuredTasks feature is enabled, these replace TodoWrite items.
-            // Also include plain todos from TodoWrite for backwards compatibility.
+            // Collect background tasks from shell executor for system reminders.
             {
-                let mut todo_items = Vec::new();
+                let snapshots = self.shell_executor.background_registry.list_tasks().await;
+                if !snapshots.is_empty() {
+                    let bg_infos: Vec<cocode_system_reminder::generator::BackgroundTaskInfo> =
+                        snapshots
+                            .into_iter()
+                            .map(|s| cocode_system_reminder::generator::BackgroundTaskInfo {
+                                task_id: s.id,
+                                task_type:
+                                    cocode_system_reminder::generator::BackgroundTaskType::Shell,
+                                command: s.command,
+                                status: if s.is_running {
+                                    cocode_system_reminder::generator::BackgroundTaskStatus::Running
+                                } else {
+                                    cocode_system_reminder::generator::BackgroundTaskStatus::Completed
+                                },
+                                exit_code: None,
+                                has_new_output: false,
+                                progress_message: None,
+                                is_completion_notification: false,
+                                delta_summary: None,
+                                description: None,
+                            })
+                            .collect();
+                    builder = builder.background_tasks(bg_infos);
+                }
+            }
 
-                // Structured tasks → TodoItems
+            // Convert structured tasks to StructuredTaskInfo for rich reminders.
+            // Falls back to plain TodoItems from TodoWrite for backwards compatibility.
+            {
+                let mut has_structured = false;
+
                 if let Some(ref tasks_val) = self.current_structured_tasks {
                     if let Some(tasks_map) = tasks_val.as_object() {
+                        let mut structured_infos = Vec::new();
                         for (_id, task) in tasks_map {
-                            let status_str = task["status"].as_str().unwrap_or("pending");
-                            let status = match status_str {
-                                "in_progress" => {
-                                    cocode_system_reminder::generator::TodoStatus::InProgress
-                                }
-                                "completed" => {
-                                    cocode_system_reminder::generator::TodoStatus::Completed
-                                }
-                                _ => cocode_system_reminder::generator::TodoStatus::Pending,
-                            };
+                            let status_str =
+                                task["status"].as_str().unwrap_or("pending").to_string();
                             // Skip deleted tasks
                             if status_str == "deleted" {
                                 continue;
                             }
-                            let blocked_by = task["blocked_by"].as_array();
-                            let is_blocked = blocked_by.map_or(false, |arr| !arr.is_empty());
-                            todo_items.push(cocode_system_reminder::generator::TodoItem {
+                            let blocked_by: Vec<String> = task["blocked_by"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|b| b.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let is_blocked = blocked_by.iter().any(|bid| {
+                                tasks_map
+                                    .get(bid)
+                                    .map_or(false, |bt| bt["status"].as_str() != Some("completed"))
+                            });
+                            let blocks: Vec<String> = task["blocks"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|b| b.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            structured_infos.push(StructuredTaskInfo {
                                 id: task["id"].as_str().unwrap_or("?").to_string(),
                                 subject: task["subject"].as_str().unwrap_or("?").to_string(),
-                                status,
+                                description: task["description"].as_str().map(String::from),
+                                status: status_str,
+                                active_form: task["active_form"].as_str().map(String::from),
+                                owner: task["owner"].as_str().map(String::from),
+                                blocks,
+                                blocked_by,
                                 is_blocked,
                             });
+                        }
+                        if !structured_infos.is_empty() {
+                            builder = builder.structured_tasks(structured_infos);
+                            has_structured = true;
                         }
                     }
                 }
 
                 // Plain todos (from TodoWrite) — only when structured tasks are absent
-                if todo_items.is_empty() {
+                if !has_structured {
                     if let Some(ref todos_val) = self.current_todos {
                         if let Some(arr) = todos_val.as_array() {
+                            let mut todo_items = Vec::new();
                             for todo in arr {
                                 let status_str = todo["status"].as_str().unwrap_or("pending");
                                 let status = match status_str {
@@ -1458,12 +1512,11 @@ impl AgentLoop {
                                     is_blocked: false,
                                 });
                             }
+                            if !todo_items.is_empty() {
+                                builder = builder.todos(todo_items);
+                            }
                         }
                     }
-                }
-
-                if !todo_items.is_empty() {
-                    builder = builder.todos(todo_items);
                 }
             }
 

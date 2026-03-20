@@ -462,6 +462,101 @@ async fn test_edit_create_with_parent_dirs() {
     assert_eq!(content, "nested content");
 }
 
+// ── Plan mode create_new_file test ──────────────────────────────
+
+#[tokio::test]
+async fn test_create_new_file_blocked_in_plan_mode() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let new_file = dir.path().join("new_code.rs");
+    let plan_file = dir.path().join("plan.md");
+
+    let tool = EditTool::new();
+    let mut ctx = make_context().with_plan_mode(true, Some(plan_file));
+
+    // empty old_string triggers create_new_file path
+    let input = serde_json::json!({
+        "file_path": new_file.to_str().unwrap(),
+        "old_string": "",
+        "new_string": "fn main() {}"
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("Plan mode"));
+    assert!(!new_file.exists());
+}
+
+#[tokio::test]
+async fn test_create_new_file_allowed_for_plan_file() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+
+    let tool = EditTool::new();
+    let mut ctx = make_context().with_plan_mode(true, Some(plan_file.clone()));
+
+    // empty old_string triggers create_new_file path — plan file should be allowed
+    let input = serde_json::json!({
+        "file_path": plan_file.to_str().unwrap(),
+        "old_string": "",
+        "new_string": "# My Plan"
+    });
+
+    let result = tool.execute(input, &mut ctx).await.unwrap();
+    assert!(!result.is_error);
+
+    let content = std::fs::read_to_string(&plan_file).unwrap();
+    assert_eq!(content, "# My Plan");
+}
+
+// ── Plan mode check_permission tests ────────────────────────────
+
+#[tokio::test]
+async fn test_check_permission_plan_file_auto_allowed() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    std::fs::write(&plan_file, "# Plan").unwrap();
+
+    let tool = EditTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file.clone()));
+
+    let input = serde_json::json!({
+        "file_path": plan_file.to_str().unwrap(),
+        "old_string": "# Plan",
+        "new_string": "# Updated Plan"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Plan file edit should be auto-allowed, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_non_plan_file_denied_in_plan_mode() {
+    let plan_file = PathBuf::from("/tmp/plan.md");
+    let other_file = PathBuf::from("/tmp/code.rs");
+
+    let tool = EditTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file));
+
+    let input = serde_json::json!({
+        "file_path": other_file.to_str().unwrap(),
+        "old_string": "old",
+        "new_string": "new"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Non-plan file edit in plan mode should be denied, got: {result:?}"
+    );
+}
+
 // ── SHA256 staleness test ───────────────────────────────────────
 
 #[tokio::test]

@@ -124,6 +124,7 @@ pub use generator::QueuedCommandInfo;
 pub use generator::RestoredPlanInfo;
 pub use generator::RewindContextInfo;
 pub use generator::SkillInfo;
+pub use generator::StructuredTaskInfo;
 pub use inject::InjectedBlock;
 pub use inject::InjectedMessage;
 pub use inject::NormalizedMessages;

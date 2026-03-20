@@ -1809,10 +1809,11 @@ fn apply_permission_mode(
             other => other,
         },
         PermissionMode::Plan if !is_read_only_or_plan_tool(registry, tool_name) => {
-            // In plan mode, deny all non-read-only tools (unless already allowed/denied)
+            // In plan mode, deny non-read-only tools — but respect tool-level Allowed
+            // (e.g., plan file writes that the tool explicitly auto-allowed)
             match result {
-                cocode_protocol::PermissionResult::Allowed
-                | cocode_protocol::PermissionResult::NeedsApproval { .. } => {
+                cocode_protocol::PermissionResult::Allowed => result,
+                cocode_protocol::PermissionResult::NeedsApproval { .. } => {
                     cocode_protocol::PermissionResult::Denied {
                         reason: "Plan mode: only read-only tools allowed".to_string(),
                     }

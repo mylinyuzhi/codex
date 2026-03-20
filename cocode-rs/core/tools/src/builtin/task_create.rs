@@ -59,6 +59,16 @@ impl Tool for TaskCreateTool {
                     "type": "string",
                     "description": "Optional owner (agent/team name) for task assignment"
                 },
+                "blocks": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Task IDs that this task blocks"
+                },
+                "blockedBy": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Task IDs that block this task"
+                },
                 "metadata": {
                     "type": "object",
                     "description": "Arbitrary metadata to attach to the task"
@@ -101,6 +111,25 @@ impl Tool for TaskCreateTool {
         }
 
         let task_id = structured_tasks::generate_task_id();
+
+        // Parse initial dependency arrays
+        let initial_blocks: Vec<String> = input["blocks"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let initial_blocked_by: Vec<String> = input["blockedBy"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let task = StructuredTask {
             id: task_id.clone(),
             subject: subject.to_string(),
@@ -113,8 +142,8 @@ impl Tool for TaskCreateTool {
                     .unwrap_or_else(|| structured_tasks::derive_active_form(subject)),
             ),
             owner: input["owner"].as_str().map(String::from),
-            blocks: Vec::new(),
-            blocked_by: Vec::new(),
+            blocks: initial_blocks.clone(),
+            blocked_by: initial_blocked_by.clone(),
             metadata: input.get("metadata").cloned().unwrap_or(Value::Null),
         };
 
@@ -135,6 +164,23 @@ impl Tool for TaskCreateTool {
             }
 
             store.insert(task_id.clone(), task);
+
+            // Bidirectional dependency consistency: update related tasks
+            for target_id in &initial_blocks {
+                if let Some(target) = store.get_mut(target_id) {
+                    if !target.blocked_by.contains(&task_id) {
+                        target.blocked_by.push(task_id.clone());
+                    }
+                }
+            }
+            for source_id in &initial_blocked_by {
+                if let Some(source) = store.get_mut(source_id) {
+                    if !source.blocks.contains(&task_id) {
+                        source.blocks.push(task_id.clone());
+                    }
+                }
+            }
+
             structured_tasks::tasks_to_value(&store)
         };
 

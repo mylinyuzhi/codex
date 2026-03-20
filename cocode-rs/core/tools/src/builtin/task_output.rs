@@ -86,44 +86,60 @@ impl Tool for TaskOutputTool {
             .is_running(task_id)
             .await;
 
+        // Resolve command name for richer headers
+        let command_label = ctx
+            .shell_executor
+            .background_registry
+            .get_command(task_id)
+            .await;
+
+        // Format header with optional command
+        let header = |status: &str| -> String {
+            match &command_label {
+                Some(cmd) => format!("Task {task_id} ({status}): {cmd}"),
+                None => format!("Task {task_id} ({status})"),
+            }
+        };
+
         if is_shell_running {
             // Shell task is running
             if block {
                 let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
-                let start = std::time::Instant::now();
 
-                loop {
-                    if ctx.is_cancelled() {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (cancelled):\n{output}"
-                        )));
+                // Use Notify-based waiting instead of polling
+                if let Some(notify) = ctx
+                    .shell_executor
+                    .background_registry
+                    .get_completed_notify(task_id)
+                    .await
+                {
+                    tokio::select! {
+                        _ = notify.notified() => { /* completed */ }
+                        _ = tokio::time::sleep(timeout_duration) => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header(&format!("still running, timeout after {timeout_ms}ms"))
+                            )));
+                        }
+                        _ = ctx.cancel_token.cancelled() => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header("cancelled")
+                            )));
+                        }
                     }
-                    if !ctx
-                        .shell_executor
-                        .background_registry
-                        .is_running(task_id)
-                        .await
-                    {
-                        break;
-                    }
-                    if start.elapsed() >= timeout_duration {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (still running, timeout after {timeout_ms}ms):\n{output}"
-                        )));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
 
@@ -143,12 +159,10 @@ impl Tool for TaskOutputTool {
             } else {
                 "completed"
             };
-            return Ok(ToolOutput::text(format!(
-                "Task {task_id} ({status}):\n{output}"
-            )));
+            return Ok(ToolOutput::text(format!("{}:\n{output}", header(status))));
         }
 
-        // Check if we can still get shell output (task may have completed)
+        // Check if we can still get shell output (task may have completed/stopped)
         if let Some(output) = ctx
             .shell_executor
             .background_registry
@@ -156,7 +170,8 @@ impl Tool for TaskOutputTool {
             .await
         {
             return Ok(ToolOutput::text(format!(
-                "Task {task_id} (completed):\n{output}"
+                "{}:\n{output}",
+                header("completed")
             )));
         }
 

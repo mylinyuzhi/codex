@@ -85,7 +85,9 @@
       "Bash(done)",
       "Bash(find . -name \"*.rs\" -exec grep -l \"pub\\(crate\\)\" {})",
       "Bash(grep -E \"\\\\.\\(rs\\)$\")",
-      "Bash(2)"
+      "Bash(2)",
+      "Bash(/tmp/integration_summary.txt:*)",
+      "Read(//tmp/**)"
     ],
     "deny": [],
     "ask": []

@@ -101,6 +101,7 @@ pub mod snapshot;
 
 pub use background::BackgroundProcess;
 pub use background::BackgroundTaskRegistry;
+pub use background::BackgroundTaskSnapshot;
 pub use command::CommandInput;
 pub use command::CommandResult;
 pub use command::ExecuteResult;
