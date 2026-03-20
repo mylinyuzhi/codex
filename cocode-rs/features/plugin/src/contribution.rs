@@ -116,7 +116,7 @@ impl<'a> IntoIterator for &'a StringOrVec {
 /// Each field is a list of paths (relative to the plugin directory) that
 /// contain contribution definitions. Fields accept either a single string
 /// or an array of strings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginContributions {
     /// Paths to skill directories (containing SKILL.md files).
     #[serde(default)]
@@ -210,7 +210,7 @@ pub enum PluginContribution {
 }
 
 /// An output style definition loaded from a plugin.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutputStyleDefinition {
     /// Style name (derived from the filename).
     pub name: String,
@@ -273,6 +273,11 @@ impl PluginContribution {
     /// Check if this is an LSP server contribution.
     pub fn is_lsp_server(&self) -> bool {
         matches!(self, Self::LspServer { .. })
+    }
+
+    /// Check if this is an output style contribution.
+    pub fn is_output_style(&self) -> bool {
+        matches!(self, Self::OutputStyle { .. })
     }
 }
 

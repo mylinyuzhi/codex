@@ -218,6 +218,9 @@ pub struct SkillInfo {
     /// Whether this is a bundled (built-in) skill. Bundled skills get priority
     /// in budget-aware formatting and are never truncated.
     pub is_bundled: bool,
+    /// Plugin name if this skill was contributed by a plugin.
+    /// Shown as `"(from plugin-name)"` in the system reminder.
+    pub plugin_name: Option<String>,
 }
 
 /// Information about an invoked skill.

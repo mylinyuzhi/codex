@@ -34,6 +34,13 @@ pub struct McpServerConfig {
     /// Whether to automatically start this server.
     #[serde(default = "default_true")]
     pub auto_start: bool,
+
+    /// Origin scope of this server configuration.
+    ///
+    /// Plugin-loaded servers are marked `"dynamic"` to distinguish them from
+    /// user-configured (static) MCP servers.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 /// Transport configuration for MCP servers.
@@ -68,9 +75,24 @@ impl McpServerConfig {
         plugin_root: &Path,
         user_config: Option<&HashMap<String, serde_json::Value>>,
     ) {
+        self.resolve_variables_with(plugin_root, user_config, |name| std::env::var(name).ok());
+    }
+
+    /// Resolve variable substitution with a custom environment variable lookup function.
+    ///
+    /// This is the underlying implementation of [`resolve_variables`]. The `env_var_fn`
+    /// parameter replaces direct `std::env::var` lookups, enabling deterministic testing
+    /// without `unsafe` environment mutation.
+    fn resolve_variables_with(
+        &mut self,
+        plugin_root: &Path,
+        user_config: Option<&HashMap<String, serde_json::Value>>,
+        env_var_fn: impl Fn(&str) -> Option<String>,
+    ) {
         let root_str = plugin_root.to_string_lossy().to_string();
 
-        let resolve = |s: &str| -> String { resolve_variable_string(s, &root_str, user_config) };
+        let resolve =
+            |s: &str| -> String { resolve_variable_string(s, &root_str, user_config, &env_var_fn) };
 
         // Resolve transport fields
         match &mut self.transport {
@@ -95,11 +117,16 @@ impl McpServerConfig {
     }
 }
 
+/// Maximum number of variable substitution iterations per pattern type.
+/// Guards against infinite loops when a resolved value reintroduces the pattern.
+const MAX_VARIABLE_ITERATIONS: usize = 64;
+
 /// Resolve variable patterns in a single string.
 fn resolve_variable_string(
     s: &str,
     plugin_root: &str,
     user_config: Option<&HashMap<String, serde_json::Value>>,
+    env_var_fn: &dyn Fn(&str) -> Option<String>,
 ) -> String {
     let mut result = s.to_string();
 
@@ -107,19 +134,29 @@ fn resolve_variable_string(
     result = result.replace("${COCODE_PLUGIN_ROOT}", plugin_root);
 
     // Replace ${env.VAR_NAME} patterns
+    let mut iterations = 0;
     while let Some(start) = result.find("${env.") {
+        if iterations >= MAX_VARIABLE_ITERATIONS {
+            break;
+        }
+        iterations += 1;
         let Some(end) = result[start..].find('}') else {
             break;
         };
         let end = start + end;
         let var_name = &result[start + 6..end];
-        let value = std::env::var(var_name).unwrap_or_default();
+        let value = env_var_fn(var_name).unwrap_or_default();
         result = format!("{}{}{}", &result[..start], value, &result[end + 1..]);
     }
 
     // Replace ${user_config.KEY} patterns
     if let Some(config) = user_config {
+        let mut iterations = 0;
         while let Some(start) = result.find("${user_config.") {
+            if iterations >= MAX_VARIABLE_ITERATIONS {
+                break;
+            }
+            iterations += 1;
             let Some(end) = result[start..].find('}') else {
                 break;
             };

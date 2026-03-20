@@ -1262,11 +1262,20 @@ impl AgentLoop {
                 let mut skill_infos: Vec<SkillInfo> = sm
                     .llm_invocable_skills()
                     .into_iter()
-                    .map(|skill| SkillInfo {
-                        name: skill.name.clone(),
-                        description: skill.description.clone(),
-                        when_to_use: skill.when_to_use.clone(),
-                        is_bundled: skill.loaded_from == cocode_skill::LoadedFrom::Bundled,
+                    .map(|skill| {
+                        let plugin_name = match &skill.source {
+                            cocode_skill::SkillSource::Plugin { plugin_name } => {
+                                Some(plugin_name.clone())
+                            }
+                            _ => None,
+                        };
+                        SkillInfo {
+                            name: skill.name.clone(),
+                            description: skill.description.clone(),
+                            when_to_use: skill.when_to_use.clone(),
+                            is_bundled: skill.loaded_from == cocode_skill::LoadedFrom::Bundled,
+                            plugin_name,
+                        }
                     })
                     .collect();
 
@@ -1274,11 +1283,18 @@ impl AgentLoop {
                 let touched_paths = reminder_tracker_view.tracked_files();
                 if !touched_paths.is_empty() {
                     for skill in sm.activate_for_paths(&touched_paths) {
+                        let plugin_name = match &skill.source {
+                            cocode_skill::SkillSource::Plugin { plugin_name } => {
+                                Some(plugin_name.clone())
+                            }
+                            _ => None,
+                        };
                         skill_infos.push(SkillInfo {
                             name: skill.name.clone(),
                             description: skill.description.clone(),
                             when_to_use: skill.when_to_use.clone(),
                             is_bundled: false,
+                            plugin_name,
                         });
                     }
                 }

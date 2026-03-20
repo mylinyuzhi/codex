@@ -130,6 +130,15 @@ pub enum PluginError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// MCP server connection failed.
+    #[snafu(display("MCP connection failed for {server}: {message}"))]
+    McpConnectionFailed {
+        server: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for PluginError {
@@ -137,18 +146,21 @@ impl ErrorExt for PluginError {
         match self {
             Self::ManifestNotFound { .. } => StatusCode::FileNotFound,
             Self::InvalidManifest { .. } => StatusCode::InvalidConfig,
+            // Semantically a conflict/duplicate error; no StatusCode::Conflict exists.
             Self::AlreadyRegistered { .. } => StatusCode::InvalidArguments,
             Self::NotFound { .. } => StatusCode::FileNotFound,
             Self::Io { .. } => StatusCode::IoError,
             Self::PathTraversal { .. } => StatusCode::PermissionDenied,
             Self::InvalidVersion { .. } => StatusCode::InvalidConfig,
             Self::MarketplaceNotFound { .. } => StatusCode::FileNotFound,
+            // Semantically a conflict/duplicate error; no StatusCode::Conflict exists.
             Self::MarketplaceAlreadyExists { .. } => StatusCode::InvalidArguments,
             Self::PluginNotInstalled { .. } => StatusCode::FileNotFound,
             Self::InstallationFailed { .. } => StatusCode::IoError,
             Self::GitCloneFailed { .. } => StatusCode::IoError,
             Self::CacheError { .. } => StatusCode::IoError,
             Self::RegistryCorrupted { .. } => StatusCode::InvalidConfig,
+            Self::McpConnectionFailed { .. } => StatusCode::IoError,
         }
     }
 

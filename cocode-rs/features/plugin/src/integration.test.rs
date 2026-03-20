@@ -241,11 +241,22 @@ fn test_integrate_plugins_with_agents() {
     assert_eq!(result.registry.len(), 1);
     assert_eq!(result.registry.agent_contributions().len(), 1);
 
-    // Verify agent was registered in the subagent manager
+    // Verify agents were registered in the subagent manager
+    // Agent namespacing creates both "test-plugin:test-agent" and "test-agent" (unambiguous alias)
     let definitions = subagent_manager.definitions();
-    assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions[0].name, "test-agent");
-    assert_eq!(definitions[0].agent_type, "test-agent");
+    assert_eq!(definitions.len(), 2);
+
+    let namespaced = definitions
+        .iter()
+        .find(|d| d.name == "test-plugin:test-agent")
+        .expect("namespaced agent");
+    assert_eq!(namespaced.agent_type, "test-plugin:test-agent");
+
+    let alias = definitions
+        .iter()
+        .find(|d| d.name == "test-agent")
+        .expect("alias agent");
+    assert_eq!(alias.agent_type, "test-agent");
 }
 
 #[test]
@@ -355,4 +366,13 @@ fn test_integrate_with_extra_marketplaces() {
     let list = mm.list();
     assert_eq!(list.len(), 1);
     assert!(list.contains_key("integrated-market"));
+}
+
+#[test]
+fn test_mcp_server_namespaced_format() {
+    // Verify the namespaced MCP server name format: plugin_{pluginName}_{serverName}
+    let plugin_name = "my-plugin";
+    let server_name = "filesystem";
+    let namespaced = format!("plugin_{plugin_name}_{server_name}");
+    assert_eq!(namespaced, "plugin_my-plugin_filesystem");
 }

@@ -12,6 +12,7 @@ fn test_mcp_server_stdio() {
         },
         env: HashMap::new(),
         auto_start: true,
+        scope: None,
     };
 
     assert_eq!(config.name, "file-server");
@@ -35,6 +36,7 @@ fn test_mcp_server_http() {
         },
         env: HashMap::new(),
         auto_start: false,
+        scope: None,
     };
 
     if let McpTransport::Http { url } = &config.transport {
@@ -59,6 +61,7 @@ fn test_mcp_server_serialize_deserialize() {
             map
         },
         auto_start: true,
+        scope: None,
     };
 
     let json_str = serde_json::to_string(&config).expect("serialize");
@@ -122,6 +125,7 @@ fn test_resolve_variables_plugin_root() {
             map
         },
         auto_start: true,
+        scope: None,
     };
 
     config.resolve_variables(std::path::Path::new("/plugins/my-plugin"), None);
@@ -140,9 +144,6 @@ fn test_resolve_variables_plugin_root() {
 
 #[test]
 fn test_resolve_variables_env() {
-    // SAFETY: test-only, single-threaded test environment.
-    unsafe { std::env::set_var("COCODE_TEST_VAR_12345", "hello-world") };
-
     let mut config = McpServerConfig {
         name: "test".to_string(),
         description: None,
@@ -152,16 +153,20 @@ fn test_resolve_variables_env() {
         },
         env: HashMap::new(),
         auto_start: true,
+        scope: None,
     };
 
-    config.resolve_variables(std::path::Path::new("/tmp"), None);
+    config.resolve_variables_with(std::path::Path::new("/tmp"), None, |name| {
+        if name == "COCODE_TEST_VAR_12345" {
+            Some("hello-world".to_string())
+        } else {
+            None
+        }
+    });
 
     if let McpTransport::Stdio { args, .. } = &config.transport {
         assert_eq!(args[0], "--token=hello-world");
     }
-
-    // SAFETY: test-only, single-threaded test environment.
-    unsafe { std::env::remove_var("COCODE_TEST_VAR_12345") };
 }
 
 #[test]
@@ -174,6 +179,7 @@ fn test_resolve_variables_http_url() {
         },
         env: HashMap::new(),
         auto_start: true,
+        scope: None,
     };
 
     config.resolve_variables(std::path::Path::new("/tmp"), None);
@@ -195,6 +201,7 @@ fn test_resolve_variables_user_config() {
         },
         env: HashMap::new(),
         auto_start: true,
+        scope: None,
     };
 
     let mut user_config = HashMap::new();
@@ -221,6 +228,7 @@ fn test_resolve_variables_no_patterns() {
         },
         env: HashMap::new(),
         auto_start: true,
+        scope: None,
     };
 
     config.resolve_variables(std::path::Path::new("/tmp"), None);
@@ -229,6 +237,55 @@ fn test_resolve_variables_no_patterns() {
         assert_eq!(command, "node");
         assert_eq!(args[0], "server.js");
     }
+}
+
+#[test]
+fn test_resolve_variables_self_referencing_env_terminates() {
+    // An env var whose value reintroduces the ${env.} pattern should not loop forever.
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "${env.COCODE_LOOP_VAR}".to_string(),
+            args: vec![],
+        },
+        env: HashMap::new(),
+        auto_start: true,
+        scope: None,
+    };
+
+    // This should terminate (not hang) due to the iteration guard.
+    config.resolve_variables_with(std::path::Path::new("/tmp"), None, |name| {
+        if name == "COCODE_LOOP_VAR" {
+            Some("prefix${env.COCODE_LOOP_VAR}suffix".to_string())
+        } else {
+            None
+        }
+    });
+
+    if let McpTransport::Stdio { command, .. } = &config.transport {
+        // The exact value doesn't matter — what matters is that it terminated.
+        assert!(!command.is_empty());
+    }
+}
+
+#[test]
+fn test_resolve_variables_preserves_scope() {
+    let mut config = McpServerConfig {
+        name: "test".to_string(),
+        description: None,
+        transport: McpTransport::Stdio {
+            command: "${COCODE_PLUGIN_ROOT}/bin/server".to_string(),
+            args: vec![],
+        },
+        env: HashMap::new(),
+        auto_start: true,
+        scope: Some("dynamic".to_string()),
+    };
+
+    config.resolve_variables(std::path::Path::new("/plugins/test"), None);
+
+    assert_eq!(config.scope, Some("dynamic".to_string()));
 }
 
 #[test]

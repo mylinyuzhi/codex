@@ -9,7 +9,7 @@ The hooks system allows customization of agent behavior at key lifecycle points.
 - **5 Handler Types**: Command (shell), Prompt (LLM), Agent (sub-agent), Webhook, Inline
 - **3 Result Types**: Continue, reject, modify input
 - **4 Execution Outcomes**: Success, blocking, non_blocking_error, cancelled
-- **4 Scoping Levels**: Policy > Plugin > Session > Skill
+- **5 Scoping Levels**: Policy > Session > Agent > Skill > Plugin
 - **2 Execution Contexts**: REPL (interactive) and Non-REPL (batch)
 - **Configurable Timeout**: Default 10 minutes per hook (5s for special hooks)
 
@@ -597,32 +597,35 @@ Hooks are aggregated from multiple sources with priority order:
 
 | Scope | Priority | Source | Skipped When |
 |-------|----------|--------|--------------|
-| Policy | 1 (Highest) | `policySettings.hooks` | Never |
-| Plugin | 2 | Plugin manifests | `allowManagedHooksOnly=true` |
-| Session | 3 | Session state | `allowManagedHooksOnly=true` |
-| Skill | 4 (Lowest) | Skill frontmatter | `allowManagedHooksOnly=true` |
+| Policy | 0 (Highest) | `policySettings.hooks` | Never |
+| Session | 1 | Session state | `allowManagedHooksOnly=true` |
+| Agent | 2 | Agent/subagent definitions | `allowManagedHooksOnly=true` |
+| Skill | 3 | Skill frontmatter | `allowManagedHooksOnly=true` |
+| Plugin | 4 (Lowest) | Plugin manifests | Never (`is_managed`) |
 
-**Policy hooks ALWAYS run.** Other hooks can be disabled with settings.
+**Policy and Plugin hooks are managed** and always run. Other hooks can be disabled with `allowManagedHooksOnly`.
 
 ```rust
-/// Hook scope hierarchy (Claude Code v2.1.7 aligned)
+/// Hook scope hierarchy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HookScope {
-    /// Policy-level hooks (highest priority, always run)
+    /// Organization-level policy hooks (highest priority)
     Policy = 0,
-    /// Plugin-defined hooks
-    Plugin = 1,
-    /// Session-registered hooks
-    Session = 2,
-    /// Skill frontmatter hooks (lowest priority)
+    /// Session-level hooks
+    Session = 1,
+    /// Agent/subagent-level hooks
+    Agent = 2,
+    /// Skill-level hooks
     Skill = 3,
+    /// Plugin-provided hooks (lowest priority — runs last)
+    Plugin = 4,
 }
 
 impl HookScope {
     /// Check if hook should run based on settings
     pub fn should_run(&self, allow_managed_hooks_only: bool) -> bool {
         match self {
-            HookScope::Policy => true,  // Always run
+            HookScope::Policy | HookScope::Plugin => true,  // Managed — always run
             _ => !allow_managed_hooks_only,
         }
     }

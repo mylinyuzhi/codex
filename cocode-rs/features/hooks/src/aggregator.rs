@@ -14,6 +14,8 @@ use crate::settings::HookSettings;
 /// - Setting the source field on hooks
 /// - Filtering hooks based on `allow_managed_hooks_only` setting
 /// - Ordering hooks by scope priority (Policy > Session > Agent > Skill > Plugin)
+///
+/// Plugin hooks run last so user session hooks can take precedence.
 #[derive(Debug, Default)]
 pub struct HookAggregator {
     hooks: Vec<HookDefinition>,
@@ -131,10 +133,10 @@ impl HookAggregator {
 
         [
             (HookScope::Policy, policy),
-            (HookScope::Plugin, plugin),
             (HookScope::Session, session),
             (HookScope::Agent, agent),
             (HookScope::Skill, skill),
+            (HookScope::Plugin, plugin),
         ]
         .into_iter()
         .filter(|(_, hooks)| !hooks.is_empty())
@@ -147,6 +149,7 @@ pub fn aggregate_hooks(
     policy_hooks: impl IntoIterator<Item = HookDefinition>,
     plugin_hooks: impl IntoIterator<Item = (String, Vec<HookDefinition>)>,
     session_hooks: impl IntoIterator<Item = HookDefinition>,
+    agent_hooks: impl IntoIterator<Item = (String, Vec<HookDefinition>)>,
     skill_hooks: impl IntoIterator<Item = (String, Vec<HookDefinition>)>,
     settings: &HookSettings,
 ) -> Vec<HookDefinition> {
@@ -159,6 +162,10 @@ pub fn aggregate_hooks(
     }
 
     aggregator.add_session_hooks(session_hooks);
+
+    for (name, hooks) in agent_hooks {
+        aggregator.add_agent_hooks(name, hooks);
+    }
 
     for (name, hooks) in skill_hooks {
         aggregator.add_skill_hooks(name, hooks);

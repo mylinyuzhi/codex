@@ -175,7 +175,12 @@ fn format_skills_full(skills: &[&SkillInfo]) -> String {
 }
 
 fn format_single_skill_full(skill: &SkillInfo) -> String {
-    let mut entry = format!("- {}: {}\n", skill.name, skill.description);
+    let plugin_attr = skill
+        .plugin_name
+        .as_ref()
+        .map(|p| format!(" (from {p})"))
+        .unwrap_or_default();
+    let mut entry = format!("- {}{plugin_attr}: {}\n", skill.name, skill.description);
     if let Some(ref when) = skill.when_to_use {
         entry.push_str(&format!("  When to use: {when}\n"));
     }
@@ -189,12 +194,17 @@ fn format_skills_truncated(skills: &[&SkillInfo], per_skill_budget: usize) -> St
         if skill.is_bundled {
             content.push_str(&format_single_skill_full(skill));
         } else {
+            let plugin_attr = skill
+                .plugin_name
+                .as_ref()
+                .map(|p| format!(" (from {p})"))
+                .unwrap_or_default();
             let mut desc = skill.description.clone();
             if per_skill_budget > 10 && desc.len() > per_skill_budget {
                 desc.truncate(per_skill_budget.saturating_sub(3));
                 desc.push_str("...");
             }
-            content.push_str(&format!("- {}: {desc}\n", skill.name));
+            content.push_str(&format!("- {}{plugin_attr}: {desc}\n", skill.name));
         }
     }
     content
@@ -207,7 +217,12 @@ fn format_skills_names_only(skills: &[&SkillInfo]) -> String {
         if skill.is_bundled {
             content.push_str(&format_single_skill_full(skill));
         } else {
-            content.push_str(&format!("- {}\n", skill.name));
+            let plugin_attr = skill
+                .plugin_name
+                .as_ref()
+                .map(|p| format!(" (from {p})"))
+                .unwrap_or_default();
+            content.push_str(&format!("- {}{plugin_attr}\n", skill.name));
         }
     }
     content

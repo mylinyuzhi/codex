@@ -144,9 +144,10 @@ impl PluginIntegrationConfig {
         self
     }
 
-    /// Build the list of plugin roots with their scopes.
-    fn plugin_roots(&self) -> Vec<(PathBuf, PluginScope)> {
+    /// Build the list of plugin roots with their scopes and the loaded settings.
+    fn plugin_roots_and_settings(&self) -> (Vec<(PathBuf, PluginScope)>, PluginSettings) {
         let mut roots = Vec::new();
+        let mut settings = PluginSettings::default();
 
         if let Some(dir) = &self.managed_dir {
             roots.push((dir.clone(), PluginScope::Managed));
@@ -164,7 +165,7 @@ impl PluginIntegrationConfig {
             let settings_path = plugins_dir.join("settings.json");
 
             let registry = InstalledPluginsRegistry::load(&registry_path);
-            let settings = PluginSettings::load(&settings_path);
+            settings = PluginSettings::load(&settings_path);
 
             for (plugin_id, entries) in &registry.plugins {
                 // Config-level overrides take priority over per-file settings
@@ -178,13 +179,10 @@ impl PluginIntegrationConfig {
                 }
                 for entry in entries {
                     if entry.install_path.exists() {
-                        let scope = match entry.scope.as_str() {
-                            "managed" => PluginScope::Managed,
-                            "project" => PluginScope::Project,
-                            "local" => PluginScope::Local,
-                            "flag" => PluginScope::Flag,
-                            _ => PluginScope::User,
-                        };
+                        let scope = entry
+                            .scope
+                            .parse::<PluginScope>()
+                            .unwrap_or(PluginScope::User);
                         roots.push((entry.install_path.clone(), scope));
                     }
                 }
@@ -196,7 +194,7 @@ impl PluginIntegrationConfig {
             roots.push((dir.clone(), PluginScope::Flag));
         }
 
-        roots
+        (roots, settings)
     }
 }
 
@@ -252,7 +250,7 @@ pub fn integrate_plugins(
         }
     }
 
-    let roots = config.plugin_roots();
+    let (roots, settings) = config.plugin_roots_and_settings();
 
     info!(
         roots = roots.len(),
@@ -265,7 +263,7 @@ pub fn integrate_plugins(
     );
 
     // Load all plugins
-    let plugins = load_plugins_from_roots(&roots);
+    let plugins = load_plugins_from_roots(&roots, &settings);
 
     // Build registry
     let mut registry = PluginRegistry::new();
@@ -313,8 +311,8 @@ pub fn integrate_plugins(
 ///
 /// Use this when you need to inspect plugins before integration.
 pub fn load_plugins(config: &PluginIntegrationConfig) -> PluginRegistry {
-    let roots = config.plugin_roots();
-    let plugins = load_plugins_from_roots(&roots);
+    let (roots, settings) = config.plugin_roots_and_settings();
+    let plugins = load_plugins_from_roots(&roots, &settings);
 
     let mut registry = PluginRegistry::new();
     registry.register_all(plugins);
@@ -324,23 +322,57 @@ pub fn load_plugins(config: &PluginIntegrationConfig) -> PluginRegistry {
 
 /// Connect plugin MCP servers to the tool registry.
 ///
-/// For each auto-start MCP server contribution from plugins, starts the server
-/// process and registers its tools in the tool registry. Returns the active
-/// MCP clients so the caller can keep them alive for the session lifetime.
+/// For each auto-start MCP server contribution from plugins, connects all
+/// servers concurrently and then registers their tools sequentially.
+/// Returns the active MCP clients so the caller can keep them alive for
+/// the session lifetime.
 pub async fn connect_plugin_mcp_servers(
     registry: &PluginRegistry,
     tool_registry: &mut ToolRegistry,
     cocode_home: &std::path::Path,
 ) -> Vec<Arc<RmcpClient>> {
     let servers = registry.mcp_server_contributions();
-    let mut clients = Vec::new();
+    let auto_start: Vec<_> = servers
+        .into_iter()
+        .filter(|(config, _)| config.auto_start)
+        .collect();
 
-    for (config, plugin_name) in servers {
-        if !config.auto_start {
-            continue;
-        }
-        match connect_mcp_server(config, plugin_name, tool_registry, cocode_home).await {
-            Ok(client) => clients.push(client),
+    if auto_start.is_empty() {
+        return Vec::new();
+    }
+
+    // Connect all servers concurrently (I/O-bound: process spawn + MCP handshake)
+    let connection_futures: Vec<_> = auto_start
+        .iter()
+        .map(|&(config, plugin_name)| establish_mcp_connection(config, plugin_name, cocode_home))
+        .collect();
+
+    let results = futures::future::join_all(connection_futures).await;
+
+    // Register tools sequentially (requires &mut ToolRegistry)
+    let mut clients = Vec::new();
+    for (result, &(config, plugin_name)) in results.into_iter().zip(auto_start.iter()) {
+        match result {
+            Ok((client, tools_result)) => {
+                let tools_count = tools_result.tools.len();
+                // Namespace MCP server name as plugin_{pluginName}_{serverName}
+                // so tool names become mcp__plugin_myPlugin_serverName__toolName
+                let namespaced = format!("plugin_{}_{}", plugin_name, config.name);
+                tool_registry.register_mcp_tools_executable(
+                    &namespaced,
+                    tools_result.tools,
+                    client.clone(),
+                    Duration::from_secs(60),
+                );
+                info!(
+                    server = %config.name,
+                    namespaced = %namespaced,
+                    plugin = %plugin_name,
+                    tools = tools_count,
+                    "Connected plugin MCP server"
+                );
+                clients.push(client);
+            }
             Err(e) => {
                 warn!(
                     server = %config.name,
@@ -359,12 +391,16 @@ pub async fn connect_plugin_mcp_servers(
     clients
 }
 
-async fn connect_mcp_server(
+/// Establish an MCP connection to a plugin server.
+///
+/// Creates the client, initializes the MCP protocol, and lists available tools.
+/// Tool registration is deferred to the caller since it requires `&mut ToolRegistry`.
+async fn establish_mcp_connection(
     config: &crate::mcp::McpServerConfig,
     plugin_name: &str,
-    tool_registry: &mut ToolRegistry,
     cocode_home: &std::path::Path,
-) -> anyhow::Result<Arc<RmcpClient>> {
+) -> crate::error::Result<(Arc<RmcpClient>, cocode_mcp_types::ListToolsResult)> {
+    use crate::error::plugin_error::McpConnectionFailedSnafu;
     use cocode_mcp_types::ClientCapabilities;
     use cocode_mcp_types::Implementation;
     use cocode_mcp_types::InitializeRequestParams;
@@ -386,7 +422,14 @@ async fn connect_mcp_server(
                 &[],
                 None,
             )
-            .await?,
+            .await
+            .map_err(|e| {
+                McpConnectionFailedSnafu {
+                    server: config.name.clone(),
+                    message: e.to_string(),
+                }
+                .build()
+            })?,
         ),
         McpTransport::Http { url } => Arc::new(
             RmcpClient::new_streamable_http_client(
@@ -398,7 +441,14 @@ async fn connect_mcp_server(
                 Default::default(),
                 cocode_home.to_path_buf(),
             )
-            .await?,
+            .await
+            .map_err(|e| {
+                McpConnectionFailedSnafu {
+                    server: config.name.clone(),
+                    message: e.to_string(),
+                }
+                .build()
+            })?,
         ),
     };
 
@@ -430,29 +480,28 @@ async fn connect_mcp_server(
 
     client
         .initialize(init_params, Some(Duration::from_secs(30)), no_elicitation)
-        .await?;
+        .await
+        .map_err(|e| {
+            McpConnectionFailedSnafu {
+                server: config.name.clone(),
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
-    // List and register tools
+    // List available tools
     let tools_result = client
         .list_tools(None, Some(Duration::from_secs(30)))
-        .await?;
-    let tools_count = tools_result.tools.len();
+        .await
+        .map_err(|e| {
+            McpConnectionFailedSnafu {
+                server: config.name.clone(),
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
-    tool_registry.register_mcp_tools_executable(
-        &config.name,
-        tools_result.tools,
-        client.clone(),
-        Duration::from_secs(60),
-    );
-
-    info!(
-        server = %config.name,
-        plugin = %plugin_name,
-        tools = tools_count,
-        "Connected plugin MCP server"
-    );
-
-    Ok(client)
+    Ok((client, tools_result))
 }
 
 /// Register plugin-contributed LSP servers with the LSP server manager.

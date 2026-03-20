@@ -99,17 +99,19 @@ fn test_scope_ordering() {
     aggregator.add_skill_hooks("skill", vec![make_hook("sk1")]);
     aggregator.add_session_hooks(vec![make_hook("sess1")]);
     aggregator.add_plugin_hooks("plugin", vec![make_hook("plug1")]);
+    aggregator.add_agent_hooks("agent", vec![make_hook("ag1")]);
     aggregator.add_policy_hooks(vec![make_hook("pol1")]);
 
     let settings = HookSettings::default();
     let hooks = aggregator.build(&settings);
 
-    // Should be sorted by scope priority (Policy > Plugin > Session > Skill)
-    assert_eq!(hooks.len(), 4);
+    // Should be sorted by scope priority (Policy > Session > Agent > Skill > Plugin)
+    assert_eq!(hooks.len(), 5);
     assert_eq!(hooks[0].source.scope(), HookScope::Policy);
-    assert_eq!(hooks[1].source.scope(), HookScope::Plugin);
-    assert_eq!(hooks[2].source.scope(), HookScope::Session);
+    assert_eq!(hooks[1].source.scope(), HookScope::Session);
+    assert_eq!(hooks[2].source.scope(), HookScope::Agent);
     assert_eq!(hooks[3].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[4].source.scope(), HookScope::Plugin);
 }
 
 #[test]
@@ -154,15 +156,18 @@ fn test_aggregate_hooks_helper() {
         vec![make_hook("pol1")],
         vec![("plugin1".to_string(), vec![make_hook("plug1")])],
         vec![make_hook("sess1")],
+        vec![("agent1".to_string(), vec![make_hook("ag1")])],
         vec![("skill1".to_string(), vec![make_hook("sk1")])],
         &HookSettings::default(),
     );
 
-    assert_eq!(hooks.len(), 4);
+    // Should be sorted by scope priority (Policy > Session > Agent > Skill > Plugin)
+    assert_eq!(hooks.len(), 5);
     assert_eq!(hooks[0].source.scope(), HookScope::Policy);
-    assert_eq!(hooks[1].source.scope(), HookScope::Plugin);
-    assert_eq!(hooks[2].source.scope(), HookScope::Session);
+    assert_eq!(hooks[1].source.scope(), HookScope::Session);
+    assert_eq!(hooks[2].source.scope(), HookScope::Agent);
     assert_eq!(hooks[3].source.scope(), HookScope::Skill);
+    assert_eq!(hooks[4].source.scope(), HookScope::Plugin);
 }
 
 #[test]
