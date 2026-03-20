@@ -68,6 +68,14 @@ pub struct BackgroundTaskInfo {
     pub exit_code: Option<i32>,
     /// Whether there's new output since last check.
     pub has_new_output: bool,
+    /// Latest progress message from the agent (if running).
+    pub progress_message: Option<String>,
+    /// Whether this is a completion notification (bypasses throttle).
+    pub is_completion_notification: bool,
+    /// Summary of new output since last report (for completed agents).
+    pub delta_summary: Option<String>,
+    /// Human-readable description of the task.
+    pub description: Option<String>,
 }
 
 /// Type of background task.
@@ -127,7 +135,7 @@ pub struct DiagnosticInfo {
     pub code: Option<String>,
 }
 
-/// Todo/task item information.
+/// Todo/task item information (plain TodoWrite items).
 #[derive(Debug, Clone)]
 pub struct TodoItem {
     /// Task ID.
@@ -137,6 +145,29 @@ pub struct TodoItem {
     /// Task status.
     pub status: TodoStatus,
     /// Whether this task is blocked.
+    pub is_blocked: bool,
+}
+
+/// Rich structured task information (from TaskCreate/TaskUpdate tools).
+#[derive(Debug, Clone)]
+pub struct StructuredTaskInfo {
+    /// Task ID.
+    pub id: String,
+    /// Task subject/title.
+    pub subject: String,
+    /// Detailed description.
+    pub description: Option<String>,
+    /// Status string (pending, in_progress, completed).
+    pub status: String,
+    /// Present-continuous form of the task (e.g., "Fixing auth bug").
+    pub active_form: Option<String>,
+    /// Task owner (agent/team name).
+    pub owner: Option<String>,
+    /// IDs of tasks this task blocks.
+    pub blocks: Vec<String>,
+    /// IDs of tasks that block this task.
+    pub blocked_by: Vec<String>,
+    /// Whether this task is blocked by any incomplete task.
     pub is_blocked: bool,
 }
 
@@ -218,6 +249,9 @@ pub struct SkillInfo {
     /// Whether this is a bundled (built-in) skill. Bundled skills get priority
     /// in budget-aware formatting and are never truncated.
     pub is_bundled: bool,
+    /// Plugin name if this skill was contributed by a plugin.
+    /// Shown as `"(from plugin-name)"` in the system reminder.
+    pub plugin_name: Option<String>,
 }
 
 /// Information about an invoked skill.
@@ -419,8 +453,10 @@ pub struct GeneratorContext<'a> {
     pub diagnostics: Vec<DiagnosticInfo>,
 
     // === Todo/Tasks ===
-    /// Current todo items.
+    /// Current todo items (plain TodoWrite).
     pub todos: Vec<TodoItem>,
+    /// Rich structured tasks (from TaskCreate/TaskUpdate).
+    pub structured_tasks: Vec<StructuredTaskInfo>,
 
     // === Cron Jobs ===
     /// Current cron jobs for reminder injection.
@@ -538,9 +574,14 @@ impl<'a> GeneratorContext<'a> {
         !self.diagnostics.is_empty()
     }
 
-    /// Check if there are any todos.
+    /// Check if there are any todos (plain or structured).
     pub fn has_todos(&self) -> bool {
-        !self.todos.is_empty()
+        !self.todos.is_empty() || !self.structured_tasks.is_empty()
+    }
+
+    /// Check if there are structured tasks.
+    pub fn has_structured_tasks(&self) -> bool {
+        !self.structured_tasks.is_empty()
     }
 
     /// Get pending todos.
@@ -617,6 +658,7 @@ pub struct GeneratorContextBuilder<'a> {
     background_tasks: Vec<BackgroundTaskInfo>,
     diagnostics: Vec<DiagnosticInfo>,
     todos: Vec<TodoItem>,
+    structured_tasks: Vec<StructuredTaskInfo>,
     cron_jobs: Vec<CronJobInfo>,
     nested_memory_triggers: HashSet<PathBuf>,
     full_content_flags: HashMap<AttachmentType, bool>,
@@ -731,6 +773,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn todos(mut self, todos: Vec<TodoItem>) -> Self {
         self.todos = todos;
+        self
+    }
+
+    pub fn structured_tasks(mut self, tasks: Vec<StructuredTaskInfo>) -> Self {
+        self.structured_tasks = tasks;
         self
     }
 
@@ -849,6 +896,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             background_tasks: self.background_tasks,
             diagnostics: self.diagnostics,
             todos: self.todos,
+            structured_tasks: self.structured_tasks,
             cron_jobs: self.cron_jobs,
             nested_memory_triggers: self.nested_memory_triggers,
             full_content_flags: self.full_content_flags,

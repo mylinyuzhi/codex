@@ -5,13 +5,13 @@ use std::fs;
 #[test]
 fn test_load_mcp_servers_from_empty_dir() {
     let tmp = tempfile::tempdir().expect("create temp dir");
-    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", None);
     assert!(results.is_empty());
 }
 
 #[test]
 fn test_load_mcp_servers_from_nonexistent_dir() {
-    let results = load_mcp_servers_from_dir(Path::new("/nonexistent"), "test-plugin");
+    let results = load_mcp_servers_from_dir(Path::new("/nonexistent"), "test-plugin", None);
     assert!(results.is_empty());
 }
 
@@ -39,7 +39,7 @@ fn test_load_mcp_server_stdio() {
     )
     .expect("write");
 
-    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", None);
     assert_eq!(results.len(), 1);
 
     if let PluginContribution::McpServer {
@@ -50,6 +50,7 @@ fn test_load_mcp_server_stdio() {
         assert_eq!(config.name, "filesystem");
         assert_eq!(config.description, Some("File system access".to_string()));
         assert!(config.auto_start);
+        assert_eq!(config.scope, Some("dynamic".to_string()));
         assert_eq!(plugin_name, "test-plugin");
 
         if let McpTransport::Stdio { command, args } = &config.transport {
@@ -82,12 +83,13 @@ fn test_load_mcp_server_http() {
     )
     .expect("write");
 
-    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", None);
     assert_eq!(results.len(), 1);
 
     if let PluginContribution::McpServer { config, .. } = &results[0] {
         assert_eq!(config.name, "remote-server");
         assert!(!config.auto_start);
+        assert_eq!(config.scope, Some("dynamic".to_string()));
 
         if let McpTransport::Http { url } = &config.transport {
             assert_eq!(url, "http://localhost:3000");
@@ -107,7 +109,7 @@ fn test_load_mcp_server_invalid_json() {
 
     fs::write(server_dir.join("mcp.json"), "invalid { json").expect("write");
 
-    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", None);
     assert!(results.is_empty()); // Invalid JSON should be skipped
 }
 
@@ -145,7 +147,7 @@ fn test_load_multiple_mcp_servers() {
     )
     .expect("write");
 
-    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin");
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", None);
     assert_eq!(results.len(), 2);
 
     let names: Vec<&str> = results
@@ -160,4 +162,59 @@ fn test_load_multiple_mcp_servers() {
         .collect();
     assert!(names.contains(&"server1"));
     assert!(names.contains(&"server2"));
+
+    // All servers loaded from plugins should have scope "dynamic"
+    for result in &results {
+        if let PluginContribution::McpServer { config, .. } = result {
+            assert_eq!(config.scope, Some("dynamic".to_string()));
+        }
+    }
+}
+
+#[test]
+fn test_user_config_variable_resolution() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let server_dir = tmp.path().join("configured");
+    fs::create_dir_all(&server_dir).expect("mkdir");
+
+    fs::write(
+        server_dir.join("mcp.json"),
+        r#"{
+  "name": "configured-server",
+  "transport": {
+    "type": "stdio",
+    "command": "server",
+    "args": ["--api-key", "${user_config.api_key}"]
+  },
+  "env": {
+    "TOKEN": "${user_config.token}"
+  }
+}"#,
+    )
+    .expect("write");
+
+    let mut user_config = std::collections::HashMap::new();
+    user_config.insert(
+        "api_key".to_string(),
+        serde_json::Value::String("sk-test-123".to_string()),
+    );
+    user_config.insert(
+        "token".to_string(),
+        serde_json::Value::String("tok-abc".to_string()),
+    );
+
+    let results = load_mcp_servers_from_dir(tmp.path(), "test-plugin", Some(&user_config));
+    assert_eq!(results.len(), 1);
+
+    if let PluginContribution::McpServer { config, .. } = &results[0] {
+        if let McpTransport::Stdio { args, .. } = &config.transport {
+            assert_eq!(args[1], "sk-test-123");
+        } else {
+            panic!("Expected Stdio transport");
+        }
+        assert_eq!(config.env.get("TOKEN").unwrap(), "tok-abc");
+        assert_eq!(config.scope, Some("dynamic".to_string()));
+    } else {
+        panic!("Expected McpServer contribution");
+    }
 }

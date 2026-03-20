@@ -1,4 +1,5 @@
 use super::*;
+use std::str::FromStr;
 
 #[test]
 fn test_scope_priority() {
@@ -46,4 +47,25 @@ fn test_scope_default_dir() {
     assert!(PluginScope::Local.default_dir().is_none());
     assert!(PluginScope::Flag.default_dir().is_none());
     assert!(PluginScope::Project.default_dir().is_none());
+}
+
+#[test]
+fn test_from_str_round_trip() {
+    for scope in [
+        PluginScope::Managed,
+        PluginScope::User,
+        PluginScope::Project,
+        PluginScope::Local,
+        PluginScope::Flag,
+    ] {
+        let s = scope.to_string();
+        let parsed = PluginScope::from_str(&s).expect("parse");
+        assert_eq!(parsed, scope);
+    }
+}
+
+#[test]
+fn test_from_str_unknown() {
+    assert!(PluginScope::from_str("unknown").is_err());
+    assert!(PluginScope::from_str("").is_err());
 }

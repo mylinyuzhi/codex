@@ -92,6 +92,9 @@ pub enum Feature {
     Cron,
     /// Enable worktree tools (EnterWorktree/ExitWorktree).
     Worktree,
+    /// Enable background task execution (Task tool's `run_in_background` parameter).
+    /// When disabled, all tasks run in the foreground regardless of the parameter.
+    BackgroundTasks,
 }
 
 impl Feature {
@@ -311,6 +314,12 @@ const FEATURES: &[FeatureSpec] = &[
         key: "worktree",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::BackgroundTasks,
+        key: "background_tasks",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 

@@ -86,44 +86,60 @@ impl Tool for TaskOutputTool {
             .is_running(task_id)
             .await;
 
+        // Resolve command name for richer headers
+        let command_label = ctx
+            .shell_executor
+            .background_registry
+            .get_command(task_id)
+            .await;
+
+        // Format header with optional command
+        let header = |status: &str| -> String {
+            match &command_label {
+                Some(cmd) => format!("Task {task_id} ({status}): {cmd}"),
+                None => format!("Task {task_id} ({status})"),
+            }
+        };
+
         if is_shell_running {
             // Shell task is running
             if block {
                 let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
-                let start = std::time::Instant::now();
 
-                loop {
-                    if ctx.is_cancelled() {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (cancelled):\n{output}"
-                        )));
+                // Use Notify-based waiting instead of polling
+                if let Some(notify) = ctx
+                    .shell_executor
+                    .background_registry
+                    .get_completed_notify(task_id)
+                    .await
+                {
+                    tokio::select! {
+                        _ = notify.notified() => { /* completed */ }
+                        _ = tokio::time::sleep(timeout_duration) => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header(&format!("still running, timeout after {timeout_ms}ms"))
+                            )));
+                        }
+                        _ = ctx.cancel_token.cancelled() => {
+                            let output = ctx
+                                .shell_executor
+                                .background_registry
+                                .get_output(task_id)
+                                .await
+                                .unwrap_or_default();
+                            return Ok(ToolOutput::text(format!(
+                                "{}:\n{output}",
+                                header("cancelled")
+                            )));
+                        }
                     }
-                    if !ctx
-                        .shell_executor
-                        .background_registry
-                        .is_running(task_id)
-                        .await
-                    {
-                        break;
-                    }
-                    if start.elapsed() >= timeout_duration {
-                        let output = ctx
-                            .shell_executor
-                            .background_registry
-                            .get_output(task_id)
-                            .await
-                            .unwrap_or_default();
-                        return Ok(ToolOutput::text(format!(
-                            "Task {task_id} (still running, timeout after {timeout_ms}ms):\n{output}"
-                        )));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
 
@@ -143,12 +159,10 @@ impl Tool for TaskOutputTool {
             } else {
                 "completed"
             };
-            return Ok(ToolOutput::text(format!(
-                "Task {task_id} ({status}):\n{output}"
-            )));
+            return Ok(ToolOutput::text(format!("{}:\n{output}", header(status))));
         }
 
-        // Check if we can still get shell output (task may have completed)
+        // Check if we can still get shell output (task may have completed/stopped)
         if let Some(output) = ctx
             .shell_executor
             .background_registry
@@ -156,7 +170,8 @@ impl Tool for TaskOutputTool {
             .await
         {
             return Ok(ToolOutput::text(format!(
-                "Task {task_id} (completed):\n{output}"
+                "{}:\n{output}",
+                header("completed")
             )));
         }
 
@@ -195,10 +210,10 @@ impl Tool for TaskOutputTool {
                     )));
                 }
                 for path in &candidate_paths {
-                    if path.exists()
-                        && let Ok(content) = tokio::fs::read_to_string(path).await
-                    {
-                        return Ok(format_agent_output(task_id, &content));
+                    if path.exists() {
+                        return Ok(
+                            read_agent_output_delta(task_id, path, &ctx.output_offsets).await
+                        );
                     }
                 }
                 if start.elapsed() >= timeout_duration {
@@ -211,10 +226,8 @@ impl Tool for TaskOutputTool {
         } else {
             // Non-blocking: check once
             for path in &candidate_paths {
-                if path.exists()
-                    && let Ok(content) = tokio::fs::read_to_string(path).await
-                {
-                    return Ok(format_agent_output(task_id, &content));
+                if path.exists() {
+                    return Ok(read_agent_output_delta(task_id, path, &ctx.output_offsets).await);
                 }
             }
         }
@@ -225,18 +238,137 @@ impl Tool for TaskOutputTool {
     }
 }
 
-/// Parse agent JSONL content and format as a ToolOutput.
-fn format_agent_output(task_id: &str, content: &str) -> ToolOutput {
-    if let Ok(entry) = serde_json::from_str::<serde_json::Value>(content) {
-        let status = entry["status"].as_str().unwrap_or("unknown");
-        let output = entry["output"]
-            .as_str()
-            .or_else(|| entry["error"].as_str())
-            .unwrap_or(content);
-        ToolOutput::text(format!("Agent {task_id} ({status}):\n{output}"))
-    } else {
-        ToolOutput::text(format!("Agent {task_id}:\n{content}"))
+/// Read agent output incrementally using byte-offset delta tracking.
+///
+/// On the first call for a given task_id, reads from offset 0 (full content).
+/// On subsequent calls, reads only new entries appended since the last read.
+async fn read_agent_output_delta(
+    task_id: &str,
+    path: &std::path::Path,
+    offsets: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, u64>>>,
+) -> ToolOutput {
+    let mut offsets = offsets.lock().await;
+    let offset = offsets.get(task_id).copied().unwrap_or(0);
+    match read_jsonl_from_offset(path, offset).await {
+        Ok((entries, new_offset)) => {
+            offsets.insert(task_id.to_string(), new_offset);
+            format_delta_entries(task_id, &entries, offset > 0)
+        }
+        Err(e) => ToolOutput::text(format!("Agent {task_id} (error reading output: {e})")),
     }
+}
+
+/// Read JSONL entries from a file starting at a byte offset.
+///
+/// Returns parsed entries and the new byte offset for subsequent reads.
+async fn read_jsonl_from_offset(
+    path: &std::path::Path,
+    byte_offset: u64,
+) -> std::io::Result<(Vec<Value>, u64)> {
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncSeekExt;
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let file_len = file.metadata().await?.len();
+
+    if byte_offset >= file_len {
+        return Ok((Vec::new(), byte_offset));
+    }
+
+    file.seek(std::io::SeekFrom::Start(byte_offset)).await?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).await?;
+
+    let entries: Vec<Value> = buf
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    Ok((entries, file_len))
+}
+
+/// Format delta entries from incremental reads.
+fn format_delta_entries(task_id: &str, entries: &[Value], is_delta: bool) -> ToolOutput {
+    if entries.is_empty() {
+        return ToolOutput::text(format!("Agent {task_id}: no new output"));
+    }
+
+    let last_status = entries
+        .iter()
+        .rev()
+        .find_map(|e| e["status"].as_str())
+        .unwrap_or("running");
+
+    let mut parts = Vec::new();
+    for entry in entries {
+        if let Some(v) = entry["output"]
+            .as_str()
+            .or_else(|| entry["text"].as_str())
+            .or_else(|| entry["message"].as_str())
+        {
+            parts.push(v.to_string());
+        } else if let Some(err) = entry["error"].as_str() {
+            parts.push(format!("[error] {err}"));
+        }
+    }
+
+    let combined = if parts.is_empty() {
+        format!("{} entries", entries.len())
+    } else {
+        parts.join("\n")
+    };
+
+    let delta_label = if is_delta { " (new)" } else { "" };
+    ToolOutput::text(format!(
+        "Agent {task_id} ({last_status}){delta_label}:\n{combined}"
+    ))
+}
+
+/// Parse agent JSONL content (potentially multi-line) and format as a ToolOutput.
+///
+/// The transcript file is in JSONL format: each line is a separate JSON entry.
+/// This function handles both single-entry and multi-entry transcripts, extracting
+/// the last status and combining output/error messages from all entries.
+#[cfg(test)]
+fn format_agent_output(task_id: &str, content: &str) -> ToolOutput {
+    let entries: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    if entries.is_empty() {
+        return ToolOutput::text(format!("Agent {task_id}:\n{content}"));
+    }
+
+    // Use the last entry's status as the overall status
+    let last_status = entries
+        .iter()
+        .rev()
+        .find_map(|e| e["status"].as_str())
+        .unwrap_or("running");
+
+    // Collect output/error parts from all entries
+    let mut parts = Vec::new();
+    for entry in &entries {
+        if let Some(v) = entry["output"]
+            .as_str()
+            .or_else(|| entry["text"].as_str())
+            .or_else(|| entry["message"].as_str())
+        {
+            parts.push(v.to_string());
+        } else if let Some(err) = entry["error"].as_str() {
+            parts.push(format!("[error] {err}"));
+        }
+    }
+
+    let combined = if parts.is_empty() {
+        content.to_string()
+    } else {
+        parts.join("\n")
+    };
+    ToolOutput::text(format!("Agent {task_id} ({last_status}):\n{combined}"))
 }
 
 #[cfg(test)]

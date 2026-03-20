@@ -197,6 +197,114 @@ async fn test_invalid_patch_returns_error() {
     assert!(result.is_err());
 }
 
+// ── Plan mode check_permission tests ────────────────────────────
+
+#[tokio::test]
+async fn test_check_permission_plan_file_auto_allowed() {
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    fs::write(&plan_file, "# Plan\nold content\n").unwrap();
+
+    let tool = ApplyPatchTool::new();
+    let ctx = make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file.clone()));
+
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n # Plan\n-old content\n+new content\n*** End Patch",
+        plan_file.display()
+    );
+
+    let input = serde_json::json!({ "input": patch });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Plan file patch should be auto-allowed, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_non_plan_file_denied_in_plan_mode() {
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    let other_file = dir.path().join("code.rs");
+
+    let tool = ApplyPatchTool::new();
+    let ctx = make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file));
+
+    let patch = format!(
+        "*** Begin Patch\n*** Add File: {}\n+fn main() {{}}\n*** End Patch",
+        other_file.display()
+    );
+
+    let input = serde_json::json!({ "input": patch });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Non-plan file patch in plan mode should be denied, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_multi_file_mixed_targets_denied() {
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    let other_file = dir.path().join("code.rs");
+    fs::write(&plan_file, "# Plan\nold content\n").unwrap();
+
+    let tool = ApplyPatchTool::new();
+    let ctx = make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file.clone()));
+
+    // Patch targets both plan file AND another file → should be denied
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n # Plan\n-old content\n+new content\n*** Add File: {}\n+fn main() {{}}\n*** End Patch",
+        plan_file.display(),
+        other_file.display()
+    );
+
+    let input = serde_json::json!({ "input": patch });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Multi-file patch with non-plan targets should be denied, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_unparseable_patch_passthrough() {
+    let dir = TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+
+    let tool = ApplyPatchTool::new();
+    let ctx = make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file));
+
+    let input = serde_json::json!({ "input": "not a valid patch" });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Passthrough),
+        "Unparseable patch should passthrough, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_not_plan_mode_passthrough() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("code.rs");
+
+    let tool = ApplyPatchTool::new();
+    let ctx = make_context(dir.path().to_path_buf()); // not in plan mode
+
+    let patch = format!(
+        "*** Begin Patch\n*** Add File: {}\n+fn main() {{}}\n*** End Patch",
+        file.display()
+    );
+
+    let input = serde_json::json!({ "input": patch });
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Passthrough),
+        "Not in plan mode should passthrough, got: {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_context_modifiers_added() {
     let dir = TempDir::new().unwrap();

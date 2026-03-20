@@ -42,7 +42,11 @@ const BUNDLE_EXTENSIONS: &[&str] = &["mcpb", "dxt"];
 ///   }
 /// }
 /// ```
-pub fn load_mcp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribution> {
+pub fn load_mcp_servers_from_dir(
+    dir: &Path,
+    plugin_name: &str,
+    user_config: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Vec<PluginContribution> {
     if !dir.is_dir() {
         debug!(
             plugin = %plugin_name,
@@ -64,7 +68,7 @@ pub fn load_mcp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginCon
         if entry.file_type().is_dir() {
             let mcp_path = entry.path().join(MCP_JSON);
             if mcp_path.is_file() {
-                match load_mcp_server_from_file(&mcp_path, plugin_name) {
+                match load_mcp_server_from_file(&mcp_path, plugin_name, user_config) {
                     Ok(contrib) => results.push(contrib),
                     Err(e) => {
                         warn!(
@@ -80,7 +84,7 @@ pub fn load_mcp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginCon
             // Check for .mcpb / .dxt bundle files
             if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
                 if BUNDLE_EXTENSIONS.contains(&ext) {
-                    match load_mcp_bundle(entry.path(), plugin_name) {
+                    match load_mcp_bundle(entry.path(), plugin_name, user_config) {
                         Ok(contrib) => results.push(contrib),
                         Err(e) => {
                             warn!(
@@ -110,7 +114,11 @@ pub fn load_mcp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginCon
 ///
 /// These are ZIP archives containing a `manifest.json` (or `mcp.json`) with
 /// the MCP server configuration and optionally bundled server executables.
-fn load_mcp_bundle(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContribution> {
+fn load_mcp_bundle(
+    path: &Path,
+    plugin_name: &str,
+    user_config: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> anyhow::Result<PluginContribution> {
     // Extract the bundle to a temporary directory alongside the bundle file
     let bundle_name = path
         .file_stem()
@@ -155,7 +163,10 @@ fn load_mcp_bundle(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContr
     let mut config: McpServerConfig = serde_json::from_str(&content)?;
 
     // Resolve variables using the extract directory as the plugin root
-    config.resolve_variables(&extract_dir, None);
+    config.resolve_variables(&extract_dir, user_config);
+
+    // Mark as dynamic (plugin-loaded) to distinguish from user-configured servers
+    config.scope = Some("dynamic".into());
 
     debug!(
         plugin = %plugin_name,
@@ -171,6 +182,9 @@ fn load_mcp_bundle(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContr
 }
 
 /// Extract a ZIP bundle to a target directory.
+///
+/// Uses a temporary directory for extraction and renames atomically on success,
+/// preventing partial extraction from being visible to concurrent processes.
 fn extract_zip_bundle(bundle_path: &Path, target_dir: &Path) -> anyhow::Result<()> {
     use std::io::Read;
 
@@ -180,58 +194,81 @@ fn extract_zip_bundle(bundle_path: &Path, target_dir: &Path) -> anyhow::Result<(
         "Extracting MCP bundle"
     );
 
-    // Clean target if it exists
-    if target_dir.exists() {
-        std::fs::remove_dir_all(target_dir)?;
+    // Extract to a temporary directory for atomicity
+    let tmp_dir = {
+        let mut s = target_dir.as_os_str().to_os_string();
+        s.push(".tmp");
+        std::path::PathBuf::from(s)
+    };
+
+    // Clean up leftover tmp dir from a previous failed extraction
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir)?;
     }
-    std::fs::create_dir_all(target_dir)?;
+    std::fs::create_dir_all(&tmp_dir)?;
 
     let file = std::fs::File::open(bundle_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
+    let entry_count = archive.len();
 
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)?;
-        let entry_path = match entry.enclosed_name() {
-            Some(p) => p.to_path_buf(),
-            None => continue, // Skip entries with unsafe paths
-        };
+    let extract_result: anyhow::Result<()> = (|| {
+        for i in 0..entry_count {
+            let mut entry = archive.by_index(i)?;
+            let entry_path = match entry.enclosed_name() {
+                Some(p) => p.to_path_buf(),
+                None => continue, // Skip entries with unsafe paths
+            };
 
-        let out_path = target_dir.join(&entry_path);
+            let out_path = tmp_dir.join(&entry_path);
 
-        // Security: ensure path stays within target_dir
-        if !out_path.starts_with(target_dir) {
-            warn!(
-                path = %entry_path.display(),
-                "Skipping zip entry with path traversal"
-            );
-            continue;
-        }
-
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out_path)?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
+            // Security: ensure path stays within tmp_dir
+            if !out_path.starts_with(&tmp_dir) {
+                warn!(
+                    path = %entry_path.display(),
+                    "Skipping zip entry with path traversal"
+                );
+                continue;
             }
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf)?;
-            std::fs::write(&out_path, &buf)?;
 
-            // Set executable bit on Unix for binary files
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if entry.unix_mode().is_some_and(|m| m & 0o111 != 0) {
-                    let perms = std::fs::Permissions::from_mode(0o755);
-                    std::fs::set_permissions(&out_path, perms)?;
+            if entry.is_dir() {
+                std::fs::create_dir_all(&out_path)?;
+            } else {
+                if let Some(parent) = out_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                std::fs::write(&out_path, &buf)?;
+
+                // Set executable bit on Unix for binary files
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if entry.unix_mode().is_some_and(|m| m & 0o111 != 0) {
+                        let perms = std::fs::Permissions::from_mode(0o755);
+                        std::fs::set_permissions(&out_path, perms)?;
+                    }
                 }
             }
         }
+        Ok(())
+    })();
+
+    if let Err(e) = extract_result {
+        // Clean up tmp dir on error
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err(e);
     }
+
+    // Replace target directory (rename is atomic on same filesystem)
+    if target_dir.exists() {
+        std::fs::remove_dir_all(target_dir)?;
+    }
+    std::fs::rename(&tmp_dir, target_dir)?;
 
     debug!(
         bundle = %bundle_path.display(),
-        entries = archive.len(),
+        entries = entry_count,
         "Extracted MCP bundle"
     );
 
@@ -242,7 +279,11 @@ fn extract_zip_bundle(bundle_path: &Path, target_dir: &Path) -> anyhow::Result<(
 ///
 /// Resolves variable substitution patterns (`${COCODE_PLUGIN_ROOT}`, `${env.VAR}`)
 /// using the parent plugin directory as the plugin root.
-fn load_mcp_server_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<PluginContribution> {
+fn load_mcp_server_from_file(
+    path: &Path,
+    plugin_name: &str,
+    user_config: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> anyhow::Result<PluginContribution> {
     let content = std::fs::read_to_string(path)?;
     let mut config: McpServerConfig = serde_json::from_str(&content)?;
 
@@ -251,7 +292,10 @@ fn load_mcp_server_from_file(path: &Path, plugin_name: &str) -> anyhow::Result<P
     // Walk up to find the directory that contains plugin.json.
     let plugin_root =
         find_plugin_root(path).unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf());
-    config.resolve_variables(&plugin_root, None);
+    config.resolve_variables(&plugin_root, user_config);
+
+    // Mark as dynamic (plugin-loaded) to distinguish from user-configured servers
+    config.scope = Some("dynamic".into());
 
     debug!(
         plugin = %plugin_name,

@@ -83,20 +83,79 @@ impl Tool for KillShellTool {
         }
 
         // Fall through to check background agents via cancel token registry
-        {
-            let mut tokens = ctx.agent_cancel_tokens.lock().await;
-            if let Some(token) = tokens.remove(task_id) {
-                token.cancel();
-                return Ok(ToolOutput::text(format!(
-                    "Agent {task_id} cancelled successfully."
-                )));
-            }
+        let maybe_token = ctx.agent_cancel_tokens.lock().await.remove(task_id);
+        if let Some(token) = maybe_token {
+            // Read partial output before cancellation (best-effort)
+            let partial = read_agent_partial_output(task_id, ctx).await;
+            token.cancel();
+
+            // Record the kill so status is reported as Killed (not Failed)
+            ctx.killed_agents.lock().await.insert(task_id.to_string());
+
+            let msg = match partial {
+                Some(output) => {
+                    format!("Agent {task_id} cancelled.\n\nPartial output:\n{output}")
+                }
+                None => format!("Agent {task_id} cancelled successfully."),
+            };
+            return Ok(ToolOutput::text(msg));
         }
 
         Ok(ToolOutput::error(format!(
             "Task {task_id} not found. It may have already completed or never started."
         )))
     }
+}
+
+/// Best-effort read of an agent's partial output from its transcript file.
+///
+/// Checks candidate paths (agent_output_dir, session_dir sibling, temp_dir)
+/// and parses JSONL entries, extracting output/text/message/error fields.
+async fn read_agent_partial_output(task_id: &str, ctx: &ToolContext) -> Option<String> {
+    let agent_file_name = format!("{task_id}.jsonl");
+    let mut candidate_paths = Vec::new();
+
+    if let Some(ref dir) = ctx.agent_output_dir {
+        candidate_paths.push(dir.join(&agent_file_name));
+    }
+    if let Some(ref session_dir) = ctx.session_dir {
+        candidate_paths.push(
+            session_dir
+                .parent()
+                .unwrap_or(session_dir)
+                .join("cocode-agents")
+                .join(&agent_file_name),
+        );
+    }
+    candidate_paths.push(
+        std::env::temp_dir()
+            .join("cocode-agents")
+            .join(&agent_file_name),
+    );
+
+    for path in &candidate_paths {
+        if let Ok(content) = tokio::fs::read_to_string(path).await {
+            let mut parts = Vec::new();
+            for line in content.lines().filter(|l| !l.trim().is_empty()) {
+                if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Some(v) = entry["output"]
+                        .as_str()
+                        .or_else(|| entry["text"].as_str())
+                        .or_else(|| entry["message"].as_str())
+                    {
+                        parts.push(v.to_string());
+                    } else if let Some(err) = entry["error"].as_str() {
+                        parts.push(format!("[error] {err}"));
+                    }
+                }
+            }
+            if !parts.is_empty() {
+                return Some(parts.join("\n"));
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

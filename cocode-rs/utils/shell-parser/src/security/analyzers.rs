@@ -19,8 +19,101 @@ pub trait Analyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis);
 }
 
+/// Extracts (byte_index, char) pairs for characters in unquoted context.
+///
+/// Tracks single-quote, double-quote, and backslash-escape state,
+/// yielding only characters that appear outside any quoting construct.
+fn extract_unquoted_chars(source: &str) -> Vec<(usize, char)> {
+    let mut result = Vec::new();
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while i < len {
+        let ch = bytes[i];
+        if !in_single_quote && !in_double_quote && ch == b'\\' {
+            i += 2; // skip escaped char
+            continue;
+        }
+        if ch == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if ch == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote {
+            result.push((i, ch as char));
+        }
+        i += 1;
+    }
+    result
+}
+
 // =============================================================================
-// Allow Phase Analyzers
+// Layer 0: Pre-check Analyzer (highest priority)
+// =============================================================================
+
+/// Detects single-quote bypass via backslash at end of single-quoted string.
+///
+/// A pattern like `'test\'` has an odd number of backslashes before the closing
+/// quote. A naive parser that interprets `\'` as an escape (bash doesn't support
+/// escapes in single quotes) would think the quote is still open, allowing
+/// injection of commands after the closing quote.
+pub struct SingleQuoteBypassAnalyzer;
+
+impl Analyzer for SingleQuoteBypassAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        let bytes = source.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+
+        while i < len {
+            if bytes[i] != b'\'' {
+                i += 1;
+                continue;
+            }
+            // Found opening single quote
+            i += 1;
+            let content_start = i;
+            // Scan to closing quote
+            while i < len && bytes[i] != b'\'' {
+                i += 1;
+            }
+            if i >= len {
+                break; // unclosed quote
+            }
+            // Count backslashes immediately before closing quote
+            let mut bs_count = 0usize;
+            let mut j = i;
+            while j > content_start && bytes[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            // Odd number: a naive parser would interpret \' as escape
+            if bs_count % 2 == 1 {
+                analysis.add_risk(
+                    SecurityRisk::new(
+                        RiskKind::SingleQuoteBypass,
+                        "backslash at end of single-quoted string may bypass quote tracking",
+                    )
+                    .with_matched_text(source),
+                );
+                return;
+            }
+            i += 1; // skip closing quote
+        }
+    }
+}
+
+// =============================================================================
+// Deny Phase Analyzers
 // =============================================================================
 
 /// Detects dangerous jq operations (system() calls).
@@ -47,6 +140,18 @@ impl Analyzer for JqDangerAnalyzer {
                             .with_matched_text(arg),
                         );
                     }
+                }
+
+                // Check for dangerous file-access flags
+                let has_file_flag = args
+                    .iter()
+                    .skip(1)
+                    .any(|a| matches!(a.as_str(), "-f" | "--fromfile" | "--rawfile" | "-L"));
+                if has_file_flag {
+                    analysis.add_risk(SecurityRisk::new(
+                        RiskKind::JqDanger,
+                        "jq file flag can read arbitrary files",
+                    ));
                 }
             }
         }
@@ -215,6 +320,263 @@ impl Analyzer for ProcEnvironAnalyzer {
     }
 }
 
+/// Detects backslash-escaped whitespace outside quotes (line-continuation injection).
+pub struct BackslashEscapedWhitespaceAnalyzer;
+
+impl Analyzer for BackslashEscapedWhitespaceAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
+        static BS_WS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\[ \t]").expect("valid regex"));
+
+        // Check unquoted and double-quoted tokens (single-quoted is literal)
+        for token in cmd.tokens() {
+            if matches!(token.kind, TokenKind::SingleQuoted) {
+                continue;
+            }
+            if matches!(
+                token.kind,
+                TokenKind::Word | TokenKind::DoubleQuoted | TokenKind::Operator
+            ) && BS_WS_RE.is_match(&token.text)
+            {
+                analysis.add_risk(
+                    SecurityRisk::new(
+                        RiskKind::BackslashEscapedWhitespace,
+                        "backslash before whitespace may inject line continuation",
+                    )
+                    .with_span(token.span)
+                    .with_matched_text(&token.text),
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Detects backslash-escaped shell operators outside quotes.
+pub struct BackslashEscapedOperatorsAnalyzer;
+
+impl Analyzer for BackslashEscapedOperatorsAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
+        static BS_OP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\[;|&<>]").expect("valid regex"));
+
+        for token in cmd.tokens() {
+            if matches!(
+                token.kind,
+                TokenKind::SingleQuoted | TokenKind::DoubleQuoted
+            ) {
+                continue;
+            }
+            if BS_OP_RE.is_match(&token.text) {
+                analysis.add_risk(
+                    SecurityRisk::new(
+                        RiskKind::BackslashEscapedOperators,
+                        "backslash-escaped operator may bypass naive quote stripping",
+                    )
+                    .with_span(token.span)
+                    .with_matched_text(&token.text),
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Detects non-ASCII Unicode whitespace characters.
+pub struct UnicodeWhitespaceAnalyzer;
+
+impl Analyzer for UnicodeWhitespaceAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        for ch in source.chars() {
+            if ch.is_whitespace() && !ch.is_ascii() {
+                analysis.add_risk(
+                    SecurityRisk::new(
+                        RiskKind::UnicodeWhitespace,
+                        format!(
+                            "non-ASCII whitespace character U+{:04X} may be used for obfuscation",
+                            ch as u32
+                        ),
+                    )
+                    .with_matched_text(ch.to_string()),
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Detects `#` not preceded by whitespace or start-of-line (potential comment injection).
+pub struct MidWordHashAnalyzer;
+
+impl Analyzer for MidWordHashAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        let unquoted = extract_unquoted_chars(source);
+        for &(idx, ch) in &unquoted {
+            if ch == '#' && idx > 0 {
+                let prev = source.as_bytes()[idx - 1];
+                if !prev.is_ascii_whitespace() {
+                    analysis.add_risk(SecurityRisk::new(
+                        RiskKind::MidWordHash,
+                        "hash character not preceded by whitespace may indicate comment injection",
+                    ));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Detects brace expansion ({a,b} or {1..3}) outside quotes.
+pub struct BraceExpansionAnalyzer;
+
+impl Analyzer for BraceExpansionAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        #[allow(clippy::expect_used)]
+        static BRACE_RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"\{[^}]*?(?:,|\.\.)[^}]*\}").expect("valid regex"));
+
+        let source = cmd.source();
+        let unquoted: String = extract_unquoted_chars(source)
+            .into_iter()
+            .map(|(_, ch)| ch)
+            .collect();
+
+        if BRACE_RE.is_match(&unquoted) {
+            analysis.add_risk(SecurityRisk::new(
+                RiskKind::BraceExpansion,
+                "brace expansion outside quotes may generate unexpected arguments",
+            ));
+        }
+    }
+}
+
+/// Detects dangerous zsh-specific commands.
+pub struct ZshDangerousCommandsAnalyzer;
+
+impl Analyzer for ZshDangerousCommandsAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        const ZSH_CMDS: &[&str] = &["zmodload", "emulate", "sysopen", "zcompile", "autoload"];
+
+        let commands = cmd.extract_commands();
+        for args in &commands {
+            if let Some(cmd_name) = args.first() {
+                if ZSH_CMDS.contains(&cmd_name.as_str()) {
+                    analysis.add_risk(SecurityRisk::new(
+                        RiskKind::ZshDangerousCommands,
+                        format!("{cmd_name} is a dangerous zsh-specific command"),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Detects odd number of unescaped quotes after `#` on a line (comment/quote desync).
+pub struct CommentQuoteDesyncAnalyzer;
+
+impl Analyzer for CommentQuoteDesyncAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        for line in source.lines() {
+            // Find first unquoted `#` using quote-state tracking
+            let bytes = line.as_bytes();
+            let len = bytes.len();
+            let mut i = 0;
+            let mut in_single_quote = false;
+            let mut in_double_quote = false;
+            let mut hash_pos = None;
+
+            while i < len {
+                let ch = bytes[i];
+                if !in_single_quote && !in_double_quote && ch == b'\\' {
+                    i += 2; // skip escaped char
+                    continue;
+                }
+                if ch == b'\'' && !in_double_quote {
+                    in_single_quote = !in_single_quote;
+                    i += 1;
+                    continue;
+                }
+                if ch == b'"' && !in_single_quote {
+                    in_double_quote = !in_double_quote;
+                    i += 1;
+                    continue;
+                }
+                if !in_single_quote && !in_double_quote && ch == b'#' {
+                    hash_pos = Some(i);
+                    break;
+                }
+                i += 1;
+            }
+
+            if let Some(pos) = hash_pos {
+                let after_hash = &line[pos + 1..];
+                let mut single_count = 0i32;
+                let mut double_count = 0i32;
+                let mut prev_was_backslash = false;
+                for ch in after_hash.chars() {
+                    if prev_was_backslash {
+                        prev_was_backslash = false;
+                        continue;
+                    }
+                    if ch == '\\' {
+                        prev_was_backslash = true;
+                        continue;
+                    }
+                    if ch == '\'' {
+                        single_count += 1;
+                    } else if ch == '"' {
+                        double_count += 1;
+                    }
+                }
+                if single_count % 2 != 0 || double_count % 2 != 0 {
+                    analysis.add_risk(
+                        SecurityRisk::new(
+                            RiskKind::CommentQuoteDesync,
+                            "odd number of quotes after # may desync parser quote tracking",
+                        )
+                        .with_matched_text(line),
+                    );
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Detects literal newline followed by `#` inside double-quoted tokens.
+pub struct QuotedNewlineHashAnalyzer;
+
+impl Analyzer for QuotedNewlineHashAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        for token in cmd.tokens() {
+            if token.kind != TokenKind::DoubleQuoted {
+                continue;
+            }
+            // Check for literal newline followed by #
+            if token.text.contains('\n') {
+                let lines: Vec<&str> = token.text.split('\n').collect();
+                for line in lines.iter().skip(1) {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with('#') {
+                        analysis.add_risk(
+                            SecurityRisk::new(
+                                RiskKind::QuotedNewlineHash,
+                                "newline followed by # inside double quotes may be interpreted as comment",
+                            )
+                            .with_span(token.span)
+                            .with_matched_text(&token.text),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // =============================================================================
 // Ask Phase Analyzers
 // =============================================================================
@@ -287,13 +649,37 @@ impl Analyzer for MalformedTokensAnalyzer {
             );
         }
 
-        // Check for unbalanced brackets/quotes
+        // Check for unbalanced brackets/quotes with quote-context awareness.
+        // Skip counting inside single quotes (everything is literal there).
         let source = cmd.source();
         let mut paren_depth = 0i32;
         let mut brace_depth = 0i32;
         let mut bracket_depth = 0i32;
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_escape = false;
 
         for ch in source.chars() {
+            if in_escape {
+                in_escape = false;
+                continue;
+            }
+            if ch == '\\' && !in_single_quote {
+                in_escape = true;
+                continue;
+            }
+            if ch == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                continue;
+            }
+            if ch == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                continue;
+            }
+            // Skip bracket counting inside single quotes
+            if in_single_quote {
+                continue;
+            }
             match ch {
                 '(' => paren_depth += 1,
                 ')' => paren_depth -= 1,
@@ -319,29 +705,34 @@ pub struct SensitiveRedirectAnalyzer;
 
 impl Analyzer for SensitiveRedirectAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
-        static SENSITIVE_PATHS: Lazy<Vec<&str>> = Lazy::new(|| {
-            vec![
-                "/etc/passwd",
-                "/etc/shadow",
-                "/etc/sudoers",
-                "~/.ssh/",
-                ".ssh/",
-                "id_rsa",
-                "id_ed25519",
-                ".env",
-                ".netrc",
-                ".npmrc",
-                ".pypirc",
-                "credentials",
-                "secrets",
-                "/dev/tcp",
-                "/dev/udp",
-            ]
-        });
+        const SENSITIVE_PATHS: &[&str] = &[
+            "/etc/passwd",
+            "/etc/shadow",
+            "/etc/sudoers",
+            "~/.ssh/",
+            ".ssh/",
+            "id_rsa",
+            "id_ed25519",
+            ".env",
+            ".netrc",
+            ".npmrc",
+            ".pypirc",
+            "credentials",
+            "secrets",
+            "/dev/tcp",
+            "/dev/udp",
+        ];
 
         if let Some(tree) = cmd.tree() {
             let redirects = extract_redirects_from_tree(tree, cmd.source());
             for redirect in redirects {
+                // Skip fd-to-fd duplications like 2>&1 or 1>&2
+                if redirect.kind == crate::redirects::RedirectKind::Duplicate
+                    && redirect.target.parse::<i32>().is_ok()
+                {
+                    continue;
+                }
+
                 for sensitive in SENSITIVE_PATHS.iter() {
                     if redirect.target.contains(sensitive) {
                         let direction = if redirect.kind.is_output() {
@@ -357,6 +748,17 @@ impl Analyzer for SensitiveRedirectAnalyzer {
                             .with_span(redirect.span),
                         );
                     }
+                }
+
+                // Variable target: redirect to $VAR is suspicious
+                if redirect.target.starts_with('$') {
+                    analysis.add_risk(
+                        SecurityRisk::new(
+                            RiskKind::SensitiveRedirect,
+                            "redirect target uses variable expansion",
+                        )
+                        .with_span(redirect.span),
+                    );
                 }
 
                 // Check for /dev/tcp and /dev/udp (network redirects)
@@ -381,11 +783,9 @@ pub struct NetworkExfiltrationAnalyzer;
 
 impl Analyzer for NetworkExfiltrationAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
-        static EXFIL_CMDS: Lazy<Vec<&str>> = Lazy::new(|| {
-            vec![
-                "curl", "wget", "nc", "netcat", "ncat", "telnet", "ssh", "scp", "rsync", "ftp",
-            ]
-        });
+        const EXFIL_CMDS: &[&str] = &[
+            "curl", "wget", "nc", "netcat", "ncat", "telnet", "ssh", "scp", "rsync", "ftp",
+        ];
 
         let commands = cmd.extract_commands();
         for args in &commands {
@@ -426,8 +826,8 @@ pub struct PrivilegeEscalationAnalyzer;
 
 impl Analyzer for PrivilegeEscalationAnalyzer {
     fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
-        static PRIV_ESC_CMDS: Lazy<Vec<&str>> =
-            Lazy::new(|| vec!["sudo", "su", "doas", "pkexec", "gksudo", "kdesudo", "runas"]);
+        const PRIV_ESC_CMDS: &[&str] =
+            &["sudo", "su", "doas", "pkexec", "gksudo", "kdesudo", "runas"];
 
         let commands = cmd.extract_commands();
         for args in &commands {
@@ -669,7 +1069,7 @@ impl Analyzer for HeredocSubstitutionAnalyzer {
 /// Get all default analyzers.
 pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
     vec![
-        // Allow phase
+        // Deny phase
         Box::new(JqDangerAnalyzer),
         Box::new(ObfuscatedFlagsAnalyzer),
         Box::new(ShellMetacharactersAnalyzer),
@@ -677,6 +1077,14 @@ pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
         Box::new(NewlineInjectionAnalyzer),
         Box::new(IfsInjectionAnalyzer),
         Box::new(ProcEnvironAnalyzer),
+        Box::new(BackslashEscapedWhitespaceAnalyzer),
+        Box::new(BackslashEscapedOperatorsAnalyzer),
+        Box::new(UnicodeWhitespaceAnalyzer),
+        Box::new(MidWordHashAnalyzer),
+        Box::new(BraceExpansionAnalyzer),
+        Box::new(ZshDangerousCommandsAnalyzer),
+        Box::new(CommentQuoteDesyncAnalyzer),
+        Box::new(QuotedNewlineHashAnalyzer),
         // Ask phase
         Box::new(HeredocSubstitutionAnalyzer),
         Box::new(DangerousSubstitutionAnalyzer),

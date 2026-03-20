@@ -204,12 +204,21 @@ fn test_analyze_command_substitution() {
 
 #[test]
 fn test_analyze_obfuscated_flags() {
+    // echo is in the fast-path whitelist, so ANSI-C quoting in echo is safe
     let result = analyze_command_safety("echo $'hello\\nworld'");
-    // ANSI-C quoting is medium risk in Allow phase
-    // May be safe depending on analysis
     assert!(
-        result.is_safe() || result.requires_approval(),
-        "obfuscated flags result: {result:?}"
+        result.is_safe(),
+        "echo with ANSI-C quoting hits fast-path whitelist: {result:?}"
+    );
+}
+
+#[test]
+fn test_deny_phase_risks_always_denied() {
+    // Backslash-escaped operators are Deny-phase risks — must be denied
+    let result = analyze_command_safety("myapp test\\;id");
+    assert!(
+        result.is_denied(),
+        "Deny-phase risk should be denied, got: {result:?}"
     );
 }
 

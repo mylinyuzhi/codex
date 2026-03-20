@@ -180,6 +180,26 @@ async fn test_plan_mode_allows_plan_file() {
 }
 
 #[tokio::test]
+async fn test_plan_mode_blocks_when_no_plan_file_path() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("code.rs");
+
+    let tool = WriteTool::new();
+    // plan mode active but no plan_file_path set — should deny all writes
+    let mut ctx = make_context().with_plan_mode(true, None);
+
+    let input = serde_json::json!({
+        "file_path": file_path.to_str().unwrap(),
+        "content": "fn main() {}"
+    });
+
+    let result = tool.execute(input, &mut ctx).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("Plan mode"));
+}
+
+#[tokio::test]
 async fn test_non_plan_mode_allows_any_file() {
     let dir = TempDir::new().unwrap();
     let file_path = dir.path().join("code.rs");
@@ -245,6 +265,50 @@ async fn test_write_new_file_uses_lf() {
 }
 
 // ── SHA256 staleness detection ────────────────────────────────
+
+// ── Plan mode check_permission tests ──────────────────────────
+
+#[tokio::test]
+async fn test_check_permission_plan_file_auto_allowed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    std::fs::write(&plan_file, "# Plan").unwrap();
+
+    let tool = WriteTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file.clone()));
+
+    let input = serde_json::json!({
+        "file_path": plan_file.to_str().unwrap(),
+        "content": "# Updated Plan"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Plan file write should be auto-allowed, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_permission_non_plan_file_denied_in_plan_mode() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let plan_file = dir.path().join("plan.md");
+    let other_file = dir.path().join("code.rs");
+
+    let tool = WriteTool::new();
+    let ctx = make_context().with_plan_mode(true, Some(plan_file));
+
+    let input = serde_json::json!({
+        "file_path": other_file.to_str().unwrap(),
+        "content": "fn main() {}"
+    });
+
+    let result = tool.check_permission(&input, &ctx).await;
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Non-plan file write in plan mode should be denied, got: {result:?}"
+    );
+}
 
 #[tokio::test]
 async fn test_write_sha256_detects_external_modification() {

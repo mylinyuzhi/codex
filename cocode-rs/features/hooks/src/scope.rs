@@ -9,23 +9,24 @@ use serde::Serialize;
 /// The scope from which a hook originates, which determines its priority.
 ///
 /// Lower numeric order = higher priority. `Policy` hooks always run first.
-/// Plugin hooks are second highest priority, matching Claude Code's behavior
-/// where managed plugins are trusted and take precedence over user session hooks.
+/// Plugin hooks run last (lowest priority) so that user session hooks can
+/// take precedence and block events before plugins see them — matching
+/// Claude Code's behavior where plugin hooks have priority 999 (LAST).
 ///
-/// Priority order: Policy > Plugin > Session > Agent > Skill
+/// Priority order: Policy > Session > Agent > Skill > Plugin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookScope {
     /// Organization-level policy hooks (highest priority).
     Policy = 0,
-    /// Plugin-provided hooks (high priority — managed/trusted).
-    Plugin = 1,
     /// Session-level hooks.
-    Session = 2,
+    Session = 1,
     /// Agent/subagent-level hooks.
-    Agent = 3,
-    /// Skill-level hooks (lowest priority).
-    Skill = 4,
+    Agent = 2,
+    /// Skill-level hooks.
+    Skill = 3,
+    /// Plugin-provided hooks (lowest priority — runs last).
+    Plugin = 4,
 }
 
 /// The source of a hook, providing more detail than scope alone.

@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 
 /// Records subagent interactions to a JSONL file.
@@ -20,6 +22,7 @@ impl TranscriptRecorder {
     /// Append an entry to the transcript file.
     ///
     /// Each entry is serialized as a single JSON line followed by a newline.
+    /// O_APPEND guarantees atomic writes for JSONL entries (<4096 bytes on most POSIX systems).
     pub async fn record(&self, entry: &serde_json::Value) -> std::io::Result<()> {
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -87,6 +90,35 @@ impl TranscriptRecorder {
         });
         self.record(&entry).await
     }
+}
+
+/// Read JSONL entries from a file starting at a byte offset.
+///
+/// Returns the parsed entries and the new byte offset (for subsequent delta reads).
+/// This enables incremental output reading without re-reading the entire file.
+pub async fn read_from_offset(
+    path: &Path,
+    byte_offset: u64,
+) -> std::io::Result<(Vec<serde_json::Value>, u64)> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let metadata = file.metadata().await?;
+    let file_len = metadata.len();
+
+    if byte_offset >= file_len {
+        return Ok((Vec::new(), byte_offset));
+    }
+
+    file.seek(std::io::SeekFrom::Start(byte_offset)).await?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).await?;
+
+    let entries: Vec<serde_json::Value> = buf
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    Ok((entries, file_len))
 }
 
 /// Filter transcript entries with empty or whitespace-only output.

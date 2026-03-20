@@ -98,10 +98,10 @@ impl Tool for ShellTool {
         let (_, analysis) = cocode_shell_parser::parse_and_analyze(&command_str);
 
         if analysis.has_risks() {
-            let allow_phase_risks =
-                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Allow);
-            if !allow_phase_risks.is_empty() {
-                let risk_msgs: Vec<String> = allow_phase_risks
+            let deny_phase_risks =
+                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Deny);
+            if !deny_phase_risks.is_empty() {
+                let risk_msgs: Vec<String> = deny_phase_risks
                     .iter()
                     .map(|r| format!("{}: {}", r.kind, r.message))
                     .collect();

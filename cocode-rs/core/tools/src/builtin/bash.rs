@@ -19,6 +19,9 @@ use cocode_shell::CommandResult;
 use cocode_shell::ExecuteResult;
 use serde_json::Value;
 
+/// Maximum number of subcommands allowed in a compound command.
+const MAX_SUBCOMMANDS: usize = 20;
+
 /// Default timeout in seconds.
 const DEFAULT_TIMEOUT_SECS: i64 = 120;
 /// Maximum timeout in seconds.
@@ -205,6 +208,46 @@ fn is_plan_mode_allowed(command: &str) -> bool {
     })
 }
 
+/// Check for risky compound command patterns.
+///
+/// Returns a reason string if the compound command should require approval.
+fn check_compound_risks(commands: &[Vec<String>]) -> Option<String> {
+    // 1. Subcommand count cap
+    if commands.len() > MAX_SUBCOMMANDS {
+        return Some(format!(
+            "{} subcommands exceeds limit ({})",
+            commands.len(),
+            MAX_SUBCOMMANDS
+        ));
+    }
+
+    // 2. Multiple cd detection
+    let cd_count = commands
+        .iter()
+        .filter(|c| c.first().map(String::as_str) == Some("cd"))
+        .count();
+    if cd_count > 1 {
+        return Some("multiple cd commands in one invocation".to_string());
+    }
+
+    // 3. cd + git write command protection
+    let has_cd = cd_count > 0;
+    let has_git_write = commands.iter().any(|c| {
+        c.first().map(String::as_str) == Some("git")
+            && c.get(1).is_some_and(|s| {
+                matches!(
+                    s.as_str(),
+                    "push" | "commit" | "merge" | "rebase" | "reset" | "checkout"
+                )
+            })
+    });
+    if has_cd && has_git_write {
+        return Some("cd combined with git write command requires approval".to_string());
+    }
+
+    None
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -291,14 +334,14 @@ impl Tool for BashTool {
         }
 
         // Run security analysis using cocode-shell-parser
-        let (_, analysis) = cocode_shell_parser::parse_and_analyze(command);
+        let (parsed, analysis) = cocode_shell_parser::parse_and_analyze(command);
 
         if analysis.has_risks() {
-            // Allow-phase risks → Deny immediately (injection vectors)
-            let allow_phase_risks =
-                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Allow);
-            if !allow_phase_risks.is_empty() {
-                let risk_msgs: Vec<String> = allow_phase_risks
+            // Deny-phase risks → Deny immediately (injection vectors)
+            let deny_phase_risks =
+                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Deny);
+            if !deny_phase_risks.is_empty() {
+                let risk_msgs: Vec<String> = deny_phase_risks
                     .iter()
                     .map(|r| format!("{}: {}", r.kind, r.message))
                     .collect();
@@ -361,6 +404,28 @@ impl Tool for BashTool {
                         tool_name: cocode_protocol::ToolName::Bash.as_str().to_string(),
                         description,
                         risks,
+                        allow_remember: true,
+                        proposed_prefix_pattern: None,
+                    },
+                };
+            }
+        }
+
+        // Check compound command risks (subcommand count, multiple cd, cd+git write)
+        {
+            let commands = parsed.extract_commands();
+            if let Some(reason) = check_compound_risks(&commands) {
+                let description = if command.len() > 120 {
+                    format!("{}...", &command[..120])
+                } else {
+                    command.to_string()
+                };
+                return PermissionResult::NeedsApproval {
+                    request: ApprovalRequest {
+                        request_id: format!("bash-compound-{}", uuid::Uuid::new_v4()),
+                        tool_name: cocode_protocol::ToolName::Bash.as_str().to_string(),
+                        description: format!("{reason}: {description}"),
+                        risks: vec![],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                     },

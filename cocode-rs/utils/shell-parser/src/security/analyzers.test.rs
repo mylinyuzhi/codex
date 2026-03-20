@@ -114,3 +114,316 @@ fn test_safe_command() {
     // Should have no high/critical risks
     assert!(analysis.risks.iter().all(|r| r.level < RiskLevel::High));
 }
+
+// =========================================================================
+// Phase 2: New analyzer tests
+// =========================================================================
+
+#[test]
+fn test_backslash_escaped_whitespace() {
+    let analysis = analyze_command("echo hello\\ world");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BackslashEscapedWhitespace)
+    );
+}
+
+#[test]
+fn test_backslash_escaped_whitespace_safe() {
+    // Inside single quotes is literal, should not flag
+    let analysis = analyze_command("echo 'hello\\ world'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BackslashEscapedWhitespace)
+    );
+}
+
+#[test]
+fn test_backslash_escaped_operators() {
+    let analysis = analyze_command("echo test\\;id");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BackslashEscapedOperators)
+    );
+}
+
+#[test]
+fn test_backslash_escaped_operators_safe() {
+    // Inside quotes should not flag
+    let analysis = analyze_command("echo 'test\\;id'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BackslashEscapedOperators)
+    );
+}
+
+#[test]
+fn test_unicode_whitespace() {
+    // U+00A0 non-breaking space
+    let analysis = analyze_command("echo\u{00A0}hello");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::UnicodeWhitespace)
+    );
+}
+
+#[test]
+fn test_unicode_whitespace_safe() {
+    let analysis = analyze_command("echo hello world");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::UnicodeWhitespace)
+    );
+}
+
+#[test]
+fn test_mid_word_hash() {
+    let analysis = analyze_command("echo test#comment");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::MidWordHash)
+    );
+}
+
+#[test]
+fn test_mid_word_hash_safe() {
+    // Hash preceded by whitespace is a normal comment
+    let analysis = analyze_command("echo test # comment");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::MidWordHash)
+    );
+}
+
+#[test]
+fn test_brace_expansion() {
+    let analysis = analyze_command("echo {a,b,c}");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BraceExpansion)
+    );
+}
+
+#[test]
+fn test_brace_expansion_range() {
+    let analysis = analyze_command("echo {1..10}");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BraceExpansion)
+    );
+}
+
+#[test]
+fn test_brace_expansion_safe() {
+    // Inside quotes should not flag
+    let analysis = analyze_command("echo '{a,b}'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::BraceExpansion)
+    );
+}
+
+#[test]
+fn test_zsh_dangerous_commands() {
+    let analysis = analyze_command("zmodload zsh/system");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::ZshDangerousCommands)
+    );
+}
+
+#[test]
+fn test_zsh_dangerous_commands_safe() {
+    let analysis = analyze_command("echo hello");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::ZshDangerousCommands)
+    );
+}
+
+#[test]
+fn test_comment_quote_desync() {
+    // Odd number of single quotes after #
+    let analysis = analyze_command("echo test #it's broken");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::CommentQuoteDesync)
+    );
+}
+
+#[test]
+fn test_comment_quote_desync_safe() {
+    // Even quotes after # is fine
+    let analysis = analyze_command("echo test # balanced 'a' 'b'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::CommentQuoteDesync)
+    );
+}
+
+#[test]
+fn test_comment_quote_desync_hash_inside_quotes() {
+    // A `#` inside double quotes is a literal character, not a comment delimiter
+    let analysis = analyze_command("echo \"color#red\"");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::CommentQuoteDesync),
+        "hash inside double quotes should not flag CommentQuoteDesync: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_comment_quote_desync_hash_inside_single_quotes() {
+    // A `#` inside single quotes is also a literal character
+    let analysis = analyze_command("echo 'color#red'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::CommentQuoteDesync),
+        "hash inside single quotes should not flag CommentQuoteDesync: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_quoted_newline_hash() {
+    let analysis = analyze_command("echo \"hello\n# injected\"");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::QuotedNewlineHash)
+    );
+}
+
+#[test]
+fn test_quoted_newline_hash_safe() {
+    let analysis = analyze_command("echo \"hello world\"");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::QuotedNewlineHash)
+    );
+}
+
+// =========================================================================
+// Phase 3: Layer 0 + safe pattern tests
+// =========================================================================
+
+#[test]
+fn test_single_quote_bypass() {
+    // SingleQuoteBypassAnalyzer is Layer 0 (not in default_analyzers), test directly
+    let mut parser = ShellParser::new();
+    let cmd = parser.parse("echo 'test\\' | evil");
+    let mut analysis = SecurityAnalysis::new();
+    SingleQuoteBypassAnalyzer.analyze(&cmd, &mut analysis);
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::SingleQuoteBypass),
+        "should detect single quote bypass: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_single_quote_bypass_safe() {
+    let mut parser = ShellParser::new();
+    let cmd = parser.parse("echo 'normal string'");
+    let mut analysis = SecurityAnalysis::new();
+    SingleQuoteBypassAnalyzer.analyze(&cmd, &mut analysis);
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::SingleQuoteBypass)
+    );
+}
+
+#[test]
+fn test_single_quote_bypass_double_backslash_safe() {
+    // Even number of backslashes before closing quote is legitimate
+    let mut parser = ShellParser::new();
+    let cmd = parser.parse("echo 'test\\\\' more");
+    let mut analysis = SecurityAnalysis::new();
+    SingleQuoteBypassAnalyzer.analyze(&cmd, &mut analysis);
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::SingleQuoteBypass),
+        "double backslash should NOT flag: {analysis:?}"
+    );
+}
+
+// =========================================================================
+// Phase 4: Existing analyzer fix tests
+// =========================================================================
+
+#[test]
+fn test_jq_file_flag() {
+    let analysis = analyze_command("jq -f dangerous.jq .");
+    assert!(
+        analysis.risks.iter().any(|r| r.kind == RiskKind::JqDanger),
+        "jq -f should produce JqDanger: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_malformed_tokens_single_quoted_brackets() {
+    // Brackets inside single quotes are literal, should NOT flag
+    let analysis = analyze_command("echo 'func(){}'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::MalformedTokens && r.message.contains("unbalanced")),
+        "single-quoted brackets should not flag: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_malformed_tokens_double_quoted_brackets() {
+    // Brackets inside double quotes should not cause false positive
+    let analysis = analyze_command("echo \"array[0]\"");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::MalformedTokens && r.message.contains("unbalanced")),
+        "double-quoted balanced brackets should not flag: {analysis:?}"
+    );
+}

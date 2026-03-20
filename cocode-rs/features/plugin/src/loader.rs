@@ -20,6 +20,8 @@ use crate::manifest::PluginRootSettings;
 use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
 
+use crate::plugin_settings::PluginSettings;
+
 use cocode_skill::SkillLoadOutcome;
 use cocode_skill::load_skills_from_dir;
 use std::path::Path;
@@ -32,8 +34,11 @@ use walkdir::WalkDir;
 /// Maximum depth to scan for plugins.
 const MAX_SCAN_DEPTH: i32 = 3;
 
+/// Maximum output style file size (1 MB).
+const MAX_OUTPUT_STYLE_SIZE: u64 = 1_048_576;
+
 /// A loaded plugin with its manifest and contributions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoadedPlugin {
     /// Plugin manifest.
     pub manifest: PluginManifest,
@@ -126,7 +131,12 @@ impl PluginLoader {
     }
 
     /// Load a single plugin from its directory.
-    pub fn load(&self, dir: &Path, scope: PluginScope) -> Result<LoadedPlugin> {
+    pub fn load(
+        &self,
+        dir: &Path,
+        scope: PluginScope,
+        settings: &PluginSettings,
+    ) -> Result<LoadedPlugin> {
         debug!(path = %dir.display(), scope = %scope, "Loading plugin");
 
         // Load manifest
@@ -141,9 +151,16 @@ impl PluginLoader {
             .build());
         }
 
+        // Look up per-plugin user config for variable resolution (e.g. MCP servers)
+        let user_config = settings.get_plugin_config(&manifest.plugin.name);
+
         // Load contributions
-        let contributions =
-            self.load_contributions(dir, &manifest.contributions, &manifest.plugin.name)?;
+        let contributions = self.load_contributions(
+            dir,
+            &manifest.contributions,
+            &manifest.plugin.name,
+            user_config,
+        )?;
 
         // Load plugin root settings
         let settings = PluginRootSettings::from_dir(dir);
@@ -194,8 +211,9 @@ impl PluginLoader {
                 .build()
             })?
         } else {
-            // Path doesn't exist, return as-is (will fail later with appropriate error)
-            full_path
+            // Normalize the path to resolve .. components for traversal detection,
+            // even when the target doesn't exist and can't be canonicalized.
+            normalize_path(&full_path)
         };
 
         // Check that the canonical path is within the plugin directory
@@ -218,31 +236,21 @@ impl PluginLoader {
         plugin_dir: &Path,
         contributions: &PluginContributions,
         plugin_name: &str,
+        user_config: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<Vec<PluginContribution>> {
         let mut result = Vec::new();
 
         // Load skills (declared or auto-discover skills/)
-        let skill_paths = if contributions.skills.is_empty() {
-            self.auto_discover_dir(plugin_dir, "skills")
-        } else {
-            contributions.skills.iter().cloned().collect()
-        };
-        for skill_path in &skill_paths {
-            let full_path = match self.validate_path(plugin_dir, skill_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %skill_path,
-                        error = %e,
-                        "Invalid skill path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_dir(plugin_dir, "skills");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.skills,
+            fallback,
+            plugin_name,
+            "skill",
+        ) {
             if full_path.is_dir() {
-                let outcomes = load_skills_from_dir(&full_path);
-                for outcome in outcomes {
+                for outcome in load_skills_from_dir(&full_path) {
                     match outcome {
                         SkillLoadOutcome::Success { skill, .. } => {
                             result.push(PluginContribution::Skill {
@@ -260,34 +268,18 @@ impl PluginLoader {
                         }
                     }
                 }
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "Skill path not found or not a directory"
-                );
             }
         }
 
         // Load hooks (declared or auto-discover hooks/hooks.json)
-        let hook_paths = if contributions.hooks.is_empty() {
-            self.auto_discover_file(plugin_dir, "hooks/hooks.json")
-        } else {
-            contributions.hooks.iter().cloned().collect()
-        };
-        for hook_path in &hook_paths {
-            let full_path = match self.validate_path(plugin_dir, hook_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %hook_path,
-                        error = %e,
-                        "Invalid hook path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_file(plugin_dir, "hooks/hooks.json");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.hooks,
+            fallback,
+            plugin_name,
+            "hook",
+        ) {
             if full_path.is_file() {
                 match self.load_hooks_from_file(&full_path, plugin_name) {
                     Ok(hooks) => result.extend(hooks),
@@ -300,175 +292,89 @@ impl PluginLoader {
                         );
                     }
                 }
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "Hook file not found"
-                );
             }
         }
 
         // Load agents (declared or auto-discover agents/)
-        let agent_paths = if contributions.agents.is_empty() {
-            self.auto_discover_dir(plugin_dir, "agents")
-        } else {
-            contributions.agents.iter().cloned().collect()
-        };
-        for agent_path in &agent_paths {
-            let full_path = match self.validate_path(plugin_dir, agent_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %agent_path,
-                        error = %e,
-                        "Invalid agent path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_dir(plugin_dir, "agents");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.agents,
+            fallback,
+            plugin_name,
+            "agent",
+        ) {
             if full_path.is_dir() {
-                let agents = load_agents_from_dir(&full_path, plugin_name);
-                result.extend(agents);
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "Agent path not found or not a directory"
-                );
+                result.extend(load_agents_from_dir(&full_path, plugin_name));
             }
         }
 
         // Load commands (declared or auto-discover commands/)
-        let command_paths = if contributions.commands.is_empty() {
-            self.auto_discover_dir(plugin_dir, "commands")
-        } else {
-            contributions.commands.iter().cloned().collect()
-        };
-        for command_path in &command_paths {
-            let full_path = match self.validate_path(plugin_dir, command_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %command_path,
-                        error = %e,
-                        "Invalid command path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_dir(plugin_dir, "commands");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.commands,
+            fallback,
+            plugin_name,
+            "command",
+        ) {
             if full_path.is_dir() {
-                let commands = load_commands_from_dir(&full_path, plugin_name);
-                result.extend(commands);
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "Command path not found or not a directory"
-                );
+                result.extend(load_commands_from_dir(&full_path, plugin_name));
             }
         }
 
         // Load MCP servers (declared or auto-discover mcp/ and .mcp.json)
-        let mcp_paths = if contributions.mcp_servers.is_empty() {
+        let fallback = {
             let mut paths = self.auto_discover_dir(plugin_dir, "mcp");
             let mcp_json = plugin_dir.join(".mcp.json");
             if mcp_json.is_file() {
                 paths.push(".mcp.json".to_string());
             }
             paths
-        } else {
-            contributions.mcp_servers.iter().cloned().collect()
         };
-        for mcp_path in &mcp_paths {
-            let full_path = match self.validate_path(plugin_dir, mcp_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %mcp_path,
-                        error = %e,
-                        "Invalid MCP server path in plugin"
-                    );
-                    continue;
-                }
-            };
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.mcp_servers,
+            fallback,
+            plugin_name,
+            "MCP server",
+        ) {
             if full_path.is_dir() {
-                let servers = load_mcp_servers_from_dir(&full_path, plugin_name);
-                result.extend(servers);
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "MCP server path not found or not a directory"
-                );
+                result.extend(load_mcp_servers_from_dir(
+                    &full_path,
+                    plugin_name,
+                    user_config,
+                ));
             }
         }
 
         // Load LSP servers (declared or auto-discover .lsp.json)
-        let lsp_paths = if contributions.lsp_servers.is_empty() {
-            self.auto_discover_file(plugin_dir, ".lsp.json")
-        } else {
-            contributions.lsp_servers.iter().cloned().collect()
-        };
-        for lsp_path in &lsp_paths {
-            let full_path = match self.validate_path(plugin_dir, lsp_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %lsp_path,
-                        error = %e,
-                        "Invalid LSP server path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_file(plugin_dir, ".lsp.json");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.lsp_servers,
+            fallback,
+            plugin_name,
+            "LSP server",
+        ) {
             if full_path.is_file() {
-                let servers = load_lsp_servers_from_file(&full_path, plugin_name);
-                result.extend(servers);
+                result.extend(load_lsp_servers_from_file(&full_path, plugin_name));
             } else if full_path.is_dir() {
-                let servers = load_lsp_servers_from_dir(&full_path, plugin_name);
-                result.extend(servers);
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "LSP server path not found"
-                );
+                result.extend(load_lsp_servers_from_dir(&full_path, plugin_name));
             }
         }
 
         // Load output styles (declared or auto-discover outputStyles/)
-        let style_paths = if contributions.output_styles.is_empty() {
-            self.auto_discover_dir(plugin_dir, "outputStyles")
-        } else {
-            contributions.output_styles.iter().cloned().collect()
-        };
-        for style_path in &style_paths {
-            let full_path = match self.validate_path(plugin_dir, style_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        plugin = %plugin_name,
-                        path = %style_path,
-                        error = %e,
-                        "Invalid output style path in plugin"
-                    );
-                    continue;
-                }
-            };
+        let fallback = self.auto_discover_dir(plugin_dir, "outputStyles");
+        for full_path in self.resolve_paths(
+            plugin_dir,
+            &contributions.output_styles,
+            fallback,
+            plugin_name,
+            "output style",
+        ) {
             if full_path.is_dir() {
-                let styles = load_output_styles_from_dir(&full_path, plugin_name);
-                result.extend(styles);
-            } else {
-                debug!(
-                    plugin = %plugin_name,
-                    path = %full_path.display(),
-                    "Output style path not found or not a directory"
-                );
+                result.extend(load_output_styles_from_dir(&full_path, plugin_name));
             }
         }
 
@@ -495,6 +401,39 @@ impl PluginLoader {
         } else {
             Vec::new()
         }
+    }
+
+    /// Resolve declared or auto-discovered paths, validating each against the
+    /// plugin directory boundary.
+    fn resolve_paths(
+        &self,
+        plugin_dir: &Path,
+        declared: &crate::contribution::StringOrVec,
+        fallback: Vec<String>,
+        plugin_name: &str,
+        contribution_type: &str,
+    ) -> Vec<PathBuf> {
+        let relative_paths: Vec<String> = if declared.is_empty() {
+            fallback
+        } else {
+            declared.iter().cloned().collect()
+        };
+
+        relative_paths
+            .iter()
+            .filter_map(|rel| match self.validate_path(plugin_dir, rel) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %rel,
+                        error = %e,
+                        "Invalid {contribution_type} path in plugin"
+                    );
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Load hooks from a JSON file.
@@ -525,7 +464,10 @@ impl PluginLoader {
 ///
 /// Scans each root for plugins and loads them. Returns all successfully
 /// loaded plugins.
-pub fn load_plugins_from_roots(roots: &[(PathBuf, PluginScope)]) -> Vec<LoadedPlugin> {
+pub fn load_plugins_from_roots(
+    roots: &[(PathBuf, PluginScope)],
+    settings: &PluginSettings,
+) -> Vec<LoadedPlugin> {
     let loader = PluginLoader::new();
     let mut plugins = Vec::new();
 
@@ -548,7 +490,7 @@ pub fn load_plugins_from_roots(roots: &[(PathBuf, PluginScope)]) -> Vec<LoadedPl
         );
 
         for dir in plugin_dirs {
-            match loader.load(&dir, *scope) {
+            match loader.load(&dir, *scope, settings) {
                 Ok(plugin) => plugins.push(plugin),
                 Err(e) => {
                     warn!(
@@ -565,6 +507,22 @@ pub fn load_plugins_from_roots(roots: &[(PathBuf, PluginScope)]) -> Vec<LoadedPl
     info!(total = plugins.len(), "Plugin loading complete");
 
     plugins
+}
+
+/// Normalize a path by resolving `.` and `..` components without filesystem access.
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                result.pop();
+            }
+            Component::CurDir => {}
+            c => result.push(c),
+        }
+    }
+    result
 }
 
 /// Load output styles from a directory.
@@ -592,6 +550,18 @@ fn load_output_styles_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContr
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            // Check file size before reading
+            if let Ok(meta) = entry.metadata()
+                && meta.len() > MAX_OUTPUT_STYLE_SIZE
+            {
+                warn!(
+                    plugin = %plugin_name,
+                    path = %path.display(),
+                    size = meta.len(),
+                    "Output style file exceeds size limit, skipping"
+                );
+                continue;
+            }
             let name = path
                 .file_stem()
                 .and_then(|s| s.to_str())

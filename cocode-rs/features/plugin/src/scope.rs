@@ -5,6 +5,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// The scope from which a plugin was loaded.
 ///
@@ -84,6 +85,21 @@ impl std::fmt::Display for PluginScope {
             Self::Project => write!(f, "project"),
             Self::Local => write!(f, "local"),
             Self::Flag => write!(f, "flag"),
+        }
+    }
+}
+
+impl FromStr for PluginScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "managed" => Ok(Self::Managed),
+            "user" => Ok(Self::User),
+            "project" => Ok(Self::Project),
+            "local" => Ok(Self::Local),
+            "flag" => Ok(Self::Flag),
+            other => Err(format!("unknown plugin scope: {other}")),
         }
     }
 }

@@ -39,9 +39,13 @@ use cocode_shell::ShellExecutor;
 use cocode_skill::SkillInterface;
 use cocode_skill::SkillManager;
 use cocode_subagent::AgentExecuteParams;
+use cocode_subagent::AgentStatus as SubagentStatus;
 use cocode_subagent::IsolationMode;
 use cocode_subagent::MemoryScope;
 use cocode_subagent::SubagentManager;
+use cocode_system_reminder::BackgroundTaskInfo;
+use cocode_system_reminder::BackgroundTaskStatus;
+use cocode_system_reminder::BackgroundTaskType;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
 
@@ -305,6 +309,13 @@ pub struct SessionState {
     /// The state is a list of (path, read_state) tuples representing files that
     /// have been read and their content/modification state.
     reminder_file_tracker_state: Vec<(std::path::PathBuf, cocode_tools::FileReadState)>,
+
+    /// Shared set of agent IDs killed via TaskStop (persists across turns).
+    ///
+    /// When TaskStop cancels a background agent, the agent_id is inserted here.
+    /// `collect_background_agent_tasks()` checks this set to report the agent
+    /// as `Killed` rather than `Failed`.
+    killed_agents: cocode_tools::context::KilledAgents,
 }
 
 impl SessionState {
@@ -434,7 +445,12 @@ impl SessionState {
         }
 
         // Create subagent manager and load builtin + custom agents
-        let mut subagent_manager = SubagentManager::new();
+        let auto_background_timeout = std::env::var("COCODE_AUTO_BACKGROUND_TASKS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs);
+        let mut subagent_manager =
+            SubagentManager::new().with_auto_background_timeout(auto_background_timeout);
         let mut agent_defs =
             cocode_subagent::all_agents(&config.cocode_home, Some(session.working_dir.as_path()));
 
@@ -711,6 +727,7 @@ impl SessionState {
                 cocode_tools::ApprovalStore::new(),
             )),
             reminder_file_tracker_state: Vec::new(),
+            killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         });
 
         // Clean up orphaned worktrees at session startup (Gap 8 fix)
@@ -930,7 +947,8 @@ impl SessionState {
         .approval_store(self.shared_approval_store.clone())
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
-        .cocode_home(self.config.cocode_home.clone());
+        .cocode_home(self.config.cocode_home.clone())
+        .killed_agents(self.killed_agents.clone());
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -938,6 +956,9 @@ impl SessionState {
         }
 
         let mut loop_instance = builder.build();
+
+        // Push background agent task info for system reminders
+        loop_instance.set_background_agent_tasks(self.collect_background_agent_tasks().await);
 
         let result = loop_instance.run(user_input).await?;
 
@@ -2531,6 +2552,55 @@ impl SessionState {
         })
     }
 
+    /// Collect background agent task info from the subagent manager.
+    ///
+    /// Called before each `loop_instance.run()` to populate the system reminder
+    /// feedback loop with current agent statuses.
+    async fn collect_background_agent_tasks(&self) -> Vec<BackgroundTaskInfo> {
+        let mut mgr = self.subagent_manager.lock().await;
+        let killed = self.killed_agents.lock().await;
+
+        // Promote Failed → Killed for agents explicitly stopped via TaskStop.
+        // After cancellation the completion handler marks them Failed; this
+        // upgrades to Killed so GC, status reporting, and match arms work.
+        if !killed.is_empty() {
+            mgr.promote_killed(&killed);
+        }
+
+        // Auto-GC stale agents (completed/failed/killed for >5 min).
+        mgr.gc_stale(std::time::Duration::from_secs(300));
+
+        mgr.agent_infos()
+            .into_iter()
+            .map(|info| {
+                let is_completed = matches!(
+                    info.status,
+                    SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Killed
+                );
+                BackgroundTaskInfo {
+                    task_id: info.id,
+                    task_type: BackgroundTaskType::AsyncAgent,
+                    command: info.name.unwrap_or_else(|| info.agent_type.clone()),
+                    status: match info.status {
+                        SubagentStatus::Running | SubagentStatus::Backgrounded => {
+                            BackgroundTaskStatus::Running
+                        }
+                        SubagentStatus::Completed => BackgroundTaskStatus::Completed,
+                        SubagentStatus::Failed | SubagentStatus::Killed => {
+                            BackgroundTaskStatus::Failed
+                        }
+                    },
+                    exit_code: None,
+                    has_new_output: false,
+                    progress_message: None,
+                    is_completion_notification: is_completed,
+                    delta_summary: None,
+                    description: None,
+                }
+            })
+            .collect()
+    }
+
     /// Build the callback for firing SubagentStop hooks when background agents complete.
     fn build_background_stop_hook_fn(&self) -> cocode_subagent::BackgroundStopHookFn {
         let hook_registry = self.hook_registry.clone();
@@ -2726,7 +2796,8 @@ impl SessionState {
         .approval_store(self.shared_approval_store.clone())
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
-        .cocode_home(self.config.cocode_home.clone());
+        .cocode_home(self.config.cocode_home.clone())
+        .killed_agents(self.killed_agents.clone());
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
@@ -2734,6 +2805,9 @@ impl SessionState {
         }
 
         let mut loop_instance = builder.build();
+
+        // Push background agent task info for system reminders
+        loop_instance.set_background_agent_tasks(self.collect_background_agent_tasks().await);
 
         // Queued commands are consumed as steering in core_message_loop Step 6.5.
         // No post-idle re-execution needed — steering asks the model to address

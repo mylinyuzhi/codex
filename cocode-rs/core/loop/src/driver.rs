@@ -37,6 +37,9 @@ use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::ApprovedPlanInfo;
 use cocode_system_reminder::AsyncHookResponseInfo;
+use cocode_system_reminder::BackgroundTaskInfo;
+use cocode_system_reminder::BackgroundTaskStatus;
+use cocode_system_reminder::BackgroundTaskType;
 use cocode_system_reminder::GeneratorContext;
 use cocode_system_reminder::HookBlockingInfo;
 use cocode_system_reminder::HookContextInfo;
@@ -46,6 +49,7 @@ use cocode_system_reminder::InvokedSkillInfo;
 use cocode_system_reminder::MentionReadRecord;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SkillInfo;
+use cocode_system_reminder::StructuredTaskInfo;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::create_injected_messages;
 use cocode_tools::ApprovalStore;
@@ -272,6 +276,18 @@ pub struct AgentLoop {
 
     /// Path to the cocode home directory for durable cron persistence.
     cocode_home: Option<std::path::PathBuf>,
+
+    /// Shared set of agent IDs killed via TaskStop (persists across turns).
+    killed_agents: cocode_tools::context::KilledAgents,
+
+    /// Per-turn background agent task info pushed by the session layer.
+    ///
+    /// Set via [`set_background_agent_tasks`] before each turn so that
+    /// `generate_system_reminders()` can populate the `background_tasks`
+    /// field in `GeneratorContext`. Combined with shell background tasks
+    /// collected directly from the registry, this closes the feedback loop
+    /// between the subagent manager and the unified tasks system reminder.
+    background_agent_tasks: Vec<cocode_system_reminder::BackgroundTaskInfo>,
 }
 
 impl AgentLoop {
@@ -346,6 +362,19 @@ impl AgentLoop {
     /// Take the current cron jobs (if any) set by CronCreate/CronDelete.
     pub fn take_cron_jobs(&mut self) -> Option<serde_json::Value> {
         self.current_cron_jobs.take()
+    }
+
+    /// Set background agent task info for the next turn's system reminders.
+    ///
+    /// Called by the session/executor layer before each turn with the latest
+    /// agent snapshot from `SubagentManager::agent_infos()`. These are
+    /// combined with shell background tasks from the registry to populate
+    /// the `background_tasks` field in `GeneratorContext`.
+    pub fn set_background_agent_tasks(
+        &mut self,
+        tasks: Vec<cocode_system_reminder::BackgroundTaskInfo>,
+    ) {
+        self.background_agent_tasks = tasks;
     }
 
     /// Take the plan mode state for persistence across loop runs.
@@ -1187,6 +1216,39 @@ impl AgentLoop {
         let mention_read_records =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::<MentionReadRecord>::new()));
 
+        // Collect background tasks for system reminder feedback loop:
+        // 1. Shell background tasks from the registry
+        // 2. Agent background tasks pushed by the session layer
+        let background_tasks = {
+            let mut tasks: Vec<BackgroundTaskInfo> = Vec::new();
+
+            // Shell background tasks
+            for snapshot in self.shell_executor.background_registry.list_tasks().await {
+                let status = if snapshot.is_running {
+                    BackgroundTaskStatus::Running
+                } else {
+                    BackgroundTaskStatus::Completed
+                };
+                tasks.push(BackgroundTaskInfo {
+                    task_id: snapshot.id,
+                    task_type: BackgroundTaskType::Shell,
+                    command: snapshot.command,
+                    status,
+                    exit_code: None,
+                    has_new_output: false,
+                    progress_message: None,
+                    is_completion_notification: false,
+                    delta_summary: None,
+                    description: None,
+                });
+            }
+
+            // Agent background tasks (pushed by session layer)
+            tasks.extend(self.background_agent_tasks.drain(..));
+
+            tasks
+        };
+
         // Generate system reminders with derived tracker view (lock NOT held)
         let injected_messages = {
             let mut builder = GeneratorContext::builder()
@@ -1207,6 +1269,11 @@ impl AgentLoop {
                     blocking: blocking_hooks,
                 })
                 .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
+
+            // Wire background tasks into the generator context
+            if !background_tasks.is_empty() {
+                builder = builder.background_tasks(background_tasks);
+            }
 
             // Drain pending compacted large files (one-shot: populated during restoration)
             if !self.pending_compacted_large_files.is_empty() {
@@ -1262,11 +1329,20 @@ impl AgentLoop {
                 let mut skill_infos: Vec<SkillInfo> = sm
                     .llm_invocable_skills()
                     .into_iter()
-                    .map(|skill| SkillInfo {
-                        name: skill.name.clone(),
-                        description: skill.description.clone(),
-                        when_to_use: skill.when_to_use.clone(),
-                        is_bundled: skill.loaded_from == cocode_skill::LoadedFrom::Bundled,
+                    .map(|skill| {
+                        let plugin_name = match &skill.source {
+                            cocode_skill::SkillSource::Plugin { plugin_name } => {
+                                Some(plugin_name.clone())
+                            }
+                            _ => None,
+                        };
+                        SkillInfo {
+                            name: skill.name.clone(),
+                            description: skill.description.clone(),
+                            when_to_use: skill.when_to_use.clone(),
+                            is_bundled: skill.loaded_from == cocode_skill::LoadedFrom::Bundled,
+                            plugin_name,
+                        }
                     })
                     .collect();
 
@@ -1274,11 +1350,18 @@ impl AgentLoop {
                 let touched_paths = reminder_tracker_view.tracked_files();
                 if !touched_paths.is_empty() {
                     for skill in sm.activate_for_paths(&touched_paths) {
+                        let plugin_name = match &skill.source {
+                            cocode_skill::SkillSource::Plugin { plugin_name } => {
+                                Some(plugin_name.clone())
+                            }
+                            _ => None,
+                        };
                         skill_infos.push(SkillInfo {
                             name: skill.name.clone(),
                             description: skill.description.clone(),
                             when_to_use: skill.when_to_use.clone(),
                             is_bundled: false,
+                            plugin_name,
                         });
                     }
                 }
@@ -1317,46 +1400,96 @@ impl AgentLoop {
                 builder = builder.rewind_info(rewind_info);
             }
 
-            // Convert structured tasks to TodoItems for the reminder system.
-            // When StructuredTasks feature is enabled, these replace TodoWrite items.
-            // Also include plain todos from TodoWrite for backwards compatibility.
+            // Collect background tasks from shell executor for system reminders.
             {
-                let mut todo_items = Vec::new();
+                let snapshots = self.shell_executor.background_registry.list_tasks().await;
+                if !snapshots.is_empty() {
+                    let bg_infos: Vec<cocode_system_reminder::generator::BackgroundTaskInfo> =
+                        snapshots
+                            .into_iter()
+                            .map(|s| cocode_system_reminder::generator::BackgroundTaskInfo {
+                                task_id: s.id,
+                                task_type:
+                                    cocode_system_reminder::generator::BackgroundTaskType::Shell,
+                                command: s.command,
+                                status: if s.is_running {
+                                    cocode_system_reminder::generator::BackgroundTaskStatus::Running
+                                } else {
+                                    cocode_system_reminder::generator::BackgroundTaskStatus::Completed
+                                },
+                                exit_code: None,
+                                has_new_output: false,
+                                progress_message: None,
+                                is_completion_notification: false,
+                                delta_summary: None,
+                                description: None,
+                            })
+                            .collect();
+                    builder = builder.background_tasks(bg_infos);
+                }
+            }
 
-                // Structured tasks → TodoItems
+            // Convert structured tasks to StructuredTaskInfo for rich reminders.
+            // Falls back to plain TodoItems from TodoWrite for backwards compatibility.
+            {
+                let mut has_structured = false;
+
                 if let Some(ref tasks_val) = self.current_structured_tasks {
                     if let Some(tasks_map) = tasks_val.as_object() {
+                        let mut structured_infos = Vec::new();
                         for (_id, task) in tasks_map {
-                            let status_str = task["status"].as_str().unwrap_or("pending");
-                            let status = match status_str {
-                                "in_progress" => {
-                                    cocode_system_reminder::generator::TodoStatus::InProgress
-                                }
-                                "completed" => {
-                                    cocode_system_reminder::generator::TodoStatus::Completed
-                                }
-                                _ => cocode_system_reminder::generator::TodoStatus::Pending,
-                            };
+                            let status_str =
+                                task["status"].as_str().unwrap_or("pending").to_string();
                             // Skip deleted tasks
                             if status_str == "deleted" {
                                 continue;
                             }
-                            let blocked_by = task["blocked_by"].as_array();
-                            let is_blocked = blocked_by.map_or(false, |arr| !arr.is_empty());
-                            todo_items.push(cocode_system_reminder::generator::TodoItem {
+                            let blocked_by: Vec<String> = task["blocked_by"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|b| b.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let is_blocked = blocked_by.iter().any(|bid| {
+                                tasks_map
+                                    .get(bid)
+                                    .map_or(false, |bt| bt["status"].as_str() != Some("completed"))
+                            });
+                            let blocks: Vec<String> = task["blocks"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|b| b.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            structured_infos.push(StructuredTaskInfo {
                                 id: task["id"].as_str().unwrap_or("?").to_string(),
                                 subject: task["subject"].as_str().unwrap_or("?").to_string(),
-                                status,
+                                description: task["description"].as_str().map(String::from),
+                                status: status_str,
+                                active_form: task["active_form"].as_str().map(String::from),
+                                owner: task["owner"].as_str().map(String::from),
+                                blocks,
+                                blocked_by,
                                 is_blocked,
                             });
+                        }
+                        if !structured_infos.is_empty() {
+                            builder = builder.structured_tasks(structured_infos);
+                            has_structured = true;
                         }
                     }
                 }
 
                 // Plain todos (from TodoWrite) — only when structured tasks are absent
-                if todo_items.is_empty() {
+                if !has_structured {
                     if let Some(ref todos_val) = self.current_todos {
                         if let Some(arr) = todos_val.as_array() {
+                            let mut todo_items = Vec::new();
                             for todo in arr {
                                 let status_str = todo["status"].as_str().unwrap_or("pending");
                                 let status = match status_str {
@@ -1379,12 +1512,11 @@ impl AgentLoop {
                                     is_blocked: false,
                                 });
                             }
+                            if !todo_items.is_empty() {
+                                builder = builder.todos(todo_items);
+                            }
                         }
                     }
-                }
-
-                if !todo_items.is_empty() {
-                    builder = builder.todos(todo_items);
                 }
             }
 
@@ -1501,6 +1633,9 @@ impl AgentLoop {
         .with_async_hook_tracker(self.async_hook_tracker.clone())
         .with_shell_executor(self.shell_executor.clone())
         .with_otel_manager(self.otel_manager.clone());
+
+        // Share killed agents registry (persists across turns)
+        executor = executor.with_killed_agents(self.killed_agents.clone());
 
         // Wire file backup store from snapshot manager for Tier 1 rewind
         if let Some(ref sm) = self.snapshot_manager {

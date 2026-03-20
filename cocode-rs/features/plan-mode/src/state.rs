@@ -113,7 +113,13 @@ impl PlanModeState {
 ///
 /// `true` if the path matches the plan file, allowing write access.
 pub fn is_safe_file(path: &Path, plan_file_path: Option<&Path>) -> bool {
-    plan_file_path.is_some_and(|plan_path| path == plan_path)
+    plan_file_path.is_some_and(|plan_path| {
+        // Try canonical comparison first, fall back to direct comparison
+        match (path.canonicalize(), plan_path.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => path == plan_path,
+        }
+    })
 }
 
 #[cfg(test)]

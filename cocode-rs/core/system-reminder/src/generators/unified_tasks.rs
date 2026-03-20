@@ -46,8 +46,12 @@ impl AttachmentGenerator for UnifiedTasksGenerator {
     }
 
     fn throttle_config(&self) -> ThrottleConfig {
-        // Check every turn since background task status can change rapidly
-        ThrottleConfig::none()
+        // Check every 3 turns (matches CC's TURNS_BETWEEN_PROGRESS = 3).
+        // Background task status changes are important but don't need every-turn updates.
+        ThrottleConfig {
+            min_turns_between: 3,
+            ..ThrottleConfig::default()
+        }
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -56,12 +60,21 @@ impl AttachmentGenerator for UnifiedTasksGenerator {
             return Ok(None);
         }
 
+        // Completion notifications always bypass the throttle
+        let has_completion = ctx
+            .background_tasks
+            .iter()
+            .any(|t| t.is_completion_notification);
+
         let content = format_tasks(&ctx.background_tasks);
 
-        Ok(Some(SystemReminder::new(
-            AttachmentType::BackgroundTask,
-            content,
-        )))
+        let mut reminder = SystemReminder::new(AttachmentType::BackgroundTask, content);
+
+        if has_completion {
+            reminder.set_bypass_throttle(true);
+        }
+
+        Ok(Some(reminder))
     }
 }
 
@@ -142,8 +155,20 @@ fn format_single_task(task: &BackgroundTaskInfo) -> String {
         .map(|code| format!(" [exit: {code}]"))
         .unwrap_or_default();
 
+    let progress = task
+        .progress_message
+        .as_deref()
+        .map(|msg| format!(" — {msg}"))
+        .unwrap_or_default();
+
+    let delta = task
+        .delta_summary
+        .as_deref()
+        .map(|s| format!(" :: {s}"))
+        .unwrap_or_default();
+
     format!(
-        "- [{type_label}] `{id}`: {cmd}{exit_info}{new_output_marker}\n",
+        "- [{type_label}] `{id}`: {cmd}{exit_info}{new_output_marker}{progress}{delta}\n",
         id = task.task_id,
         cmd = task.command,
     )

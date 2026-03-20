@@ -578,13 +578,13 @@ The Bash tool uses the `shell-parser` crate (`cocode-rs/utils/shell-parser/`) fo
 
 | Phase | Risk Type | Severity | Description |
 |-------|-----------|----------|-------------|
-| Allow | JqDanger | High | `jq` with `system()` calls |
-| Allow | ObfuscatedFlags | Medium | ANSI-C quoting `$'...'` |
-| Allow | ShellMetacharacters | Medium | Metacharacters in `find -exec` |
-| Allow | DangerousVariables | Medium | Variables piped (`$VAR \|`) |
-| Allow | NewlineInjection | High | Literal `\n` followed by commands |
-| Allow | IfsInjection | High | IFS environment manipulation |
-| Allow | ProcEnvironAccess | High | `/proc/*/environ` access |
+| Deny | JqDanger | High | `jq` with `system()` calls |
+| Deny | ObfuscatedFlags | Medium | ANSI-C quoting `$'...'` |
+| Deny | ShellMetacharacters | Medium | Metacharacters in `find -exec` |
+| Deny | DangerousVariables | Medium | Variables piped (`$VAR \|`) |
+| Deny | NewlineInjection | High | Literal `\n` followed by commands |
+| Deny | IfsInjection | High | IFS environment manipulation |
+| Deny | ProcEnvironAccess | High | `/proc/*/environ` access |
 | Ask | DangerousSubstitution | Medium | Command/process substitution |
 | Ask | MalformedTokens | Low | Syntax errors, unbalanced brackets |
 | Ask | SensitiveRedirect | High | Redirects to sensitive paths |
@@ -602,15 +602,15 @@ async fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> Permissio
 
     let (parsed, analysis) = ShellParser::parse_and_analyze(command);
 
-    // Check Allow phase risks
-    let allow_risks: Vec<_> = analysis.risks.iter()
-        .filter(|r| r.phase == RiskPhase::Allow)
+    // Check Deny phase risks
+    let deny_risks: Vec<_> = analysis.risks.iter()
+        .filter(|r| r.phase == RiskPhase::Deny)
         .collect();
 
-    if !allow_risks.is_empty() {
-        // Auto-reject if any Allow phase risks detected
+    if !deny_risks.is_empty() {
+        // Auto-reject if any Deny phase risks detected
         return PermissionResult::Denied {
-            reason: format!("Security risk: {}", allow_risks[0].message)
+            reason: format!("Security risk: {}", deny_risks[0].message)
         };
     }
 

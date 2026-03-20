@@ -87,6 +87,24 @@ fn test_contribution_agent() {
 }
 
 #[test]
+fn test_is_output_style() {
+    use crate::contribution::OutputStyleDefinition;
+
+    let contrib = PluginContribution::OutputStyle {
+        style: OutputStyleDefinition {
+            name: "concise".to_string(),
+            prompt: "Be concise".to_string(),
+        },
+        plugin_name: "my-plugin".to_string(),
+    };
+
+    assert!(contrib.is_output_style());
+    assert!(!contrib.is_skill());
+    assert!(!contrib.is_hook());
+    assert_eq!(contrib.name(), "concise");
+}
+
+#[test]
 fn test_contributions_serialize() {
     let contrib = PluginContributions {
         skills: vec!["skills/".to_string()].into(),

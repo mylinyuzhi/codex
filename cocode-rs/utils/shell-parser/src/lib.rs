@@ -10,7 +10,7 @@
 //! - **Safe command extraction**: Whitelist-based extraction of "word-only" commands
 //! - **Pipe segment extraction**: Parse pipelines into individual segments
 //! - **Redirection parsing**: Detect and classify shell redirections
-//! - **Security analysis**: 14 risk types across 2 phases (Allow/Ask)
+//! - **Security analysis**: 24 risk types across 2 phases (Deny/Ask)
 //!
 //! # Quick Start
 //!
@@ -98,6 +98,19 @@ pub use tokenizer::Tokenizer;
 /// Convenience function to parse and analyze a command in one step.
 pub fn parse_and_analyze(source: &str) -> (ParsedCommand, security::SecurityAnalysis) {
     let mut parser = ShellParser::new();
+    let cmd = parser.parse(source);
+    let analysis = security::analyze(&cmd);
+    (cmd, analysis)
+}
+
+/// Parse and analyze reusing an existing parser instance.
+///
+/// Avoids re-creating the tree-sitter parser each call, useful in hot paths
+/// that analyze many commands in sequence.
+pub fn parse_and_analyze_with(
+    parser: &mut ShellParser,
+    source: &str,
+) -> (ParsedCommand, security::SecurityAnalysis) {
     let cmd = parser.parse(source);
     let analysis = security::analyze(&cmd);
     (cmd, analysis)

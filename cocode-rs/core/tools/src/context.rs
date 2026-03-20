@@ -222,6 +222,13 @@ pub type ModelCallFn = Arc<
 /// without needing a callback to the SubagentManager.
 pub type AgentCancelTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
+/// Shared set of agent IDs that have been explicitly killed via TaskStop.
+///
+/// When TaskStop cancels an agent, its ID is recorded here. The session
+/// layer checks this set when building background task info so the agent's
+/// status is reported as `Killed` rather than `Failed`.
+pub type KilledAgents = Arc<Mutex<HashSet<String>>>;
+
 /// Type alias for the agent spawn callback function.
 ///
 /// This callback is provided by the executor layer to enable tools
@@ -1436,6 +1443,11 @@ pub struct ToolContext {
     /// TaskStop uses this to cancel agents by ID. Tokens are registered
     /// by the executor when spawning subagents.
     pub agent_cancel_tokens: AgentCancelTokens,
+    /// Shared set of agent IDs killed via TaskStop.
+    ///
+    /// Populated by `kill_shell.rs` after cancelling an agent so the session
+    /// layer can report the agent's status as `Killed` instead of `Failed`.
+    pub killed_agents: KilledAgents,
     /// Base directory for background agent output files.
     ///
     /// Used by TaskOutput to find agent output JSONL files. When set, this
@@ -1502,6 +1514,11 @@ pub struct ToolContext {
     ///
     /// Used for durable cron persistence and other session-scoped file operations.
     pub cocode_home: Option<PathBuf>,
+    /// Per-task byte offsets for incremental (delta) output reading.
+    ///
+    /// TaskOutput stores the last-read byte offset per task_id so subsequent
+    /// reads only return new entries, matching CC's `readOutputFileDelta`.
+    pub output_offsets: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
 }
 
 impl ToolContext {
@@ -1523,6 +1540,7 @@ impl ToolContext {
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
             agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            killed_agents: Arc::new(Mutex::new(HashSet::new())),
             agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
@@ -1544,6 +1562,7 @@ impl ToolContext {
             file_backup_store: None,
             question_responder: None,
             cocode_home: None,
+            output_offsets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1610,6 +1629,12 @@ impl ToolContext {
     /// Set the shared agent cancel token registry.
     pub fn with_agent_cancel_tokens(mut self, tokens: AgentCancelTokens) -> Self {
         self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the shared killed agents registry.
+    pub fn with_killed_agents(mut self, killed: KilledAgents) -> Self {
+        self.killed_agents = killed;
         self
     }
 
@@ -1690,6 +1715,17 @@ impl ToolContext {
     pub fn with_cocode_home(mut self, path: impl Into<PathBuf>) -> Self {
         self.cocode_home = Some(path.into());
         self
+    }
+
+    /// Check if a write to the given path is allowed in plan mode.
+    ///
+    /// Returns `true` if not in plan mode, or if the path is the plan file.
+    /// Returns `false` if in plan mode and the path is not the plan file.
+    pub fn plan_mode_allows_write(&self, path: &Path) -> bool {
+        if !self.is_plan_mode {
+            return true;
+        }
+        cocode_plan_mode::is_safe_file(path, self.plan_file_path.as_deref())
     }
 
     /// Spawn a subagent using the configured callback.
@@ -1927,6 +1963,7 @@ pub struct ToolContextBuilder {
     file_tracker: Arc<Mutex<FileTracker>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     agent_cancel_tokens: AgentCancelTokens,
+    killed_agents: KilledAgents,
     agent_output_dir: Option<PathBuf>,
     model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
@@ -1948,6 +1985,7 @@ pub struct ToolContextBuilder {
     file_backup_store: Option<Arc<cocode_file_backup::FileBackupStore>>,
     question_responder: Option<Arc<QuestionResponder>>,
     cocode_home: Option<PathBuf>,
+    output_offsets: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
 }
 
 impl ToolContextBuilder {
@@ -1968,6 +2006,7 @@ impl ToolContextBuilder {
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             spawn_agent_fn: None,
             agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            killed_agents: Arc::new(Mutex::new(HashSet::new())),
             agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
@@ -1989,6 +2028,7 @@ impl ToolContextBuilder {
             file_backup_store: None,
             question_responder: None,
             cocode_home: None,
+            output_offsets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -2061,6 +2101,12 @@ impl ToolContextBuilder {
     /// Set the shared agent cancel token registry.
     pub fn agent_cancel_tokens(mut self, tokens: AgentCancelTokens) -> Self {
         self.agent_cancel_tokens = tokens;
+        self
+    }
+
+    /// Set the shared killed agents registry.
+    pub fn killed_agents(mut self, killed: KilledAgents) -> Self {
+        self.killed_agents = killed;
         self
     }
 
@@ -2180,6 +2226,15 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the shared output offsets for delta reads.
+    pub fn output_offsets(
+        mut self,
+        offsets: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
+    ) -> Self {
+        self.output_offsets = offsets;
+        self
+    }
+
     /// Set allowed subagent types for the Task tool.
     pub fn task_type_restrictions(mut self, restrictions: Vec<String>) -> Self {
         self.task_type_restrictions = Some(restrictions);
@@ -2206,6 +2261,7 @@ impl ToolContextBuilder {
             file_tracker: self.file_tracker,
             spawn_agent_fn: self.spawn_agent_fn,
             agent_cancel_tokens: self.agent_cancel_tokens,
+            killed_agents: self.killed_agents,
             agent_output_dir: self.agent_output_dir,
             model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
@@ -2227,6 +2283,7 @@ impl ToolContextBuilder {
             file_backup_store: self.file_backup_store,
             question_responder: self.question_responder,
             cocode_home: self.cocode_home,
+            output_offsets: self.output_offsets,
         }
     }
 }

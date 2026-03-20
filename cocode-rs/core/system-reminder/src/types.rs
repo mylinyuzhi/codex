@@ -605,6 +605,12 @@ pub struct SystemReminder {
     /// generate_all() to update the shared FileTracker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_reads: Vec<FileReadInfo>,
+    /// Whether this reminder should bypass the throttle.
+    ///
+    /// Set by generators when the content is urgent (e.g., completion
+    /// notifications for background agents that should not be delayed).
+    #[serde(default)]
+    pub bypass_throttle: bool,
 }
 
 /// Type-specific metadata for reminders.
@@ -631,6 +637,7 @@ impl SystemReminder {
             is_silent: false,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -647,6 +654,7 @@ impl SystemReminder {
             is_silent: false,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -662,6 +670,7 @@ impl SystemReminder {
             is_silent: false,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -677,6 +686,7 @@ impl SystemReminder {
             is_silent: true,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -694,6 +704,7 @@ impl SystemReminder {
             is_silent: true,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -709,6 +720,7 @@ impl SystemReminder {
             is_silent: true,
             metadata: None,
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 
@@ -726,6 +738,14 @@ impl SystemReminder {
     pub fn with_silent(mut self, is_silent: bool) -> Self {
         self.is_silent = is_silent;
         self
+    }
+
+    /// Set whether this reminder should bypass throttle checks.
+    ///
+    /// Used for urgent content like completion notifications that
+    /// should not be delayed by the per-generator turn throttle.
+    pub fn set_bypass_throttle(&mut self, bypass: bool) {
+        self.bypass_throttle = bypass;
     }
 
     /// Set the metadata for this reminder.
@@ -769,6 +789,7 @@ impl SystemReminder {
                 paths,
             })),
             file_reads: Vec::new(),
+            bypass_throttle: false,
         }
     }
 

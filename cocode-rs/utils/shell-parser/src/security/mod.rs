@@ -3,7 +3,7 @@
 //! This module provides comprehensive security analysis for shell commands,
 //! detecting various risk patterns across two phases:
 //!
-//! - **Allow phase**: Risks that can be auto-approved for safe patterns
+//! - **Deny phase**: High-confidence injection patterns auto-denied by consumers
 //! - **Ask phase**: Risks that require user approval
 //!
 //! # Example
@@ -26,7 +26,11 @@ mod analyzers;
 mod risks;
 
 pub use analyzers::Analyzer;
+pub use analyzers::BackslashEscapedOperatorsAnalyzer;
+pub use analyzers::BackslashEscapedWhitespaceAnalyzer;
+pub use analyzers::BraceExpansionAnalyzer;
 pub use analyzers::CodeExecutionAnalyzer;
+pub use analyzers::CommentQuoteDesyncAnalyzer;
 pub use analyzers::DangerousSubstitutionAnalyzer;
 pub use analyzers::DangerousVariablesAnalyzer;
 pub use analyzers::FileSystemTamperingAnalyzer;
@@ -34,13 +38,18 @@ pub use analyzers::HeredocSubstitutionAnalyzer;
 pub use analyzers::IfsInjectionAnalyzer;
 pub use analyzers::JqDangerAnalyzer;
 pub use analyzers::MalformedTokensAnalyzer;
+pub use analyzers::MidWordHashAnalyzer;
 pub use analyzers::NetworkExfiltrationAnalyzer;
 pub use analyzers::NewlineInjectionAnalyzer;
 pub use analyzers::ObfuscatedFlagsAnalyzer;
 pub use analyzers::PrivilegeEscalationAnalyzer;
 pub use analyzers::ProcEnvironAnalyzer;
+pub use analyzers::QuotedNewlineHashAnalyzer;
 pub use analyzers::SensitiveRedirectAnalyzer;
 pub use analyzers::ShellMetacharactersAnalyzer;
+pub use analyzers::SingleQuoteBypassAnalyzer;
+pub use analyzers::UnicodeWhitespaceAnalyzer;
+pub use analyzers::ZshDangerousCommandsAnalyzer;
 pub use analyzers::default_analyzers;
 pub use risks::RiskKind;
 pub use risks::RiskLevel;
@@ -49,10 +58,66 @@ pub use risks::SecurityAnalysis;
 pub use risks::SecurityRisk;
 
 use crate::parser::ParsedCommand;
+use crate::tokenizer::TokenKind;
+
+/// Check if a command matches known-safe patterns that don't need full analysis.
+///
+/// Matches Claude Code's Phase A allow-list:
+/// - Empty/whitespace commands
+/// - Safe git commit messages (no variable expansion)
+fn is_safe_pattern(cmd: &ParsedCommand) -> bool {
+    // Empty or whitespace-only command
+    if cmd.source().trim().is_empty() {
+        return true;
+    }
+
+    // Safe git commit: `git commit -m "..."` with no expansion in message
+    let commands = cmd.extract_commands();
+    if commands.len() == 1 {
+        let args = &commands[0];
+        if args.first().is_some_and(|c| c == "git")
+            && args.get(1).is_some_and(|c| c == "commit")
+            && args.iter().any(|a| a == "-m")
+        {
+            // Verify no tokens contain variable expansion or command substitution
+            let has_expansion = cmd.tokens().iter().any(|t| {
+                matches!(
+                    t.kind,
+                    TokenKind::CommandSubstitution
+                        | TokenKind::ProcessSubstitution
+                        | TokenKind::VariableExpansion
+                )
+            });
+            if !has_expansion {
+                return true;
+            }
+        }
+    }
+
+    false
+}
 
 /// Analyze a parsed command for security risks using all default analyzers.
+///
+/// The analysis pipeline is:
+/// 1. **Layer 0**: Pre-check for single-quote bypass (early return on deny)
+/// 2. **Safe pattern short-circuit**: Skip full analysis for known-safe patterns
+/// 3. **Full analyzer pipeline**: Run all default analyzers
 pub fn analyze(cmd: &ParsedCommand) -> SecurityAnalysis {
     let mut analysis = SecurityAnalysis::new();
+
+    // Layer 0: Pre-check for quote bypass (highest priority)
+    SingleQuoteBypassAnalyzer.analyze(cmd, &mut analysis);
+    if analysis.is_auto_denied() {
+        return analysis;
+    }
+
+    // Safe pattern short-circuit
+    if is_safe_pattern(cmd) {
+        return analysis;
+    }
+
+    // Full analyzer pipeline
     for analyzer in default_analyzers() {
         analyzer.analyze(cmd, &mut analysis);
     }

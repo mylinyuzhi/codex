@@ -40,7 +40,7 @@ fn test_unsafe_heredoc_substitution() {
 fn test_requires_approval() {
     let mut analysis = SecurityAnalysis::new();
     analysis.add_risk(SecurityRisk::new(RiskKind::ObfuscatedFlags, "test"));
-    assert!(!analysis.requires_approval()); // Allow phase
+    assert!(!analysis.requires_approval()); // Deny phase, not Ask
 
     analysis.add_risk(SecurityRisk::new(RiskKind::CodeExecution, "test2"));
     assert!(analysis.requires_approval()); // Ask phase

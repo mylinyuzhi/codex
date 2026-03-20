@@ -24,7 +24,7 @@ fn parse_scope(s: &str) -> anyhow::Result<PluginScope> {
 }
 
 /// Run a plugin management command.
-pub async fn run(action: PluginAction, config: &ConfigManager) -> anyhow::Result<()> {
+pub async fn run(action: PluginAction, _config: &ConfigManager) -> anyhow::Result<()> {
     let cocode_home = cocode_config::find_cocode_home();
     let plugins = plugins_dir(&cocode_home);
 
@@ -126,9 +126,6 @@ pub async fn run(action: PluginAction, config: &ConfigManager) -> anyhow::Result
         }
     }
 
-    // Suppress unused variable warning for config (used for cocode_home derivation)
-    let _ = config;
-
     Ok(())
 }
 
@@ -137,7 +134,8 @@ fn validate_plugin(path: &PathBuf) -> anyhow::Result<()> {
     let loader = cocode_plugin::PluginLoader::new();
 
     // Try to load the plugin
-    match loader.load(path, PluginScope::Flag) {
+    let settings = cocode_plugin::PluginSettings::default();
+    match loader.load(path, PluginScope::Flag, &settings) {
         Ok(plugin) => {
             println!("Plugin validation passed!\n");
             println!("  Name: {}", plugin.manifest.plugin.name);
@@ -145,46 +143,35 @@ fn validate_plugin(path: &PathBuf) -> anyhow::Result<()> {
             println!("  Description: {}", plugin.manifest.plugin.description);
             println!("  Contributions: {} items", plugin.contributions.len());
 
-            let skills: Vec<_> = plugin
-                .contributions
-                .iter()
-                .filter(|c| c.is_skill())
-                .collect();
-            let hooks: Vec<_> = plugin
-                .contributions
-                .iter()
-                .filter(|c| c.is_hook())
-                .collect();
-            let agents: Vec<_> = plugin
-                .contributions
-                .iter()
-                .filter(|c| c.is_agent())
-                .collect();
-            let mcp: Vec<_> = plugin
-                .contributions
-                .iter()
-                .filter(|c| c.is_mcp_server())
-                .collect();
-            let lsp: Vec<_> = plugin
-                .contributions
-                .iter()
-                .filter(|c| c.is_lsp_server())
-                .collect();
+            let (mut skills, mut hooks, mut agents, mut mcp, mut lsp) = (0, 0, 0, 0, 0);
+            for c in &plugin.contributions {
+                if c.is_skill() {
+                    skills += 1;
+                } else if c.is_hook() {
+                    hooks += 1;
+                } else if c.is_agent() {
+                    agents += 1;
+                } else if c.is_mcp_server() {
+                    mcp += 1;
+                } else if c.is_lsp_server() {
+                    lsp += 1;
+                }
+            }
 
-            if !skills.is_empty() {
-                println!("  Skills: {}", skills.len());
+            if skills > 0 {
+                println!("  Skills: {skills}");
             }
-            if !hooks.is_empty() {
-                println!("  Hooks: {}", hooks.len());
+            if hooks > 0 {
+                println!("  Hooks: {hooks}");
             }
-            if !agents.is_empty() {
-                println!("  Agents: {}", agents.len());
+            if agents > 0 {
+                println!("  Agents: {agents}");
             }
-            if !mcp.is_empty() {
-                println!("  MCP servers: {}", mcp.len());
+            if mcp > 0 {
+                println!("  MCP servers: {mcp}");
             }
-            if !lsp.is_empty() {
-                println!("  LSP servers: {}", lsp.len());
+            if lsp > 0 {
+                println!("  LSP servers: {lsp}");
             }
         }
         Err(e) => {

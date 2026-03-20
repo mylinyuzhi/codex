@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use cocode_error::BoxedError;
 use cocode_protocol::LoopEvent;
@@ -25,6 +28,27 @@ pub enum AgentStatus {
     Completed,
     Failed,
     Backgrounded,
+    Killed,
+}
+
+/// How an agent ended up in the background.
+///
+/// CC distinguishes `background: true` (explicit) from `isBackgrounded: true`
+/// (Ctrl+B / timeout). This enum captures that distinction.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BackgroundOrigin {
+    /// Spawned with `run_in_background: true`.
+    Explicit,
+    /// Transitioned via Ctrl+B signal.
+    Signal,
+    /// Auto-backgrounded after timeout.
+    Timeout,
+}
+
+/// Generate a type-prefixed task ID matching CC's `a{8hex}` / `b{8hex}` format.
+fn generate_prefixed_id(prefix: char) -> String {
+    let hex = uuid::Uuid::new_v4().simple().to_string();
+    format!("{prefix}{}", &hex[..8])
 }
 
 /// Result of spawning a subagent.
@@ -71,6 +95,12 @@ pub struct AgentInstance {
 
     /// Background output file path (if running in background).
     pub output_file: Option<PathBuf>,
+
+    /// How this agent ended up in the background (if applicable).
+    pub background_origin: Option<BackgroundOrigin>,
+
+    /// When this agent completed/failed/was killed (for GC).
+    pub completed_at: Option<Instant>,
 }
 
 /// Parameters for executing an agent.
@@ -165,6 +195,9 @@ struct BackgroundCompletionCtx<'a> {
     stop_hook_fn: Option<&'a BackgroundStopHookFn>,
     agent_type: &'a str,
     transitioned_from_foreground: bool,
+    /// Guard to prevent duplicate completion notifications.
+    /// Set to `true` on first call; subsequent calls are no-ops.
+    notified: &'a AtomicBool,
 }
 
 /// Shared logic for background agent completion (transcript write, event send, hook fire).
@@ -181,7 +214,18 @@ async fn handle_background_completion(ctx: BackgroundCompletionCtx<'_>) {
         stop_hook_fn,
         agent_type,
         transitioned_from_foreground,
+        notified,
     } = ctx;
+
+    // Guard against duplicate notifications (e.g., completion racing with kill)
+    if notified.swap(true, Ordering::SeqCst) {
+        tracing::debug!(
+            agent_id = %agent_id,
+            "Skipping duplicate background completion notification"
+        );
+        return;
+    }
+
     if let Err(e) = result {
         tracing::error!(
             agent_id = %agent_id,
@@ -306,6 +350,21 @@ fn build_execute_params(
 /// Default limit on concurrent background agents.
 const DEFAULT_MAX_BACKGROUND_AGENTS: usize = 8;
 
+/// Lightweight snapshot of an agent instance for status reporting.
+#[derive(Debug, Clone)]
+pub struct AgentInstanceInfo {
+    /// Agent instance ID.
+    pub id: String,
+    /// The agent type (e.g., "Explore", "Plan").
+    pub agent_type: String,
+    /// Display name (from spawn input).
+    pub name: Option<String>,
+    /// Current execution status.
+    pub status: AgentStatus,
+    /// How this agent ended up in the background (if applicable).
+    pub background_origin: Option<BackgroundOrigin>,
+}
+
 /// Manages subagent registration, spawning, and lifecycle tracking.
 pub struct SubagentManager {
     agents: HashMap<String, AgentInstance>,
@@ -322,10 +381,18 @@ pub struct SubagentManager {
     background_stop_hook_fn: Option<BackgroundStopHookFn>,
     /// Maximum number of concurrent background agents.
     max_background_agents: usize,
+    /// Auto-background timeout for foreground agents.
+    /// If a foreground agent runs longer than this, it is automatically
+    /// transitioned to background. `None` disables auto-backgrounding.
+    auto_background_timeout: Option<std::time::Duration>,
 }
 
 impl SubagentManager {
     /// Create a new empty subagent manager.
+    ///
+    /// Auto-background timeout defaults to `None` (disabled). Use
+    /// [`with_auto_background_timeout`] to enable it — the config layer
+    /// should read `COCODE_AUTO_BACKGROUND_TASKS` and pass the value in.
     pub fn new() -> Self {
         Self {
             agents: HashMap::new(),
@@ -336,6 +403,7 @@ impl SubagentManager {
             event_tx: None,
             background_stop_hook_fn: None,
             max_background_agents: DEFAULT_MAX_BACKGROUND_AGENTS,
+            auto_background_timeout: None,
         }
     }
 
@@ -360,6 +428,15 @@ impl SubagentManager {
     /// Set the maximum number of concurrent background agents.
     pub fn with_max_background_agents(mut self, n: usize) -> Self {
         self.max_background_agents = n;
+        self
+    }
+
+    /// Set the auto-background timeout for foreground agents.
+    ///
+    /// If a foreground agent runs longer than this duration, it is automatically
+    /// transitioned to background (same as Ctrl+B). `None` disables auto-backgrounding.
+    pub fn with_auto_background_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.auto_background_timeout = timeout;
         self
     }
 
@@ -527,7 +604,7 @@ impl SubagentManager {
         let definition = self.resolve_definition(&input.agent_type)?;
         self.handle_resume(&mut input).await;
 
-        let agent_id = uuid::Uuid::new_v4().to_string();
+        let agent_id = generate_prefixed_id('a');
         tracing::info!(
             agent_id = %agent_id,
             agent_type = %input.agent_type,
@@ -615,6 +692,8 @@ impl SubagentManager {
                 output: None,
                 cancel_token: Some(cancel_token.clone()),
                 output_file: Some(output_file.clone()),
+                background_origin: Some(BackgroundOrigin::Explicit),
+                completed_at: None,
             };
             self.agents.insert(agent_id.clone(), instance);
 
@@ -640,6 +719,7 @@ impl SubagentManager {
                 let event_tx = self.event_tx.clone();
                 let stop_hook_fn = self.background_stop_hook_fn.clone();
                 let agent_type_for_hook = input.agent_type.clone();
+                let notified = Arc::new(AtomicBool::new(false));
                 tokio::spawn(async move {
                     let result = execute_fn(params).await;
                     handle_background_completion(BackgroundCompletionCtx {
@@ -651,6 +731,7 @@ impl SubagentManager {
                         stop_hook_fn: stop_hook_fn.as_ref(),
                         agent_type: &agent_type_for_hook,
                         transitioned_from_foreground: false,
+                        notified: &notified,
                     })
                     .await;
                 });
@@ -678,6 +759,8 @@ impl SubagentManager {
                 output: None,
                 cancel_token: Some(cancel_token.clone()),
                 output_file: None,
+                background_origin: None,
+                completed_at: None,
             };
             self.agents.insert(agent_id.clone(), instance);
 
@@ -701,7 +784,10 @@ impl SubagentManager {
                 // Pin the future so it can be moved into a background task on Ctrl+B
                 let mut execute_future = Box::pin(execute_fn(params));
 
-                // Use select! to handle both normal completion and background signal
+                // Determine auto-background timeout
+                let auto_bg_timeout = self.auto_background_timeout;
+
+                // Use select! to handle normal completion, background signal, and auto-background timeout
                 tokio::select! {
                     result = &mut execute_future => {
                         // Normal completion - unregister from background signals
@@ -712,12 +798,14 @@ impl SubagentManager {
                                 if let Some(instance) = self.agents.get_mut(&agent_id) {
                                     instance.status = AgentStatus::Completed;
                                     instance.output = Some(result.clone());
+                                    instance.completed_at = Some(Instant::now());
                                 }
                                 Some(result)
                             }
                             Err(e) => {
                                 if let Some(instance) = self.agents.get_mut(&agent_id) {
                                     instance.status = AgentStatus::Failed;
+                                    instance.completed_at = Some(Instant::now());
                                 }
                                 return Err(subagent_error::ExecuteSnafu {
                                     message: "Foreground subagent execution".to_string(),
@@ -727,62 +815,56 @@ impl SubagentManager {
                         }
                     }
                     _ = bg_signal_rx => {
-                        // Background signal received - transition to background
+                        // Background signal received (Ctrl+B) - transition to background
                         tracing::info!(
                             agent_id = %agent_id,
-                            "Agent transitioned to background via signal"
+                            trigger = "signal",
+                            "Agent transitioned to background"
                         );
 
-                        // Create output file for background results
-                        let output_file = self.output_dir.join(format!("{agent_id}.jsonl"));
-
-                        // Ensure output directory exists
-                        if let Err(e) = tokio::fs::create_dir_all(&self.output_dir).await {
-                            tracing::warn!(error = %e, "Failed to create output directory");
-                        }
-
-                        // Update instance to background status
-                        if let Some(instance) = self.agents.get_mut(&agent_id) {
-                            instance.status = AgentStatus::Backgrounded;
-                            instance.output_file = Some(output_file.clone());
-                        }
-
-                        // Move the in-flight future into a background task
-                        // (continues existing execution instead of restarting)
-                        let agent_id_clone = agent_id.clone();
-                        let output_file_clone = output_file.clone();
-                        let prompt_for_transcript = resolved.prompt.clone();
-                        let event_tx = self.event_tx.clone();
-                        let stop_hook_fn = self.background_stop_hook_fn.clone();
-                        let agent_type_for_hook = input.agent_type.clone();
-
-                        tokio::spawn(async move {
-                            let result = execute_future.await;
-                            handle_background_completion(BackgroundCompletionCtx {
-                                agent_id: &agent_id_clone,
-                                result: &result,
-                                output_file: &output_file_clone,
-                                prompt: &prompt_for_transcript,
-                                event_tx: event_tx.as_ref(),
-                                stop_hook_fn: stop_hook_fn.as_ref(),
-                                agent_type: &agent_type_for_hook,
-                                transitioned_from_foreground: true,
-                            })
-                            .await;
-                        });
-
-                        let bg_agent = BackgroundAgent {
-                            agent_id: agent_id.clone(),
-                            output_file,
-                        };
-
-                        return Ok(SpawnResult {
+                        return self.transition_to_background(
                             agent_id,
-                            output: None,
-                            background: Some(bg_agent),
-                            cancel_token: Some(cancel_token),
-                            color: definition.color.clone(),
-                        });
+                            cancel_token,
+                            &definition,
+                            &resolved,
+                            &input,
+                            execute_future,
+                            BackgroundOrigin::Signal,
+                        ).await;
+                    }
+                    _ = async {
+                        match auto_bg_timeout {
+                            Some(d) => tokio::time::sleep(d).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Auto-background timeout reached
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            timeout_secs = ?auto_bg_timeout,
+                            trigger = "timeout",
+                            "Agent auto-transitioned to background"
+                        );
+
+                        // Notify main agent of auto-background transition
+                        if let Some(ref tx) = self.event_tx {
+                            let _ = tx
+                                .send(LoopEvent::SubagentBackgrounded {
+                                    agent_id: agent_id.clone(),
+                                    output_file: self.output_dir.join(format!("{agent_id}.jsonl")),
+                                })
+                                .await;
+                        }
+
+                        return self.transition_to_background(
+                            agent_id,
+                            cancel_token,
+                            &definition,
+                            &resolved,
+                            &input,
+                            execute_future,
+                            BackgroundOrigin::Timeout,
+                        ).await;
                     }
                 }
             } else {
@@ -799,6 +881,7 @@ impl SubagentManager {
                 if let Some(instance) = self.agents.get_mut(&agent_id) {
                     instance.status = AgentStatus::Completed;
                     instance.output = Some(stub_output.clone());
+                    instance.completed_at = Some(Instant::now());
                 }
                 Some(stub_output)
             };
@@ -812,6 +895,78 @@ impl SubagentManager {
                 color: definition.color.clone(),
             })
         }
+    }
+
+    /// Transition a foreground agent's in-flight future to a background task.
+    ///
+    /// Shared logic for Ctrl+B signal and auto-background timeout transitions.
+    async fn transition_to_background(
+        &mut self,
+        agent_id: String,
+        cancel_token: CancellationToken,
+        definition: &AgentDefinition,
+        resolved: &ResolvedPrompt,
+        input: &SpawnInput,
+        execute_future: std::pin::Pin<
+            Box<dyn std::future::Future<Output = std::result::Result<String, BoxedError>> + Send>,
+        >,
+        origin: BackgroundOrigin,
+    ) -> Result<SpawnResult> {
+        // Unregister from background signal registry (no longer foreground)
+        crate::signal::unregister_backgroundable_agent(&agent_id);
+
+        // Create output file for background results
+        let output_file = self.output_dir.join(format!("{agent_id}.jsonl"));
+
+        // Ensure output directory exists
+        if let Err(e) = tokio::fs::create_dir_all(&self.output_dir).await {
+            tracing::warn!(error = %e, "Failed to create output directory");
+        }
+
+        // Update instance to background status
+        if let Some(instance) = self.agents.get_mut(&agent_id) {
+            instance.status = AgentStatus::Backgrounded;
+            instance.output_file = Some(output_file.clone());
+            instance.background_origin = Some(origin);
+        }
+
+        // Move the in-flight future into a background task
+        let agent_id_clone = agent_id.clone();
+        let output_file_clone = output_file.clone();
+        let prompt_for_transcript = resolved.prompt.clone();
+        let event_tx = self.event_tx.clone();
+        let stop_hook_fn = self.background_stop_hook_fn.clone();
+        let agent_type_for_hook = input.agent_type.clone();
+        let notified = Arc::new(AtomicBool::new(false));
+
+        tokio::spawn(async move {
+            let result = execute_future.await;
+            handle_background_completion(BackgroundCompletionCtx {
+                agent_id: &agent_id_clone,
+                result: &result,
+                output_file: &output_file_clone,
+                prompt: &prompt_for_transcript,
+                event_tx: event_tx.as_ref(),
+                stop_hook_fn: stop_hook_fn.as_ref(),
+                agent_type: &agent_type_for_hook,
+                transitioned_from_foreground: true,
+                notified: &notified,
+            })
+            .await;
+        });
+
+        let bg_agent = BackgroundAgent {
+            agent_id: agent_id.clone(),
+            output_file,
+        };
+
+        Ok(SpawnResult {
+            agent_id,
+            output: None,
+            background: Some(bg_agent),
+            cancel_token: Some(cancel_token),
+            color: definition.color.clone(),
+        })
     }
 
     /// Resume a previously backgrounded agent.
@@ -846,27 +1001,101 @@ impl SubagentManager {
         self.agents.get(agent_id).map(|a| a.status.clone())
     }
 
-    /// Remove a completed/failed agent from tracking.
+    /// Remove a completed/failed/killed agent from tracking.
     ///
     /// Returns `None` if the agent is still running or backgrounded.
     pub fn remove_agent(&mut self, agent_id: &str) -> Option<AgentInstance> {
         match self.agents.get(agent_id).map(|a| &a.status) {
-            Some(AgentStatus::Completed | AgentStatus::Failed) => self.agents.remove(agent_id),
+            Some(AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed) => {
+                self.agents.remove(agent_id)
+            }
             _ => None,
         }
     }
 
-    /// Remove all completed and failed agents. Returns the count removed.
+    /// Remove all completed, failed, and killed agents. Returns the count removed.
     pub fn gc_completed(&mut self) -> usize {
         let before = self.agents.len();
-        self.agents
-            .retain(|_, a| !matches!(a.status, AgentStatus::Completed | AgentStatus::Failed));
+        self.agents.retain(|_, a| {
+            !matches!(
+                a.status,
+                AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed
+            )
+        });
         before - self.agents.len()
+    }
+
+    /// Remove completed/failed/killed agents older than `max_age`. Returns count removed.
+    ///
+    /// Unlike `gc_completed()`, this preserves recently finished agents so they
+    /// remain visible to TaskOutput for a while after completion.
+    pub fn gc_stale(&mut self, max_age: std::time::Duration) -> usize {
+        let before = self.agents.len();
+        let now = Instant::now();
+        self.agents.retain(|_, a| {
+            if !matches!(
+                a.status,
+                AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed
+            ) {
+                return true; // keep running/backgrounded agents
+            }
+            match a.completed_at {
+                Some(at) => now.duration_since(at) < max_age,
+                None => true, // no timestamp yet, keep
+            }
+        });
+        before - self.agents.len()
+    }
+
+    /// Kill all running and backgrounded agents. Returns IDs of killed agents.
+    pub fn kill_all_running(&mut self) -> Vec<String> {
+        let mut killed = Vec::new();
+        for (id, instance) in &mut self.agents {
+            if matches!(
+                instance.status,
+                AgentStatus::Running | AgentStatus::Backgrounded
+            ) {
+                if let Some(token) = &instance.cancel_token {
+                    token.cancel();
+                }
+                instance.status = AgentStatus::Killed;
+                instance.completed_at = Some(Instant::now());
+                killed.push(id.clone());
+            }
+        }
+        killed
     }
 
     /// Get count of tracked agents.
     pub fn agent_count(&self) -> usize {
         self.agents.len()
+    }
+
+    /// Promote `Failed` agents to `Killed` if their ID is in the given set.
+    ///
+    /// After `TaskStop` cancels an agent, the background completion handler
+    /// marks it `Failed`. This method upgrades the status so GC, status
+    /// reporting, and match arms correctly reflect user-initiated cancellation.
+    pub fn promote_killed(&mut self, killed_ids: &std::collections::HashSet<String>) {
+        for (id, instance) in &mut self.agents {
+            if instance.status == AgentStatus::Failed && killed_ids.contains(id) {
+                instance.status = AgentStatus::Killed;
+            }
+        }
+    }
+
+    /// Returns lightweight info snapshots of all tracked agents.
+    pub fn agent_infos(&self) -> Vec<AgentInstanceInfo> {
+        self.agents
+            .values()
+            .map(|a| AgentInstanceInfo {
+                id: a.id.clone(),
+                agent_type: a.agent_type.clone(),
+                name: a.name.clone(),
+                status: a.status.clone(),
+                background_origin: a.background_origin.clone(),
+            })
+            .collect()
     }
 
     /// Get count of agents by status.

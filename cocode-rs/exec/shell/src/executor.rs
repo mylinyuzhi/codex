@@ -676,7 +676,7 @@ impl ShellExecutor {
         stdout_buf: Arc<Mutex<Vec<u8>>>,
         stderr_buf: Arc<Mutex<Vec<u8>>>,
     ) -> String {
-        let task_id = format!("bg-{}", uuid_simple());
+        let task_id = generate_shell_task_id();
 
         // Seed combined output with what we have so far
         let combined_output = Arc::new(Mutex::new(String::new()));
@@ -855,7 +855,7 @@ impl ShellExecutor {
     /// via the background registry using the returned task ID.
     #[allow(clippy::unwrap_used)]
     pub async fn spawn_background(&self, command: &str) -> Result<String, String> {
-        let task_id = format!("bg-{}", uuid_simple());
+        let task_id = generate_shell_task_id();
         let output = Arc::new(Mutex::new(String::new()));
         let completed = Arc::new(Notify::new());
         let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -1109,15 +1109,23 @@ fn extract_cwd_from_output(output: &str) -> (String, Option<PathBuf>) {
     (output.to_string(), None)
 }
 
-/// Generates a simple unique identifier (timestamp-based).
-fn uuid_simple() -> String {
+/// Generate a type-prefixed task ID for shell background tasks.
+///
+/// Produces `b{8hex}` matching CC's task ID format.
+fn generate_shell_task_id() -> String {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{nanos:x}")
+    let hex = format!("{nanos:x}");
+    let suffix = if hex.len() >= 8 {
+        &hex[hex.len() - 8..]
+    } else {
+        &hex
+    };
+    format!("b{suffix}")
 }
 
 #[cfg(test)]

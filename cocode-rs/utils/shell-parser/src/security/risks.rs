@@ -29,8 +29,8 @@ impl fmt::Display for RiskLevel {
 /// The phase at which a risk is evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RiskPhase {
-    /// Allow phase - risks that can be auto-approved for safe patterns.
-    Allow,
+    /// Deny phase - high-confidence injection patterns auto-denied by consumers.
+    Deny,
     /// Ask phase - risks that require user approval.
     Ask,
 }
@@ -38,7 +38,7 @@ pub enum RiskPhase {
 impl fmt::Display for RiskPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RiskPhase::Allow => write!(f, "allow"),
+            RiskPhase::Deny => write!(f, "deny"),
             RiskPhase::Ask => write!(f, "ask"),
         }
     }
@@ -47,7 +47,9 @@ impl fmt::Display for RiskPhase {
 /// Specific types of security risks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RiskKind {
-    // Allow phase risks (7)
+    // Deny phase risks (16)
+    /// Single-quote bypass via backslash at end of single-quoted string.
+    SingleQuoteBypass,
     /// Dangerous jq operations (system() calls).
     JqDanger,
     /// Obfuscated flags using $'...' or $"..." syntax.
@@ -62,6 +64,22 @@ pub enum RiskKind {
     IfsInjection,
     /// Access to /proc/*/environ.
     ProcEnvironAccess,
+    /// Backslash before whitespace outside quotes (line-continuation injection).
+    BackslashEscapedWhitespace,
+    /// Backslash before shell operators outside quotes (\;, \|, \&, etc.).
+    BackslashEscapedOperators,
+    /// Non-ASCII Unicode whitespace characters (zero-width spaces, NBSP, etc.).
+    UnicodeWhitespace,
+    /// Hash character not preceded by whitespace (potential comment injection).
+    MidWordHash,
+    /// Brace expansion ({a,b} or {1..3}) outside quotes.
+    BraceExpansion,
+    /// Dangerous zsh-specific commands (zmodload, emulate, etc.).
+    ZshDangerousCommands,
+    /// Odd number of unescaped quotes after # (comment/quote desync).
+    CommentQuoteDesync,
+    /// Literal newline followed by # inside double quotes.
+    QuotedNewlineHash,
 
     // Ask phase risks (8)
     /// Unsafe heredoc in command substitution (unquoted delimiter allows expansion).
@@ -86,7 +104,8 @@ impl RiskKind {
     /// Returns the default risk level for this kind.
     pub fn default_level(&self) -> RiskLevel {
         match self {
-            // Allow phase - generally lower severity
+            // Deny phase
+            RiskKind::SingleQuoteBypass => RiskLevel::Critical,
             RiskKind::JqDanger => RiskLevel::High,
             RiskKind::ObfuscatedFlags => RiskLevel::Medium,
             RiskKind::ShellMetacharacters => RiskLevel::Medium,
@@ -94,6 +113,14 @@ impl RiskKind {
             RiskKind::NewlineInjection => RiskLevel::High,
             RiskKind::IfsInjection => RiskLevel::High,
             RiskKind::ProcEnvironAccess => RiskLevel::High,
+            RiskKind::BackslashEscapedWhitespace => RiskLevel::Medium,
+            RiskKind::BackslashEscapedOperators => RiskLevel::Medium,
+            RiskKind::UnicodeWhitespace => RiskLevel::High,
+            RiskKind::MidWordHash => RiskLevel::Medium,
+            RiskKind::BraceExpansion => RiskLevel::Medium,
+            RiskKind::ZshDangerousCommands => RiskLevel::High,
+            RiskKind::CommentQuoteDesync => RiskLevel::Medium,
+            RiskKind::QuotedNewlineHash => RiskLevel::Medium,
 
             // Ask phase - generally higher severity
             RiskKind::UnsafeHeredocSubstitution => RiskLevel::Medium,
@@ -110,13 +137,22 @@ impl RiskKind {
     /// Returns the phase for this risk kind.
     pub fn phase(&self) -> RiskPhase {
         match self {
-            RiskKind::JqDanger
+            RiskKind::SingleQuoteBypass
+            | RiskKind::JqDanger
             | RiskKind::ObfuscatedFlags
             | RiskKind::ShellMetacharacters
             | RiskKind::DangerousVariables
             | RiskKind::NewlineInjection
             | RiskKind::IfsInjection
-            | RiskKind::ProcEnvironAccess => RiskPhase::Allow,
+            | RiskKind::ProcEnvironAccess
+            | RiskKind::BackslashEscapedWhitespace
+            | RiskKind::BackslashEscapedOperators
+            | RiskKind::UnicodeWhitespace
+            | RiskKind::MidWordHash
+            | RiskKind::BraceExpansion
+            | RiskKind::ZshDangerousCommands
+            | RiskKind::CommentQuoteDesync
+            | RiskKind::QuotedNewlineHash => RiskPhase::Deny,
 
             RiskKind::UnsafeHeredocSubstitution
             | RiskKind::DangerousSubstitution
@@ -132,6 +168,7 @@ impl RiskKind {
     /// Returns a human-readable name for this risk kind.
     pub fn name(&self) -> &'static str {
         match self {
+            RiskKind::SingleQuoteBypass => "single quote bypass",
             RiskKind::JqDanger => "jq danger",
             RiskKind::ObfuscatedFlags => "obfuscated flags",
             RiskKind::ShellMetacharacters => "shell metacharacters",
@@ -139,6 +176,14 @@ impl RiskKind {
             RiskKind::NewlineInjection => "newline injection",
             RiskKind::IfsInjection => "IFS injection",
             RiskKind::ProcEnvironAccess => "/proc environ access",
+            RiskKind::BackslashEscapedWhitespace => "backslash escaped whitespace",
+            RiskKind::BackslashEscapedOperators => "backslash escaped operators",
+            RiskKind::UnicodeWhitespace => "unicode whitespace",
+            RiskKind::MidWordHash => "mid-word hash",
+            RiskKind::BraceExpansion => "brace expansion",
+            RiskKind::ZshDangerousCommands => "zsh dangerous commands",
+            RiskKind::CommentQuoteDesync => "comment quote desync",
+            RiskKind::QuotedNewlineHash => "quoted newline hash",
             RiskKind::UnsafeHeredocSubstitution => "unsafe heredoc substitution",
             RiskKind::DangerousSubstitution => "dangerous substitution",
             RiskKind::MalformedTokens => "malformed tokens",
@@ -254,6 +299,11 @@ impl SecurityAnalysis {
     /// Returns risks filtered by minimum level.
     pub fn risks_at_or_above(&self, level: RiskLevel) -> Vec<&SecurityRisk> {
         self.risks.iter().filter(|r| r.level >= level).collect()
+    }
+
+    /// Returns true if any risk is in the Deny phase (auto-denied by consumers).
+    pub fn is_auto_denied(&self) -> bool {
+        self.risks.iter().any(|r| r.phase == RiskPhase::Deny)
     }
 
     /// Returns true if any risk requires user approval (Ask phase).

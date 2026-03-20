@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -35,6 +36,24 @@ impl TaskStatus {
             "deleted" => Some(TaskStatus::Deleted),
             _ => None,
         }
+    }
+
+    /// Returns `true` if the transition from `self` to `to` is valid.
+    ///
+    /// Valid transitions:
+    /// - `Pending → InProgress`, `Pending → Completed`
+    /// - `InProgress → Completed`
+    /// - Any status → `Deleted`
+    pub fn can_transition_to(self, to: TaskStatus) -> bool {
+        if to == TaskStatus::Deleted {
+            return true;
+        }
+        matches!(
+            (self, to),
+            (TaskStatus::Pending, TaskStatus::InProgress)
+                | (TaskStatus::Pending, TaskStatus::Completed)
+                | (TaskStatus::InProgress, TaskStatus::Completed)
+        )
     }
 }
 
@@ -85,32 +104,75 @@ pub fn tasks_to_value(tasks: &BTreeMap<String, StructuredTask>) -> Value {
     })
 }
 
+/// Returns `true` if the task is marked as internal via `metadata._internal`.
+pub fn is_internal_task(task: &StructuredTask) -> bool {
+    task.metadata
+        .get("_internal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Format a single task as a human-readable line.
+///
+/// When `completed_ids` is provided, `blocked_by` entries that appear in the set
+/// are filtered out (smart blocker filtering — only show incomplete blockers).
+///
+/// Returns `None` for deleted tasks and internal tasks (`metadata._internal == true`).
+pub fn format_single_task(
+    task: &StructuredTask,
+    completed_ids: Option<&HashSet<String>>,
+) -> Option<String> {
+    if matches!(task.status, TaskStatus::Deleted) || is_internal_task(task) {
+        return None;
+    }
+    let marker = match task.status {
+        TaskStatus::Completed => "[x]",
+        TaskStatus::InProgress => "[>]",
+        TaskStatus::Pending => "[ ]",
+        TaskStatus::Deleted => return None,
+    };
+    let mut out = format!("{marker} {}: {}\n", task.id, task.subject);
+
+    // blocked_by — optionally filter out completed blockers
+    let active_blockers: Vec<&str> = task
+        .blocked_by
+        .iter()
+        .filter(|b| completed_ids.map_or(true, |ids| !ids.contains(b.as_str())))
+        .map(String::as_str)
+        .collect();
+    if !active_blockers.is_empty() {
+        out.push_str(&format!("    blocked by: {}\n", active_blockers.join(", ")));
+    }
+    if let Some(ref owner) = task.owner {
+        out.push_str(&format!("    owner: {owner}\n"));
+    }
+    if !task.blocks.is_empty() {
+        out.push_str(&format!("    blocks: {}\n", task.blocks.join(", ")));
+    }
+    Some(out)
+}
+
 /// Format tasks as a human-readable summary.
 pub fn format_task_summary(tasks: &BTreeMap<String, StructuredTask>) -> String {
+    format_task_summary_filtered(tasks, None)
+}
+
+/// Format tasks as a human-readable summary with optional smart blocker filtering.
+pub fn format_task_summary_filtered(
+    tasks: &BTreeMap<String, StructuredTask>,
+    completed_ids: Option<&HashSet<String>>,
+) -> String {
     if tasks.is_empty() {
         return "No tasks.".to_string();
     }
     let mut output = String::new();
     for task in tasks.values() {
-        if matches!(task.status, TaskStatus::Deleted) {
-            continue;
+        if let Some(line) = format_single_task(task, completed_ids) {
+            output.push_str(&line);
         }
-        let marker = match task.status {
-            TaskStatus::Completed => "[x]",
-            TaskStatus::InProgress => "[>]",
-            TaskStatus::Pending => "[ ]",
-            TaskStatus::Deleted => continue,
-        };
-        output.push_str(&format!("{marker} {}: {}\n", task.id, task.subject));
-        if !task.blocked_by.is_empty() {
-            output.push_str(&format!("    blocked by: {}\n", task.blocked_by.join(", ")));
-        }
-        if let Some(ref owner) = task.owner {
-            output.push_str(&format!("    owner: {owner}\n"));
-        }
-        if !task.blocks.is_empty() {
-            output.push_str(&format!("    blocks: {}\n", task.blocks.join(", ")));
-        }
+    }
+    if output.is_empty() {
+        return "No tasks.".to_string();
     }
     output
 }
@@ -162,3 +224,7 @@ pub fn derive_active_form(subject: &str) -> String {
 
     format!("Working on: {trimmed}")
 }
+
+#[cfg(test)]
+#[path = "structured_tasks.test.rs"]
+mod tests;

@@ -326,3 +326,270 @@ async fn test_spawn_input_description() {
     let result = mgr.spawn_full(input).await.expect("spawn_full");
     assert!(result.output.is_some());
 }
+
+// ── agent_infos tests ──
+
+#[tokio::test]
+async fn test_agent_infos_returns_snapshots() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    mgr.register_agent_type(test_definition("explore"));
+
+    let id1 = mgr.spawn("bash", "task1").await.expect("spawn");
+    let id2 = mgr.spawn("explore", "task2").await.expect("spawn");
+
+    // Set different statuses
+    mgr.agents.get_mut(&id1).expect("a").status = AgentStatus::Running;
+    // id2 stays Completed (stub)
+
+    let infos = mgr.agent_infos();
+    assert_eq!(infos.len(), 2);
+
+    let info1 = infos.iter().find(|i| i.id == id1).expect("info1");
+    assert_eq!(info1.agent_type, "bash");
+    assert_eq!(info1.status, AgentStatus::Running);
+
+    let info2 = infos.iter().find(|i| i.id == id2).expect("info2");
+    assert_eq!(info2.agent_type, "explore");
+    assert_eq!(info2.status, AgentStatus::Completed);
+}
+
+#[tokio::test]
+async fn test_agent_infos_includes_name() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let mut input = test_spawn_input("bash", "task1");
+    input.name = Some("my-agent".to_string());
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+
+    let infos = mgr.agent_infos();
+    let info = infos
+        .iter()
+        .find(|i| i.id == result.agent_id)
+        .expect("info");
+    assert_eq!(info.name, Some("my-agent".to_string()));
+}
+
+// ── Killed status tests ──
+
+#[tokio::test]
+async fn test_killed_status_in_remove_agent() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Manually set to Killed
+    mgr.agents.get_mut(&id).expect("agent").status = AgentStatus::Killed;
+
+    // remove_agent should accept Killed status
+    let removed = mgr.remove_agent(&id);
+    assert!(removed.is_some());
+    assert!(mgr.get_status(&id).is_none());
+}
+
+#[tokio::test]
+async fn test_killed_status_in_gc_completed() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let id1 = mgr.spawn("bash", "t1").await.expect("spawn");
+    let id2 = mgr.spawn("bash", "t2").await.expect("spawn");
+
+    // Set one to Killed, other stays Completed
+    mgr.agents.get_mut(&id1).expect("a").status = AgentStatus::Killed;
+
+    let removed = mgr.gc_completed();
+    assert_eq!(removed, 2); // Both Killed and Completed removed
+    assert_eq!(mgr.agent_count(), 0);
+}
+
+// ── promote_killed tests ──
+
+#[tokio::test]
+async fn test_promote_killed_upgrades_failed_to_killed() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Simulate cancellation: handler marks agent as Failed
+    mgr.agents.get_mut(&id).expect("agent").status = AgentStatus::Failed;
+
+    let mut killed_set = std::collections::HashSet::new();
+    killed_set.insert(id.clone());
+    mgr.promote_killed(&killed_set);
+
+    assert_eq!(mgr.get_status(&id), Some(AgentStatus::Killed));
+}
+
+#[tokio::test]
+async fn test_promote_killed_ignores_non_failed() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Manually set to Running (no-execute stub completes immediately)
+    mgr.agents.get_mut(&id).expect("agent").status = AgentStatus::Running;
+
+    // Agent is Running — should NOT be promoted
+    let mut killed_set = std::collections::HashSet::new();
+    killed_set.insert(id.clone());
+    mgr.promote_killed(&killed_set);
+
+    // Still Running, not Killed
+    assert_eq!(mgr.get_status(&id), Some(AgentStatus::Running));
+}
+
+#[tokio::test]
+async fn test_promote_killed_ignores_unknown_ids() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+    mgr.agents.get_mut(&id).expect("agent").status = AgentStatus::Failed;
+
+    // killed set contains a different ID
+    let mut killed_set = std::collections::HashSet::new();
+    killed_set.insert("unknown-id".to_string());
+    mgr.promote_killed(&killed_set);
+
+    // Still Failed, not upgraded
+    assert_eq!(mgr.get_status(&id), Some(AgentStatus::Failed));
+}
+
+// ── Auto-background timeout default tests ──
+
+#[test]
+fn test_auto_background_timeout_defaults_to_none() {
+    let mgr = SubagentManager::new();
+    assert!(mgr.auto_background_timeout.is_none());
+}
+
+#[test]
+fn test_auto_background_timeout_builder() {
+    let mgr = SubagentManager::new()
+        .with_auto_background_timeout(Some(std::time::Duration::from_secs(60)));
+    assert_eq!(
+        mgr.auto_background_timeout,
+        Some(std::time::Duration::from_secs(60))
+    );
+}
+
+// ── Prefixed ID tests ──
+
+#[tokio::test]
+async fn test_agent_id_has_prefix() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+    assert!(
+        id.starts_with('a'),
+        "Agent ID should start with 'a' prefix, got: {id}"
+    );
+    assert_eq!(id.len(), 9, "Agent ID should be a{{8hex}}, got: {id}");
+}
+
+// ── BackgroundOrigin tests ──
+
+#[tokio::test]
+async fn test_background_origin_explicit() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let mut input = test_spawn_input("bash", "test");
+    input.run_in_background = Some(true);
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+
+    let infos = mgr.agent_infos();
+    let info = infos
+        .iter()
+        .find(|i| i.id == result.agent_id)
+        .expect("info");
+    assert_eq!(info.background_origin, Some(BackgroundOrigin::Explicit));
+}
+
+#[tokio::test]
+async fn test_foreground_has_no_background_origin() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let input = test_spawn_input("bash", "test");
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+
+    let infos = mgr.agent_infos();
+    let info = infos
+        .iter()
+        .find(|i| i.id == result.agent_id)
+        .expect("info");
+    assert_eq!(info.background_origin, None);
+}
+
+// ── gc_stale tests ──
+
+#[tokio::test]
+async fn test_gc_stale_removes_old_agents() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let id1 = mgr.spawn("bash", "t1").await.expect("spawn");
+    let id2 = mgr.spawn("bash", "t2").await.expect("spawn");
+
+    // Both completed (stub). Set id1 completed_at to long ago.
+    mgr.agents.get_mut(&id1).expect("a").completed_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(600));
+    // id2 completed just now (already set by stub)
+
+    let removed = mgr.gc_stale(std::time::Duration::from_secs(300));
+    assert_eq!(removed, 1, "Should remove only the old agent");
+    assert!(mgr.get_status(&id1).is_none(), "Old agent should be gone");
+    assert!(mgr.get_status(&id2).is_some(), "Recent agent should remain");
+}
+
+#[tokio::test]
+async fn test_gc_stale_keeps_running_agents() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Set to running (GC should not touch it)
+    mgr.agents.get_mut(&id).expect("a").status = AgentStatus::Running;
+
+    let removed = mgr.gc_stale(std::time::Duration::from_secs(0));
+    assert_eq!(removed, 0);
+    assert!(mgr.get_status(&id).is_some());
+}
+
+// ── kill_all_running tests ──
+
+#[tokio::test]
+async fn test_kill_all_running() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let id1 = mgr.spawn("bash", "t1").await.expect("spawn");
+    let id2 = mgr.spawn("bash", "t2").await.expect("spawn");
+    let id3 = mgr.spawn("bash", "t3").await.expect("spawn");
+
+    // Set some to running/backgrounded
+    mgr.agents.get_mut(&id1).expect("a").status = AgentStatus::Running;
+    mgr.agents.get_mut(&id2).expect("a").status = AgentStatus::Backgrounded;
+    // id3 stays Completed
+
+    let killed = mgr.kill_all_running();
+    assert_eq!(killed.len(), 2);
+    assert!(killed.contains(&id1));
+    assert!(killed.contains(&id2));
+
+    assert_eq!(mgr.get_status(&id1), Some(AgentStatus::Killed));
+    assert_eq!(mgr.get_status(&id2), Some(AgentStatus::Killed));
+    assert_eq!(mgr.get_status(&id3), Some(AgentStatus::Completed));
+}
+
+#[tokio::test]
+async fn test_kill_all_running_empty() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let _id = mgr.spawn("bash", "test").await.expect("spawn"); // Completed
+
+    let killed = mgr.kill_all_running();
+    assert!(killed.is_empty());
+}

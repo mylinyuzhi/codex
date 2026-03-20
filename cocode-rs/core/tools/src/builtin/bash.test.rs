@@ -383,6 +383,68 @@ async fn test_plan_mode_check_permission_denies_write() {
     assert!(matches!(result, PermissionResult::Denied { .. }));
 }
 
+// -- Compound command risk checks --
+
+#[test]
+fn test_compound_multiple_cd_flagged() {
+    let commands = vec![
+        vec!["cd".into(), "/tmp".into()],
+        vec!["cd".into(), "/var".into()],
+        vec!["ls".into()],
+    ];
+    assert!(
+        check_compound_risks(&commands).is_some(),
+        "multiple cd should be flagged"
+    );
+}
+
+#[test]
+fn test_compound_cd_plus_git_write_flagged() {
+    let commands = vec![
+        vec!["cd".into(), "/tmp".into()],
+        vec!["git".into(), "push".into()],
+    ];
+    assert!(
+        check_compound_risks(&commands).is_some(),
+        "cd + git push should be flagged"
+    );
+}
+
+#[test]
+fn test_compound_too_many_subcommands() {
+    let commands: Vec<Vec<String>> = (0..25)
+        .map(|_| vec!["echo".into(), "hello".into()])
+        .collect();
+    assert!(
+        check_compound_risks(&commands).is_some(),
+        "25 subcommands should exceed limit"
+    );
+}
+
+#[test]
+fn test_compound_cd_plus_safe_command_ok() {
+    let commands = vec![
+        vec!["cd".into(), "/tmp".into()],
+        vec!["ls".into(), "-la".into()],
+    ];
+    assert!(
+        check_compound_risks(&commands).is_none(),
+        "cd + ls should be fine"
+    );
+}
+
+#[test]
+fn test_compound_single_cd_ok() {
+    let commands = vec![
+        vec!["cd".into(), "/tmp".into()],
+        vec!["echo".into(), "hello".into()],
+    ];
+    assert!(
+        check_compound_risks(&commands).is_none(),
+        "single cd should be fine"
+    );
+}
+
 #[tokio::test]
 async fn test_non_plan_mode_unaffected() {
     let tool = BashTool::new();

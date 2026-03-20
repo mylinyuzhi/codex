@@ -187,7 +187,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | `keyring-store` | Secure credential storage using system keyring |
 | `pty` | Pseudo-terminal handling |
 | `readiness` | Readiness flag with token-based auth and async waiting |
-| `shell-parser` | Shell command parsing and security analysis (15 analyzers: 7 Allow + 8 Ask) |
+| `shell-parser` | Shell command parsing and security analysis (24 analyzers: 16 Deny + 8 Ask) |
 | `stdio-to-uds` | Bridge stdio streams to Unix domain sockets |
 | `string` | String truncation and boundary utilities |
 | `symbol-search` | Symbol search for code navigation |
