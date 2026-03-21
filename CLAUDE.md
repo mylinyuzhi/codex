@@ -9,7 +9,7 @@ Run from `cocode-rs/` directory:
 ```bash
 just fmt          # After Rust changes (auto-approve)
 just pre-commit   # REQUIRED before commit
-just test         # If changed provider-sdks or core crates
+just test         # If changed vercel-ai or core crates
 just check        # Type-check all crates
 just clippy       # Run clippy on all crates
 just help         # All commands
@@ -85,26 +85,26 @@ Rules:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  App: cli, tui, session                                         │
-├─────────────────────────────────────────────────────────────────┤
-│  Core: loop → executor → api                                    │
-│            ↓        ↓                                           │
-│         tools ← context ← prompt                                │
-│            ↓                                                    │
-│      message, system-reminder, subagent                         │
-├─────────────────────────────────────────────────────────────────┤
-│  Features: skill, hooks, plugin, plan-mode                      │
-│  Exec: shell, sandbox, arg0                                     │
-│  MCP: mcp-types, rmcp-client                                    │
-│  Standalone: retrieval, lsp                                     │
-├─────────────────────────────────────────────────────────────────┤
-│  Provider SDKs: hyper-sdk → anthropic, openai, google-genai,    │
-│                             volcengine-ark, z-ai                │
-├─────────────────────────────────────────────────────────────────┤
-│  Common: protocol, config, error, otel                          │
-│  Utils: 20 utility crates (see table below)                     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  App: cli, tui, session                                              │
+├──────────────────────────────────────────────────────────────────────┤
+│  Core: loop → executor → api                                        │
+│            ↓        ↓                                                │
+│         tools ← context ← prompt                                    │
+│            ↓                                                         │
+│      message, system-reminder, subagent, file-backup                 │
+├──────────────────────────────────────────────────────────────────────┤
+│  Features: skill, hooks, plugin, plan-mode, team, auto-memory        │
+│  Exec: shell, sandbox, arg0                                          │
+│  MCP: mcp-types, rmcp-client                                         │
+│  Standalone: retrieval, lsp                                           │
+├──────────────────────────────────────────────────────────────────────┤
+│  Vercel AI: ai → openai, openai-compatible, google, anthropic,       │
+│                  bytedance (on provider + provider-utils)              │
+├──────────────────────────────────────────────────────────────────────┤
+│  Common: protocol, config, error, otel, stack-trace-macro             │
+│  Utils: 20 utility crates (see table below)                           │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Data Flows
@@ -116,7 +116,7 @@ User input
   → SystemReminderOrchestrator.generate_all()    [system-reminder]
   → SystemPromptBuilder.build()                   [prompt]
   → ToolRegistry.definitions_for_model()          [tools]
-  → ApiClient.stream_request()                    [api → hyper-sdk]
+  → ApiClient.stream_request()                    [api → vercel-ai]
   → StreamProcessor yields StreamEvents           [api]
   → StreamingToolExecutor:
       safe tools → execute concurrently           [tools]
@@ -137,16 +137,6 @@ User input
   → Config snapshot → core/executor → core/loop
 ```
 
-### Provider Call Chain
-
-```
-ConfigManager.resolve_provider(name)
-  → ProviderInfo (api_key, base_url, models, wire_api)
-  → hyper-sdk: Provider::model(slug) → Arc<dyn Model>
-  → model.stream(GenerateRequest) → StreamResponse
-  → core/api: UnifiedStream wraps with retry, stall detection, fallback
-```
-
 ### Shell Execution Flow
 
 ```
@@ -157,9 +147,9 @@ Bash tool → ShellExecutor.execute(CommandInput)
   → CommandResult (exit_code, stdout, stderr, new_cwd)
 ```
 
-## Crate Guide (53 crates)
+## Crate Guide (59 crates)
 
-### Common (4)
+### Common (5)
 
 | Crate | Purpose | Key Types |
 |-------|---------|-----------|
@@ -167,19 +157,9 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | `config` | Layered config: JSON files + env + runtime overrides | `ConfigManager` (thread-safe, `RwLock`), `ConfigLoader`, `ConfigResolver`, `Config` (complete snapshot), `RuntimeOverrides`, `RoleSelections` |
 | `error` | Unified errors with StatusCode classification | `StatusCode` (5-digit `XX_YYY`), `ErrorExt` trait (`status_code()`, `is_retryable()`, `retry_after()`), snafu + snafu-virtstack |
 | `otel` | OpenTelemetry tracing and metrics | `OtelManager` (counters, histograms, timers, session span) |
+| `stack-trace-macro` | Proc macro for snafu error enums with virtual stack traces | `#[stack_trace_debug]` (proc macro attribute) |
 
-### Provider SDKs (6)
-
-| Crate | Purpose | Key Types |
-|-------|---------|-----------|
-| `hyper-sdk` | **Main SDK**: Unified multi-provider client (standalone, no protocol deps) | `Provider` trait, `Model` trait (`generate()`, `stream()`, `embed()`), `Message`, `ContentBlock`, `GenerateRequest`/`Response`, `StreamResponse`/`Event`, `HookChain`, `HttpInterceptor` |
-| `anthropic` | Anthropic Claude API | Implements `Provider`/`Model` for Claude models |
-| `openai` | OpenAI Responses API | Implements `Provider`/`Model` for GPT models |
-| `google-genai` | Google Gemini API | Implements `Provider`/`Model` for Gemini models |
-| `volcengine-ark` | Volcengine Ark API | Implements `Provider`/`Model` with endpoint-ID aliasing |
-| `z-ai` | ZhipuAI / Z.AI API | Implements `Provider`/`Model` for Z.AI models |
-
-### Core (9)
+### Core (10)
 
 | Crate | Purpose | Key Types |
 |-------|---------|-----------|
@@ -192,6 +172,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | `loop` | Agent loop driver: multi-turn 18-step cycle | `AgentLoop` (`run(prompt) → LoopResult`), compaction (micro-compact: clear old tool results; session memory: background summarization agent), fallback (stream→non-stream, context overflow→reduce max_tokens 25%, model fallback), `AgentStatus` via `watch::Sender` |
 | `subagent` | Isolated agent spawning for parallel tasks | `AgentDefinition` (tools, disallowed_tools, identity, max_turns), `SubagentManager` (register, spawn_full), `AgentInstance` (Running/Completed/Failed/Backgrounded), four-layer tool filtering, foreground (blocks) vs background (output_file) |
 | `executor` | Top-level session driver wiring all components | `AgentExecutor` (`execute(prompt) → String`), `ExecutorBuilder` → `AgentExecutor` → `AgentLoop` → `StreamingToolExecutor`, permission pipeline: `PermissionRule` → `PermissionRuleEvaluator` → `ApprovalStore` |
+| `file-backup` | File backup and snapshot management with diff-based checkpoints | `FileBackupStore` (backup coordination, `Mutex`-based), `SnapshotManager`, `BackupEntry`, `BackupIndex`, `TurnSnapshot` (turn-level state), `RewindResult` |
 
 ### App (3)
 
@@ -201,7 +182,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | `tui` | Terminal UI using Elm architecture (TEA) | `App` (async run loop), `AppState` (model), `TuiEvent` (messages: keyboard/agent/file-search), `UserCommand` (TUI→Core: SubmitInput/Interrupt/ApprovalResponse), `Overlay` (permission prompts, model picker), `tokio::select!` on agent_rx + events + file_search + symbol_search channels |
 | `session` | Session persistence and state aggregation | `Session` (id, timestamps, model, working_dir), `SessionState` (message_history + tool_registry + hook_registry + executor), `SessionManager` (create/load/save/list), JSON persistence at `~/.cocode/sessions/` |
 
-### Features (4)
+### Features (6)
 
 | Crate | Purpose | Key Types |
 |-------|---------|-----------|
@@ -209,6 +190,8 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | `hooks` | Pre/post event interception with scoped priority | `HookDefinition` (event + matcher + handler), `HookEventType` (BeforeToolCall/AfterToolCall/SessionStart), `HookHandler` (Command/Prompt/Agent/Webhook/Inline), `HookScope` (Skill > Plugin > Project > User > Global), `AsyncHookTracker` |
 | `plugin` | Plugin system via PLUGIN.toml manifests | `PluginManifest` (PLUGIN.toml), `PluginContributions` (skills, hooks, agents, commands, MCP servers), `PluginScope` (Managed > User > Project), `PluginLoader`, `PluginRegistry` |
 | `plan-mode` | Plan file management for plan-then-execute workflow | `PlanFileManager` (CRUD), `PlanModeState`, plans at `~/.cocode/plans/{adjective}-{action}-{noun}.md` |
+| `team` | Multi-agent team orchestration with dual-layer persistence | `Team` (container), `TeamMember` (agent definition), `TeamStore` (`Arc<Mutex<T>>`), `Mailbox` (JSONL inter-agent messaging), `AgentMessage` (envelope), `ShutdownTracker`, `TeamConfig` |
+| `auto-memory` | Persistent cross-session knowledge via per-project MEMORY.md | `AutoMemoryState` (`Arc` + `RwLock`), `MemoryIndex`, `MemoryFrontmatter`, `AutoMemoryEntry`, `ResolvedAutoMemoryConfig`, `StalenessInfo` |
 
 ### Exec (3)
 
@@ -231,6 +214,19 @@ Bash tool → ShellExecutor.execute(CommandInput)
 |-------|---------|-----------|
 | `retrieval` | Code search: BM25 + vector + AST via Facade pattern | `RetrievalFacade` (search, build_index, generate_repomap), `SearchRequest` (fluent: `.bm25()`, `.vector()`, `.hybrid()`, `.limit()`), `CodeChunk`, `IndexManager`, `RepoMapGenerator` (PageRank), presets: NONE/MINIMAL/STANDARD/FULL, LRU cache by workdir (max 16), SQLite + LanceDB storage |
 | `lsp` | AI-friendly LSP client (query by name+kind, not position) | `LspServerManager` (multi-server lifecycle), `LspClient` (e.g. `client.definition(path, "Config", Some(SymbolKind::Struct))`), `SymbolKind`, `ResolvedSymbol`, `DiagnosticsStore` (300ms debounce), `ServerLifecycle` (max 5 restarts, exponential backoff), built-in: rust-analyzer, gopls, pyright, typescript-language-server |
+
+### Vercel AI (8)
+
+| Crate | Purpose | Key Types |
+|-------|---------|-----------|
+| `vercel-ai-provider` | Standalone types matching @ai-sdk/provider v4 spec | `LanguageModelV4` trait, `EmbeddingModelV4` trait, `ImageModelV4` trait, `ProviderV4` trait, `LanguageModelV4Prompt`, `UserContentPart`/`AssistantContentPart`/`ToolContentPart` (content enums), `AISdkError` |
+| `vercel-ai-provider-utils` | Utilities for implementing AI SDK v4 providers | `ApiResponse`, `ResponseHandler`/`JsonResponseHandler`/`StreamResponseHandler`, `ErrorHandler`, `Fetch`/`FetchOptions`, `Schema`/`ValidationError`, `ToolMapping`, `DataUri` |
+| `vercel-ai` | High-level SDK matching @ai-sdk/ai (generate_text, stream_text, embed) | `GenerateTextOptions`/`GenerateTextResult`, `StreamTextOptions`, `GenerateTextCallbacks`/`StreamTextCallbacks`, `GenerateObjectOptions`, `EmbedOptions`/`EmbedResult`, `OutputStrategy`, `LanguageModel` |
+| `vercel-ai-openai` | OpenAI provider for Vercel AI SDK v4 | `OpenAIProvider`, `OpenAIProviderSettings`, `OpenAIChatLanguageModel`, `OpenAIResponsesLanguageModel`, `OpenAIEmbeddingModel`, `OpenAIImageModel`, `OpenAISpeechModel`, `OpenAITranscriptionModel` |
+| `vercel-ai-openai-compatible` | Generic OpenAI-compatible provider (xAI, Groq, Together, etc.) | `OpenAICompatibleProvider`, `OpenAICompatibleProviderSettings`, `OpenAICompatibleChatLanguageModel`, `OpenAICompatibleEmbeddingModel`, `MetadataExtractor`, `StreamMetadataExtractor` |
+| `vercel-ai-google` | Google Gemini provider for Vercel AI SDK v4 | `GoogleGenerativeAIProvider`, `GoogleGenerativeAIProviderSettings`, `GoogleGenerativeAILanguageModel`, `GoogleGenerativeAIEmbeddingModel`, `GoogleGenerativeAIImageModel`, `GoogleGenerativeAIVideoModel` |
+| `vercel-ai-anthropic` | Anthropic Claude provider for Vercel AI SDK v4 | `AnthropicProvider`, `AnthropicProviderSettings`, `AnthropicMessagesLanguageModel`, `AnthropicConfig`, `CacheControlValidator` |
+| `vercel-ai-bytedance` | ByteDance video provider (Seedance) via ModelArk API | `ByteDanceProvider`, `ByteDanceProviderSettings`, `ByteDanceVideoModel`, `ByteDanceVideoModelConfig`, `ByteDanceVideoSettings` |
 
 ### Utils (20)
 
@@ -262,7 +258,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | Pattern | Where | Details |
 |---------|-------|---------|
 | **Builder** | Most crates | `ExecutorBuilder`, `AgentLoop::new()`, `FacadeBuilder`, `SearchRequest` (fluent) |
-| **Arc-heavy sharing** | core/ | Registries, managers, trackers: `Arc<Mutex<T>>` or `Arc<T>` |
+| **Arc-heavy sharing** | core/, features/ | Registries, managers, trackers: `Arc<Mutex<T>>` or `Arc<RwLock<T>>` (e.g. `TeamStore`, `AutoMemoryState`) |
 | **Event-driven** | loop, tui | `mpsc::Sender<LoopEvent>` for UI updates, `tokio::select!` multiplexing |
 | **Cancellation** | All async | `CancellationToken` threaded through all layers |
 | **Callback decoupling** | tools, subagent | `SpawnAgentFn` callback avoids tools→subagent circular dependency; `context` stores tool names as `Vec<String>` to avoid tools dep |
@@ -270,6 +266,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | **Permission pipeline** | executor, tools | `Tool.check_permission()` → `PermissionRuleEvaluator` (sorted by `RuleSource` priority: Session > Command > Cli > Flag > Local > Project > Policy > User) → `ApprovalStore` |
 | **Facade** | retrieval | Single `RetrievalFacade` entry point hides SearchService + IndexService + RecentFilesService |
 | **Elm (TEA)** | tui | Model (`AppState`) + Message (`TuiEvent`) + Update (`handle_command`) + View (`render`) |
+| **Middleware** | vercel-ai | `FnOnce` + `BoxFuture` callbacks for `do_generate`/`do_stream` delegation in language model middleware |
 
 ## Testing
 
@@ -367,8 +364,9 @@ This repo uses snapshot tests (via `insta`) to validate rendered output, especia
 | Layer | Error Type |
 |-------|------------|
 | common/, core/ | `cocode-error` + snafu + snafu-virtstack (StatusCode `XX_YYY` classification, retryable flag) |
-| features/ | snafu |
-| provider-sdks/, utils/ | `anyhow::Result` |
+| features/ | snafu + `cocode-error` |
+| utils/ | `anyhow::Result` |
+| vercel-ai/ | `thiserror` (standalone, no cocode deps) |
 | app/, exec/, mcp/, standalone | `anyhow::Result` |
 
 StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12). See [common/error/README.md](cocode-rs/common/error/README.md).
@@ -391,12 +389,9 @@ StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12
 | TUI | [app/tui/CLAUDE.md](cocode-rs/app/tui/CLAUDE.md) |
 | Retrieval | [retrieval/CLAUDE.md](cocode-rs/retrieval/CLAUDE.md) |
 | LSP | [lsp/CLAUDE.md](cocode-rs/lsp/CLAUDE.md) |
-| Hyper SDK | [provider-sdks/hyper-sdk/CLAUDE.md](cocode-rs/provider-sdks/hyper-sdk/CLAUDE.md) |
-| Anthropic SDK | [provider-sdks/anthropic/CLAUDE.md](cocode-rs/provider-sdks/anthropic/CLAUDE.md) |
-| OpenAI SDK | [provider-sdks/openai/CLAUDE.md](cocode-rs/provider-sdks/openai/CLAUDE.md) |
-| Google GenAI SDK | [provider-sdks/google-genai/CLAUDE.md](cocode-rs/provider-sdks/google-genai/CLAUDE.md) |
-| Volcengine Ark SDK | [provider-sdks/volcengine-ark/CLAUDE.md](cocode-rs/provider-sdks/volcengine-ark/CLAUDE.md) |
-| Z.AI SDK | [provider-sdks/z-ai/CLAUDE.md](cocode-rs/provider-sdks/z-ai/CLAUDE.md) |
+| Vercel AI SDK | [vercel-ai/ai/CLAUDE.md](cocode-rs/vercel-ai/ai/CLAUDE.md) |
+| Vercel AI Provider | [vercel-ai/provider/CLAUDE.md](cocode-rs/vercel-ai/provider/CLAUDE.md) |
+| Vercel AI Provider Utils | [vercel-ai/provider-utils/CLAUDE.md](cocode-rs/vercel-ai/provider-utils/CLAUDE.md) |
 | File Ignore | [utils/file-ignore/CLAUDE.md](cocode-rs/utils/file-ignore/CLAUDE.md) |
 | Error Codes | [common/error/README.md](cocode-rs/common/error/README.md) |
 | User Docs | [docs/](docs/) (getting-started.md, config.md, sandbox.md) |
