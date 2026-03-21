@@ -2,8 +2,6 @@
 
 Multi-provider LLM SDK and CLI. All development in `cocode-rs/`.
 
-**Read `AGENTS.md` for Rust conventions.** This file covers architecture, key types, data flow, and crate navigation.
-
 ## Commands
 
 Run from `cocode-rs/` directory:
@@ -16,6 +14,73 @@ just check        # Type-check all crates
 just clippy       # Run clippy on all crates
 just help         # All commands
 ```
+
+## Code Style
+
+### Format and Lint
+
+- When using `format!` and you can inline variables into `{}`, always do that
+  ```rust
+  // Correct
+  format!("{name} is {age}")
+  // Avoid
+  format!("{} is {}", name, age)
+  ```
+- Always collapse if statements per [collapsible_if](https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if)
+- Use method references over closures when possible per [redundant_closure_for_method_calls](https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls)
+- When possible, make `match` statements exhaustive and avoid wildcard arms
+
+### Integer Types
+
+- Use `i32`/`i64` instead of `u32`/`u64` for most cases
+- This avoids subtle overflow bugs and matches common API conventions
+
+### Error Handling
+
+- Never use `.unwrap()` in non-test code
+- Use `?` for propagation or `.expect("reason")` with clear context
+- Avoid mixing `Result` and `Option` without clear conversion
+- See Error Handling section below for per-layer error types
+
+### Serde Conventions
+
+- Add `#[serde(default)]` for optional config fields
+- Add `#[derive(Default)]` for structs used with `..Default::default()`
+- Use `#[serde(rename_all = "snake_case")]` for enums
+
+### Parameter Design
+
+- Avoid bool or ambiguous `Option` parameters that force callers to write hard-to-read code such as `foo(false)` or `bar(None)`
+- Prefer enums, named methods, newtypes, or other idiomatic Rust API shapes when they keep the callsite self-documenting
+
+### Argument Comments
+
+When you cannot avoid a small positional-literal callsite, use an exact `/*param_name*/` comment before opaque literal arguments:
+
+```rust
+// Good — self-documenting
+connect(/*timeout*/ None, /*retries*/ 3, /*verbose*/ false)
+
+// Bad — opaque
+connect(None, 3, false)
+```
+
+Rules:
+- Add `/*param*/` for `None`, booleans, and numeric literals passed by position
+- Do not add for string or char literals unless the comment adds real clarity
+- The parameter name must exactly match the callee signature
+
+### Module Size
+
+- Target Rust modules under 500 LoC (excluding tests)
+- If a file exceeds ~800 LoC, add new functionality in a new module instead of extending the existing file
+- Prefer adding new modules over growing existing ones
+
+### Comments
+
+- Keep concise — describe purpose, not implementation details
+- Field docs: 1-2 lines max, no example configs/commands
+- Code comments: state intent only when non-obvious
 
 ## Architecture
 
@@ -206,6 +271,97 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | **Facade** | retrieval | Single `RetrievalFacade` entry point hides SearchService + IndexService + RecentFilesService |
 | **Elm (TEA)** | tui | Model (`AppState`) + Message (`TuiEvent`) + Update (`handle_command`) + View (`render`) |
 
+## Testing
+
+### Test Assertions
+
+- Use `pretty_assertions::assert_eq` for clearer diffs
+- Prefer comparing entire objects over individual fields
+  ```rust
+  // Correct
+  assert_eq!(actual, expected);
+  // Avoid
+  assert_eq!(actual.name, expected.name);
+  assert_eq!(actual.value, expected.value);
+  ```
+- Avoid mutating process environment in tests; prefer passing flags or dependencies
+
+### Test Organization
+
+- **Separate test files** using `#[path]` attribute to keep source files focused:
+  ```rust
+  // At the end of implementation.rs
+  #[cfg(test)]
+  #[path = "implementation.test.rs"]
+  mod tests;
+  ```
+  Tests go in the companion `implementation.test.rs` file in the same directory.
+- Integration tests in `tests/` directory
+- Use descriptive test names: `test_<function>_<scenario>_<expected>`
+
+### Test & Lint Workflow
+
+- Test the specific changed crate first: `just test-crate cocode-<name>`
+- Only run full `just test` if changes affect shared crates (common/, core/, protocol/)
+- Use `just fix -p cocode-<name>` for scoped clippy fixes; only run `just fix` without `-p` if you changed shared crates
+
+### Snapshot Tests
+
+This repo uses snapshot tests (via `insta`) to validate rendered output, especially in TUI.
+
+- Any change that affects user-visible UI must include corresponding `insta` snapshot coverage
+- Run tests to generate updated snapshots: `cargo test -p cocode-tui`
+- Check pending: `cargo insta pending-snapshots -p cocode-tui`
+- Review by reading `*.snap.new` files directly, or: `cargo insta show -p cocode-tui path/to/file.snap.new`
+- Accept: `cargo insta accept -p cocode-tui`
+- Install if missing: `cargo install cargo-insta`
+
+## TUI Conventions
+
+### Styling (ratatui)
+
+- Use Stylize helpers: `"text".dim()`, `.bold()`, `.cyan()`, `.italic()`, `.underlined()` instead of manual `Style`
+- Simple conversions: `"text".into()` for spans, `vec![...].into()` for lines
+- Computed styles: `Span::styled` or `Span::from(text).set_style(style)` is OK when style is runtime-computed
+- Avoid hardcoded `.white()` — prefer the default foreground (no color)
+- Chain for readability: `url.cyan().underlined()`
+- Use `Line::from(text)` or `Span::from(text)` only when the target type isn't obvious from context
+- Avoid churn: don't refactor between equivalent forms without a clear readability gain
+- Compactness: prefer the form that stays on one line after rustfmt
+
+### Text Wrapping
+
+- Use `textwrap::wrap` for plain strings
+- For ratatui `Line` wrapping, use helpers in `tui/src/wrapping.rs` (e.g. `word_wrap_lines` / `word_wrap_line`)
+- For indentation, use `initial_indent` / `subsequent_indent` options rather than custom logic
+
+## Async Conventions
+
+### Tokio Runtime
+
+- Use `tokio::task::spawn_blocking` for blocking operations
+- Prefer `tokio::sync` primitives over `std::sync` in async contexts
+- Add `Send + Sync` bounds to traits used with `Arc<dyn Trait>`
+
+## Dependencies
+
+### Adding Dependencies
+
+- Prefer well-maintained crates with active development
+- Check for security advisories before adding
+- Use workspace dependencies when possible
+
+### Common Dependencies
+
+| Purpose | Crate |
+|---------|-------|
+| Async runtime | `tokio` |
+| HTTP client | `reqwest` |
+| JSON | `serde_json` |
+| Error handling | `anyhow`, `snafu` |
+| Logging | `tracing` |
+| Testing | `pretty_assertions` |
+
 ## Error Handling
 
 | Layer | Error Type |
@@ -216,6 +372,17 @@ Bash tool → ShellExecutor.execute(CommandInput)
 | app/, exec/, mcp/, standalone | `anyhow::Result` |
 
 StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12). See [common/error/README.md](cocode-rs/common/error/README.md).
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **No Prompt Caching** | Prompt caching (Anthropic's cache breakpoints feature) is not required for this project. Do not implement or plan for it. |
+| **No Deprecated Code** | When refactoring or implementing features, remove obsolete code completely. Do not mark as deprecated or maintain backward compatibility - delete it outright to keep the codebase clean and avoid technical debt. |
+| **No Inline Tests** | Never put `#[cfg(test)] mod tests { ... }` with test functions inline in source files. Always extract tests to a separate `<name>.test.rs` file and reference it with `#[cfg(test)] #[path = "<name>.test.rs"] mod tests;` at the end of the source file. |
+| **No `unsafe` Code** | Never use `unsafe` blocks, `unsafe fn`, `unsafe impl`, or `unsafe trait` anywhere in the codebase. All code must be written in safe Rust. If a dependency requires `unsafe` at the boundary, wrap it in a safe abstraction within that dependency — never expose `unsafe` to cocode-rs crates. If you believe `unsafe` is truly unavoidable, stop and discuss the design with the team first. |
+| **No Hardcoded Tool/Enum Names** | Never use string literals like `"Read"`, `"Task"`, `"shutdown_request"` for tool names or enum identifiers. Always use the canonical enum's `as_str()` method: `ToolName::Read.as_str()`, `MessageType::ShutdownRequest.as_str()`. For const arrays use `const X: &[&str] = &[ToolName::Xxx.as_str(), ...]`. When the canonical enum is in a crate you cannot depend on (e.g., cross-layer), define well-known constants in a shared module (see `generator::message_types`). This prevents silent breakage when enum variants are renamed. |
+| **No Single-Use Helpers** | Do not create small helper methods that are referenced only once. Inline the logic at the call site. |
 
 ## Specialized Documentation
 
@@ -231,19 +398,5 @@ StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12
 | Volcengine Ark SDK | [provider-sdks/volcengine-ark/CLAUDE.md](cocode-rs/provider-sdks/volcengine-ark/CLAUDE.md) |
 | Z.AI SDK | [provider-sdks/z-ai/CLAUDE.md](cocode-rs/provider-sdks/z-ai/CLAUDE.md) |
 | File Ignore | [utils/file-ignore/CLAUDE.md](cocode-rs/utils/file-ignore/CLAUDE.md) |
-
-## Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **No Prompt Caching** | Prompt caching (Anthropic's cache breakpoints feature) is not required for this project. Do not implement or plan for it. |
-| **No Deprecated Code** | When refactoring or implementing features, remove obsolete code completely. Do not mark as deprecated or maintain backward compatibility - delete it outright to keep the codebase clean and avoid technical debt. |
-| **No Inline Tests** | Never put `#[cfg(test)] mod tests { ... }` with test functions inline in source files. Always extract tests to a separate `<name>.test.rs` file and reference it with `#[cfg(test)] #[path = "<name>.test.rs"] mod tests;` at the end of the source file. See `AGENTS.md` "Test Organization". |
-| **No `unsafe` Code** | Never use `unsafe` blocks, `unsafe fn`, `unsafe impl`, or `unsafe trait` anywhere in the codebase. All code must be written in safe Rust. If a dependency requires `unsafe` at the boundary, wrap it in a safe abstraction within that dependency — never expose `unsafe` to cocode-rs crates. If you believe `unsafe` is truly unavoidable, stop and discuss the design with the team first. |
-| **No Hardcoded Tool/Enum Names** | Never use string literals like `"Read"`, `"Task"`, `"shutdown_request"` for tool names or enum identifiers. Always use the canonical enum's `as_str()` method: `ToolName::Read.as_str()`, `MessageType::ShutdownRequest.as_str()`. For const arrays use `const X: &[&str] = &[ToolName::Xxx.as_str(), ...]`. When the canonical enum is in a crate you cannot depend on (e.g., cross-layer), define well-known constants in a shared module (see `generator::message_types`). This prevents silent breakage when enum variants are renamed. |
-
-## References
-
-- **Code conventions**: `AGENTS.md`
-- **Error codes**: `cocode-rs/common/error/README.md`
-- **User docs**: `docs/` (getting-started.md, config.md, sandbox.md)
+| Error Codes | [common/error/README.md](cocode-rs/common/error/README.md) |
+| User Docs | [docs/](docs/) (getting-started.md, config.md, sandbox.md) |
