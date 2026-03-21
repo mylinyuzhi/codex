@@ -1946,6 +1946,9 @@ pub struct RewindSelectorOverlay {
     pub loading: bool,
     /// Description of the loading action (for display).
     pub loading_action: Option<String>,
+    /// Whether the initially selected checkpoint needs diff stats fetched.
+    /// Set to true when the overlay opens; consumed by the first navigation event.
+    pub needs_initial_diff_stats: bool,
 }
 
 impl RewindSelectorOverlay {
@@ -1961,6 +1964,7 @@ impl RewindSelectorOverlay {
             summarize_turn: None,
             loading: false,
             loading_action: None,
+            needs_initial_diff_stats: false,
         }
     }
 
@@ -2029,7 +2033,19 @@ impl RewindSelectorOverlay {
         }
         match self.phase {
             RewindSelectorPhase::SelectCheckpoint => {
-                // Advance to mode selection
+                // Fast-path: if no file changes for this checkpoint, skip mode
+                // selection and go directly to ConversationOnly rewind.
+                let has_file_changes = self
+                    .selected_checkpoint()
+                    .map(|cp| cp.file_count > 0)
+                    .unwrap_or(false);
+                if !has_file_changes {
+                    return self.selected_checkpoint().map(|cp| RewindAction::Rewind {
+                        turn_number: cp.turn_number,
+                        mode: cocode_protocol::RewindMode::ConversationOnly,
+                    });
+                }
+                // Normal path: advance to mode selection
                 self.phase = RewindSelectorPhase::SelectMode;
                 self.mode_selected = 0;
                 None

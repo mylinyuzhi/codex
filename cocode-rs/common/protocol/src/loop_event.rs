@@ -643,6 +643,13 @@ pub enum LoopEvent {
         /// Available checkpoints in chronological order (oldest first).
         checkpoints: Vec<RewindCheckpointItem>,
     },
+    /// Diff stats ready for a specific rewind checkpoint (lazy computation).
+    DiffStatsReady {
+        /// The turn number these stats apply to.
+        turn_number: i32,
+        /// The computed diff stats.
+        stats: RewindDiffStats,
+    },
 
     // ========== Summarize ==========
     /// Partial compaction (summarize from a user-selected turn) completed.
@@ -683,6 +690,20 @@ pub struct RewindCheckpointItem {
     pub has_ghost_commit: bool,
     /// File paths modified in this turn (for diff preview).
     pub modified_files: Vec<String>,
+    /// Cumulative diff stats for rewinding to this turn (computed lazily).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_stats: Option<RewindDiffStats>,
+}
+
+/// Line-level diff statistics for a rewind preview.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RewindDiffStats {
+    /// Number of files that would change.
+    pub files_changed: i32,
+    /// Total lines that would be added.
+    pub insertions: i32,
+    /// Total lines that would be removed.
+    pub deletions: i32,
 }
 
 /// Info about an available output style (for the picker overlay).

@@ -332,6 +332,18 @@ pub async fn handle_command(
                 }
                 Some(Overlay::RewindSelector(rw)) => {
                     rw.move_up();
+                    // Request diff stats for the newly selected checkpoint (lazy).
+                    if rw.phase == crate::state::RewindSelectorPhase::SelectCheckpoint {
+                        if let Some(cp) = rw.selected_checkpoint() {
+                            if cp.diff_stats.is_none() {
+                                let _ = command_tx
+                                    .send(UserCommand::RequestDiffStats {
+                                        turn_number: cp.turn_number,
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
                 }
                 Some(Overlay::PlanExitApproval(plan_exit)) => {
                     plan_exit.move_up();
@@ -371,6 +383,18 @@ pub async fn handle_command(
                 }
                 Some(Overlay::RewindSelector(rw)) => {
                     rw.move_down();
+                    // Request diff stats for the newly selected checkpoint (lazy).
+                    if rw.phase == crate::state::RewindSelectorPhase::SelectCheckpoint {
+                        if let Some(cp) = rw.selected_checkpoint() {
+                            if cp.diff_stats.is_none() {
+                                let _ = command_tx
+                                    .send(UserCommand::RequestDiffStats {
+                                        turn_number: cp.turn_number,
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
                 }
                 Some(Overlay::PlanExitApproval(plan_exit)) => {
                     plan_exit.move_down();
@@ -1697,9 +1721,22 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             if checkpoints.is_empty() {
                 state.ui.toast_info(t!("toast.rewind_no_checkpoints"));
             } else {
-                state.ui.set_overlay(Overlay::RewindSelector(
-                    crate::state::RewindSelectorOverlay::new(checkpoints),
-                ));
+                let mut overlay = crate::state::RewindSelectorOverlay::new(checkpoints);
+                // Mark that the initial selection needs diff stats fetched.
+                // The first navigation event (or confirm) will trigger the request.
+                overlay.needs_initial_diff_stats = true;
+                state.ui.set_overlay(Overlay::RewindSelector(overlay));
+            }
+        }
+        LoopEvent::DiffStatsReady { turn_number, stats } => {
+            // Update the matching checkpoint in the rewind selector overlay.
+            if let Some(Overlay::RewindSelector(ref mut rw)) = state.ui.overlay {
+                for cp in &mut rw.checkpoints {
+                    if cp.turn_number == turn_number {
+                        cp.diff_stats = Some(stats);
+                        break;
+                    }
+                }
             }
         }
 

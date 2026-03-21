@@ -10,6 +10,7 @@ pub use backup::BackupIndex;
 pub use backup::FileBackupStore;
 pub use snapshot::CheckpointInfo;
 pub use snapshot::DEFAULT_MAX_SNAPSHOTS;
+pub use snapshot::DryRunDiffStats;
 pub use snapshot::GhostConfig;
 pub use snapshot::RewindInfo;
 pub use snapshot::RewindMode;

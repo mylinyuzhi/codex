@@ -1087,6 +1087,9 @@ async fn handle_idle_command(
             info!(turn_number, ?context, "Summarize from turn requested");
             execute_summarize_from_turn(state, event_tx, turn_number, context.as_deref()).await;
         }
+        UserCommand::RequestDiffStats { turn_number } => {
+            compute_diff_stats_for_turn(state, event_tx, turn_number).await;
+        }
         UserCommand::SetPermissionMode { mode } => {
             info!(?mode, "Permission mode changed");
             let was_plan =
@@ -1132,8 +1135,8 @@ async fn handle_idle_command(
 /// Build checkpoint items from snapshot manager and message history.
 ///
 /// Used by both `RequestRewindCheckpoints` and `/rewind` local command.
-/// Takes the raw checkpoint tuples `(turn_number, file_count, has_ghost_commit)`
-/// to avoid a dependency on `cocode-file-backup`.
+/// Diff stats are NOT computed eagerly — they are fetched on-demand via
+/// `RequestDiffStats` when the user selects a checkpoint in the overlay.
 async fn build_checkpoint_items(
     state: &cocode_session::SessionState,
     event_tx: &mpsc::Sender<LoopEvent>,
@@ -1147,6 +1150,16 @@ async fn build_checkpoint_items(
         return false;
     };
     let infos = sm.list_checkpoints().await;
+
+    // Telemetry: rewind selector opened
+    if let Some(otel) = state.otel_manager() {
+        otel.counter(
+            "cocode.rewind.selector_opened",
+            1,
+            &[("checkpoint_count", &infos.len().to_string())],
+        );
+    }
+
     let checkpoints: Vec<cocode_protocol::RewindCheckpointItem> = infos
         .into_iter()
         .map(|cp| {
@@ -1166,6 +1179,7 @@ async fn build_checkpoint_items(
                     }
                 })
                 .unwrap_or_default();
+
             cocode_protocol::RewindCheckpointItem {
                 turn_number: cp.turn_number,
                 file_count: cp.file_count,
@@ -1176,16 +1190,51 @@ async fn build_checkpoint_items(
                     .iter()
                     .map(|p| p.display().to_string())
                     .collect(),
+                diff_stats: None, // Computed lazily via RequestDiffStats
             }
         })
         .collect();
+
     let _ = event_tx
         .send(LoopEvent::RewindCheckpointsReady { checkpoints })
         .await;
     true
 }
 
+/// Compute diff stats for a single checkpoint on-demand and emit the result.
+async fn compute_diff_stats_for_turn(
+    state: &cocode_session::SessionState,
+    event_tx: &mpsc::Sender<LoopEvent>,
+    turn_number: i32,
+) {
+    let Some(sm) = state.snapshot_manager().cloned() else {
+        return;
+    };
+    match sm.dry_run_diff_stats(turn_number).await {
+        Ok(stats) => {
+            let _ = event_tx
+                .send(LoopEvent::DiffStatsReady {
+                    turn_number,
+                    stats: cocode_protocol::RewindDiffStats {
+                        files_changed: stats.files_changed,
+                        insertions: stats.insertions,
+                        deletions: stats.deletions,
+                    },
+                })
+                .await;
+        }
+        Err(e) => {
+            tracing::debug!(turn_number, "Failed to compute diff stats: {e}");
+        }
+    }
+}
+
 /// Execute a rewind operation with the given target turn and mode.
+///
+/// File restoration is handled by `SnapshotManager::rewind_to_turn_with_mode`.
+/// Conversation state changes (history truncation, todo rebuild, file tracker
+/// pruning) are delegated to `SessionState::apply_rewind_mode_for_turn` to
+/// avoid duplicating that logic here.
 async fn execute_rewind(
     state: &mut cocode_session::SessionState,
     event_tx: &mpsc::Sender<LoopEvent>,
@@ -1195,34 +1244,23 @@ async fn execute_rewind(
     if let Some(sm) = state.snapshot_manager().cloned() {
         match sm.rewind_to_turn_with_mode(target_turn, mode).await {
             Ok(result) => {
-                let truncate_conversation = mode != cocode_protocol::RewindMode::CodeOnly;
+                // Delegate ALL conversation state changes to SessionState.
+                // This handles: history truncation, todo rebuild, file tracker
+                // pruning, and prompt capture — in a single consistent operation.
+                let (messages_removed, restored_prompt) =
+                    state.apply_rewind_mode_for_turn(result.rewound_turn, mode);
 
-                // Find the original user prompt before truncating
-                let restored_prompt = if truncate_conversation {
-                    state
-                        .message_history
-                        .turns()
-                        .iter()
-                        .find(|t| t.number == result.rewound_turn)
-                        .map(|t| t.user_message.text())
-                } else {
-                    None
-                };
-
-                let messages_removed = if truncate_conversation {
-                    let before = state.message_history.turn_count();
-                    state
-                        .message_history
-                        .truncate_from_turn(result.rewound_turn);
-                    before - state.message_history.turn_count()
-                } else {
-                    0
-                };
-
-                // Reconstruct todo state from remaining turns
-                if truncate_conversation {
-                    let todos = reconstruct_todos_from_history(state);
-                    state.set_todos(todos);
+                // Telemetry: rewind completed
+                if let Some(otel) = state.otel_manager() {
+                    otel.counter(
+                        "cocode.rewind.completed",
+                        1,
+                        &[
+                            ("mode", &format!("{mode:?}")),
+                            ("used_git", &result.used_git_restore.to_string()),
+                            ("files_restored", &result.restored_files.len().to_string()),
+                        ],
+                    );
                 }
 
                 let _ = event_tx
@@ -1236,6 +1274,11 @@ async fn execute_rewind(
                     .await;
             }
             Err(e) => {
+                // Telemetry: rewind failed
+                if let Some(otel) = state.otel_manager() {
+                    otel.counter("cocode.rewind.failed", 1, &[]);
+                }
+
                 let _ = event_tx
                     .send(LoopEvent::RewindFailed {
                         error: e.to_string(),
@@ -1280,36 +1323,6 @@ async fn execute_summarize_from_turn(
                 .await;
         }
     }
-}
-
-/// Reconstruct todo state from the retained message history.
-///
-/// Scans the retained turns for the most recent TodoWrite tool call output.
-/// If none found, returns an empty array.
-fn reconstruct_todos_from_history(state: &cocode_session::SessionState) -> serde_json::Value {
-    use cocode_protocol::ToolResultContent;
-
-    // Walk turns in reverse to find the most recent TodoWrite result
-    for turn in state.message_history.turns().iter().rev() {
-        for tc in &turn.tool_calls {
-            if tc.name == cocode_protocol::ToolName::TodoWrite.as_str() || tc.name == "TodoUpdate" {
-                if let Some(ref output) = tc.output {
-                    match output {
-                        ToolResultContent::Text(text) => {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
-                                return parsed;
-                            }
-                        }
-                        ToolResultContent::Structured(value) => {
-                            return value.clone();
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // No TodoWrite found — return empty array
-    serde_json::Value::Array(vec![])
 }
 
 /// Handle the plan exit option after a turn completes.

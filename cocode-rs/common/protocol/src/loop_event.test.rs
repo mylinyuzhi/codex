@@ -595,6 +595,7 @@ fn test_rewind_checkpoints_ready_event() {
                 user_message_preview: "Hello".to_string(),
                 has_ghost_commit: false,
                 modified_files: vec![],
+                diff_stats: None,
             },
             RewindCheckpointItem {
                 turn_number: 2,
@@ -602,6 +603,11 @@ fn test_rewind_checkpoints_ready_event() {
                 user_message_preview: "Fix the bug".to_string(),
                 has_ghost_commit: true,
                 modified_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
+                diff_stats: Some(RewindDiffStats {
+                    files_changed: 2,
+                    insertions: 10,
+                    deletions: 5,
+                }),
             },
         ],
     };

@@ -124,6 +124,7 @@ pub use loop_event::PluginSummaryInfo;
 pub use loop_event::RawStreamEvent;
 pub use loop_event::RetryInfo;
 pub use loop_event::RewindCheckpointItem;
+pub use loop_event::RewindDiffStats;
 pub use loop_event::RewindMode;
 pub use loop_event::TaskProgress;
 pub use loop_event::TaskType;

@@ -131,6 +131,12 @@ pub enum UserCommand {
         context: Option<String>,
     },
 
+    /// Request diff stats for a specific rewind checkpoint (lazy, on-demand).
+    RequestDiffStats {
+        /// The turn number to compute diff stats for.
+        turn_number: i32,
+    },
+
     /// Request graceful shutdown.
     Shutdown,
 }
@@ -233,6 +239,9 @@ impl std::fmt::Display for UserCommand {
             }
             UserCommand::SummarizeFromTurn { turn_number, .. } => {
                 write!(f, "SummarizeFromTurn({turn_number})")
+            }
+            UserCommand::RequestDiffStats { turn_number } => {
+                write!(f, "RequestDiffStats({turn_number})")
             }
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }

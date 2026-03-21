@@ -229,3 +229,272 @@ async fn test_max_snapshots_retention() {
     let turn1_entries = mgr.backup_store().entries_for_turn("turn-1").await;
     assert!(turn1_entries.is_empty());
 }
+
+#[tokio::test]
+async fn test_dry_run_diff_stats_modified_file() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, "line1\nline2\nline3\n")
+        .await
+        .unwrap();
+
+    // Turn 1: backup, then modify
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, "line1\nchanged\nline3\nnew_line\n")
+        .await
+        .unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Dry run: should detect differences
+    let stats = mgr.dry_run_diff_stats(1).await.unwrap();
+    assert_eq!(stats.files_changed, 1);
+    // "changed" replaces "line2" (+1 -1), "new_line" is added (+1)
+    assert!(stats.insertions > 0 || stats.deletions > 0);
+}
+
+#[tokio::test]
+async fn test_dry_run_diff_stats_new_file() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("new.txt");
+    // File doesn't exist yet
+
+    // Turn 1: backup (records non-existence), then create
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, "hello\nworld\n").await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Dry run: rewind would delete the newly created file
+    let stats = mgr.dry_run_diff_stats(1).await.unwrap();
+    assert_eq!(stats.files_changed, 1);
+    assert_eq!(stats.deletions, 2); // 2 lines would be removed
+    assert_eq!(stats.insertions, 0);
+}
+
+#[tokio::test]
+async fn test_dry_run_diff_stats_no_changes() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, "original\n").await.unwrap();
+
+    // Turn 1: backup, then write back the same content
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, "original\n").await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Dry run: no changes (file matches backup)
+    let stats = mgr.dry_run_diff_stats(1).await.unwrap();
+    assert_eq!(stats.files_changed, 0);
+    assert_eq!(stats.insertions, 0);
+    assert_eq!(stats.deletions, 0);
+}
+
+#[tokio::test]
+async fn test_rewind_with_mode_code_only() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, b"modified").await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Rewind with CodeOnly mode
+    let result = mgr
+        .rewind_to_turn_with_mode(Some(1), RewindMode::CodeOnly)
+        .await
+        .unwrap();
+    assert_eq!(result.rewound_turn, 1);
+    assert_eq!(result.mode, RewindMode::CodeOnly);
+    assert_eq!(result.restored_files.len(), 1);
+
+    // File should be restored
+    let content = tokio::fs::read_to_string(&file).await.unwrap();
+    assert_eq!(content, "original");
+}
+
+#[tokio::test]
+async fn test_rewind_with_mode_conversation_only() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, b"modified").await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Rewind with ConversationOnly — files should NOT be restored
+    let result = mgr
+        .rewind_to_turn_with_mode(Some(1), RewindMode::ConversationOnly)
+        .await
+        .unwrap();
+    assert_eq!(result.rewound_turn, 1);
+    assert_eq!(result.mode, RewindMode::ConversationOnly);
+    assert!(result.restored_files.is_empty()); // No file restoration
+
+    // File should still be "modified"
+    let content = tokio::fs::read_to_string(&file).await.unwrap();
+    assert_eq!(content, "modified");
+}
+
+#[tokio::test]
+async fn test_vecdeque_trimming_many_snapshots() {
+    let tmp = TempDir::new().unwrap();
+    // Limit to 5 snapshots to test VecDeque trimming
+    let mgr = create_test_manager_with_limit(&tmp, false, 5).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"v0").await.unwrap();
+
+    // Create 10 turns — only the last 5 should remain
+    for i in 1..=10 {
+        let turn_id = format!("turn-{i}");
+        mgr.start_turn_snapshot(&turn_id, i, false).await;
+        mgr.backup_store()
+            .backup_before_modify(&file)
+            .await
+            .unwrap();
+        tokio::fs::write(&file, format!("v{i}").as_bytes())
+            .await
+            .unwrap();
+        mgr.finalize_turn_snapshot(&turn_id, i, None).await;
+    }
+
+    let checkpoints = mgr.list_checkpoints().await;
+    assert_eq!(checkpoints.len(), 5);
+    assert_eq!(checkpoints[0].turn_number, 6);
+    assert_eq!(checkpoints[4].turn_number, 10);
+
+    // Turns 1-5 should have been cleaned up
+    for i in 1..=5 {
+        let entries = mgr
+            .backup_store()
+            .entries_for_turn(&format!("turn-{i}"))
+            .await;
+        assert!(entries.is_empty(), "turn-{i} should be cleaned up");
+    }
+}
+
+#[tokio::test]
+async fn test_dry_run_diff_stats_binary_file() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("image.bin");
+    // Write binary content (non-UTF-8 bytes)
+    let binary_v1: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xFE];
+    tokio::fs::write(&file, &binary_v1).await.unwrap();
+
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    // Write different binary content
+    let binary_v2: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xAA, 0xBB, 0xCC];
+    tokio::fs::write(&file, &binary_v2).await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Dry run: binary file should be counted as changed (different size)
+    let stats = mgr.dry_run_diff_stats(1).await.unwrap();
+    assert_eq!(stats.files_changed, 1);
+    // Binary files have no line-level diff
+    assert_eq!(stats.insertions, 0);
+    assert_eq!(stats.deletions, 0);
+}
+
+#[tokio::test]
+async fn test_rewind_to_specific_turn_multi() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"v0").await.unwrap();
+
+    // Create 3 turns
+    for i in 1..=3 {
+        let turn_id = format!("turn-{i}");
+        mgr.start_turn_snapshot(&turn_id, i, false).await;
+        mgr.backup_store()
+            .backup_before_modify(&file)
+            .await
+            .unwrap();
+        tokio::fs::write(&file, format!("v{i}").as_bytes())
+            .await
+            .unwrap();
+        mgr.finalize_turn_snapshot(&turn_id, i, None).await;
+    }
+
+    assert_eq!(mgr.list_checkpoints().await.len(), 3);
+
+    // Rewind to turn 2 — should remove turns 2 and 3, restore to pre-turn-2 state
+    let result = mgr
+        .rewind_to_turn_with_mode(Some(2), RewindMode::CodeAndConversation)
+        .await
+        .unwrap();
+    assert_eq!(result.rewound_turn, 2);
+    let content = tokio::fs::read_to_string(&file).await.unwrap();
+    assert_eq!(content, "v1"); // Restored to state before turn 2
+
+    // Only turn 1 should remain
+    let checkpoints = mgr.list_checkpoints().await;
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].turn_number, 1);
+}
+
+#[tokio::test]
+async fn test_restore_skips_unchanged_file() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = create_test_manager(&tmp, false).await;
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    // Turn 1: backup, modify, then manually restore to original
+    mgr.start_turn_snapshot("turn-1", 1, false).await;
+    mgr.backup_store()
+        .backup_before_modify(&file)
+        .await
+        .unwrap();
+    tokio::fs::write(&file, b"modified").await.unwrap();
+    mgr.finalize_turn_snapshot("turn-1", 1, None).await;
+
+    // Manually revert the file before rewinding
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    // Rewind should succeed but skip the actual write (file_needs_restore = false)
+    let result = mgr.rewind_last_turn().await.unwrap();
+    assert_eq!(result.rewound_turn, 1);
+    // The file content should still be "original" (no unnecessary write)
+    let content = tokio::fs::read_to_string(&file).await.unwrap();
+    assert_eq!(content, "original");
+}

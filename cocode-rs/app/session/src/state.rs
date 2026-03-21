@@ -1889,14 +1889,12 @@ impl SessionState {
     /// Apply rewind mode to conversation state.
     ///
     /// Handles the three rewind modes:
-    /// - `CodeAndConversation`: Truncate history, restore files, rebuild todos/tracker
-    /// - `ConversationOnly`: Truncate history, keep files, rebuild todos/tracker
-    /// - `CodeOnly`: Keep history, restore files, rebuild tracker from retained history
+    /// - `CodeAndConversation`: Truncate history, rebuild todos/tracker
+    /// - `ConversationOnly`: Truncate history only, rebuild todos/tracker
+    /// - `CodeOnly`: Keep history, rebuild file tracker from retained history
     ///
-    /// # Arguments
-    ///
-    /// * `rewound_turn` - The turn number to rewind to
-    /// * `mode` - The rewind mode
+    /// File restoration is handled externally by `SnapshotManager` before
+    /// this method is called. This method only manages conversation state.
     ///
     /// # Returns
     ///
@@ -1910,21 +1908,17 @@ impl SessionState {
     ) -> (i32, Option<String>) {
         match mode {
             cocode_protocol::RewindMode::CodeAndConversation => {
-                // Truncate history and restore files
-                let restored_files = self.restore_files_from_turn(rewound_turn);
                 let (messages_removed, restored_prompt) =
                     self.rewind_conversation_state_from_turn(rewound_turn);
                 tracing::debug!(
                     rewound_turn,
                     messages_removed,
-                    restored_files,
                     has_prompt = restored_prompt.is_some(),
                     "Applied CodeAndConversation rewind"
                 );
                 (messages_removed, restored_prompt)
             }
             cocode_protocol::RewindMode::ConversationOnly => {
-                // Truncate history but keep files
                 let (messages_removed, restored_prompt) =
                     self.rewind_conversation_state_from_turn(rewound_turn);
                 tracing::debug!(
@@ -1936,8 +1930,7 @@ impl SessionState {
                 (messages_removed, restored_prompt)
             }
             cocode_protocol::RewindMode::CodeOnly => {
-                // Keep history but restore files and rebuild tracker
-                let _restored_files = self.restore_files_from_turn(rewound_turn);
+                // Keep history but rebuild tracker from retained history
                 self.rebuild_reminder_file_tracker_from_history();
                 tracing::debug!(rewound_turn, "Applied CodeOnly rewind");
                 (0, None)
@@ -1954,15 +1947,6 @@ impl SessionState {
         before - self.message_history.turn_count()
     }
 
-    /// Restore files from a specific turn using snapshot manager.
-    ///
-    /// Returns the number of files restored.
-    fn restore_files_from_turn(&mut self, _from_turn: i32) -> i32 {
-        // File restoration is handled by the snapshot manager in tui_runner
-        // This method is a placeholder for session-level restoration logic
-        0
-    }
-
     /// Rebuild todos from retained message history.
     ///
     /// Scans through the message history for TodoWrite/TodoUpdate tool calls
@@ -1974,15 +1958,17 @@ impl SessionState {
 
     /// Reconstruct todos from message history by finding the most recent TodoWrite result.
     ///
-    /// Walks turns in reverse to find the most recent TodoWrite/TodoUpdate tool call
+    /// Walks turns in reverse to find the most recent TodoWrite tool call
     /// with a successful output, then parses and returns the todo list.
     fn reconstruct_todos_from_history(&self) -> serde_json::Value {
         use cocode_protocol::ToolResultContent;
 
-        // Walk turns in reverse to find the most recent TodoWrite/TodoUpdate result
+        let todo_write_name = cocode_protocol::ToolName::TodoWrite.as_str();
+
+        // Walk turns in reverse to find the most recent TodoWrite result
         for turn in self.message_history.turns().iter().rev() {
             for tc in &turn.tool_calls {
-                if tc.name == "TodoWrite" || tc.name == "TodoUpdate" {
+                if tc.name == todo_write_name {
                     if let Some(ref output) = tc.output {
                         match output {
                             ToolResultContent::Text(text) => {
