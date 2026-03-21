@@ -37,4 +37,7 @@ pub struct OpenAICompatibleProviderSettings {
     /// Optional custom error handler for failed API responses.
     /// If not set, uses the default OpenAI-compatible error handler.
     pub error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
+    /// When `true`, `base_url` is the complete endpoint URL — no API path
+    /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
+    pub full_url: Option<bool>,
 }

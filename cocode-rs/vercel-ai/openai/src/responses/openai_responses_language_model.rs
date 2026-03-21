@@ -774,7 +774,7 @@ fn create_responses_stream(
                 if let Some(event) = state.pending.pop_front() {
                     return Some((Ok(event), state));
                 }
-                if state.done {
+                if state.done && state.pending.is_empty() {
                     return None;
                 }
                 match state.next_events().await {
@@ -794,9 +794,9 @@ fn create_responses_stream(
                                     state.service_tier.as_deref(),
                                 ),
                             };
-                            return Some((Ok(finish), state));
+                            state.pending.push_back(finish);
                         }
-                        return None;
+                        // Fall through to loop — drain pending
                     }
                     Err(e) => {
                         state.done = true;
@@ -858,6 +858,7 @@ impl ResponsesStreamState {
         }
     }
 
+    /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
     async fn next_events(&mut self) -> Result<bool, AISdkError> {
         use futures::StreamExt;
         match self.byte_stream.next().await {
@@ -865,7 +866,7 @@ impl ResponsesStreamState {
                 let text = String::from_utf8_lossy(&bytes);
                 self.buffer.push_str(&text);
                 self.process_buffer();
-                Ok(!self.pending.is_empty())
+                Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => Ok(false),
@@ -876,14 +877,16 @@ impl ResponsesStreamState {
         while let Some(line_end) = self.buffer.find('\n') {
             let line_len = line_end + 1;
             let line = self.buffer[..line_end].trim_end_matches('\r');
-            if !line.is_empty()
-                && let Some(data) = line.strip_prefix("data: ")
-                && data != "[DONE]"
+            if let Some(data) = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
             {
-                let data = data.to_string();
-                self.buffer.drain(..line_len);
-                self.process_event(&data);
-                continue;
+                if !data.is_empty() && data != "[DONE]" {
+                    let data = data.to_string();
+                    self.buffer.drain(..line_len);
+                    self.process_event(&data);
+                    continue;
+                }
             }
             self.buffer.drain(..line_len);
         }

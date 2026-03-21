@@ -730,6 +730,25 @@ async fn generate_text_inner(
     .with_steps(steps.clone());
     final_result.call_id = call_id;
     final_result.total_usage = total_usage.clone();
+    final_result.content = last_step.content.clone();
+    final_result.reasoning = last_step.reasoning.clone();
+    final_result.tool_calls = last_step.tool_calls.clone();
+    final_result.tool_results = last_step.tool_results.clone();
+    final_result.warnings = last_step.warnings.clone();
+    final_result.provider_metadata = last_step.provider_metadata.clone();
+    final_result.sources = last_step.sources.clone();
+    final_result.files = last_step.files.clone();
+    final_result.request = last_step.request.clone();
+    final_result.response = last_step.response.clone();
+
+    // Parse structured output if output spec is configured and finish reason is "stop"
+    // (TS SDK only parses output when finishReason === 'stop')
+    if let Some(output_spec) = output
+        && final_result.finish_reason.is_stop()
+        && let Ok(Some(parsed)) = output_spec.parse_complete_output(&final_result.text)
+    {
+        final_result.output = Some(parsed);
+    }
 
     // Call on_finish callback via telemetry dispatch
     let finish_event = OnFinishEvent::new(last_step, steps, total_usage);

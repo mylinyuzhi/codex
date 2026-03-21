@@ -17,12 +17,22 @@ pub struct AnthropicConfig {
     /// When false, `strict` on tool definitions will be ignored and a warning emitted.
     /// Defaults to true.
     pub supports_strict_tools: Option<bool>,
+    /// When `true`, `base_url` is the complete endpoint URL — no API path
+    /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
+    pub full_url: Option<bool>,
 }
 
 impl AnthropicConfig {
     /// Build a full URL from a path segment (e.g., "/messages").
+    ///
+    /// If `full_url` is set, or `base_url` already ends with the path,
+    /// returns `base_url` as-is to avoid duplication.
     pub fn url(&self, path: &str) -> String {
-        format!("{}{path}", self.base_url)
+        if self.full_url.unwrap_or(false) || self.base_url.ends_with(path) {
+            self.base_url.clone()
+        } else {
+            format!("{}{path}", self.base_url)
+        }
     }
 
     /// Get the current headers by invoking the lazy supplier.

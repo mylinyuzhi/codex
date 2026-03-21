@@ -36,13 +36,23 @@ pub struct OpenAICompatibleConfig {
     pub supported_urls: Option<Arc<SupportedUrlsFn>>,
     /// Error response handler for failed API calls.
     pub error_handler: Arc<dyn ResponseHandler<AISdkError>>,
+    /// When `true`, `base_url` is the complete endpoint URL — no API path
+    /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
+    pub full_url: Option<bool>,
 }
 
 impl OpenAICompatibleConfig {
     /// Build a full URL from a path segment (e.g., "/chat/completions"),
     /// appending any configured query parameters.
+    ///
+    /// If `full_url` is set, or `base_url` already ends with the path,
+    /// returns `base_url` as-is to avoid duplication.
     pub fn url(&self, path: &str) -> String {
-        let base = format!("{}{path}", self.base_url);
+        let base = if self.full_url.unwrap_or(false) || self.base_url.ends_with(path) {
+            self.base_url.clone()
+        } else {
+            format!("{}{path}", self.base_url)
+        };
         match &self.query_params {
             Some(params) if !params.is_empty() => {
                 let query: String = form_urlencoded::Serializer::new(String::new())

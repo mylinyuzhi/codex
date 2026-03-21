@@ -493,8 +493,8 @@ fn create_chat_stream(
                     return Some((Ok(event), state));
                 }
 
-                // If done, yield nothing
-                if state.done {
+                // If done and all pending events drained, yield nothing
+                if state.done && state.pending.is_empty() {
                     return None;
                 }
 
@@ -583,9 +583,9 @@ fn create_chat_stream(
                                 ),
                                 provider_metadata,
                             };
-                            return Some((Ok(finish), state));
+                            state.pending.push_back(finish);
                         }
-                        return None;
+                        // Fall through to loop — drain pending (TextEnd, Finish, etc.)
                     }
                     Err(e) => {
                         state.done = true;
@@ -650,7 +650,7 @@ impl ChatStreamState {
     }
 
     /// Read from byte_stream, parse SSE lines, produce events.
-    /// Returns Ok(true) if there are pending events, Ok(false) if stream ended.
+    /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
     async fn next_events(&mut self) -> Result<bool, AISdkError> {
         use futures::StreamExt;
 
@@ -659,7 +659,7 @@ impl ChatStreamState {
                 let text = String::from_utf8_lossy(&bytes);
                 self.buffer.push_str(&text);
                 self.process_buffer();
-                Ok(!self.pending.is_empty())
+                Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => Ok(false),
@@ -676,7 +676,10 @@ impl ChatStreamState {
                 continue;
             }
 
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
+            {
                 if data == "[DONE]" {
                     continue;
                 }

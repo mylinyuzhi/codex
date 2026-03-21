@@ -16,6 +16,7 @@ fn make_config() -> Arc<AnthropicConfig> {
         client: None,
         supports_native_structured_output: None,
         supports_strict_tools: None,
+        full_url: None,
     })
 }
 

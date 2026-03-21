@@ -36,6 +36,9 @@ pub struct AnthropicProviderSettings {
     /// When false, `strict` on tool definitions will be ignored and a warning emitted.
     /// Defaults to true.
     pub supports_strict_tools: Option<bool>,
+    /// When `true`, `base_url` is the complete endpoint URL — no API path
+    /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
+    pub full_url: Option<bool>,
 }
 
 /// Anthropic multi-model provider.
@@ -49,6 +52,7 @@ pub struct AnthropicProvider {
     client: Option<Arc<reqwest::Client>>,
     supports_native_structured_output: Option<bool>,
     supports_strict_tools: Option<bool>,
+    full_url: Option<bool>,
 }
 
 impl AnthropicProvider {
@@ -105,6 +109,7 @@ impl AnthropicProvider {
             client: settings.client,
             supports_native_structured_output: settings.supports_native_structured_output,
             supports_strict_tools: settings.supports_strict_tools,
+            full_url: settings.full_url,
         }
     }
 
@@ -116,6 +121,7 @@ impl AnthropicProvider {
             client: self.client.clone(),
             supports_native_structured_output: self.supports_native_structured_output,
             supports_strict_tools: self.supports_strict_tools,
+            full_url: self.full_url,
         })
     }
 

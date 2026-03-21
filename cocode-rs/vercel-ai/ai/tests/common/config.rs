@@ -74,6 +74,14 @@ pub struct TestConfig {
     pub enabled: bool,
     /// Enabled capabilities for this provider.
     pub capabilities: HashSet<String>,
+    /// Controls URL path suffix behavior (passed to provider settings).
+    pub full_url: Option<bool>,
+    /// Optional auth token for providers that use `Authorization: Bearer` instead of API key headers.
+    /// Used by Anthropic when proxied through gateways like DashScope.
+    pub auth_token: Option<String>,
+    /// Optional User-Agent header. Some gateways (e.g., DashScope) reject
+    /// requests without a User-Agent.
+    pub user_agent: Option<String>,
 }
 
 impl TestConfig {
@@ -122,7 +130,15 @@ fn get_provider_env(provider: &str, field: &str) -> Option<String> {
 }
 
 /// Parse a comma-separated capabilities string into a HashSet.
+///
+/// Special values:
+/// - Empty string → empty set (no capabilities, variant disabled)
+/// - `"none"` → empty set (explicit disable)
 fn parse_capabilities(value: &str) -> HashSet<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+        return HashSet::new();
+    }
     value
         .split(',')
         .map(|s| s.trim().to_lowercase())
@@ -130,16 +146,37 @@ fn parse_capabilities(value: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Map virtual provider names to their config source provider.
+///
+/// `openai_chat` and `openai_responses` reuse the `openai` env vars.
+fn config_provider_name(provider: &str) -> &str {
+    match provider {
+        "openai_chat" | "openai_responses" => "openai",
+        other => other,
+    }
+}
+
 /// Load capabilities for a provider.
 ///
 /// Resolution order:
-/// 1. `VERCEL_AI_TEST_{PROVIDER}_CAPABILITIES` (per-provider)
-/// 2. `VERCEL_AI_TEST_CAPABILITIES` (global)
-/// 3. All capabilities enabled (default)
+/// 1. `VERCEL_AI_TEST_{PROVIDER}_CAPABILITIES` (per-provider, e.g. `OPENAI_CHAT`)
+/// 2. `VERCEL_AI_TEST_{CONFIG_PROVIDER}_CAPABILITIES` (mapped, e.g. `OPENAI`)
+/// 3. `VERCEL_AI_TEST_CAPABILITIES` (global)
+/// 4. All capabilities enabled (default)
 fn load_capabilities(provider: &str) -> HashSet<String> {
-    // Per-provider override
-    if let Some(caps) = get_provider_env(provider, "CAPABILITIES") {
+    // Per-variant override: read env var directly (not via get_provider_env)
+    // so that empty/"none" values are respected as "disabled".
+    let variant_key = format!("{}_{}_CAPABILITIES", ENV_PREFIX, provider.to_uppercase());
+    if let Ok(caps) = std::env::var(&variant_key) {
         return parse_capabilities(&caps);
+    }
+
+    // Mapped provider fallback (e.g. openai_chat -> openai)
+    let config_name = config_provider_name(provider);
+    if config_name != provider {
+        if let Some(caps) = get_provider_env(config_name, "CAPABILITIES") {
+            return parse_capabilities(&caps);
+        }
     }
 
     // Global setting
@@ -154,26 +191,57 @@ fn load_capabilities(provider: &str) -> HashSet<String> {
     ALL_CAPABILITIES.iter().map(|s| (*s).to_string()).collect()
 }
 
+/// Get environment variable for a virtual provider variant with fallback.
+///
+/// For virtual providers like `openai_chat`, checks variant-specific env var first
+/// (e.g., `VERCEL_AI_TEST_OPENAI_CHAT_MODEL`), then falls back to the mapped
+/// provider (e.g., `VERCEL_AI_TEST_OPENAI_MODEL`).
+fn get_provider_env_with_fallback(provider: &str, field: &str) -> Option<String> {
+    // Try variant-specific first (e.g., VERCEL_AI_TEST_OPENAI_CHAT_MODEL)
+    if let Some(val) = get_provider_env(provider, field) {
+        return Some(val);
+    }
+    // Fall back to mapped provider (e.g., VERCEL_AI_TEST_OPENAI_MODEL)
+    let config_name = config_provider_name(provider);
+    if config_name != provider {
+        return get_provider_env(config_name, field);
+    }
+    None
+}
+
 /// Load test configuration for a specific provider.
 ///
 /// Returns `None` if the provider is not configured (no API key).
 /// Returns `Some(config)` with `enabled = false` if partial config exists.
+///
+/// Virtual providers like `openai_chat` and `openai_responses` support
+/// per-variant overrides for all fields. For example:
+/// - `VERCEL_AI_TEST_OPENAI_CHAT_MODEL` overrides `VERCEL_AI_TEST_OPENAI_MODEL`
+/// - `VERCEL_AI_TEST_OPENAI_CHAT_BASE_URL` overrides `VERCEL_AI_TEST_OPENAI_BASE_URL`
+///
+/// If no variant-specific env var is set, falls back to the mapped provider
+/// (e.g., `openai`) env vars.
 pub fn load_test_config(provider: &str) -> Option<TestConfig> {
     ensure_env_loaded();
 
-    let api_key = get_provider_env(provider, "API_KEY");
-    let model = get_provider_env(provider, "MODEL");
-    let base_url = get_provider_env(provider, "BASE_URL");
+    let api_key = get_provider_env_with_fallback(provider, "API_KEY");
+    let auth_token = get_provider_env_with_fallback(provider, "AUTH_TOKEN");
+    let model = get_provider_env_with_fallback(provider, "MODEL");
+    let base_url = get_provider_env_with_fallback(provider, "BASE_URL");
 
-    // API key is required for a provider to be enabled
-    let enabled = api_key.is_some() && model.is_some();
+    // Either API key or auth token is required for a provider to be enabled
+    let has_auth = api_key.is_some() || auth_token.is_some();
+    let enabled = has_auth && model.is_some();
 
     // Return None if no configuration at all
-    if api_key.is_none() && model.is_none() && base_url.is_none() {
+    if !has_auth && model.is_none() && base_url.is_none() {
         return None;
     }
 
     let capabilities = load_capabilities(provider);
+    let full_url = get_provider_env_with_fallback(provider, "FULL_URL")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1");
+    let user_agent = get_provider_env_with_fallback(provider, "USER_AGENT");
 
     Some(TestConfig {
         provider: provider.to_string(),
@@ -182,6 +250,9 @@ pub fn load_test_config(provider: &str) -> Option<TestConfig> {
         base_url,
         enabled,
         capabilities,
+        full_url,
+        auth_token,
+        user_agent,
     })
 }
 
@@ -189,14 +260,35 @@ pub fn load_test_config(provider: &str) -> Option<TestConfig> {
 pub fn list_configured_providers() -> Vec<String> {
     ensure_env_loaded();
 
-    let providers = ["openai", "anthropic", "google"];
-
-    providers
+    all_provider_names()
         .iter()
         .filter_map(|p| {
             load_test_config(p).and_then(|c| if c.enabled { Some(c.provider) } else { None })
         })
         .collect()
+}
+
+/// List all configured providers that have the `cross_provider` capability.
+pub fn list_cross_provider_configs() -> Vec<TestConfig> {
+    ensure_env_loaded();
+
+    all_provider_names()
+        .iter()
+        .filter_map(|p| {
+            load_test_config(p).filter(|c| c.enabled && c.has_capability("cross_provider"))
+        })
+        .collect()
+}
+
+/// All known provider names.
+fn all_provider_names() -> &'static [&'static str] {
+    &[
+        "openai_chat",
+        "openai_responses",
+        "openai_compatible",
+        "anthropic",
+        "google",
+    ]
 }
 
 #[cfg(test)]

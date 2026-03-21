@@ -38,6 +38,7 @@ pub struct OpenAICompatibleProvider {
         Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
     metadata_extractor: Option<Arc<dyn crate::metadata_extractor::MetadataExtractor>>,
     error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
+    full_url: Option<bool>,
 }
 
 impl OpenAICompatibleProvider {
@@ -99,6 +100,7 @@ impl OpenAICompatibleProvider {
             transform_request_body: settings.transform_request_body,
             metadata_extractor: settings.metadata_extractor,
             error_handler: settings.error_handler,
+            full_url: settings.full_url,
         }
     }
 
@@ -122,6 +124,7 @@ impl OpenAICompatibleProvider {
             metadata_extractor: self.metadata_extractor.clone(),
             supported_urls: None,
             error_handler,
+            full_url: self.full_url,
         })
     }
 
