@@ -1554,6 +1554,7 @@ impl AnthropicStreamState {
         }
     }
 
+    /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
     async fn next_events(&mut self) -> Result<bool, AISdkError> {
         use futures::StreamExt;
 
@@ -1562,7 +1563,7 @@ impl AnthropicStreamState {
                 let text = String::from_utf8_lossy(&bytes);
                 self.buffer.push_str(&text);
                 self.process_buffer();
-                Ok(!self.pending.is_empty())
+                Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => {
@@ -1595,12 +1596,20 @@ impl AnthropicStreamState {
                 continue;
             }
 
-            if let Some(event_type) = line.strip_prefix("event: ") {
+            if let Some(event_type) = line
+                .strip_prefix("event: ")
+                .or_else(|| line.strip_prefix("event:"))
+            {
+                // SSE spec: strip exactly one leading space (not all whitespace)
+                let event_type = event_type.strip_prefix(' ').unwrap_or(event_type);
                 self.current_event_type = Some(event_type.to_string());
                 continue;
             }
 
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
+            {
                 self.current_data_lines.push(data.to_string());
             }
         }
@@ -2356,7 +2365,7 @@ fn create_anthropic_stream(
                     return Some((Ok(event), state));
                 }
 
-                if state.done {
+                if state.done && state.pending.is_empty() {
                     return None;
                 }
 
@@ -2436,9 +2445,9 @@ fn create_anthropic_stream(
                                 ),
                                 provider_metadata,
                             };
-                            return Some((Ok(finish), state));
+                            state.pending.push_back(finish);
                         }
-                        return None;
+                        // Fall through to loop — drain pending
                     }
                     Err(e) => {
                         state.done = true;

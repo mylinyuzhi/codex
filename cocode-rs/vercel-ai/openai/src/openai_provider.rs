@@ -41,6 +41,9 @@ pub struct OpenAIProviderSettings {
     pub name: Option<String>,
     /// Shared HTTP client.
     pub client: Option<Arc<reqwest::Client>>,
+    /// When `true`, `base_url` is the complete endpoint URL — no API path
+    /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
+    pub full_url: Option<bool>,
 }
 
 /// OpenAI multi-model provider.
@@ -52,6 +55,7 @@ pub struct OpenAIProvider {
     base_url: String,
     headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
     client: Option<Arc<reqwest::Client>>,
+    full_url: Option<bool>,
 }
 
 impl OpenAIProvider {
@@ -103,6 +107,7 @@ impl OpenAIProvider {
             base_url,
             headers,
             client: settings.client,
+            full_url: settings.full_url,
         }
     }
 
@@ -112,6 +117,7 @@ impl OpenAIProvider {
             base_url: self.base_url.clone(),
             headers: self.headers.clone(),
             client: self.client.clone(),
+            full_url: self.full_url,
         })
     }
 

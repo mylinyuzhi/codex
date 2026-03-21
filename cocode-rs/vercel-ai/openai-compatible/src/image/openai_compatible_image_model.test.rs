@@ -19,6 +19,7 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         error_handler: Arc::new(
             crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
         ),
+        full_url: None,
     })
 }
 

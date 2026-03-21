@@ -28,6 +28,12 @@ reqwest.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+dotenvy.workspace = true
+anyhow.workspace = true
+
+[[test]]
+name = "live"
+path = "tests/live.rs"
 
 [lints]
 workspace = true

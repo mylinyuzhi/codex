@@ -531,18 +531,18 @@ fn create_chat_stream(
                     return Some((Ok(event), state));
                 }
 
-                // If done, yield nothing
-                if state.done {
+                // If done and all pending events drained, yield nothing
+                if state.done && state.pending.is_empty() {
                     return None;
                 }
 
                 // Read more bytes and parse SSE lines
                 match state.next_events().await {
                     Ok(true) => {
-                        // More events pending, loop back to drain
+                        // Stream still open, loop back to drain pending or read more
                     }
                     Ok(false) => {
-                        // Stream ended
+                        // Byte stream ended
                         state.done = true;
                         // Emit finish if we haven't already
                         if !state.finish_emitted {
@@ -566,9 +566,9 @@ fn create_chat_stream(
                                 ),
                                 provider_metadata: pm,
                             };
-                            return Some((Ok(finish), state));
+                            state.pending.push_back(finish);
                         }
-                        return None;
+                        // Fall through to loop — drain pending
                     }
                     Err(e) => {
                         state.done = true;
@@ -625,7 +625,7 @@ impl ChatStreamState {
     }
 
     /// Read from byte_stream, parse SSE lines, produce events.
-    /// Returns Ok(true) if there are pending events, Ok(false) if stream ended.
+    /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
     async fn next_events(&mut self) -> Result<bool, AISdkError> {
         use futures::StreamExt;
 
@@ -634,7 +634,7 @@ impl ChatStreamState {
                 let text = String::from_utf8_lossy(&bytes);
                 self.buffer.push_str(&text);
                 self.process_buffer();
-                Ok(!self.pending.is_empty())
+                Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => Ok(false),
@@ -646,14 +646,16 @@ impl ChatStreamState {
         while let Some(line_end) = self.buffer.find('\n') {
             let line_len = line_end + 1;
             let line = self.buffer[..line_end].trim_end_matches('\r');
-            if !line.is_empty()
-                && let Some(data) = line.strip_prefix("data: ")
-                && data != "[DONE]"
+            if let Some(data) = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
             {
-                let data = data.to_string();
-                self.buffer.drain(..line_len);
-                self.process_data_line(&data);
-                continue;
+                if !data.is_empty() && data != "[DONE]" {
+                    let data = data.to_string();
+                    self.buffer.drain(..line_len);
+                    self.process_data_line(&data);
+                    continue;
+                }
             }
             self.buffer.drain(..line_len);
         }
