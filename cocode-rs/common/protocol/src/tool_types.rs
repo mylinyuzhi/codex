@@ -228,6 +228,25 @@ pub enum ContextModifier {
         /// The full teams map (name → team object).
         teams: Value,
     },
+    /// Delegate mode was toggled for the main agent.
+    DelegateModeChanged {
+        /// Whether delegate mode is now active.
+        active: bool,
+    },
+    /// A teammate joined a team.
+    TeammateJoined {
+        /// The team name.
+        team_name: String,
+        /// The joining agent ID.
+        agent_id: String,
+    },
+    /// A teammate left a team.
+    TeammateLeft {
+        /// The team name.
+        team_name: String,
+        /// The leaving agent ID.
+        agent_id: String,
+    },
     /// A skill requests a model override for inline execution.
     ModelOverride {
         /// The model slug to switch to (e.g., "sonnet", "opus", "haiku").

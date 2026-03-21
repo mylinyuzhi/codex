@@ -1578,6 +1578,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-team"
+version = "0.0.0"
+dependencies = [
+ "cocode-error",
+ "cocode-protocol",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "cocode-tools"
 version = "0.0.0"
 dependencies = [
@@ -1603,6 +1618,8 @@ dependencies = [
  "cocode-shell",
  "cocode-shell-parser",
  "cocode-skill",
+ "cocode-team",
+ "dirs 6.0.0",
  "futures",
  "globset",
  "grep-regex",

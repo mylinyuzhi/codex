@@ -84,6 +84,10 @@ pub struct AttachmentSettings {
     pub delegate_mode: bool,
     /// Enable collaboration notifications.
     pub collab_notifications: bool,
+    /// Enable team context injection for teammates.
+    pub team_context: bool,
+    /// Enable unread mailbox message injection for teammates.
+    pub team_mailbox: bool,
     /// Enable plan verification reminders.
     pub plan_verification: bool,
     /// Enable token usage display.
@@ -125,6 +129,8 @@ impl Default for AttachmentSettings {
             cron_reminders: true,
             delegate_mode: true,
             collab_notifications: true,
+            team_context: true,
+            team_mailbox: true,
             plan_verification: true,
             token_usage: true,
             security_guidelines: true,

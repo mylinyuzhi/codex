@@ -30,13 +30,14 @@
 //!
 //! ```ignore
 //! use cocode_tools::{ToolRegistry, StreamingToolExecutor, ExecutorConfig};
-//! use cocode_tools::builtin::register_builtin_tools;
+//! use cocode_tools::builtin::{register_builtin_tools, create_default_team_stores};
 //! use std::sync::Arc;
 //!
 //! // Create and populate registry
 //! let features = cocode_protocol::Features::with_defaults();
+//! let (team_store, mailbox) = create_default_team_stores();
 //! let mut registry = ToolRegistry::new();
-//! register_builtin_tools(&mut registry, &features);
+//! register_builtin_tools(&mut registry, &features, team_store, mailbox);
 //!
 //! // Create executor
 //! let config = ExecutorConfig::default();
@@ -161,6 +162,7 @@ pub mod prelude {
     pub use crate::ToolDefinition;
     pub use crate::ToolOutput;
     pub use crate::builtin::builtin_tool_names;
+    pub use crate::builtin::create_default_team_stores;
     pub use crate::builtin::register_builtin_tools;
     pub use crate::context::ToolContext;
     pub use crate::error::Result;

@@ -1,31 +1,35 @@
 //! SendMessage tool for inter-agent communication within teams.
 //!
-//! Uses an in-memory message store per team (mailbox pattern) instead of
-//! agent-resume. Messages are stored and retrieved by recipients via
-//! collaboration notification system reminders.
+//! Uses a filesystem-backed mailbox per agent (JSONL files with atomic writes)
+//! for persistent inter-agent communication. Supports message types including
+//! shutdown requests, responses, idle notifications, and broadcast.
+
+use std::sync::Arc;
 
 use super::prompts;
-use super::team_state::AgentMessage;
-use super::team_state::MessageStore;
-use super::team_state::TeamStore;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
+use cocode_team::AgentMessage;
+use cocode_team::Mailbox;
+use cocode_team::MemberStatus;
+use cocode_team::MessageType;
+use cocode_team::TeamStore;
 use serde_json::Value;
 
 pub struct SendMessageTool {
-    team_store: TeamStore,
-    message_store: MessageStore,
+    team_store: Arc<TeamStore>,
+    mailbox: Arc<Mailbox>,
 }
 
 impl SendMessageTool {
-    pub fn new(team_store: TeamStore, message_store: MessageStore) -> Self {
+    pub fn new(team_store: Arc<TeamStore>, mailbox: Arc<Mailbox>) -> Self {
         Self {
             team_store,
-            message_store,
+            mailbox,
         }
     }
 }
@@ -54,7 +58,19 @@ impl Tool for SendMessageTool {
                 },
                 "team": {
                     "type": "string",
-                    "description": "Optional team name to scope the message to"
+                    "description": "Team name to scope the message to (required for direct messages and broadcast)"
+                },
+                "message_type": {
+                    "type": "string",
+                    "enum": [
+                        MessageType::Message.as_str(),
+                        MessageType::Broadcast.as_str(),
+                        MessageType::ShutdownRequest.as_str(),
+                        MessageType::ShutdownResponse.as_str(),
+                        MessageType::PlanApprovalResponse.as_str(),
+                        MessageType::IdleNotification.as_str(),
+                    ],
+                    "description": "Type of message. Defaults to 'message'."
                 }
             },
             "required": ["to", "message"]
@@ -87,82 +103,108 @@ impl Tool for SendMessageTool {
             .build()
         })?;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let message_type = match input["message_type"].as_str() {
+            Some(s) if s == MessageType::Broadcast.as_str() => MessageType::Broadcast,
+            Some(s) if s == MessageType::ShutdownRequest.as_str() => MessageType::ShutdownRequest,
+            Some(s) if s == MessageType::ShutdownResponse.as_str() => MessageType::ShutdownResponse,
+            Some(s) if s == MessageType::PlanApprovalResponse.as_str() => {
+                MessageType::PlanApprovalResponse
+            }
+            Some(s) if s == MessageType::IdleNotification.as_str() => MessageType::IdleNotification,
+            _ => MessageType::Message,
+        };
 
-        // Determine sender ID (use agent_id from context or "main")
+        // Determine sender ID
         let from = ctx.agent_id.clone().unwrap_or_else(|| "main".to_string());
+        let team_name = input["team"].as_str();
+
+        // Require team for all message types (no magic default)
+        let effective_team = match team_name {
+            Some(tn) => tn,
+            None => {
+                return Ok(ToolOutput::error(
+                    "'team' is required. Specify the team name to scope this message.".to_string(),
+                ));
+            }
+        };
+
+        // Build the message
+        let msg = AgentMessage::new(&from, to, message, message_type).with_team(effective_team);
 
         // Handle broadcast to all team members
-        if to == "all" {
-            let team_name = input["team"].as_str().ok_or_else(|| {
-                crate::error::tool_error::InvalidInputSnafu {
-                    message: "'team' is required when broadcasting to 'all'",
-                }
-                .build()
-            })?;
+        if to == "all" || message_type == MessageType::Broadcast {
+            let team = self
+                .team_store
+                .get_team(effective_team)
+                .await
+                .ok_or_else(|| {
+                    crate::error::tool_error::InvalidInputSnafu {
+                        message: format!("Team '{effective_team}' not found."),
+                    }
+                    .build()
+                })?;
 
-            let team_store = self.team_store.lock().await;
-            let team = team_store.get(team_name).ok_or_else(|| {
-                crate::error::tool_error::InvalidInputSnafu {
-                    message: format!("Team '{team_name}' not found."),
-                }
-                .build()
-            })?;
-
-            let member_count = team.members.len();
-            let mut msg_store = self.message_store.lock().await;
-            for member in &team.members {
-                if member.agent_id != from {
-                    msg_store.push(AgentMessage {
-                        from: from.clone(),
-                        to: member.agent_id.clone(),
-                        content: message.to_string(),
-                        timestamp: now,
-                        read: false,
-                    });
-                }
+            let member_ids = team.agent_ids();
+            if let Err(e) = self
+                .mailbox
+                .broadcast(effective_team, &msg, &member_ids)
+                .await
+            {
+                return Ok(ToolOutput::error(format!("Broadcast failed: {e}")));
             }
 
             ctx.emit_progress(format!(
-                "Broadcast to {member_count} members of team '{team_name}'"
+                "Broadcast to {} members of team '{effective_team}'",
+                member_ids.len()
             ))
             .await;
 
             return Ok(ToolOutput::text(format!(
-                "Message broadcast to {member_count} members of team '{team_name}'."
+                "Message broadcast to {} members of team '{effective_team}'.",
+                member_ids.len()
             )));
         }
 
-        // Validate team membership if team specified
-        if let Some(team_name) = input["team"].as_str() {
-            let store = self.team_store.lock().await;
-            if let Some(team) = store.get(team_name) {
+        // Validate team membership
+        match self.team_store.get_team(effective_team).await {
+            Some(team) => {
                 if !team.has_member(to) {
                     return Ok(ToolOutput::error(format!(
-                        "Agent '{to}' is not a member of team '{team_name}'."
+                        "Agent '{to}' is not a member of team '{effective_team}'."
                     )));
                 }
-            } else {
-                return Ok(ToolOutput::error(format!("Team '{team_name}' not found.")));
+            }
+            None => {
+                return Ok(ToolOutput::error(format!(
+                    "Team '{effective_team}' not found."
+                )));
             }
         }
 
-        // Store message in the mailbox
-        {
-            let mut msg_store = self.message_store.lock().await;
-            msg_store.push(AgentMessage {
-                from: from.clone(),
-                to: to.to_string(),
-                content: message.to_string(),
-                timestamp: now,
-                read: false,
-            });
+        // Send the message via mailbox
+        if let Err(e) = self.mailbox.send(effective_team, &msg).await {
+            return Ok(ToolOutput::error(format!("Send failed: {e}")));
         }
 
-        ctx.emit_progress(format!("Sent message to {to}")).await;
+        // Shutdown side effects: update member status in team store
+        match message_type {
+            MessageType::ShutdownRequest => {
+                let _ = self
+                    .team_store
+                    .update_member_status(effective_team, to, MemberStatus::ShuttingDown)
+                    .await;
+            }
+            MessageType::ShutdownResponse => {
+                let _ = self
+                    .team_store
+                    .update_member_status(effective_team, &from, MemberStatus::Stopped)
+                    .await;
+            }
+            _ => {}
+        }
+
+        ctx.emit_progress(format!("Sent {message_type} to {to}"))
+            .await;
 
         Ok(ToolOutput::text(format!(
             "Message sent to '{to}' successfully."

@@ -361,10 +361,20 @@ impl SessionState {
         // Create ModelHub with Config snapshot (role-agnostic, just for model caching)
         let model_hub = Arc::new(ModelHub::new(config.clone()));
 
+        // Create team stores and load persisted state from disk
+        let (team_store, team_mailbox) = cocode_tools::builtin::create_default_team_stores();
+        if let Err(e) = team_store.load_from_disk().await {
+            tracing::warn!(error = %e, "Failed to load persisted teams from disk");
+        }
+
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
-        let builtin_stores =
-            cocode_tools::builtin::register_builtin_tools(&mut tool_registry, &config.features);
+        let builtin_stores = cocode_tools::builtin::register_builtin_tools(
+            &mut tool_registry,
+            &config.features,
+            team_store,
+            team_mailbox,
+        );
 
         // Load durable cron jobs from disk and merge into the shared store
         if let Ok(durable_jobs) =

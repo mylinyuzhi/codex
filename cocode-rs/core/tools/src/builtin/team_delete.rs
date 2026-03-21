@@ -1,21 +1,23 @@
 //! TeamDelete tool for removing agent teams.
 
+use std::sync::Arc;
+
 use super::prompts;
-use super::team_state::TeamStore;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
+use cocode_team::TeamStore;
 use serde_json::Value;
 
 pub struct TeamDeleteTool {
-    store: TeamStore,
+    store: Arc<TeamStore>,
 }
 
 impl TeamDeleteTool {
-    pub fn new(store: TeamStore) -> Self {
+    pub fn new(store: Arc<TeamStore>) -> Self {
         Self { store }
     }
 }
@@ -63,37 +65,22 @@ impl Tool for TeamDeleteTool {
             .build()
         })?;
 
-        let snapshot = {
-            let mut store = self.store.lock().await;
-            match store.get(name) {
-                None => {
-                    return Ok(ToolOutput::error(format!("Team '{name}' not found.")));
-                }
-                Some(team) => {
-                    // Check for active members (excluding the leader)
-                    let non_leader_count = team
-                        .members
-                        .iter()
-                        .filter(|m| {
-                            team.leader_agent_id
-                                .as_ref()
-                                .is_none_or(|lid| m.agent_id != *lid)
-                        })
-                        .count();
-                    if non_leader_count > 0 {
-                        return Ok(ToolOutput::error(format!(
-                            "Team '{name}' has {non_leader_count} active non-leader member(s). \
-                             Remove them before deleting the team."
-                        )));
-                    }
-                }
+        // Check for active non-leader members before deletion
+        if let Some(team) = self.store.get_team(name).await {
+            let active_count = team.active_non_leader_members().len();
+            if active_count > 0 {
+                return Ok(ToolOutput::error(format!(
+                    "Team '{name}' has {active_count} active non-leader member(s). \
+                     Remove them before deleting the team."
+                )));
             }
-            store.remove(name);
-            serde_json::to_value(&*store).unwrap_or_else(|e| {
-                tracing::error!("TeamStore serialization failed: {e}");
-                serde_json::Value::Object(Default::default())
-            })
-        };
+        }
+
+        if let Err(e) = self.store.delete_team(name).await {
+            return Ok(ToolOutput::error(format!("{e}")));
+        }
+
+        let snapshot = self.store.snapshot().await;
 
         ctx.emit_progress(format!("Deleted team '{name}'")).await;
 

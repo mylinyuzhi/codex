@@ -396,6 +396,58 @@ pub struct QueuedCommandInfo {
     pub queued_at: i64,
 }
 
+/// Team context data for the current agent.
+#[derive(Debug, Clone)]
+pub struct TeamContextData {
+    /// Agent ID.
+    pub agent_id: String,
+    /// Display name.
+    pub agent_name: Option<String>,
+    /// Team name.
+    pub team_name: String,
+    /// Agent type (e.g., "Explore", "general-purpose").
+    pub agent_type: String,
+    /// Team members.
+    pub members: Vec<TeamMemberInfo>,
+}
+
+/// Information about a team member.
+#[derive(Debug, Clone)]
+pub struct TeamMemberInfo {
+    /// Agent ID.
+    pub agent_id: String,
+    /// Display name.
+    pub name: Option<String>,
+    /// Agent type.
+    pub agent_type: Option<String>,
+    /// Current status (e.g., "active", "idle", "stopped").
+    pub status: String,
+}
+
+/// Well-known message type identifiers.
+///
+/// These match `cocode_team::MessageType::as_str()` values. Defined here
+/// to avoid a dependency on `cocode-team` from the system-reminder crate.
+pub mod message_types {
+    pub const SHUTDOWN_REQUEST: &str = "shutdown_request";
+    pub const SHUTDOWN_RESPONSE: &str = "shutdown_response";
+}
+
+/// An unread message from the agent's mailbox.
+#[derive(Debug, Clone)]
+pub struct UnreadMessage {
+    /// Message ID.
+    pub id: String,
+    /// Sender ID or name.
+    pub from: String,
+    /// Message content.
+    pub content: String,
+    /// Message type (e.g., "message", "shutdown_request").
+    pub message_type: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+}
+
 /// Context passed to generators during execution.
 ///
 /// This provides all the runtime state needed for generators to
@@ -499,6 +551,12 @@ pub struct GeneratorContext<'a> {
     // === Collaboration notifications ===
     /// Pending collaboration notifications from other agents.
     pub collab_notifications: Vec<CollabNotification>,
+
+    // === Team context ===
+    /// Team context for the current agent (if in a team).
+    pub team_context: Option<TeamContextData>,
+    /// Unread mailbox messages for the current agent.
+    pub unread_messages: Vec<UnreadMessage>,
 
     // === Real-time steering ===
     /// Queued commands from user (Enter during streaming).
@@ -673,6 +731,8 @@ pub struct GeneratorContextBuilder<'a> {
     token_usage: Option<TokenUsageStats>,
     budget: Option<BudgetInfo>,
     collab_notifications: Vec<CollabNotification>,
+    team_context: Option<TeamContextData>,
+    unread_messages: Vec<UnreadMessage>,
     queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
     rewind_info: Option<RewindContextInfo>,
@@ -841,6 +901,16 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn team_context(mut self, ctx: TeamContextData) -> Self {
+        self.team_context = Some(ctx);
+        self
+    }
+
+    pub fn unread_messages(mut self, messages: Vec<UnreadMessage>) -> Self {
+        self.unread_messages = messages;
+        self
+    }
+
     pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
         self.queued_commands = commands;
         self
@@ -911,6 +981,8 @@ impl<'a> GeneratorContextBuilder<'a> {
             token_usage: self.token_usage,
             budget: self.budget,
             collab_notifications: self.collab_notifications,
+            team_context: self.team_context,
+            unread_messages: self.unread_messages,
             queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
             is_auto_compact_enabled: self.is_auto_compact_enabled,

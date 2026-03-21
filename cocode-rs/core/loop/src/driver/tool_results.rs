@@ -230,6 +230,30 @@ impl AgentLoop {
                         "Applied ModelOverride modifier"
                     );
                 }
+                ContextModifier::DelegateModeChanged { active } => {
+                    self.delegate_mode = *active;
+                    debug!(active = %active, "Applied DelegateModeChanged modifier");
+                }
+                ContextModifier::TeammateJoined {
+                    team_name,
+                    agent_id,
+                } => {
+                    debug!(
+                        team = %team_name,
+                        agent = %agent_id,
+                        "Applied TeammateJoined modifier"
+                    );
+                }
+                ContextModifier::TeammateLeft {
+                    team_name,
+                    agent_id,
+                } => {
+                    debug!(
+                        team = %team_name,
+                        agent = %agent_id,
+                        "Applied TeammateLeft modifier"
+                    );
+                }
                 ContextModifier::RestoreDeferredMcpTools { names } => {
                     // Restore deferred MCP tools into the active registry so
                     // they become callable on subsequent turns.

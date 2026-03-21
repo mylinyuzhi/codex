@@ -123,6 +123,12 @@ pub enum AttachmentType {
     /// Cron job state reminders (survives compaction).
     CronReminders,
 
+    // === Team context (Core tier) ===
+    /// Team identity and member list for teammates.
+    TeamContext,
+    /// Unread mailbox messages for teammates.
+    TeamMailbox,
+
     // === Phase 2 (future) ===
     /// Tool result injection.
     ToolResult,
@@ -186,6 +192,8 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
+            | AttachmentType::TeamContext
+            | AttachmentType::TeamMailbox
             | AttachmentType::CompactionReminder => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
@@ -210,7 +218,9 @@ impl AttachmentType {
             | AttachmentType::PlanToolReminder
             | AttachmentType::PlanModeExit
             | AttachmentType::CriticalInstruction
-            | AttachmentType::NestedMemory => ReminderTier::Core,
+            | AttachmentType::NestedMemory
+            | AttachmentType::TeamContext
+            | AttachmentType::TeamMailbox => ReminderTier::Core,
 
             // MainAgentOnly tier
             AttachmentType::AvailableSkills
@@ -277,6 +287,8 @@ impl AttachmentType {
             AttachmentType::BudgetUsd => "budget_usd",
             AttachmentType::AlreadyReadFile => "already_read_file",
             AttachmentType::CompactFileReference => "compact_file_reference",
+            AttachmentType::TeamContext => "team_context",
+            AttachmentType::TeamMailbox => "team_mailbox",
             AttachmentType::Rewind => "rewind",
             AttachmentType::CompactionReminder => "compaction_reminder",
         }

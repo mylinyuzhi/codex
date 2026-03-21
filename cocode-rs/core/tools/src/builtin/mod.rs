@@ -133,6 +133,27 @@ use cocode_protocol::Features;
 pub struct BuiltinStores {
     /// The shared cron job store used by CronCreate/CronDelete/CronList.
     pub cron_store: cron_state::CronJobStore,
+    /// The shared team store used by TeamCreate/TeamDelete/SendMessage.
+    pub team_store: std::sync::Arc<cocode_team::TeamStore>,
+    /// The shared mailbox used by SendMessage.
+    pub mailbox: std::sync::Arc<cocode_team::Mailbox>,
+}
+
+/// Create default team stores for use when no pre-loaded stores are available.
+///
+/// The returned stores are **not** loaded from disk. If persistence is needed,
+/// call `team_store.load_from_disk().await` before registering tools.
+pub fn create_default_team_stores() -> (
+    std::sync::Arc<cocode_team::TeamStore>,
+    std::sync::Arc<cocode_team::Mailbox>,
+) {
+    let team_base_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".cocode")
+        .join("teams");
+    let team_store = std::sync::Arc::new(cocode_team::TeamStore::new(team_base_dir.clone(), true));
+    let mailbox = std::sync::Arc::new(cocode_team::Mailbox::new(team_base_dir));
+    (team_store, mailbox)
 }
 
 /// Register all built-in tools with a registry.
@@ -144,9 +165,18 @@ pub struct BuiltinStores {
 /// The `features` parameter is used to configure interview-conditional
 /// tool descriptions (e.g., EnterPlanMode).
 ///
+/// `team_store` and `mailbox` should be pre-loaded (via `TeamStore::load_from_disk()`)
+/// before calling this function. Use [`create_default_team_stores`] if no
+/// pre-loaded stores are available.
+///
 /// Returns [`BuiltinStores`] containing shared state handles for the
 /// registered tools (e.g. the cron job store for durable persistence).
-pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) -> BuiltinStores {
+pub fn register_builtin_tools(
+    registry: &mut ToolRegistry,
+    features: &Features,
+    team_store: std::sync::Arc<cocode_team::TeamStore>,
+    mailbox: std::sync::Arc<cocode_team::Mailbox>,
+) -> BuiltinStores {
     let interview_phase = features.enabled(cocode_protocol::Feature::PlanModeInterview);
 
     registry.register(ReadTool::new());
@@ -188,14 +218,16 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry, features: &Features) 
     registry.register(CronDeleteTool::new(cron_store.clone()));
     registry.register(CronListTool::new(cron_store.clone()));
 
-    // Team/collaboration tools (shared store + message store)
-    let team_store = team_state::new_team_store();
-    let message_store = team_state::new_message_store();
+    // Team/collaboration tools (pre-loaded team store + mailbox)
     registry.register(TeamCreateTool::new(team_store.clone()));
     registry.register(TeamDeleteTool::new(team_store.clone()));
-    registry.register(SendMessageTool::new(team_store, message_store));
+    registry.register(SendMessageTool::new(team_store.clone(), mailbox.clone()));
 
-    BuiltinStores { cron_store }
+    BuiltinStores {
+        cron_store,
+        team_store,
+        mailbox,
+    }
 }
 
 /// Get a list of built-in tool names.

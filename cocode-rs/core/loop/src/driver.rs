@@ -215,6 +215,10 @@ pub struct AgentLoop {
     /// Latest cron jobs snapshot.
     current_cron_jobs: Option<serde_json::Value>,
 
+    // Delegate mode (updated by ContextModifier::DelegateModeChanged)
+    /// Whether the main agent is in delegate mode (coordination-only tools).
+    delegate_mode: bool,
+
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
     /// Shared via `Arc<Mutex>` so the TUI driver can push commands while the

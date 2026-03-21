@@ -460,6 +460,7 @@ impl AgentLoopBuilder {
             current_todos: None,
             current_structured_tasks: None,
             current_cron_jobs: None,
+            delegate_mode: false,
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,
