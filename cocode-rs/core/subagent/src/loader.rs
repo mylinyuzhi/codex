@@ -35,6 +35,8 @@ use std::path::Path;
 use serde::Deserialize;
 use snafu::ResultExt;
 
+use cocode_protocol::execution::ExecutionIdentity;
+
 use crate::Result;
 use crate::definition::AgentDefinition;
 use crate::definition::AgentHookDefinition;
@@ -213,7 +215,7 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> Result<AgentDefinit
         Some(body_trimmed.to_string())
     };
 
-    let identity = fm.model.as_deref().map(parse_identity);
+    let identity = fm.model.as_deref().map(ExecutionIdentity::parse_loose);
     let permission_mode = fm.permission_mode.as_deref().map(parse_permission_mode);
 
     let memory = fm.memory.as_deref().and_then(parse_memory_scope);
@@ -274,23 +276,6 @@ fn parse_frontmatter(content: &str) -> std::result::Result<(&str, &str), String>
     }
 
     Err("missing closing `---` frontmatter delimiter".to_string())
-}
-
-/// Parse a model identity string.
-fn parse_identity(s: &str) -> cocode_protocol::execution::ExecutionIdentity {
-    use cocode_protocol::execution::ExecutionIdentity;
-    use cocode_protocol::model::ModelRole;
-
-    match s.to_lowercase().as_str() {
-        "main" => ExecutionIdentity::Role(ModelRole::Main),
-        "fast" | "haiku" => ExecutionIdentity::Role(ModelRole::Fast),
-        "explore" => ExecutionIdentity::Role(ModelRole::Explore),
-        "plan" => ExecutionIdentity::Role(ModelRole::Plan),
-        "vision" => ExecutionIdentity::Role(ModelRole::Vision),
-        "review" => ExecutionIdentity::Role(ModelRole::Review),
-        "compact" => ExecutionIdentity::Role(ModelRole::Compact),
-        "inherit" | _ => ExecutionIdentity::Inherit,
-    }
 }
 
 /// Parse a memory scope string.

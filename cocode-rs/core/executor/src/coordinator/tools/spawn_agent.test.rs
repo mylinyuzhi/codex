@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_spawn_agent_input_defaults() {
@@ -16,7 +17,10 @@ fn test_spawn_agent_input_full() {
     let input = SpawnAgentInput {
         model: "claude-3".to_string(),
         prompt: "build feature".to_string(),
-        tools: vec!["Bash".to_string(), "Edit".to_string()],
+        tools: vec![
+            ToolName::Bash.as_str().to_string(),
+            ToolName::Edit.as_str().to_string(),
+        ],
         max_turns: Some(20),
         description: None,
     };

@@ -134,6 +134,49 @@ pub fn is_outside_cwd(path: &Path, cwd: &Path) -> bool {
     !abs_path.starts_with(&abs_cwd)
 }
 
+/// Check if a directory path requires elevated permission for read-only access.
+///
+/// Used by tools that operate on directories (glob, grep, ls) to enforce:
+/// - Sensitive directory targets → NeedsApproval
+/// - Outside working directory → NeedsApproval
+/// - Otherwise → Allowed
+pub fn check_directory_permission(
+    tool_name: &str,
+    path: &Path,
+    cwd: &Path,
+) -> cocode_protocol::PermissionResult {
+    use cocode_protocol::ApprovalRequest;
+    use cocode_protocol::PermissionResult;
+
+    if is_sensitive_directory(path) {
+        return PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!("{tool_name}-sensitive-{}", path.display()),
+                tool_name: tool_name.to_string(),
+                description: format!("Accessing sensitive directory: {}", path.display()),
+                risks: vec![],
+                allow_remember: true,
+                proposed_prefix_pattern: None,
+            },
+        };
+    }
+
+    if is_outside_cwd(path, cwd) {
+        return PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!("{tool_name}-outside-cwd-{}", path.display()),
+                tool_name: tool_name.to_string(),
+                description: format!("Accessing outside working directory: {}", path.display()),
+                risks: vec![],
+                allow_remember: true,
+                proposed_prefix_pattern: None,
+            },
+        };
+    }
+
+    PermissionResult::Allowed
+}
+
 /// Simple pattern matching for sensitive file detection.
 fn matches_pattern(pattern: &str, full_path: &str, filename: &str) -> bool {
     if pattern.contains('/') {

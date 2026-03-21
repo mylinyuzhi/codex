@@ -236,11 +236,8 @@ impl SessionMemoryExtractionAgent {
             Err(e) => {
                 let error = format!("LLM request failed: {e}");
                 warn!(error = %e, "Session memory extraction failed");
-                self.emit(LoopEvent::SessionMemoryExtractionFailed {
-                    error: error.clone(),
-                    attempts: 1,
-                })
-                .await;
+                self.emit(LoopEvent::SessionMemoryExtractionFailed { error, attempts: 1 })
+                    .await;
                 return Err(e).context(agent_loop_error::ExtractionLlmFailedSnafu);
             }
         };

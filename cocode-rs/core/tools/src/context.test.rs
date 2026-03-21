@@ -1,15 +1,16 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_approval_store() {
     let mut store = ApprovalStore::new();
 
-    assert!(!store.is_approved("Bash", "git status"));
-    store.approve_pattern("Bash", "git status");
-    assert!(store.is_approved("Bash", "git status"));
+    assert!(!store.is_approved(ToolName::Bash.as_str(), "git status"));
+    store.approve_pattern(ToolName::Bash.as_str(), "git status");
+    assert!(store.is_approved(ToolName::Bash.as_str(), "git status"));
 
-    store.approve_session("Read");
-    assert!(store.is_approved("Read", "any_pattern"));
+    store.approve_session(ToolName::Read.as_str());
+    assert!(store.is_approved(ToolName::Read.as_str(), "any_pattern"));
 }
 
 #[test]
@@ -17,25 +18,25 @@ fn test_approval_store_wildcard() {
     let mut store = ApprovalStore::new();
 
     // Prefix wildcard: "git *" matches "git push origin main"
-    store.approve_pattern("Bash", "git *");
-    assert!(store.is_approved("Bash", "git push origin main"));
-    assert!(store.is_approved("Bash", "git status"));
-    assert!(store.is_approved("Bash", "git"));
-    assert!(!store.is_approved("Bash", "gitx"));
-    assert!(!store.is_approved("Bash", "npm install"));
+    store.approve_pattern(ToolName::Bash.as_str(), "git *");
+    assert!(store.is_approved(ToolName::Bash.as_str(), "git push origin main"));
+    assert!(store.is_approved(ToolName::Bash.as_str(), "git status"));
+    assert!(store.is_approved(ToolName::Bash.as_str(), "git"));
+    assert!(!store.is_approved(ToolName::Bash.as_str(), "gitx"));
+    assert!(!store.is_approved(ToolName::Bash.as_str(), "npm install"));
 
     // Different tool name should not match
-    assert!(!store.is_approved("Edit", "git push"));
+    assert!(!store.is_approved(ToolName::Edit.as_str(), "git push"));
 
     // Glob wildcard: "npm*" matches "npm" and "npx"
-    store.approve_pattern("Bash", "npm*");
-    assert!(store.is_approved("Bash", "npm install"));
-    assert!(store.is_approved("Bash", "npmrc"));
-    assert!(!store.is_approved("Bash", "node index.js"));
+    store.approve_pattern(ToolName::Bash.as_str(), "npm*");
+    assert!(store.is_approved(ToolName::Bash.as_str(), "npm install"));
+    assert!(store.is_approved(ToolName::Bash.as_str(), "npmrc"));
+    assert!(!store.is_approved(ToolName::Bash.as_str(), "node index.js"));
 
     // Universal wildcard
-    store.approve_pattern("Bash", "*");
-    assert!(store.is_approved("Bash", "anything"));
+    store.approve_pattern(ToolName::Bash.as_str(), "*");
+    assert!(store.is_approved(ToolName::Bash.as_str(), "anything"));
 }
 
 #[test]

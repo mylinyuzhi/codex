@@ -131,7 +131,11 @@ impl Bm25Searcher {
 
         // Read content from files for each chunk
         let mut contents = HashMap::new();
-        let workspace_root = self.workspace_root.lock().ok().and_then(|g| g.clone());
+        let workspace_root = self
+            .workspace_root
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         if let Some(ref workspace_root) = workspace_root {
             for (id, chunk_ref) in &chunk_refs {
                 match chunk_ref.read_content(workspace_root) {

@@ -13,7 +13,11 @@ fn test_plan_agent() {
     );
     assert_eq!(
         agent.disallowed_tools,
-        vec!["Edit", "Write", "NotebookEdit"]
+        vec![
+            ToolName::Edit.as_str(),
+            ToolName::Write.as_str(),
+            ToolName::NotebookEdit.as_str()
+        ]
     );
     assert!(agent.max_turns.is_none());
     assert!(matches!(

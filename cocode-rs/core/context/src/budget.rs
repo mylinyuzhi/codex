@@ -98,17 +98,23 @@ impl ContextBudget {
         self.input_budget() - self.total_used()
     }
 
+    /// Get or create a mutable reference to a category's allocation.
+    fn get_or_insert(&mut self, category: BudgetCategory) -> &mut BudgetAllocation {
+        if let Some(idx) = self.allocations.iter().position(|a| a.category == category) {
+            return &mut self.allocations[idx];
+        }
+        self.allocations.push(BudgetAllocation {
+            category,
+            allocated: 0,
+            used: 0,
+        });
+        let len = self.allocations.len();
+        &mut self.allocations[len - 1]
+    }
+
     /// Set allocation for a category.
     pub fn set_allocation(&mut self, category: BudgetCategory, allocated: i32) {
-        if let Some(alloc) = self.allocations.iter_mut().find(|a| a.category == category) {
-            alloc.allocated = allocated;
-        } else {
-            self.allocations.push(BudgetAllocation {
-                category,
-                allocated,
-                used: 0,
-            });
-        }
+        self.get_or_insert(category).allocated = allocated;
     }
 
     /// Remaining tokens for a specific category.
@@ -121,15 +127,7 @@ impl ContextBudget {
 
     /// Record token usage for a category.
     pub fn record_usage(&mut self, category: BudgetCategory, tokens: i32) {
-        if let Some(alloc) = self.allocations.iter_mut().find(|a| a.category == category) {
-            alloc.used += tokens;
-        } else {
-            self.allocations.push(BudgetAllocation {
-                category,
-                allocated: 0,
-                used: tokens,
-            });
-        }
+        self.get_or_insert(category).used += tokens;
     }
 
     /// Context utilization ratio (0.0 to 1.0).

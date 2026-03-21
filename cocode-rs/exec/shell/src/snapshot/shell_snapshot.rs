@@ -30,21 +30,7 @@ const DEFAULT_SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 
 /// Default directory name for shell snapshots.
 const DEFAULT_SNAPSHOT_DIR: &str = "shell_snapshots";
 
-/// Resolve the cocode home directory.
-///
-/// Checks `COCODE_HOME` env var first, falls back to `~/.cocode`.
-/// This is a standalone implementation to avoid depending on `cocode-config`.
-fn find_cocode_home() -> PathBuf {
-    std::env::var("COCODE_HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".cocode")
-        })
-}
+use cocode_utils_common::find_cocode_home;
 
 /// Configuration for shell snapshotting.
 #[derive(Debug, Clone)]

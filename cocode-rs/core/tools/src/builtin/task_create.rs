@@ -92,12 +92,7 @@ impl Tool for TaskCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let subject = input["subject"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "subject must be a string",
-            }
-            .build()
-        })?;
+        let subject = super::input_helpers::require_str(&input, "subject")?;
 
         let status_str = input["status"].as_str().unwrap_or("pending");
         let status = TaskStatus::parse(status_str).unwrap_or(TaskStatus::Pending);
@@ -113,22 +108,8 @@ impl Tool for TaskCreateTool {
         let task_id = structured_tasks::generate_task_id();
 
         // Parse initial dependency arrays
-        let initial_blocks: Vec<String> = input["blocks"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let initial_blocked_by: Vec<String> = input["blockedBy"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let initial_blocks = super::input_helpers::string_array(&input, "blocks");
+        let initial_blocked_by = super::input_helpers::string_array(&input, "blockedBy");
 
         let task = StructuredTask {
             id: task_id.clone(),

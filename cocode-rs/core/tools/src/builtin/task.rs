@@ -110,7 +110,7 @@ impl Tool for TaskTool {
 
     fn is_concurrency_safe_for(&self, input: &Value) -> bool {
         // Background tasks are safe for concurrent execution; foreground tasks block
-        input["run_in_background"].as_bool().unwrap_or(false)
+        super::input_helpers::bool_or(input, "run_in_background", false)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

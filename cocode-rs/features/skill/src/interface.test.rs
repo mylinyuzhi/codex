@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_deserialize_full() {
@@ -14,7 +15,10 @@ allowed-tools:
     assert_eq!(iface.description, "Generate a commit message");
     assert_eq!(
         iface.allowed_tools,
-        Some(vec!["Bash".to_string(), "Read".to_string()])
+        Some(vec![
+            ToolName::Bash.as_str().to_string(),
+            ToolName::Read.as_str().to_string()
+        ])
     );
 }
 
@@ -68,7 +72,7 @@ fn test_serialize_roundtrip() {
     let iface = SkillInterface {
         name: "roundtrip".to_string(),
         description: "Roundtrip test".to_string(),
-        allowed_tools: Some(vec!["Bash".to_string()]),
+        allowed_tools: Some(vec![ToolName::Bash.as_str().to_string()]),
         when_to_use: None,
         user_invocable: None,
         disable_model_invocation: None,
@@ -85,7 +89,10 @@ fn test_serialize_roundtrip() {
     let serialized = serde_yml::to_string(&iface).expect("serialize");
     let deserialized: SkillInterface = serde_yml::from_str(&serialized).expect("deserialize");
     assert_eq!(deserialized.name, "roundtrip");
-    assert_eq!(deserialized.allowed_tools, Some(vec!["Bash".to_string()]));
+    assert_eq!(
+        deserialized.allowed_tools,
+        Some(vec![ToolName::Bash.as_str().to_string()])
+    );
 }
 
 #[test]
@@ -110,7 +117,10 @@ hooks:
     assert_eq!(pre_hooks[0].command, Some("npm run lint".to_string()));
     assert_eq!(pre_hooks[0].timeout_secs, 10);
     assert!(pre_hooks[0].once);
-    assert_eq!(pre_hooks[0].matcher, Some("Write".to_string()));
+    assert_eq!(
+        pre_hooks[0].matcher,
+        Some(ToolName::Write.as_str().to_string())
+    );
 }
 
 #[test]

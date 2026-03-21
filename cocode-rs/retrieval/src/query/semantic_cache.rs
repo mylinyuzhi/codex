@@ -86,7 +86,10 @@ impl SemanticQueryCache {
             return None;
         }
 
-        let entries = self.entries.read().ok()?;
+        let entries = self
+            .entries
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut best_match: Option<(f32, &str)> = None;
 

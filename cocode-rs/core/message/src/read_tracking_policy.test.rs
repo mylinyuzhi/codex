@@ -1,15 +1,16 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_is_read_state_source_tool() {
-    assert!(is_read_state_source_tool("Read"));
+    assert!(is_read_state_source_tool(ToolName::Read.as_str()));
     assert!(is_read_state_source_tool("ReadManyFiles"));
-    assert!(is_read_state_source_tool("Glob"));
-    assert!(is_read_state_source_tool("Grep"));
+    assert!(is_read_state_source_tool(ToolName::Glob.as_str()));
+    assert!(is_read_state_source_tool(ToolName::Grep.as_str()));
 
-    assert!(!is_read_state_source_tool("Edit"));
-    assert!(!is_read_state_source_tool("Write"));
-    assert!(!is_read_state_source_tool("Bash"));
+    assert!(!is_read_state_source_tool(ToolName::Edit.as_str()));
+    assert!(!is_read_state_source_tool(ToolName::Write.as_str()));
+    assert!(!is_read_state_source_tool(ToolName::Bash.as_str()));
 }
 
 #[test]
@@ -47,17 +48,17 @@ fn test_is_stronger_kind() {
 fn test_collect_cleared_read_paths() {
     // With modifier paths - should use them directly
     let modifier_paths = vec![PathBuf::from("/src/main.rs")];
-    let paths = collect_cleared_read_paths("Read", &modifier_paths, None);
+    let paths = collect_cleared_read_paths(ToolName::Read.as_str(), &modifier_paths, None);
     assert_eq!(paths.len(), 1);
     assert_eq!(paths[0], PathBuf::from("/src/main.rs"));
 
     // Without modifier paths - should fall back
-    let paths = collect_cleared_read_paths("Read", &[], Some("/src/lib.rs"));
+    let paths = collect_cleared_read_paths(ToolName::Read.as_str(), &[], Some("/src/lib.rs"));
     assert_eq!(paths.len(), 1);
     assert_eq!(paths[0], PathBuf::from("/src/lib.rs"));
 
     // Non-read tool returns empty
-    let paths = collect_cleared_read_paths("Edit", &modifier_paths, None);
+    let paths = collect_cleared_read_paths(ToolName::Edit.as_str(), &modifier_paths, None);
     assert!(paths.is_empty());
 }
 
@@ -66,13 +67,14 @@ fn test_collect_cleared_read_paths_from_input() {
     // With modifier paths - should use them directly
     let modifier_paths = vec![PathBuf::from("/src/main.rs")];
     let input = serde_json::json!({"file_path": "/other.rs"});
-    let paths = collect_cleared_read_paths_from_input("Read", &modifier_paths, &input);
+    let paths =
+        collect_cleared_read_paths_from_input(ToolName::Read.as_str(), &modifier_paths, &input);
     assert_eq!(paths.len(), 1);
     assert_eq!(paths[0], PathBuf::from("/src/main.rs")); // Uses modifier, not input
 
     // Without modifier paths - parses input
     let input = serde_json::json!({"file_path": "/src/main.rs"});
-    let paths = collect_cleared_read_paths_from_input("Read", &[], &input);
+    let paths = collect_cleared_read_paths_from_input(ToolName::Read.as_str(), &[], &input);
     assert_eq!(paths.len(), 1);
     assert_eq!(paths[0], PathBuf::from("/src/main.rs"));
 
@@ -83,7 +85,7 @@ fn test_collect_cleared_read_paths_from_input() {
 
     // Non-read tool returns empty
     let input = serde_json::json!({"file_path": "/src/main.rs"});
-    let paths = collect_cleared_read_paths_from_input("Edit", &[], &input);
+    let paths = collect_cleared_read_paths_from_input(ToolName::Edit.as_str(), &[], &input);
     assert!(paths.is_empty());
 }
 

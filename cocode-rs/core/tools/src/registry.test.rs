@@ -2,6 +2,7 @@ use super::*;
 use crate::context::ToolContext;
 use crate::error::Result;
 use async_trait::async_trait;
+use cocode_protocol::ToolName;
 use cocode_protocol::ToolOutput;
 
 struct TestTool {
@@ -98,12 +99,12 @@ fn test_alias() {
         TestTool {
             name: "read_file".to_string(),
         },
-        "Read",
+        ToolName::Read.as_str(),
     );
 
     assert!(registry.has("read_file"));
-    assert!(registry.has("Read"));
-    assert!(registry.get("Read").is_some());
+    assert!(registry.has(ToolName::Read.as_str()));
+    assert!(registry.get(ToolName::Read.as_str()).is_some());
 }
 
 #[test]
@@ -289,7 +290,7 @@ fn test_case_insensitive_tool_lookup() {
     // Exact match
     assert!(registry.get("bash").is_some());
     // Wrong case from model
-    assert!(registry.get("Bash").is_some());
+    assert!(registry.get(ToolName::Bash.as_str()).is_some());
     assert!(registry.get("BASH").is_some());
     assert!(registry.get("bAsH").is_some());
     // Non-existent
@@ -303,11 +304,11 @@ fn test_case_insensitive_alias_lookup() {
         TestTool {
             name: "read_file".to_string(),
         },
-        "Read",
+        ToolName::Read.as_str(),
     );
 
     // Exact alias match
-    assert!(registry.get("Read").is_some());
+    assert!(registry.get(ToolName::Read.as_str()).is_some());
     // Case-insensitive alias
     assert!(registry.get("read").is_some());
     assert!(registry.get("READ").is_some());
@@ -317,7 +318,7 @@ fn test_case_insensitive_alias_lookup() {
 fn test_exact_match_preferred_over_case_insensitive() {
     let mut registry = ToolRegistry::new();
     registry.register(TestTool {
-        name: "Bash".to_string(),
+        name: ToolName::Bash.as_str().to_string(),
     });
     registry.register(TestTool {
         name: "bash".to_string(),
@@ -327,8 +328,8 @@ fn test_exact_match_preferred_over_case_insensitive() {
     let tool = registry.get("bash").unwrap();
     assert_eq!(tool.name(), "bash");
 
-    let tool = registry.get("Bash").unwrap();
-    assert_eq!(tool.name(), "Bash");
+    let tool = registry.get(ToolName::Bash.as_str()).unwrap();
+    assert_eq!(tool.name(), ToolName::Bash.as_str());
 }
 
 #[test]

@@ -119,46 +119,15 @@ impl ToolName {
     }
 
     /// Parse from a string, returns None for unknown/MCP tools.
+    ///
+    /// Derives mappings from `as_str()` via `ALL`, so adding a new variant
+    /// only requires updating `as_str()` and `ALL` — not a third match.
     pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "Read" => Some(ToolName::Read),
-            "ReadManyFiles" => Some(ToolName::ReadManyFiles),
-            "Glob" => Some(ToolName::Glob),
-            "Grep" => Some(ToolName::Grep),
-            "Edit" => Some(ToolName::Edit),
-            "Write" => Some(ToolName::Write),
-            "LS" => Some(ToolName::LS),
-            "Bash" => Some(ToolName::Bash),
-            "shell" => Some(ToolName::Shell),
-            "Task" => Some(ToolName::Task),
-            "TaskOutput" => Some(ToolName::TaskOutput),
-            "TaskStop" => Some(ToolName::TaskStop),
-            "TaskCreate" => Some(ToolName::TaskCreate),
-            "TaskUpdate" => Some(ToolName::TaskUpdate),
-            "TaskGet" => Some(ToolName::TaskGet),
-            "TaskList" => Some(ToolName::TaskList),
-            "EnterPlanMode" => Some(ToolName::EnterPlanMode),
-            "ExitPlanMode" => Some(ToolName::ExitPlanMode),
-            "AskUserQuestion" => Some(ToolName::AskUserQuestion),
-            "TodoWrite" => Some(ToolName::TodoWrite),
-            "EnterWorktree" => Some(ToolName::EnterWorktree),
-            "ExitWorktree" => Some(ToolName::ExitWorktree),
-            "CronCreate" => Some(ToolName::CronCreate),
-            "CronDelete" => Some(ToolName::CronDelete),
-            "CronList" => Some(ToolName::CronList),
-            "TeamCreate" => Some(ToolName::TeamCreate),
-            "TeamDelete" => Some(ToolName::TeamDelete),
-            "SendMessage" => Some(ToolName::SendMessage),
-            "WebFetch" => Some(ToolName::WebFetch),
-            "WebSearch" => Some(ToolName::WebSearch),
-            "Skill" => Some(ToolName::Skill),
-            "Lsp" => Some(ToolName::Lsp),
-            "NotebookEdit" => Some(ToolName::NotebookEdit),
-            "SmartEdit" => Some(ToolName::SmartEdit),
-            "apply_patch" => Some(ToolName::ApplyPatch),
-            "MCPSearch" | "ToolSearch" => Some(ToolName::McpSearch),
-            _ => None,
+        // Handle aliases that don't match the canonical as_str() value
+        if s == "ToolSearch" {
+            return Some(ToolName::McpSearch);
         }
+        Self::ALL.iter().find(|t| t.as_str() == s).copied()
     }
 
     /// All builtin tool names.

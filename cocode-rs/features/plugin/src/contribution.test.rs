@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_contributions_default() {
@@ -57,7 +58,7 @@ fn test_contribution_agent() {
         name: "test-agent".to_string(),
         description: "A test agent".to_string(),
         agent_type: "test-agent".to_string(),
-        tools: vec!["Read".to_string()],
+        tools: vec![ToolName::Read.as_str().to_string()],
         disallowed_tools: vec![],
         identity: None,
         max_turns: None,

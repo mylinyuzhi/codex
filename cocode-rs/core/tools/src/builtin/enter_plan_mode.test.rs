@@ -18,7 +18,7 @@ async fn test_enter_plan_mode_default() {
         // Non-interview message should contain step-by-step guide
         let message = content["message"].as_str().unwrap();
         assert!(message.contains("Entered plan mode"));
-        assert!(message.contains("ExitPlanMode"));
+        assert!(message.contains(cocode_protocol::ToolName::ExitPlanMode.as_str()));
     } else {
         panic!("Expected Structured output, got Text");
     }
@@ -49,7 +49,10 @@ async fn test_enter_plan_mode_interview_phase() {
 #[test]
 fn test_tool_properties() {
     let tool = EnterPlanModeTool::new();
-    assert_eq!(tool.name(), "EnterPlanMode");
+    assert_eq!(
+        tool.name(),
+        cocode_protocol::ToolName::EnterPlanMode.as_str()
+    );
     assert!(tool.is_concurrent_safe());
     assert!(tool.is_read_only());
 }

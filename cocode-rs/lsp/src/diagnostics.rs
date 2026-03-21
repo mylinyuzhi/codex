@@ -79,8 +79,6 @@ struct FileDiagnostics {
     diagnostics: Vec<DiagnosticEntry>,
     last_update: Instant,
     last_accessed: Instant,
-    #[allow(dead_code)]
-    version: i32,
 }
 
 /// Diagnostics storage with debouncing
@@ -137,7 +135,6 @@ impl DiagnosticsStore {
             .count();
 
         let mut files = self.files.write().await;
-        let version = files.get(&path).map(|f| f.version + 1).unwrap_or(1);
 
         files.insert(
             path.clone(),
@@ -145,7 +142,6 @@ impl DiagnosticsStore {
                 diagnostics: entries,
                 last_update: now,
                 last_accessed: now,
-                version,
             },
         );
 

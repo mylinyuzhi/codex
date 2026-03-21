@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use std::path::PathBuf;
 
 #[test]
@@ -164,17 +165,17 @@ fn test_threshold_status_zero_available() {
 
 #[test]
 fn test_compactable_tools_set() {
-    assert!(COMPACTABLE_TOOLS.contains("Read"));
-    assert!(COMPACTABLE_TOOLS.contains("Bash"));
-    assert!(COMPACTABLE_TOOLS.contains("Grep"));
-    assert!(COMPACTABLE_TOOLS.contains("Glob"));
-    assert!(COMPACTABLE_TOOLS.contains("WebSearch"));
-    assert!(COMPACTABLE_TOOLS.contains("WebFetch"));
-    assert!(COMPACTABLE_TOOLS.contains("Edit"));
-    assert!(COMPACTABLE_TOOLS.contains("Write"));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Read.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Bash.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Grep.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Glob.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::WebSearch.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::WebFetch.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Edit.as_str()));
+    assert!(COMPACTABLE_TOOLS.contains(ToolName::Write.as_str()));
 
     // Non-compactable tools
-    assert!(!COMPACTABLE_TOOLS.contains("Task"));
+    assert!(!COMPACTABLE_TOOLS.contains(ToolName::Task.as_str()));
     assert!(!COMPACTABLE_TOOLS.contains("AskUser"));
 }
 
@@ -269,11 +270,11 @@ fn test_task_info_serde() {
 fn test_task_status_from_tool_calls() {
     let tool_calls = vec![
         (
-            "Read".to_string(),
+            ToolName::Read.as_str().to_string(),
             serde_json::json!({"path": "/tmp/file.txt"}),
         ),
         (
-            "TodoWrite".to_string(),
+            ToolName::TodoWrite.as_str().to_string(),
             serde_json::json!({
                 "todos": [
                     {"id": "1", "subject": "Fix bug", "status": "completed"},
@@ -304,7 +305,7 @@ fn test_task_status_from_tool_calls_empty() {
 fn test_task_status_from_tool_calls_uses_latest() {
     let tool_calls = vec![
         (
-            "TodoWrite".to_string(),
+            ToolName::TodoWrite.as_str().to_string(),
             serde_json::json!({
                 "todos": [
                     {"id": "old", "subject": "Old task", "status": "pending"}
@@ -312,7 +313,7 @@ fn test_task_status_from_tool_calls_uses_latest() {
             }),
         ),
         (
-            "TodoWrite".to_string(),
+            ToolName::TodoWrite.as_str().to_string(),
             serde_json::json!({
                 "todos": [
                     {"id": "new", "subject": "New task", "status": "in_progress"}
@@ -331,7 +332,7 @@ fn test_task_status_from_tool_calls_uses_latest() {
 #[test]
 fn test_task_status_from_tool_calls_with_legacy_content() {
     let tool_calls = vec![(
-        "TodoWrite".to_string(),
+        ToolName::TodoWrite.as_str().to_string(),
         serde_json::json!({
             "todos": [
                 {"id": "1", "content": "Legacy task description", "status": "pending"}
@@ -641,7 +642,11 @@ fn test_build_token_breakdown() {
     assert!(breakdown.local_command_output_tokens > 0);
     assert!(breakdown.human_message_pct > 0.0);
     assert!(breakdown.assistant_message_pct > 0.0);
-    assert!(breakdown.tool_result_tokens.contains_key("Read"));
+    assert!(
+        breakdown
+            .tool_result_tokens
+            .contains_key(ToolName::Read.as_str())
+    );
 }
 
 #[test]
@@ -730,22 +735,22 @@ fn test_invoked_skill_restoration_serde() {
 fn test_invoked_skill_restoration_from_tool_calls() {
     let tool_calls = vec![
         (
-            "Skill".to_string(),
+            ToolName::Skill.as_str().to_string(),
             serde_json::json!({"skill": "commit", "args": "-m 'fix bug'"}),
             5,
         ),
         (
-            "Read".to_string(), // Non-skill tool, should be ignored
+            ToolName::Read.as_str().to_string(), // Non-skill tool, should be ignored
             serde_json::json!({"path": "/test.rs"}),
             6,
         ),
         (
-            "Skill".to_string(),
+            ToolName::Skill.as_str().to_string(),
             serde_json::json!({"skill": "review-pr", "args": "123"}),
             7,
         ),
         (
-            "Skill".to_string(), // Same skill again, more recent
+            ToolName::Skill.as_str().to_string(), // Same skill again, more recent
             serde_json::json!({"skill": "commit", "args": "-m 'final fix'"}),
             10,
         ),
@@ -775,11 +780,15 @@ fn test_invoked_skill_restoration_from_tool_calls_empty() {
 fn test_invoked_skill_restoration_from_tool_calls_no_skills() {
     let tool_calls = vec![
         (
-            "Read".to_string(),
+            ToolName::Read.as_str().to_string(),
             serde_json::json!({"path": "/test.rs"}),
             1,
         ),
-        ("Bash".to_string(), serde_json::json!({"command": "ls"}), 2),
+        (
+            ToolName::Bash.as_str().to_string(),
+            serde_json::json!({"command": "ls"}),
+            2,
+        ),
     ];
 
     let skills = InvokedSkillRestoration::from_tool_calls(&tool_calls);
@@ -1296,7 +1305,7 @@ fn test_task_and_skill_restoration_from_tool_calls() {
     // Simulate tool calls that include both TodoWrite and Skill invocations
     let tool_calls_with_turns = vec![
         (
-            "TodoWrite".to_string(),
+            ToolName::TodoWrite.as_str().to_string(),
             serde_json::json!({
                 "todos": [
                     {"id": "1", "subject": "Fix bug", "status": "in_progress"},
@@ -1306,7 +1315,7 @@ fn test_task_and_skill_restoration_from_tool_calls() {
             3,
         ),
         (
-            "Skill".to_string(),
+            ToolName::Skill.as_str().to_string(),
             serde_json::json!({
                 "skill": "commit",
                 "args": "-m 'fix: bug'"
@@ -1314,7 +1323,7 @@ fn test_task_and_skill_restoration_from_tool_calls() {
             5,
         ),
         (
-            "Read".to_string(),
+            ToolName::Read.as_str().to_string(),
             serde_json::json!({"file_path": "/test/file.rs"}),
             6,
         ),

@@ -76,24 +76,14 @@ impl Tool for CronCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let cron_input = input["cron"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "cron must be a string",
-            }
-            .build()
-        })?;
-        let prompt = input["prompt"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "prompt must be a string",
-            }
-            .build()
-        })?;
+        let cron_input = super::input_helpers::require_str(&input, "cron")?;
+        let prompt = super::input_helpers::require_str(&input, "prompt")?;
 
         // Parse simple interval format (e.g., "5m", "1h", "30s") or validate cron expression
         let schedule = cron_state::parse_schedule(cron_input)
             .map_err(|msg| crate::error::tool_error::InvalidInputSnafu { message: msg }.build())?;
 
-        let recurring = input["recurring"].as_bool().unwrap_or(true);
+        let recurring = super::input_helpers::bool_or(&input, "recurring", true);
 
         let job_id = cron_state::generate_cron_id();
         let now = std::time::SystemTime::now()
@@ -114,7 +104,7 @@ impl Tool for CronCreateTool {
             prompt: prompt.to_string(),
             description: input["description"].as_str().map(String::from),
             recurring,
-            durable: input["durable"].as_bool().unwrap_or(false),
+            durable: super::input_helpers::bool_or(&input, "durable", false),
             created_at: now,
             execution_count: 0,
             last_executed_at: None,
@@ -142,7 +132,7 @@ impl Tool for CronCreateTool {
         };
 
         // Persist durable jobs to disk
-        if input["durable"].as_bool().unwrap_or(false)
+        if super::input_helpers::bool_or(&input, "durable", false)
             && let Some(ref home) = ctx.cocode_home
             && let Err(e) = cron_state::save_durable_jobs(&self.store, home).await
         {

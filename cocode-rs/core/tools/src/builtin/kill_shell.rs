@@ -57,12 +57,7 @@ impl Tool for KillShellTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let task_id = input["task_id"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "task_id must be a string",
-            }
-            .build()
-        })?;
+        let task_id = super::input_helpers::require_str(&input, "task_id")?;
 
         ctx.emit_progress(format!("Stopping task {task_id}")).await;
 

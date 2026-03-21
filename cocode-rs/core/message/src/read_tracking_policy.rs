@@ -24,6 +24,16 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use cocode_protocol::ToolName;
+
+/// Tools that contribute to file-read tracking state.
+const READ_STATE_SOURCE_TOOLS: &[&str] = &[
+    ToolName::Read.as_str(),
+    ToolName::ReadManyFiles.as_str(),
+    ToolName::Glob.as_str(),
+    ToolName::Grep.as_str(),
+];
+
 /// Normalize a path for consistent tracking across all file operations.
 ///
 /// Ensures paths are consistent across different representations by:
@@ -99,7 +109,7 @@ pub fn normalize_path(path: impl AsRef<Path>) -> PathBuf {
 ///
 /// This matches Claude Code v2.1.38's `isReadStateSourceTool` function.
 pub fn is_read_state_source_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "Read" | "ReadManyFiles" | "Glob" | "Grep")
+    READ_STATE_SOURCE_TOOLS.contains(&tool_name)
 }
 
 /// Check if one FileReadKind is stronger than another.
@@ -202,27 +212,21 @@ pub fn collect_cleared_read_paths_from_input(
     // Fall back to parsing tool input
     let mut paths = Vec::new();
 
-    match tool_name {
-        "Read" => {
-            if let Some(path_str) = input.get("file_path").and_then(|v| v.as_str()) {
-                paths.push(PathBuf::from(path_str));
-            }
+    if tool_name == ToolName::Read.as_str() {
+        if let Some(path_str) = input.get("file_path").and_then(|v| v.as_str()) {
+            paths.push(PathBuf::from(path_str));
         }
-        "ReadManyFiles" => {
-            if let Some(paths_arr) = input.get("paths").and_then(|v| v.as_array()) {
-                for path_val in paths_arr {
-                    if let Some(path_str) = path_val.as_str() {
-                        paths.push(PathBuf::from(path_str));
-                    }
+    } else if tool_name == ToolName::ReadManyFiles.as_str() {
+        if let Some(paths_arr) = input.get("paths").and_then(|v| v.as_array()) {
+            for path_val in paths_arr {
+                if let Some(path_str) = path_val.as_str() {
+                    paths.push(PathBuf::from(path_str));
                 }
             }
         }
-        "Glob" | "Grep" => {
-            // These tools have a `path` parameter for the search directory
-            // We don't track these as file reads since they're metadata-only
-        }
-        _ => {}
     }
+    // Glob and Grep have a `path` parameter for the search directory
+    // but we don't track these as file reads since they're metadata-only
 
     paths
 }

@@ -3,6 +3,7 @@ use crate::config::SystemReminderConfig;
 use crate::generator::GeneratorContext;
 use crate::generator::TeamContextData;
 use crate::generator::TeamMemberInfo;
+use cocode_protocol::ToolName;
 
 fn default_config() -> SystemReminderConfig {
     SystemReminderConfig::default()
@@ -49,7 +50,7 @@ async fn generates_context_when_team_present() {
     assert!(content.contains("researcher-1"));
     assert!(content.contains("my-team"));
     assert!(content.contains("team-lead"));
-    assert!(content.contains("SendMessage"));
+    assert!(content.contains(ToolName::SendMessage.as_str()));
 }
 
 #[tokio::test]

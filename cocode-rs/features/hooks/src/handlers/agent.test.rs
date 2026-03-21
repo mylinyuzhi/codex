@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_stub_returns_continue() {
@@ -64,7 +65,11 @@ fn test_agent_verification_config_default() {
     assert!(!config.system_prompt.is_empty());
     assert_eq!(
         config.allowed_tools,
-        vec!["Read".to_string(), "Grep".to_string(), "Glob".to_string()]
+        vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Grep.as_str().to_string(),
+            ToolName::Glob.as_str().to_string()
+        ]
     );
 }
 

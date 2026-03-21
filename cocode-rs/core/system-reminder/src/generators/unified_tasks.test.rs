@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use std::path::PathBuf;
 
 fn test_config() -> SystemReminderConfig {
@@ -51,7 +52,12 @@ async fn test_with_running_tasks() {
     assert!(reminder.content().unwrap().contains("Running"));
     assert!(reminder.content().unwrap().contains("npm test"));
     assert!(reminder.content().unwrap().contains("(new output)"));
-    assert!(reminder.content().unwrap().contains("TaskOutput"));
+    assert!(
+        reminder
+            .content()
+            .unwrap()
+            .contains(ToolName::TaskOutput.as_str())
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use std::io::Write;
 use tempfile::TempDir;
 
@@ -66,8 +67,15 @@ CRITICAL: This is a custom read-only agent.
     assert_eq!(def.name, "my-agent");
     assert_eq!(def.agent_type, "my-agent");
     assert_eq!(def.description, "My custom agent");
-    assert_eq!(def.tools, vec!["Read", "Glob", "Grep"]);
-    assert_eq!(def.disallowed_tools, vec!["Edit"]);
+    assert_eq!(
+        def.tools,
+        vec![
+            ToolName::Read.as_str(),
+            ToolName::Glob.as_str(),
+            ToolName::Grep.as_str()
+        ]
+    );
+    assert_eq!(def.disallowed_tools, vec![ToolName::Edit.as_str()]);
     assert_eq!(def.max_turns, Some(15));
     assert!(matches!(
         def.identity,
@@ -169,7 +177,7 @@ fn test_merge_custom_agents_override() {
         name: "explore".to_string(),
         description: "Custom explore".to_string(),
         agent_type: "explore".to_string(),
-        tools: vec!["Read".to_string()],
+        tools: vec![ToolName::Read.as_str().to_string()],
         disallowed_tools: vec![],
         identity: None,
         max_turns: Some(50),
@@ -200,7 +208,7 @@ fn test_merge_custom_agents_new_type() {
         name: "bash".to_string(),
         description: "Bash".to_string(),
         agent_type: "bash".to_string(),
-        tools: vec!["Bash".to_string()],
+        tools: vec![ToolName::Bash.as_str().to_string()],
         disallowed_tools: vec![],
         identity: None,
         max_turns: Some(10),
@@ -290,32 +298,8 @@ fn test_load_custom_agents_integration() {
     assert_eq!(proj.source, AgentSource::ProjectSettings);
 }
 
-#[test]
-fn test_parse_identity_variants() {
-    use cocode_protocol::execution::ExecutionIdentity;
-    use cocode_protocol::model::ModelRole;
-
-    assert!(matches!(
-        parse_identity("fast"),
-        ExecutionIdentity::Role(ModelRole::Fast)
-    ));
-    assert!(matches!(
-        parse_identity("haiku"),
-        ExecutionIdentity::Role(ModelRole::Fast)
-    ));
-    assert!(matches!(
-        parse_identity("main"),
-        ExecutionIdentity::Role(ModelRole::Main)
-    ));
-    assert!(matches!(
-        parse_identity("inherit"),
-        ExecutionIdentity::Inherit
-    ));
-    assert!(matches!(
-        parse_identity("unknown"),
-        ExecutionIdentity::Inherit
-    ));
-}
+// parse_identity tests moved to cocode_protocol::execution::identity.test.rs
+// (ExecutionIdentity::parse_loose)
 
 #[test]
 fn test_parse_permission_mode_variants() {

@@ -247,7 +247,10 @@ async fn test_edit_rejects_ipynb_files() {
     let result = tool.execute(input, &mut ctx).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("NotebookEdit"));
+    assert!(
+        err.to_string()
+            .contains(cocode_protocol::ToolName::NotebookEdit.as_str())
+    );
 }
 
 #[tokio::test]

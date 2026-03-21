@@ -75,24 +75,6 @@ impl OllamaLlmProvider {
     fn endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
-
-    /// Check if Ollama server is running.
-    #[allow(dead_code)]
-    async fn check_server(&self) -> bool {
-        // Try the models endpoint to verify server is running
-        let models_url = self
-            .base_url
-            .replace("/v1", "/api/tags")
-            .replace("/v1/", "/api/tags");
-
-        self.client
-            .get(&models_url)
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
 }
 
 #[async_trait]

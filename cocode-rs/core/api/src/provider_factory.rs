@@ -21,26 +21,50 @@ fn build_http_client(timeout_secs: i64) -> Arc<reqwest::Client> {
     )
 }
 
+/// Build OpenAI provider settings with organization ID handling.
+fn create_openai_settings(
+    info: &ProviderInfo,
+    client: Arc<reqwest::Client>,
+) -> vercel_ai_openai::OpenAIProviderSettings {
+    let mut settings = vercel_ai_openai::OpenAIProviderSettings {
+        api_key: Some(info.api_key.clone()),
+        base_url: Some(info.base_url.clone()),
+        client: Some(client),
+        ..Default::default()
+    };
+    if let Some(options) = &info.options
+        && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
+    {
+        settings.organization = Some(org_id.to_string());
+    }
+    settings
+}
+
+/// Build an OpenAI-compatible provider with the given name.
+fn create_openai_compat_provider(
+    info: &ProviderInfo,
+    name: String,
+    client: Arc<reqwest::Client>,
+) -> Arc<dyn Provider> {
+    let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
+        api_key: Some(info.api_key.clone()),
+        base_url: Some(info.base_url.clone()),
+        name: Some(name),
+        client: Some(client),
+        ..Default::default()
+    };
+    Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
+        settings,
+    ))
+}
+
 /// Create a provider from ProviderInfo configuration.
 pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
     let client = build_http_client(info.timeout_secs);
 
     let provider: Arc<dyn Provider> = match info.provider_type {
         ProviderType::Openai => {
-            let mut settings = vercel_ai_openai::OpenAIProviderSettings {
-                api_key: Some(info.api_key.clone()),
-                base_url: Some(info.base_url.clone()),
-                client: Some(client),
-                ..Default::default()
-            };
-
-            // Handle organization ID from provider options
-            if let Some(options) = &info.options
-                && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
-            {
-                settings.organization = Some(org_id.to_string());
-            }
-
+            let settings = create_openai_settings(info, client);
             Arc::new(vercel_ai_openai::OpenAIProvider::new(settings))
         }
         ProviderType::Anthropic => {
@@ -61,40 +85,11 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
             Arc::new(vercel_ai_google::create_google_generative_ai(settings))
         }
         ProviderType::Volcengine => {
-            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
-                api_key: Some(info.api_key.clone()),
-                base_url: Some(info.base_url.clone()),
-                name: Some("volcengine".into()),
-                client: Some(client),
-                ..Default::default()
-            };
-            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
-                settings,
-            ))
+            create_openai_compat_provider(info, "volcengine".into(), client)
         }
-        ProviderType::Zai => {
-            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
-                api_key: Some(info.api_key.clone()),
-                base_url: Some(info.base_url.clone()),
-                name: Some("zai".into()),
-                client: Some(client),
-                ..Default::default()
-            };
-            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
-                settings,
-            ))
-        }
+        ProviderType::Zai => create_openai_compat_provider(info, "zai".into(), client),
         ProviderType::OpenaiCompat => {
-            let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
-                api_key: Some(info.api_key.clone()),
-                base_url: Some(info.base_url.clone()),
-                name: Some(info.name.clone()),
-                client: Some(client),
-                ..Default::default()
-            };
-            Arc::new(vercel_ai_openai_compatible::OpenAICompatibleProvider::new(
-                settings,
-            ))
+            create_openai_compat_provider(info, info.name.clone(), client)
         }
     };
     Ok(provider)
@@ -125,19 +120,7 @@ pub fn create_model(info: &ProviderInfo, model_slug: &str) -> Result<Arc<dyn Lan
 /// Create an OpenAI model using the Chat Completions API.
 fn create_openai_chat_model(info: &ProviderInfo, api_name: &str) -> Result<Arc<dyn LanguageModel>> {
     let client = build_http_client(info.timeout_secs);
-    let mut settings = vercel_ai_openai::OpenAIProviderSettings {
-        api_key: Some(info.api_key.clone()),
-        base_url: Some(info.base_url.clone()),
-        client: Some(client),
-        ..Default::default()
-    };
-
-    if let Some(options) = &info.options
-        && let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str())
-    {
-        settings.organization = Some(org_id.to_string());
-    }
-
+    let settings = create_openai_settings(info, client);
     let provider = vercel_ai_openai::OpenAIProvider::new(settings);
     Ok(Arc::new(provider.chat(api_name)))
 }

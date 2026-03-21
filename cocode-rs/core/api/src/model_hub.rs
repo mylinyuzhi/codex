@@ -253,9 +253,11 @@ impl ModelHub {
     // ========================================================================
 
     pub fn invalidate_model(&self, spec: &ModelSpec) {
-        if let Ok(mut cache) = self.models.write()
-            && cache.remove(spec).is_some()
-        {
+        let mut cache = self
+            .models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.remove(spec).is_some() {
             debug!(
                 provider = %spec.provider,
                 model = %spec.slug,
@@ -265,46 +267,60 @@ impl ModelHub {
     }
 
     pub fn invalidate_provider(&self, provider_name: &str) {
-        if let Ok(mut cache) = self.providers.write()
-            && cache.remove(provider_name).is_some()
         {
-            debug!(provider = %provider_name, "Invalidated cached provider");
+            let mut cache = self
+                .providers
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.remove(provider_name).is_some() {
+                debug!(provider = %provider_name, "Invalidated cached provider");
+            }
         }
 
-        if let Ok(mut cache) = self.models.write() {
-            let to_remove: Vec<ModelSpec> = cache
-                .keys()
-                .filter(|spec| spec.provider == provider_name)
-                .cloned()
-                .collect();
+        let mut cache = self
+            .models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let to_remove: Vec<ModelSpec> = cache
+            .keys()
+            .filter(|spec| spec.provider == provider_name)
+            .cloned()
+            .collect();
 
-            for spec in to_remove {
-                cache.remove(&spec);
-                debug!(
-                    provider = %spec.provider,
-                    model = %spec.slug,
-                    "Invalidated cached model (provider invalidation)"
-                );
-            }
+        for spec in to_remove {
+            cache.remove(&spec);
+            debug!(
+                provider = %spec.provider,
+                model = %spec.slug,
+                "Invalidated cached model (provider invalidation)"
+            );
         }
     }
 
     pub fn invalidate_all(&self) {
-        if let Ok(mut cache) = self.providers.write() {
-            cache.clear();
-        }
-        if let Ok(mut cache) = self.models.write() {
-            cache.clear();
-        }
+        self.providers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         debug!("Invalidated all cached providers and models");
     }
 
     pub fn provider_cache_size(&self) -> usize {
-        self.providers.read().map(|c| c.len()).unwrap_or(0)
+        self.providers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     pub fn model_cache_size(&self) -> usize {
-        self.models.read().map(|c| c.len()).unwrap_or(0)
+        self.models
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     // ========================================================================

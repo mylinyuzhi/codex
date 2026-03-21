@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_stop_reason_variants() {
@@ -104,7 +105,7 @@ fn test_plan_mode_exit_with_option_serde() {
         approved: true,
         exit_option: Some(PlanExitOption::ClearAndAcceptEdits),
         allowed_prompts: vec![AllowedPrompt {
-            tool: "Bash".to_string(),
+            tool: ToolName::Bash.as_str().to_string(),
             prompt: "run tests".to_string(),
         }],
     };
@@ -119,7 +120,7 @@ fn test_plan_mode_exit_with_option_serde() {
             assert!(approved);
             assert_eq!(exit_option, Some(PlanExitOption::ClearAndAcceptEdits));
             assert_eq!(allowed_prompts.len(), 1);
-            assert_eq!(allowed_prompts[0].tool, "Bash");
+            assert_eq!(allowed_prompts[0].tool, ToolName::Bash.as_str());
             assert_eq!(allowed_prompts[0].prompt, "run tests");
         }
         other => panic!("unexpected variant: {other:?}"),

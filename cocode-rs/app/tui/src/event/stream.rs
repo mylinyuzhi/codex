@@ -62,9 +62,6 @@ pub struct TuiEventStream {
     tick_interval: Interval,
     /// Whether the terminal is focused.
     terminal_focused: Arc<AtomicBool>,
-    /// Whether we're in the process of polling.
-    #[allow(dead_code)]
-    polling: bool,
 }
 
 impl TuiEventStream {
@@ -107,7 +104,6 @@ impl TuiEventStream {
             draw_rx,
             tick_interval: interval(config.tick_interval),
             terminal_focused,
-            polling: false,
         }
     }
 

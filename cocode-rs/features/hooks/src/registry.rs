@@ -9,8 +9,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::RwLockReadGuard;
-use std::sync::RwLockWriteGuard;
 use std::time::Instant;
 
 use tracing::debug;
@@ -24,6 +22,8 @@ use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::handlers;
 use crate::handlers::inline::InlineHandler;
+use crate::lock_utils::lock_read;
+use crate::lock_utils::lock_write;
 use crate::result::HookOutcome;
 use crate::result::HookResult;
 use crate::settings::HookSettings;
@@ -45,28 +45,6 @@ pub type HookAgentFn = Arc<
         + Send
         + Sync,
 >;
-
-/// Acquires a write lock, recovering from poison if necessary.
-fn lock_write<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockWriteGuard<'a, T>> {
-    match lock.write() {
-        Ok(g) => Some(g),
-        Err(poisoned) => {
-            warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
-        }
-    }
-}
-
-/// Acquires a read lock, recovering from poison if necessary.
-fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockReadGuard<'a, T>> {
-    match lock.read() {
-        Ok(g) => Some(g),
-        Err(poisoned) => {
-            warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
-        }
-    }
-}
 
 /// Central registry that stores hooks and dispatches events.
 ///

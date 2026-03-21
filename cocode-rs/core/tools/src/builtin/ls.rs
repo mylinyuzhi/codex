@@ -7,7 +7,6 @@ use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_file_ignore::IgnoreConfig;
 use cocode_file_ignore::IgnoreService;
-use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
@@ -228,36 +227,7 @@ impl Tool for LsTool {
             .map(|p| ctx.resolve_path(p))
             .unwrap_or_else(|| ctx.cwd.clone());
 
-        if crate::sensitive_files::is_sensitive_directory(&list_path) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("ls-sensitive-{}", list_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!("Listing sensitive directory: {}", list_path.display()),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        if crate::sensitive_files::is_outside_cwd(&list_path, &ctx.cwd) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("ls-outside-cwd-{}", list_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!(
-                        "Listing directory outside working directory: {}",
-                        list_path.display()
-                    ),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        PermissionResult::Allowed
+        crate::sensitive_files::check_directory_permission(self.name(), &list_path, &ctx.cwd)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

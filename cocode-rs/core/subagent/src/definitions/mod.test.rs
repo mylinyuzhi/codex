@@ -1,6 +1,7 @@
 use super::*;
 use cocode_config::BuiltinAgentOverride;
 use cocode_config::BuiltinAgentsConfig;
+use cocode_protocol::ToolName;
 use cocode_protocol::execution::ExecutionIdentity;
 use cocode_protocol::model::ModelRole;
 
@@ -84,14 +85,20 @@ fn test_builtin_agents_with_tools_override() {
     config.insert(
         "explore".to_string(),
         BuiltinAgentOverride {
-            tools: Some(vec!["Read".to_string(), "Bash".to_string()]),
+            tools: Some(vec![
+                ToolName::Read.as_str().to_string(),
+                ToolName::Bash.as_str().to_string(),
+            ]),
             ..Default::default()
         },
     );
 
     let agents = builtin_agents_with_config(&config);
     let explore = agents.iter().find(|a| a.agent_type == "explore").unwrap();
-    assert_eq!(explore.tools, vec!["Read", "Bash"]);
+    assert_eq!(
+        explore.tools,
+        vec![ToolName::Read.as_str(), ToolName::Bash.as_str()]
+    );
 }
 
 #[test]
@@ -110,63 +117,5 @@ fn test_builtin_agents_unknown_agent_ignored() {
     assert_eq!(agents.len(), 7);
 }
 
-#[test]
-fn test_parse_identity_roles() {
-    assert!(matches!(
-        parse_identity("main"),
-        ExecutionIdentity::Role(ModelRole::Main)
-    ));
-    assert!(matches!(
-        parse_identity("fast"),
-        ExecutionIdentity::Role(ModelRole::Fast)
-    ));
-    assert!(matches!(
-        parse_identity("explore"),
-        ExecutionIdentity::Role(ModelRole::Explore)
-    ));
-    assert!(matches!(
-        parse_identity("plan"),
-        ExecutionIdentity::Role(ModelRole::Plan)
-    ));
-    assert!(matches!(
-        parse_identity("vision"),
-        ExecutionIdentity::Role(ModelRole::Vision)
-    ));
-    assert!(matches!(
-        parse_identity("review"),
-        ExecutionIdentity::Role(ModelRole::Review)
-    ));
-    assert!(matches!(
-        parse_identity("compact"),
-        ExecutionIdentity::Role(ModelRole::Compact)
-    ));
-}
-
-#[test]
-fn test_parse_identity_inherit() {
-    assert!(matches!(
-        parse_identity("inherit"),
-        ExecutionIdentity::Inherit
-    ));
-    assert!(matches!(
-        parse_identity("unknown"),
-        ExecutionIdentity::Inherit
-    ));
-    assert!(matches!(parse_identity(""), ExecutionIdentity::Inherit));
-}
-
-#[test]
-fn test_parse_identity_case_insensitive() {
-    assert!(matches!(
-        parse_identity("MAIN"),
-        ExecutionIdentity::Role(ModelRole::Main)
-    ));
-    assert!(matches!(
-        parse_identity("Fast"),
-        ExecutionIdentity::Role(ModelRole::Fast)
-    ));
-    assert!(matches!(
-        parse_identity("EXPLORE"),
-        ExecutionIdentity::Role(ModelRole::Explore)
-    ));
-}
+// parse_identity tests moved to cocode_protocol::execution::identity.test.rs
+// (ExecutionIdentity::parse_loose)

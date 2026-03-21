@@ -1250,7 +1250,7 @@ version = "0.0.0"
 dependencies = [
  "cocode-error",
  "cocode-protocol",
- "dirs 6.0.0",
+ "cocode-utils-common",
  "once_cell",
  "rand 0.9.2",
  "serde",
@@ -1271,6 +1271,7 @@ dependencies = [
  "cocode-hooks",
  "cocode-lsp",
  "cocode-mcp-types",
+ "cocode-protocol",
  "cocode-rmcp-client",
  "cocode-skill",
  "cocode-subagent",
@@ -1466,7 +1467,7 @@ dependencies = [
  "anyhow",
  "cocode-protocol",
  "cocode-shell-parser",
- "dirs 6.0.0",
+ "cocode-utils-common",
  "libc",
  "pretty_assertions",
  "serde",
@@ -1738,6 +1739,7 @@ name = "cocode-utils-common"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "dirs 6.0.0",
  "serde",
  "tracing",
  "tracing-subscriber",

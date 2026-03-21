@@ -4,6 +4,7 @@ use cocode_context::InjectionPosition;
 use cocode_context::MemoryFile;
 use cocode_context::OutputStylePromptConfig;
 use cocode_protocol::PermissionMode;
+use cocode_protocol::ToolName;
 
 use super::*;
 
@@ -44,7 +45,10 @@ fn test_build_minimal() {
 fn test_build_with_tools() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .tool_names(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Write.as_str().to_string(),
+        ])
         .build()
         .unwrap();
 
@@ -160,9 +164,9 @@ fn test_build_with_tools_includes_dynamic_policy() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
         .tool_names(vec![
-            "Read".to_string(),
-            "Edit".to_string(),
-            "LS".to_string(),
+            ToolName::Read.as_str().to_string(),
+            ToolName::Edit.as_str().to_string(),
+            ToolName::LS.as_str().to_string(),
         ])
         .build()
         .unwrap();
@@ -178,7 +182,10 @@ fn test_build_with_tools_includes_dynamic_policy() {
 fn test_build_with_tools_excludes_ls_when_not_registered() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string(), "Edit".to_string()])
+        .tool_names(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Edit.as_str().to_string(),
+        ])
         .build()
         .unwrap();
 
@@ -192,7 +199,7 @@ fn test_build_with_tools_excludes_ls_when_not_registered() {
 fn test_section_ordering() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string()])
+        .tool_names(vec![ToolName::Read.as_str().to_string()])
         .mcp_server_names(vec!["github".to_string()])
         .memory_files(vec![MemoryFile {
             path: "CLAUDE.md".to_string(),
@@ -248,7 +255,10 @@ fn test_build_with_output_style_strips_communication_style() {
 fn test_build_with_output_style_keep_coding_false() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .tool_names(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Write.as_str().to_string(),
+        ])
         .output_style(OutputStylePromptConfig {
             name: "creative".to_string(),
             content: "Be creative.".to_string(),
@@ -274,7 +284,10 @@ fn test_build_with_output_style_keep_coding_false() {
 fn test_build_with_output_style_keep_coding_true() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .tool_names(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Write.as_str().to_string(),
+        ])
         .output_style(OutputStylePromptConfig {
             name: "explanatory".to_string(),
             content: "Be explanatory.".to_string(),

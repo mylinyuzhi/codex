@@ -99,24 +99,7 @@ pub fn is_read_only_command(command: &str) -> bool {
         "git" => {
             // Only read-only git subcommands are safe for concurrent execution
             let subcommand = trimmed.split_whitespace().nth(1).unwrap_or("");
-            matches!(
-                subcommand,
-                "status"
-                    | "log"
-                    | "diff"
-                    | "show"
-                    | "branch"
-                    | "tag"
-                    | "remote"
-                    | "rev-parse"
-                    | "describe"
-                    | "ls-files"
-                    | "ls-tree"
-                    | "cat-file"
-                    | "config"
-                    | "blame"
-                    | "shortlog"
-            )
+            PLAN_MODE_GIT_SUBCOMMANDS.contains(&subcommand)
         }
         _ => matches!(
             first_word,
@@ -462,10 +445,9 @@ impl Tool for BashTool {
             .as_i64()
             .unwrap_or(DEFAULT_TIMEOUT_SECS * 1000);
         let timeout_secs = (timeout_ms / 1000).min(MAX_TIMEOUT_SECS);
-        let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
-        let _dangerously_disable_sandbox = input["dangerouslyDisableSandbox"]
-            .as_bool()
-            .unwrap_or(false);
+        let run_in_background = super::input_helpers::bool_or(&input, "run_in_background", false);
+        let _dangerously_disable_sandbox =
+            super::input_helpers::bool_or(&input, "dangerouslyDisableSandbox", false);
         // TODO: Pass to shell executor when sandbox mode is implemented
 
         // Emit progress

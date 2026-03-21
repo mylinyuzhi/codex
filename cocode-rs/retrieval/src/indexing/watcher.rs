@@ -262,12 +262,6 @@ impl FileWatcher {
 
         false
     }
-
-    /// Get the ignore service configuration.
-    #[allow(dead_code)]
-    pub fn ignore_config(&self) -> &IgnoreConfig {
-        self.ignore_service.config()
-    }
 }
 
 #[cfg(test)]

@@ -3,12 +3,13 @@ use super::*;
 use cocode_api::AssistantContentPart;
 use cocode_api::ToolCallPart;
 use cocode_message::TrackedMessage;
+use cocode_protocol::ToolName;
 
 /// Helper: create an assistant message containing a single tool_use block.
 fn assistant_with_tool_use(tool_call_id: &str, turn_id: &str) -> TrackedMessage {
     let part = AssistantContentPart::ToolCall(ToolCallPart::new(
         tool_call_id,
-        "Bash",
+        ToolName::Bash.as_str(),
         serde_json::json!({}),
     ));
     cocode_message::create_assistant_message_with_content(vec![part], turn_id, None)
@@ -92,10 +93,16 @@ fn test_filter_mixed_resolved_and_orphaned() {
 
 #[test]
 fn test_filter_multiple_tool_calls_all_resolved() {
-    let part1 =
-        AssistantContentPart::ToolCall(ToolCallPart::new("call-a", "Bash", serde_json::json!({})));
-    let part2 =
-        AssistantContentPart::ToolCall(ToolCallPart::new("call-b", "Read", serde_json::json!({})));
+    let part1 = AssistantContentPart::ToolCall(ToolCallPart::new(
+        "call-a",
+        ToolName::Bash.as_str(),
+        serde_json::json!({}),
+    ));
+    let part2 = AssistantContentPart::ToolCall(ToolCallPart::new(
+        "call-b",
+        ToolName::Read.as_str(),
+        serde_json::json!({}),
+    ));
     let assistant =
         cocode_message::create_assistant_message_with_content(vec![part1, part2], "t1", None);
 
@@ -112,10 +119,16 @@ fn test_filter_multiple_tool_calls_all_resolved() {
 #[test]
 fn test_filter_multiple_tool_calls_partial_orphan() {
     // Assistant has two tool calls but only one has a result
-    let part1 =
-        AssistantContentPart::ToolCall(ToolCallPart::new("call-a", "Bash", serde_json::json!({})));
-    let part2 =
-        AssistantContentPart::ToolCall(ToolCallPart::new("call-b", "Read", serde_json::json!({})));
+    let part1 = AssistantContentPart::ToolCall(ToolCallPart::new(
+        "call-a",
+        ToolName::Bash.as_str(),
+        serde_json::json!({}),
+    ));
+    let part2 = AssistantContentPart::ToolCall(ToolCallPart::new(
+        "call-b",
+        ToolName::Read.as_str(),
+        serde_json::json!({}),
+    ));
     let assistant =
         cocode_message::create_assistant_message_with_content(vec![part1, part2], "t1", None);
 

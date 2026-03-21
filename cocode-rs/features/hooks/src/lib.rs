@@ -27,6 +27,7 @@ pub mod definition;
 pub mod error;
 pub mod event;
 pub mod handlers;
+pub(crate) mod lock_utils;
 pub mod matcher;
 pub mod registry;
 pub mod result;

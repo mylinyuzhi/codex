@@ -58,12 +58,7 @@ impl Tool for TeamDeleteTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let name = input["name"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "name must be a string",
-            }
-            .build()
-        })?;
+        let name = super::input_helpers::require_str(&input, "name")?;
 
         // Check for active non-leader members before deletion
         if let Some(team) = self.store.get_team(name).await {

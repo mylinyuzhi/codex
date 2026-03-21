@@ -264,22 +264,28 @@ impl InterceptorRegistry {
         }
     }
 
-    #[allow(clippy::expect_used)]
     fn register(&self, interceptor: Arc<dyn HttpInterceptor>) {
         let name = interceptor.name().to_string();
-        let mut interceptors = self.interceptors.write().expect("lock poisoned");
+        let mut interceptors = self.interceptors.write().unwrap_or_else(|e| {
+            tracing::warn!("interceptor registry lock poisoned, recovering");
+            e.into_inner()
+        });
         interceptors.insert(name, interceptor);
     }
 
-    #[allow(clippy::expect_used)]
     fn get(&self, name: &str) -> Option<Arc<dyn HttpInterceptor>> {
-        let interceptors = self.interceptors.read().expect("lock poisoned");
+        let interceptors = self.interceptors.read().unwrap_or_else(|e| {
+            tracing::warn!("interceptor registry lock poisoned, recovering");
+            e.into_inner()
+        });
         interceptors.get(name).cloned()
     }
 
-    #[allow(clippy::expect_used)]
     fn list(&self) -> Vec<String> {
-        let interceptors = self.interceptors.read().expect("lock poisoned");
+        let interceptors = self.interceptors.read().unwrap_or_else(|e| {
+            tracing::warn!("interceptor registry lock poisoned, recovering");
+            e.into_inner()
+        });
         interceptors.keys().cloned().collect()
     }
 }

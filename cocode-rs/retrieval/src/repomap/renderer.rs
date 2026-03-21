@@ -30,7 +30,7 @@ impl TreeRenderer {
     }
 
     /// Create a renderer with custom settings.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_options(show_line_numbers: bool, show_signatures: bool) -> Self {
         Self {
             show_line_numbers,

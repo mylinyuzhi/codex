@@ -10,7 +10,6 @@ pub enum Event {
     /// Keyboard input
     Key(KeyEvent),
     /// Terminal resize
-    #[allow(dead_code)]
     Resize(u16, u16),
     /// Tick for periodic updates
     Tick,

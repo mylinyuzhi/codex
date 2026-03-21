@@ -325,10 +325,6 @@ async fn run_agent_driver(
         }
     }
 
-    // Track current correlation ID for turn-related events.
-    #[allow(unused_assignments)]
-    let mut _current_correlation_id: Option<SubmissionId> = None;
-
     let mut turn_counter = 0;
     let mut deferred_commands: Vec<UserCommand> = Vec::new();
     let mut should_shutdown = false;
@@ -368,8 +364,6 @@ async fn run_agent_driver(
                     correlation_id = ?correlation_id.as_ref().map(cocode_protocol::SubmissionId::as_str),
                     "Processing user input"
                 );
-
-                _current_correlation_id = correlation_id.clone();
 
                 turn_counter += 1;
                 let turn_id = format!("turn-{turn_counter}");
@@ -515,8 +509,6 @@ async fn run_agent_driver(
                     handle_local_command_in_driver(&name, &args, &mut state, &event_tx).await;
                     continue;
                 }
-
-                _current_correlation_id = correlation_id.clone();
 
                 let slash_input = if args.is_empty() {
                     format!("/{name}")
@@ -796,8 +788,10 @@ async fn handle_in_flight_command(
             // Push directly to the shared queue — the running AgentLoop
             // will drain it at its next Step 6.5 iteration.
             let id = queue_command_shared(shared_queue, &prompt);
-            #[allow(clippy::unwrap_used)]
-            let count = shared_queue.lock().unwrap().len();
+            let count = shared_queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len();
             info!(
                 prompt_len = prompt.len(),
                 queued_count = count,
@@ -813,10 +807,10 @@ async fn handle_in_flight_command(
                 .await;
         }
         UserCommand::ClearQueues => {
-            #[allow(clippy::unwrap_used)]
-            {
-                shared_queue.lock().unwrap().clear();
-            }
+            shared_queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
             info!("Cleared all queued commands (during turn)");
             let _ = event_tx
                 .send(LoopEvent::QueueStateChanged { queued: 0 })
@@ -869,7 +863,6 @@ async fn handle_in_flight_command(
 }
 
 /// Push a command to the shared queue, returning the assigned ID.
-#[allow(clippy::unwrap_used)]
 fn queue_command_shared(shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>, prompt: &str) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -881,7 +874,10 @@ fn queue_command_shared(shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>, promp
         prompt: prompt.to_string(),
         queued_at: now,
     };
-    shared_queue.lock().unwrap().push(cmd);
+    shared_queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(cmd);
     id
 }
 

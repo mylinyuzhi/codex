@@ -83,12 +83,16 @@ impl AttachmentGenerator for AvailableSkillsGenerator {
         // On the first call, record all current skill names but don't emit
         // (they are already in the system prompt via tool definitions).
         {
-            #[allow(clippy::unwrap_used)]
-            let mut is_initial = self.is_initial.lock().unwrap();
+            let mut is_initial = self
+                .is_initial
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if *is_initial {
                 *is_initial = false;
-                #[allow(clippy::unwrap_used)]
-                let mut sent = self.sent_skill_names.lock().unwrap();
+                let mut sent = self
+                    .sent_skill_names
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 for skill in &ctx.available_skills {
                     sent.insert(skill.name.clone());
                 }
@@ -97,8 +101,10 @@ impl AttachmentGenerator for AvailableSkillsGenerator {
         }
 
         // Compute delta: skills not yet sent
-        #[allow(clippy::unwrap_used)]
-        let mut sent = self.sent_skill_names.lock().unwrap();
+        let mut sent = self
+            .sent_skill_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let new_skills: Vec<&SkillInfo> = ctx
             .available_skills
             .iter()

@@ -92,16 +92,28 @@ pub struct ShellExecutor {
 }
 
 impl std::fmt::Debug for ShellExecutor {
-    #[allow(clippy::unwrap_used)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShellExecutor")
             .field("default_timeout_secs", &self.default_timeout_secs)
-            .field("cwd", &*self.cwd.lock().unwrap())
+            .field(
+                "cwd",
+                &*self
+                    .cwd
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
             .field("background_registry", &self.background_registry)
             .field("shell", &self.shell)
             .field("snapshot_initialized", &self.snapshot_initialized)
             .field("path_extractor", &self.path_extractor.is_some())
-            .field("env_overlay_count", &self.env_overlay.lock().unwrap().len())
+            .field(
+                "env_overlay_count",
+                &self
+                    .env_overlay
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len(),
+            )
             .finish()
     }
 }
@@ -179,9 +191,11 @@ impl ShellExecutor {
     /// alternative to mutating global state via `std::env::set_var`.
     /// Typically called by the hooks bridge after SessionStart hooks produce
     /// env vars from `COCODE_ENV_FILE`.
-    #[allow(clippy::unwrap_used)]
     pub fn add_env_overlay(&self, vars: std::collections::HashMap<String, String>) {
-        let mut overlay = self.env_overlay.lock().unwrap();
+        let mut overlay = self
+            .env_overlay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         overlay.extend(vars);
     }
 
@@ -234,15 +248,19 @@ impl ShellExecutor {
     }
 
     /// Returns the current working directory.
-    #[allow(clippy::unwrap_used)]
     pub fn cwd(&self) -> PathBuf {
-        self.cwd.lock().unwrap().clone()
+        self.cwd
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Updates the working directory.
-    #[allow(clippy::unwrap_used)]
     pub fn set_cwd(&mut self, cwd: PathBuf) {
-        *self.cwd.lock().unwrap() = cwd;
+        *self
+            .cwd
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = cwd;
     }
 
     /// Creates a shell executor for subagent use.
@@ -343,29 +361,13 @@ impl ShellExecutor {
     /// This is similar to `execute()` but also tracks working directory changes.
     /// If the command succeeds and the CWD changed, the executor's internal CWD
     /// is updated to match.
-    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_cwd_tracking(
         &mut self,
         command: &str,
         timeout_secs: i64,
     ) -> CommandResult {
         let result = self.execute(command, timeout_secs).await;
-
-        // Update internal CWD if command succeeded and CWD changed
-        if result.exit_code == 0
-            && let Some(ref new_cwd) = result.new_cwd
-        {
-            let current_cwd = self.cwd.lock().unwrap().clone();
-            if new_cwd.exists() && *new_cwd != current_cwd {
-                tracing::debug!(
-                    "CWD changed: {} -> {}",
-                    current_cwd.display(),
-                    new_cwd.display()
-                );
-                *self.cwd.lock().unwrap() = new_cwd.clone();
-            }
-        }
-
+        self.maybe_update_cwd(&result);
         result
     }
 
@@ -386,7 +388,6 @@ impl ShellExecutor {
     /// # Returns
     ///
     /// A `CommandResult` with `extracted_paths` populated if extraction was performed.
-    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_extraction(&self, command: &str, timeout_secs: i64) -> CommandResult {
         let mut result = self.execute(command, timeout_secs).await;
 
@@ -396,7 +397,7 @@ impl ShellExecutor {
             && let Some(ref extractor) = self.path_extractor
         {
             let extraction_start = Instant::now();
-            let cwd = self.cwd.lock().unwrap().clone();
+            let cwd = self.cwd();
 
             // Truncate output for extraction efficiency
             let output_for_extraction = truncate_for_extraction(&result.stdout);
@@ -437,29 +438,13 @@ impl ShellExecutor {
     ///
     /// Combines the functionality of `execute_with_cwd_tracking` and
     /// `execute_with_extraction` for main agent use cases.
-    #[allow(clippy::unwrap_used)]
     pub async fn execute_with_cwd_tracking_and_extraction(
         &mut self,
         command: &str,
         timeout_secs: i64,
     ) -> CommandResult {
         let result = self.execute_with_extraction(command, timeout_secs).await;
-
-        // Update internal CWD if command succeeded and CWD changed
-        if result.exit_code == 0
-            && let Some(ref new_cwd) = result.new_cwd
-        {
-            let current_cwd = self.cwd.lock().unwrap().clone();
-            if new_cwd.exists() && *new_cwd != current_cwd {
-                tracing::debug!(
-                    "CWD changed: {} -> {}",
-                    current_cwd.display(),
-                    new_cwd.display()
-                );
-                *self.cwd.lock().unwrap() = new_cwd.clone();
-            }
-        }
-
+        self.maybe_update_cwd(&result);
         result
     }
 
@@ -472,7 +457,6 @@ impl ShellExecutor {
     ///
     /// Otherwise the command completes normally and `ExecuteResult::Completed`
     /// is returned with the usual `CommandResult`.
-    #[allow(clippy::unwrap_used)]
     pub async fn execute_backgroundable(
         &self,
         command: &str,
@@ -491,7 +475,7 @@ impl ShellExecutor {
 
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
-        let cwd = self.cwd.lock().unwrap().clone();
+        let cwd = self.cwd();
 
         // Wrap the script to capture CWD after execution
         let wrapped_script = format!(
@@ -508,10 +492,13 @@ impl ShellExecutor {
             .kill_on_drop(true);
 
         // Apply env overlay from SessionStart hooks
-        if let Ok(overlay) = self.env_overlay.lock() {
-            for (key, value) in overlay.iter() {
-                cmd.env(key, value);
-            }
+        for (key, value) in self
+            .env_overlay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            cmd.env(key, value);
         }
 
         let child = cmd.spawn();
@@ -787,7 +774,6 @@ impl ShellExecutor {
     /// Executes a command with backgrounding support and CWD tracking.
     ///
     /// Combines `execute_backgroundable()` with CWD update on completion.
-    #[allow(clippy::unwrap_used)]
     pub async fn execute_backgroundable_with_cwd_tracking(
         &mut self,
         command: &str,
@@ -798,22 +784,35 @@ impl ShellExecutor {
             .execute_backgroundable(command, timeout_secs, signal_id)
             .await;
 
-        if let ExecuteResult::Completed(ref cmd_result) = result
-            && cmd_result.exit_code == 0
-            && let Some(ref new_cwd) = cmd_result.new_cwd
+        if let ExecuteResult::Completed(ref cmd_result) = result {
+            self.maybe_update_cwd(cmd_result);
+        }
+
+        result
+    }
+
+    /// Updates the tracked CWD if a command result indicates a directory change.
+    fn maybe_update_cwd(&self, result: &CommandResult) {
+        if result.exit_code == 0
+            && let Some(ref new_cwd) = result.new_cwd
         {
-            let current_cwd = self.cwd.lock().unwrap().clone();
+            let current_cwd = self
+                .cwd
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             if new_cwd.exists() && *new_cwd != current_cwd {
                 tracing::debug!(
                     "CWD changed: {} -> {}",
                     current_cwd.display(),
                     new_cwd.display()
                 );
-                *self.cwd.lock().unwrap() = new_cwd.clone();
+                *self
+                    .cwd
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = new_cwd.clone();
             }
         }
-
-        result
     }
 
     /// POSIX-only: rewrite login shell commands to source snapshot.
@@ -853,7 +852,6 @@ impl ShellExecutor {
     ///
     /// The command output is captured asynchronously and can be retrieved
     /// via the background registry using the returned task ID.
-    #[allow(clippy::unwrap_used)]
     pub async fn spawn_background(&self, command: &str) -> Result<String, String> {
         let task_id = generate_shell_task_id();
         let output = Arc::new(Mutex::new(String::new()));
@@ -872,7 +870,7 @@ impl ShellExecutor {
             .register(task_id.clone(), process)
             .await;
 
-        let cwd = self.cwd.lock().unwrap().clone();
+        let cwd = self.cwd();
         let registry = self.background_registry.clone();
         let bg_task_id = task_id.clone();
         let shell_args = self.get_shell_args(command);
@@ -880,8 +878,8 @@ impl ShellExecutor {
         let env_overlay_snapshot: std::collections::HashMap<String, String> = self
             .env_overlay
             .lock()
-            .map(|o| o.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         tokio::spawn(async move {
             let mut cmd = tokio::process::Command::new(&shell_args[0]);
@@ -977,11 +975,10 @@ impl ShellExecutor {
     }
 
     /// Internal: runs a command and captures output, tracking CWD changes.
-    #[allow(clippy::unwrap_used)]
     async fn run_command(&self, command: &str) -> CommandResult {
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
-        let cwd = self.cwd.lock().unwrap().clone();
+        let cwd = self.cwd();
 
         // Wrap the script to capture CWD after execution
         let wrapped_script = format!(
@@ -998,10 +995,13 @@ impl ShellExecutor {
             .kill_on_drop(true);
 
         // Apply env overlay from SessionStart hooks
-        if let Ok(overlay) = self.env_overlay.lock() {
-            for (key, value) in overlay.iter() {
-                cmd.env(key, value);
-            }
+        for (key, value) in self
+            .env_overlay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            cmd.env(key, value);
         }
 
         let child = cmd.spawn();

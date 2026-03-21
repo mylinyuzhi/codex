@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_new_coordinator() {
@@ -12,7 +13,7 @@ async fn test_spawn_agent() {
     let config = SpawnConfig {
         model: "claude-3".to_string(),
         prompt: "test".to_string(),
-        tools: vec!["Bash".to_string()],
+        tools: vec![ToolName::Bash.as_str().to_string()],
     };
     let id = coord.spawn_agent(config).await.expect("spawn");
     assert!(!id.is_empty());

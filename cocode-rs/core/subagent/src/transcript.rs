@@ -32,13 +32,14 @@ impl TranscriptRecorder {
 
         let line = serde_json::to_string(entry)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        file.write_all(format!("{line}\n").as_bytes()).await?;
+        file.write_all(line.as_bytes()).await?;
+        file.write_all(b"\n").await?;
         file.flush().await?;
         Ok(())
     }
 
     /// Returns the path to the transcript file.
-    pub fn path(&self) -> &PathBuf {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 

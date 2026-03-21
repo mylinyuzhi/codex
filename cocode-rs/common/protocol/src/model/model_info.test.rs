@@ -1,4 +1,5 @@
 use super::*;
+use crate::ToolName;
 use crate::model::ReasoningEffort;
 
 #[test]
@@ -313,39 +314,51 @@ fn test_max_tool_output_chars_serde() {
 #[test]
 fn test_merge_excluded_tools_replaces() {
     let mut base = ModelInfo {
-        excluded_tools: Some(vec!["Edit".to_string()]),
+        excluded_tools: Some(vec![ToolName::Edit.as_str().to_string()]),
         ..Default::default()
     };
 
     let other = ModelInfo {
-        excluded_tools: Some(vec!["Write".to_string(), "Read".to_string()]),
+        excluded_tools: Some(vec![
+            ToolName::Write.as_str().to_string(),
+            ToolName::Read.as_str().to_string(),
+        ]),
         ..Default::default()
     };
 
     base.merge_from(&other);
     assert_eq!(
         base.excluded_tools,
-        Some(vec!["Write".to_string(), "Read".to_string()])
+        Some(vec![
+            ToolName::Write.as_str().to_string(),
+            ToolName::Read.as_str().to_string()
+        ])
     );
 }
 
 #[test]
 fn test_merge_excluded_tools_none_preserves() {
     let mut base = ModelInfo {
-        excluded_tools: Some(vec!["Edit".to_string()]),
+        excluded_tools: Some(vec![ToolName::Edit.as_str().to_string()]),
         ..Default::default()
     };
 
     let other = ModelInfo::default();
     base.merge_from(&other);
-    assert_eq!(base.excluded_tools, Some(vec!["Edit".to_string()]));
+    assert_eq!(
+        base.excluded_tools,
+        Some(vec![ToolName::Edit.as_str().to_string()])
+    );
 }
 
 #[test]
 fn test_excluded_tools_serde() {
     let config = ModelInfo {
         slug: "test-model".to_string(),
-        excluded_tools: Some(vec!["Edit".to_string(), "Write".to_string()]),
+        excluded_tools: Some(vec![
+            ToolName::Edit.as_str().to_string(),
+            ToolName::Write.as_str().to_string(),
+        ]),
         ..Default::default()
     };
 
@@ -354,6 +367,9 @@ fn test_excluded_tools_serde() {
     let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(
         parsed.excluded_tools,
-        Some(vec!["Edit".to_string(), "Write".to_string()])
+        Some(vec![
+            ToolName::Edit.as_str().to_string(),
+            ToolName::Write.as_str().to_string()
+        ])
     );
 }

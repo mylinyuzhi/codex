@@ -2,6 +2,7 @@ use super::*;
 use cocode_api::AssistantContentPart;
 use cocode_config::json_config::ExtraMarketplaceConfig;
 use cocode_config::json_config::MarketplaceSourceConfig;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_turn_result_from_loop_result() {
@@ -246,7 +247,7 @@ fn test_rebuild_file_tracker_from_modifiers() {
     ];
 
     // Build from modifiers
-    let tool_calls = vec![("Read", modifiers.as_slice(), 1, true)];
+    let tool_calls = vec![(ToolName::Read.as_str(), modifiers.as_slice(), 1, true)];
     let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
 
     assert_eq!(state.len(), 2);
@@ -294,8 +295,8 @@ fn test_file_tracker_state_prefers_newer_turns() {
     }];
 
     let tool_calls = vec![
-        ("Read", modifiers1.as_slice(), 1, true),
-        ("Read", modifiers2.as_slice(), 2, true),
+        (ToolName::Read.as_str(), modifiers1.as_slice(), 1, true),
+        (ToolName::Read.as_str(), modifiers2.as_slice(), 2, true),
     ];
 
     let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
