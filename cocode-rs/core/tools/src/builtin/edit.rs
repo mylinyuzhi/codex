@@ -68,8 +68,8 @@ impl EditTool {
             .build());
         }
 
-        // Plan mode check
-        if !ctx.plan_mode_allows_write(path) {
+        // Plan mode check (auto-memory paths bypass plan mode restrictions)
+        if !ctx.auto_memory_allows_write(path) && !ctx.plan_mode_allows_write(path) {
             return Err(crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!(
                     "Plan mode: cannot create '{}'. Only the plan file can be modified during plan mode.",
@@ -195,6 +195,11 @@ impl Tool for EditTool {
                         path.display()
                     ),
                 };
+            }
+
+            // Auto-allow auto memory file writes (even in plan mode)
+            if ctx.auto_memory_allows_write(&path) {
+                return PermissionResult::Allowed;
             }
 
             // Plan mode: only plan file allowed
@@ -334,8 +339,8 @@ impl Tool for EditTool {
             .build());
         }
 
-        // Plan mode check
-        if !ctx.plan_mode_allows_write(&path) {
+        // Plan mode check (auto-memory paths bypass plan mode restrictions)
+        if !ctx.auto_memory_allows_write(&path) && !ctx.plan_mode_allows_write(&path) {
             return Err(crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!(
                     "Plan mode: cannot edit '{}'. Only the plan file can be modified during plan mode.",

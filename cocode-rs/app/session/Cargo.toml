@@ -29,6 +29,8 @@ cocode-plugin.workspace = true
 cocode-skill.workspace = true
 cocode-subagent.workspace = true
 cocode-system-reminder.workspace = true
+cocode-auto-memory.workspace = true
+cocode-team.workspace = true
 
 # Internal - standalone
 cocode-lsp.workspace = true

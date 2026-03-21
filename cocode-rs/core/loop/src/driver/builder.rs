@@ -57,6 +57,9 @@ pub struct AgentLoopBuilder {
     custom_system_prompt: Option<String>,
     system_prompt_suffix: Option<String>,
     plan_mode_state: Option<cocode_plan_mode::PlanModeState>,
+    auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+    team_store: Option<Arc<cocode_team::TeamStore>>,
+    team_mailbox: Option<Arc<cocode_team::Mailbox>>,
     shell_executor: Option<ShellExecutor>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
@@ -113,6 +116,9 @@ impl AgentLoopBuilder {
             custom_system_prompt: None,
             system_prompt_suffix: None,
             plan_mode_state: None,
+            auto_memory_state: None,
+            team_store: None,
+            team_mailbox: None,
             shell_executor: None,
             spawn_agent_fn: None,
             skill_manager: None,
@@ -207,6 +213,24 @@ impl AgentLoopBuilder {
     /// Set initial plan mode state (for session resumption).
     pub fn plan_mode_state(mut self, state: cocode_plan_mode::PlanModeState) -> Self {
         self.plan_mode_state = Some(state);
+        self
+    }
+
+    /// Set the auto memory state.
+    pub fn auto_memory_state(mut self, state: Arc<cocode_auto_memory::AutoMemoryState>) -> Self {
+        self.auto_memory_state = Some(state);
+        self
+    }
+
+    /// Set the team store for querying team membership.
+    pub fn team_store(mut self, store: Arc<cocode_team::TeamStore>) -> Self {
+        self.team_store = Some(store);
+        self
+    }
+
+    /// Set the team mailbox for querying unread messages.
+    pub fn team_mailbox(mut self, mailbox: Arc<cocode_team::Mailbox>) -> Self {
+        self.team_mailbox = Some(mailbox);
         self
     }
 
@@ -451,6 +475,9 @@ impl AgentLoopBuilder {
             // Initially true - the first turn always has user input
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
+            auto_memory_state: self.auto_memory_state,
+            team_store: self.team_store,
+            team_mailbox: self.team_mailbox,
             shell_executor,
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
@@ -460,6 +487,7 @@ impl AgentLoopBuilder {
             current_todos: None,
             current_structured_tasks: None,
             current_cron_jobs: None,
+            delegate_mode: false,
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,

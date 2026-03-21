@@ -1219,7 +1219,15 @@ fn render_rewind_selector_overlay(
             for (i, cp) in display_items.iter().enumerate() {
                 let is_selected = i as i32 == rw.selected;
                 let prefix = if is_selected { "▸ " } else { "  " };
-                let file_info = if cp.file_count > 0 {
+                let file_info = if let Some(ref ds) = cp.diff_stats {
+                    format!(
+                        " ({} {}, +{} -{})",
+                        cp.file_count,
+                        t!("dialog.rewind_files"),
+                        ds.insertions,
+                        ds.deletions
+                    )
+                } else if cp.file_count > 0 {
                     format!(" ({} {})", cp.file_count, t!("dialog.rewind_files"))
                 } else {
                     String::new()

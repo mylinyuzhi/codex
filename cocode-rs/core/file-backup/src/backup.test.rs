@@ -166,3 +166,53 @@ async fn test_backup_preserves_file_permissions() {
     let meta = tokio::fs::metadata(&file).await.unwrap();
     assert_eq!(meta.permissions().mode(), 0o100755);
 }
+
+#[tokio::test]
+async fn test_file_needs_restore_size_mismatch() {
+    let tmp = TempDir::new().unwrap();
+    let store = FileBackupStore::with_dir(tmp.path().join("backups"))
+        .await
+        .unwrap();
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"short").await.unwrap();
+
+    store.set_current_turn("turn-1").await;
+    store.backup_before_modify(&file).await.unwrap();
+
+    // Write content with different length — size tier should catch it
+    tokio::fs::write(&file, b"this is much longer content")
+        .await
+        .unwrap();
+
+    // Restore should detect the size mismatch and restore
+    let restored = store.restore_turn("turn-1").await.unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(tokio::fs::read_to_string(&file).await.unwrap(), "short");
+}
+
+#[tokio::test]
+async fn test_file_needs_restore_hash_match_skips() {
+    let tmp = TempDir::new().unwrap();
+    let store = FileBackupStore::with_dir(tmp.path().join("backups"))
+        .await
+        .unwrap();
+
+    let file = tmp.path().join("test.txt");
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    store.set_current_turn("turn-1").await;
+    store.backup_before_modify(&file).await.unwrap();
+
+    // Modify, then revert to original content before restore
+    tokio::fs::write(&file, b"modified").await.unwrap();
+    tokio::fs::write(&file, b"original").await.unwrap();
+
+    // Restore should detect the hash match and skip the write.
+    // The file is already "original" so no restore happens → empty list.
+    let restored = store.restore_turn("turn-1").await.unwrap();
+    assert!(
+        restored.is_empty(),
+        "Should skip restore when content hash matches"
+    );
+}

@@ -95,6 +95,12 @@ pub enum Feature {
     /// Enable background task execution (Task tool's `run_in_background` parameter).
     /// When disabled, all tasks run in the foreground regardless of the parameter.
     BackgroundTasks,
+    /// Enable auto memory (MEMORY.md per-project persistence).
+    AutoMemory,
+    /// Enable relevant memories system reminder (semantic search).
+    RelevantMemories,
+    /// Enable background memory extraction agent.
+    MemoryExtraction,
 }
 
 impl Feature {
@@ -320,6 +326,24 @@ const FEATURES: &[FeatureSpec] = &[
         key: "background_tasks",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AutoMemory,
+        key: "auto_memory",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RelevantMemories,
+        key: "relevant_memories",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MemoryExtraction,
+        key: "memory_extraction",
+        stage: Stage::Experimental,
+        default_enabled: false,
     },
 ];
 

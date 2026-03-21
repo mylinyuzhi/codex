@@ -123,6 +123,12 @@ pub enum AttachmentType {
     /// Cron job state reminders (survives compaction).
     CronReminders,
 
+    // === Team context (Core tier) ===
+    /// Team identity and member list for teammates.
+    TeamContext,
+    /// Unread mailbox messages for teammates.
+    TeamMailbox,
+
     // === Phase 2 (future) ===
     /// Tool result injection.
     ToolResult,
@@ -150,6 +156,12 @@ pub enum AttachmentType {
     // === Compaction reminder ===
     /// Reminder that auto-compact is enabled (prevents "context anxiety").
     CompactionReminder,
+
+    // === Auto memory ===
+    /// Auto memory prompt (MEMORY.md instructions + content).
+    AutoMemoryPrompt,
+    /// Relevant memory files from semantic search.
+    RelevantMemories,
 }
 
 impl AttachmentType {
@@ -186,7 +198,11 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
-            | AttachmentType::CompactionReminder => XmlTag::SystemReminder,
+            | AttachmentType::TeamContext
+            | AttachmentType::TeamMailbox
+            | AttachmentType::CompactionReminder
+            | AttachmentType::AutoMemoryPrompt
+            | AttachmentType::RelevantMemories => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -210,7 +226,10 @@ impl AttachmentType {
             | AttachmentType::PlanToolReminder
             | AttachmentType::PlanModeExit
             | AttachmentType::CriticalInstruction
-            | AttachmentType::NestedMemory => ReminderTier::Core,
+            | AttachmentType::NestedMemory
+            | AttachmentType::TeamContext
+            | AttachmentType::TeamMailbox
+            | AttachmentType::AutoMemoryPrompt => ReminderTier::Core,
 
             // MainAgentOnly tier
             AttachmentType::AvailableSkills
@@ -234,7 +253,8 @@ impl AttachmentType {
             | AttachmentType::AlreadyReadFile
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
-            | AttachmentType::CompactionReminder => ReminderTier::MainAgentOnly,
+            | AttachmentType::CompactionReminder
+            | AttachmentType::RelevantMemories => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
@@ -277,8 +297,12 @@ impl AttachmentType {
             AttachmentType::BudgetUsd => "budget_usd",
             AttachmentType::AlreadyReadFile => "already_read_file",
             AttachmentType::CompactFileReference => "compact_file_reference",
+            AttachmentType::TeamContext => "team_context",
+            AttachmentType::TeamMailbox => "team_mailbox",
             AttachmentType::Rewind => "rewind",
             AttachmentType::CompactionReminder => "compaction_reminder",
+            AttachmentType::AutoMemoryPrompt => "auto_memory_prompt",
+            AttachmentType::RelevantMemories => "relevant_memories",
         }
     }
 }

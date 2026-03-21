@@ -225,6 +225,11 @@ impl FileBackupStore {
     }
 
     /// Restore all files modified during the given turn to their pre-modification state.
+    ///
+    /// Uses multi-tier comparison to skip files that already match their backup state:
+    /// 1. Existence check — detect created/deleted files
+    /// 2. Size comparison — different sizes guarantee different content
+    /// 3. Content hash comparison — definitive check using stored SHA256
     pub async fn restore_turn(&self, turn_id: &str) -> Result<Vec<PathBuf>> {
         let idx = self.index.lock().await;
         let entries = match idx.turns.get(turn_id) {
@@ -238,35 +243,41 @@ impl FileBackupStore {
             if entry.existed_before {
                 // Restore from backup blob
                 let blob_path = self.backup_dir.join(&entry.backup_filename);
-                if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
-                    let blob_content =
-                        tokio::fs::read(&blob_path)
-                            .await
-                            .context(file_backup_error::IoSnafu {
-                                message: "reading backup blob".to_string(),
-                            })?;
-                    tokio::fs::write(&entry.original_path, blob_content)
-                        .await
-                        .context(file_backup_error::IoSnafu {
-                            message: "restoring file from backup".to_string(),
-                        })?;
-                    // Restore file permissions if stored
-                    #[cfg(unix)]
-                    if let Some(mode) = entry.file_mode {
-                        use std::os::unix::fs::PermissionsExt;
-                        let perms = std::fs::Permissions::from_mode(mode);
-                        tokio::fs::set_permissions(&entry.original_path, perms)
-                            .await
-                            .ok();
-                    }
-                    restored.push(entry.original_path.clone());
-                } else {
+                if !tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
                     tracing::warn!(
                         path = %entry.original_path.display(),
                         blob = %entry.backup_filename,
                         "Backup blob missing, cannot restore file"
                     );
+                    continue;
                 }
+
+                // Multi-tier check: skip restore if file already matches backup.
+                if !Self::file_needs_restore(&entry.original_path, entry, &self.backup_dir).await {
+                    continue;
+                }
+
+                let blob_content =
+                    tokio::fs::read(&blob_path)
+                        .await
+                        .context(file_backup_error::IoSnafu {
+                            message: "reading backup blob".to_string(),
+                        })?;
+                tokio::fs::write(&entry.original_path, blob_content)
+                    .await
+                    .context(file_backup_error::IoSnafu {
+                        message: "restoring file from backup".to_string(),
+                    })?;
+                // Restore file permissions if stored
+                #[cfg(unix)]
+                if let Some(mode) = entry.file_mode {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(mode);
+                    tokio::fs::set_permissions(&entry.original_path, perms)
+                        .await
+                        .ok();
+                }
+                restored.push(entry.original_path.clone());
             } else {
                 // File was newly created - delete it
                 if tokio::fs::try_exists(&entry.original_path)
@@ -279,6 +290,94 @@ impl FileBackupStore {
             }
         }
         Ok(restored)
+    }
+
+    /// Restore a single backup entry to its original path.
+    ///
+    /// Returns `true` if the file was actually modified on disk.
+    /// Uses the same multi-tier comparison as `restore_turn`.
+    pub async fn restore_entry(&self, entry: &BackupEntry) -> Result<bool> {
+        if entry.existed_before {
+            let blob_path = self.backup_dir.join(&entry.backup_filename);
+            if !tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
+                tracing::warn!(
+                    path = %entry.original_path.display(),
+                    blob = %entry.backup_filename,
+                    "Backup blob missing, cannot restore file"
+                );
+                return Ok(false);
+            }
+
+            if !Self::file_needs_restore(&entry.original_path, entry, &self.backup_dir).await {
+                return Ok(false);
+            }
+
+            let blob_content =
+                tokio::fs::read(&blob_path)
+                    .await
+                    .context(file_backup_error::IoSnafu {
+                        message: "reading backup blob".to_string(),
+                    })?;
+            tokio::fs::write(&entry.original_path, blob_content)
+                .await
+                .context(file_backup_error::IoSnafu {
+                    message: "restoring file from backup".to_string(),
+                })?;
+            #[cfg(unix)]
+            if let Some(mode) = entry.file_mode {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(mode);
+                tokio::fs::set_permissions(&entry.original_path, perms)
+                    .await
+                    .ok();
+            }
+            Ok(true)
+        } else {
+            // File was newly created — delete it.
+            if tokio::fs::try_exists(&entry.original_path)
+                .await
+                .unwrap_or(false)
+            {
+                tokio::fs::remove_file(&entry.original_path).await.ok();
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    /// Multi-tier check whether a file needs restoration from backup.
+    ///
+    /// Tiers (cheapest first):
+    /// 1. Existence — if file doesn't exist on disk, it needs restore.
+    /// 2. Size — if sizes differ, content must differ.
+    /// 3. Content hash — definitive SHA256 comparison.
+    async fn file_needs_restore(original: &Path, entry: &BackupEntry, backup_dir: &Path) -> bool {
+        // Tier 1: existence
+        let Ok(orig_meta) = tokio::fs::metadata(original).await else {
+            return true; // File doesn't exist — needs restore
+        };
+
+        // Tier 2: size comparison
+        let blob_path = backup_dir.join(&entry.backup_filename);
+        let Ok(backup_meta) = tokio::fs::metadata(&blob_path).await else {
+            return true; // Can't stat backup — assume needs restore
+        };
+        if orig_meta.len() != backup_meta.len() {
+            return true;
+        }
+
+        // Tier 3: content hash comparison (avoids reading both files when hash matches)
+        if !entry.content_hash.is_empty() {
+            let Ok(content) = tokio::fs::read(original).await else {
+                return true;
+            };
+            let current_hash = hex_sha256(&content);
+            return current_hash != entry.content_hash;
+        }
+
+        // No stored hash — conservative: assume needs restore
+        true
     }
 
     /// Get backup entries for a specific turn.
@@ -327,11 +426,23 @@ impl FileBackupStore {
         self.save_index_locked(&idx).await;
     }
 
+    /// Get the backup directory path (used by SnapshotManager for dry-run diff).
+    pub fn backup_dir(&self) -> &Path {
+        &self.backup_dir
+    }
+
     /// Persist the index to disk.
     async fn save_index_locked(&self, idx: &BackupIndex) {
         let index_path = self.backup_dir.join("index.json");
-        if let Ok(json) = serde_json::to_string_pretty(idx) {
-            let _ = tokio::fs::write(&index_path, json).await;
+        match serde_json::to_string_pretty(idx) {
+            Ok(json) => {
+                if let Err(e) = tokio::fs::write(&index_path, json).await {
+                    tracing::warn!("Failed to persist backup index: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize backup index: {e}");
+            }
         }
     }
 

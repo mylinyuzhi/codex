@@ -23,6 +23,7 @@ use cocode_loop::LoopResult;
 use cocode_loop::StopReason;
 use cocode_message::MessageHistory;
 use cocode_plan_mode::PlanModeState;
+use cocode_protocol::Feature;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::ProviderType;
@@ -316,6 +317,15 @@ pub struct SessionState {
     /// `collect_background_agent_tasks()` checks this set to report the agent
     /// as `Killed` rather than `Failed`.
     killed_agents: cocode_tools::context::KilledAgents,
+
+    /// Auto memory state for the session (persists across turns).
+    auto_memory_state: Arc<cocode_auto_memory::AutoMemoryState>,
+
+    /// Team store for querying team membership.
+    team_store: Arc<cocode_team::TeamStore>,
+
+    /// Team mailbox for querying unread messages.
+    team_mailbox: Arc<cocode_team::Mailbox>,
 }
 
 impl SessionState {
@@ -361,10 +371,30 @@ impl SessionState {
         // Create ModelHub with Config snapshot (role-agnostic, just for model caching)
         let model_hub = Arc::new(ModelHub::new(config.clone()));
 
+        // Create team stores and load persisted state from disk
+        let (team_store, team_mailbox) = cocode_tools::builtin::create_default_team_stores();
+        if let Err(e) = team_store.load_from_disk().await {
+            tracing::warn!(error = %e, "Failed to load persisted teams from disk");
+        }
+
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
-        let builtin_stores =
-            cocode_tools::builtin::register_builtin_tools(&mut tool_registry, &config.features);
+        let builtin_stores = cocode_tools::builtin::register_builtin_tools(
+            &mut tool_registry,
+            &config.features,
+            Arc::clone(&team_store),
+            Arc::clone(&team_mailbox),
+        );
+
+        // Resolve auto memory configuration and create session state
+        let resolved_auto_memory = cocode_auto_memory::resolve_auto_memory_config(
+            &session.working_dir,
+            &config.auto_memory_config,
+            config.features.enabled(Feature::AutoMemory),
+            config.features.enabled(Feature::RelevantMemories),
+            config.features.enabled(Feature::MemoryExtraction),
+        );
+        let auto_memory_state = cocode_auto_memory::AutoMemoryState::new_arc(resolved_auto_memory);
 
         // Load durable cron jobs from disk and merge into the shared store
         if let Ok(durable_jobs) =
@@ -449,8 +479,9 @@ impl SessionState {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .map(std::time::Duration::from_secs);
-        let mut subagent_manager =
-            SubagentManager::new().with_auto_background_timeout(auto_background_timeout);
+        let mut subagent_manager = SubagentManager::new()
+            .with_auto_background_timeout(auto_background_timeout)
+            .with_auto_memory_state(Arc::clone(&auto_memory_state));
         let mut agent_defs =
             cocode_subagent::all_agents(&config.cocode_home, Some(session.working_dir.as_path()));
 
@@ -728,6 +759,9 @@ impl SessionState {
             )),
             reminder_file_tracker_state: Vec::new(),
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            auto_memory_state,
+            team_store,
+            team_mailbox,
         });
 
         // Clean up orphaned worktrees at session startup (Gap 8 fix)
@@ -948,7 +982,10 @@ impl SessionState {
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
         .cocode_home(self.config.cocode_home.clone())
-        .killed_agents(self.killed_agents.clone());
+        .killed_agents(self.killed_agents.clone())
+        .auto_memory_state(Arc::clone(&self.auto_memory_state))
+        .team_store(Arc::clone(&self.team_store))
+        .team_mailbox(Arc::clone(&self.team_mailbox));
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -1852,14 +1889,12 @@ impl SessionState {
     /// Apply rewind mode to conversation state.
     ///
     /// Handles the three rewind modes:
-    /// - `CodeAndConversation`: Truncate history, restore files, rebuild todos/tracker
-    /// - `ConversationOnly`: Truncate history, keep files, rebuild todos/tracker
-    /// - `CodeOnly`: Keep history, restore files, rebuild tracker from retained history
+    /// - `CodeAndConversation`: Truncate history, rebuild todos/tracker
+    /// - `ConversationOnly`: Truncate history only, rebuild todos/tracker
+    /// - `CodeOnly`: Keep history, rebuild file tracker from retained history
     ///
-    /// # Arguments
-    ///
-    /// * `rewound_turn` - The turn number to rewind to
-    /// * `mode` - The rewind mode
+    /// File restoration is handled externally by `SnapshotManager` before
+    /// this method is called. This method only manages conversation state.
     ///
     /// # Returns
     ///
@@ -1873,21 +1908,17 @@ impl SessionState {
     ) -> (i32, Option<String>) {
         match mode {
             cocode_protocol::RewindMode::CodeAndConversation => {
-                // Truncate history and restore files
-                let restored_files = self.restore_files_from_turn(rewound_turn);
                 let (messages_removed, restored_prompt) =
                     self.rewind_conversation_state_from_turn(rewound_turn);
                 tracing::debug!(
                     rewound_turn,
                     messages_removed,
-                    restored_files,
                     has_prompt = restored_prompt.is_some(),
                     "Applied CodeAndConversation rewind"
                 );
                 (messages_removed, restored_prompt)
             }
             cocode_protocol::RewindMode::ConversationOnly => {
-                // Truncate history but keep files
                 let (messages_removed, restored_prompt) =
                     self.rewind_conversation_state_from_turn(rewound_turn);
                 tracing::debug!(
@@ -1899,8 +1930,7 @@ impl SessionState {
                 (messages_removed, restored_prompt)
             }
             cocode_protocol::RewindMode::CodeOnly => {
-                // Keep history but restore files and rebuild tracker
-                let _restored_files = self.restore_files_from_turn(rewound_turn);
+                // Keep history but rebuild tracker from retained history
                 self.rebuild_reminder_file_tracker_from_history();
                 tracing::debug!(rewound_turn, "Applied CodeOnly rewind");
                 (0, None)
@@ -1917,15 +1947,6 @@ impl SessionState {
         before - self.message_history.turn_count()
     }
 
-    /// Restore files from a specific turn using snapshot manager.
-    ///
-    /// Returns the number of files restored.
-    fn restore_files_from_turn(&mut self, _from_turn: i32) -> i32 {
-        // File restoration is handled by the snapshot manager in tui_runner
-        // This method is a placeholder for session-level restoration logic
-        0
-    }
-
     /// Rebuild todos from retained message history.
     ///
     /// Scans through the message history for TodoWrite/TodoUpdate tool calls
@@ -1937,15 +1958,17 @@ impl SessionState {
 
     /// Reconstruct todos from message history by finding the most recent TodoWrite result.
     ///
-    /// Walks turns in reverse to find the most recent TodoWrite/TodoUpdate tool call
+    /// Walks turns in reverse to find the most recent TodoWrite tool call
     /// with a successful output, then parses and returns the todo list.
     fn reconstruct_todos_from_history(&self) -> serde_json::Value {
         use cocode_protocol::ToolResultContent;
 
-        // Walk turns in reverse to find the most recent TodoWrite/TodoUpdate result
+        let todo_write_name = cocode_protocol::ToolName::TodoWrite.as_str();
+
+        // Walk turns in reverse to find the most recent TodoWrite result
         for turn in self.message_history.turns().iter().rev() {
             for tc in &turn.tool_calls {
-                if tc.name == "TodoWrite" || tc.name == "TodoUpdate" {
+                if tc.name == todo_write_name {
                     if let Some(ref output) = tc.output {
                         match output {
                             ToolResultContent::Text(text) => {
@@ -2150,6 +2173,8 @@ impl SessionState {
         let lsp_manager = self.lsp_manager.clone();
         let selections = self.session.selections.clone();
         let message_history = self.message_history.clone();
+        let team_store = Arc::clone(&self.team_store);
+        let team_mailbox = Arc::clone(&self.team_mailbox);
 
         Box::new(move |params: AgentExecuteParams| {
             let api_client = api_client.clone();
@@ -2168,6 +2193,8 @@ impl SessionState {
             let selections = selections.clone();
             let message_history = message_history.clone();
             let parent_event_tx = parent_event_tx.clone();
+            let team_store = team_store.clone();
+            let team_mailbox = team_mailbox.clone();
 
             Box::pin(async move {
                 // ── CWD override from spawn input ──────────────────────
@@ -2468,8 +2495,15 @@ impl SessionState {
                 .lsp_manager(lsp_manager)
                 .is_subagent(true)
                 .task_type_restrictions(params.task_type_restrictions)
-                .cocode_home(cocode_home.clone());
+                .cocode_home(cocode_home.clone())
+                .team_store(team_store.clone())
+                .team_mailbox(team_mailbox.clone());
                 // NO .spawn_agent_fn() — prevents infinite recursion
+
+                // Wire auto memory from parent into child loop
+                if let Some(ref state) = params.auto_memory_state {
+                    builder = builder.auto_memory_state(Arc::clone(state));
+                }
 
                 // Apply custom system prompt if the agent definition requested it
                 if let Some(ref custom_prompt) = params.custom_system_prompt {
@@ -2498,7 +2532,7 @@ impl SessionState {
                     parent_agent_id: parent_id,
                     depth: parent_depth + 1,
                     name: params.name.clone(),
-                    team_name: None,
+                    team_name: params.team_name.clone(),
                     color: params.color.clone(),
                     plan_mode_required: params.plan_mode_required,
                 };
@@ -2797,7 +2831,10 @@ impl SessionState {
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
         .cocode_home(self.config.cocode_home.clone())
-        .killed_agents(self.killed_agents.clone());
+        .killed_agents(self.killed_agents.clone())
+        .auto_memory_state(Arc::clone(&self.auto_memory_state))
+        .team_store(Arc::clone(&self.team_store))
+        .team_mailbox(Arc::clone(&self.team_mailbox));
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {

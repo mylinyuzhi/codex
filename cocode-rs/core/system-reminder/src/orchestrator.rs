@@ -16,6 +16,7 @@ use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
 use crate::generators::AgentMentionsGenerator;
 use crate::generators::AtMentionedFilesGenerator;
+use crate::generators::AutoMemoryPromptGenerator;
 use crate::generators::AvailableSkillsGenerator;
 use crate::generators::BudgetUsdGenerator;
 use crate::generators::ChangedFilesGenerator;
@@ -34,9 +35,12 @@ use crate::generators::PlanModeExitGenerator;
 use crate::generators::PlanToolReminderGenerator;
 use crate::generators::PlanVerificationGenerator;
 use crate::generators::QueuedCommandsGenerator;
+use crate::generators::RelevantMemoriesGenerator;
 use crate::generators::RewindReminderGenerator;
 use crate::generators::SecurityGuidelinesGenerator;
 use crate::generators::SubagentPlanReminderGenerator;
+use crate::generators::TeamContextGenerator;
+use crate::generators::TeamMailboxGenerator;
 use crate::generators::TodoRemindersGenerator;
 use crate::generators::TokenUsageGenerator;
 use crate::generators::UnifiedTasksGenerator;
@@ -102,6 +106,8 @@ impl SystemReminderOrchestrator {
             Arc::new(PlanFileReferenceGenerator),
             Arc::new(SubagentPlanReminderGenerator),
             Arc::new(NestedMemoryGenerator),
+            Arc::new(TeamContextGenerator),
+            Arc::new(TeamMailboxGenerator),
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator::new()),
             Arc::new(LspDiagnosticsGenerator),
@@ -119,6 +125,9 @@ impl SystemReminderOrchestrator {
             Arc::new(CompactFileReferenceGenerator),
             Arc::new(CompactionReminderGenerator),
             Arc::new(RewindReminderGenerator),
+            // Auto memory generators
+            Arc::new(AutoMemoryPromptGenerator),
+            Arc::new(RelevantMemoriesGenerator),
             // UserPrompt tier
             Arc::new(AtMentionedFilesGenerator),
             Arc::new(AgentMentionsGenerator),
@@ -151,7 +160,7 @@ impl SystemReminderOrchestrator {
 
         // Pre-compute full-content flags for generators that have full_content_every_n
         for g in &self.generators {
-            let config = g.throttle_config();
+            let config = g.throttle_config_for_context(&ctx);
             if config.full_content_every_n.is_some() {
                 let is_full = self
                     .throttle_manager
@@ -262,8 +271,8 @@ impl SystemReminderOrchestrator {
             }
         }
 
-        // Check throttle
-        let throttle_config = generator.throttle_config();
+        // Check throttle (use context-aware config so user-configurable values apply)
+        let throttle_config = generator.throttle_config_for_context(ctx);
         if !self.throttle_manager.should_generate(
             generator.attachment_type(),
             &throttle_config,

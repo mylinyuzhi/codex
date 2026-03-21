@@ -52,6 +52,9 @@ use cocode_system_reminder::SkillInfo;
 use cocode_system_reminder::StructuredTaskInfo;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::create_injected_messages;
+use cocode_system_reminder::generator::TeamContextData;
+use cocode_system_reminder::generator::TeamMemberInfo;
+use cocode_system_reminder::generator::UnreadMessage;
 use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
@@ -177,6 +180,16 @@ pub struct AgentLoop {
     /// Plan mode state for the session.
     plan_mode_state: PlanModeState,
 
+    // Auto memory
+    /// Auto memory state for the session.
+    auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+
+    // Team collaboration
+    /// Team store for querying team membership each turn.
+    team_store: Option<Arc<cocode_team::TeamStore>>,
+    /// Team mailbox for querying unread messages each turn.
+    team_mailbox: Option<Arc<cocode_team::Mailbox>>,
+
     // Subagent spawning
     /// Shell executor for command execution and background tasks.
     shell_executor: ShellExecutor,
@@ -214,6 +227,10 @@ pub struct AgentLoop {
     // Cron job state (updated by CronCreate/CronDelete via ContextModifier)
     /// Latest cron jobs snapshot.
     current_cron_jobs: Option<serde_json::Value>,
+
+    // Delegate mode (updated by ContextModifier::DelegateModeChanged)
+    /// Whether the main agent is in delegate mode (coordination-only tools).
+    delegate_mode: bool,
 
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
@@ -585,6 +602,11 @@ impl AgentLoop {
         query_tracking: &mut QueryTracking,
         auto_compact_tracking: &mut AutoCompactTracking,
     ) -> crate::error::Result<LoopResult> {
+        // ── STEP 0.5: Refresh auto memory from disk (always fresh) ──
+        if let Some(ref state) = self.auto_memory_state {
+            state.refresh().await;
+        }
+
         // ── STEP 1: Signal stream_request_start ──
         self.emit(LoopEvent::StreamRequestStart).await;
 
@@ -1270,6 +1292,57 @@ impl AgentLoop {
                 })
                 .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
 
+            // Wire auto memory state into generator context
+            if let Some(ref state) = self.auto_memory_state {
+                builder = builder.auto_memory_state(Arc::clone(state));
+            }
+
+            // Wire team context and unread messages into generator context
+            if let (Some(store), Some(mbox)) = (&self.team_store, &self.team_mailbox) {
+                if let Some(identity) = cocode_subagent::current_agent() {
+                    if let Some(ref team_name) = identity.team_name {
+                        // Query team membership
+                        if let Some(team) = store.get_team(team_name).await {
+                            builder = builder.team_context(TeamContextData {
+                                agent_id: identity.agent_id.clone(),
+                                agent_name: identity.name.clone(),
+                                team_name: team_name.clone(),
+                                agent_type: identity.agent_type.clone(),
+                                members: team
+                                    .members
+                                    .iter()
+                                    .map(|m| TeamMemberInfo {
+                                        agent_id: m.agent_id.clone(),
+                                        name: m.name.clone(),
+                                        agent_type: m.agent_type.clone(),
+                                        status: m.status.as_str().to_string(),
+                                    })
+                                    .collect(),
+                            });
+                        }
+
+                        // Query unread messages and mark as read in a single file operation
+                        if let Ok(messages) = mbox.take_unread(team_name, &identity.agent_id).await
+                        {
+                            if !messages.is_empty() {
+                                builder = builder.unread_messages(
+                                    messages
+                                        .into_iter()
+                                        .map(|m| UnreadMessage {
+                                            id: m.id,
+                                            from: m.from,
+                                            content: m.content,
+                                            message_type: m.message_type.as_str().to_string(),
+                                            timestamp: m.timestamp,
+                                        })
+                                        .collect(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // Wire background tasks into the generator context
             if !background_tasks.is_empty() {
                 builder = builder.background_tasks(background_tasks);
@@ -1398,35 +1471,6 @@ impl AgentLoop {
             // Get rewind info if available (already extracted earlier)
             if let Some(rewind_info) = rewind_context_for_builder.clone() {
                 builder = builder.rewind_info(rewind_info);
-            }
-
-            // Collect background tasks from shell executor for system reminders.
-            {
-                let snapshots = self.shell_executor.background_registry.list_tasks().await;
-                if !snapshots.is_empty() {
-                    let bg_infos: Vec<cocode_system_reminder::generator::BackgroundTaskInfo> =
-                        snapshots
-                            .into_iter()
-                            .map(|s| cocode_system_reminder::generator::BackgroundTaskInfo {
-                                task_id: s.id,
-                                task_type:
-                                    cocode_system_reminder::generator::BackgroundTaskType::Shell,
-                                command: s.command,
-                                status: if s.is_running {
-                                    cocode_system_reminder::generator::BackgroundTaskStatus::Running
-                                } else {
-                                    cocode_system_reminder::generator::BackgroundTaskStatus::Completed
-                                },
-                                exit_code: None,
-                                has_new_output: false,
-                                progress_message: None,
-                                is_completion_notification: false,
-                                delta_summary: None,
-                                description: None,
-                            })
-                            .collect();
-                    builder = builder.background_tasks(bg_infos);
-                }
             }
 
             // Convert structured tasks to StructuredTaskInfo for rich reminders.
@@ -1615,6 +1659,10 @@ impl AgentLoop {
             cwd: self.context.environment.cwd.clone(),
             is_plan_mode: self.plan_mode_state.is_active,
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
+            auto_memory_dir: self
+                .auto_memory_state
+                .as_ref()
+                .map(|s| s.config.directory.clone()),
             features: self.features.clone(),
             web_search_config: self.web_search_config.clone(),
             web_fetch_config: self.web_fetch_config.clone(),

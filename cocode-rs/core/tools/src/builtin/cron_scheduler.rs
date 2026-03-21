@@ -121,7 +121,7 @@ impl CronScheduler {
             }
 
             // Jitter: for recurring jobs, apply random delay check.
-            if job.recurring && should_skip_for_jitter(&job.cron) {
+            if job.recurring && should_skip_for_jitter(&job.cron, &job.id) {
                 continue;
             }
 
@@ -249,7 +249,7 @@ fn part_matches(part: &str, value: u32, min: u32, max: u32) -> bool {
 /// ticks every 60 seconds, we model the jitter probabilistically: compute
 /// the jitter window in ticks, then randomly skip with appropriate
 /// probability so the average delay equals half the jitter window.
-fn should_skip_for_jitter(schedule: &str) -> bool {
+fn should_skip_for_jitter(schedule: &str, job_id: &str) -> bool {
     let period = estimate_period_secs(schedule);
     if period <= 60 {
         // No jitter for very frequent jobs.
@@ -262,13 +262,17 @@ fn should_skip_for_jitter(schedule: &str) -> bool {
     }
 
     // Use a cheap pseudo-random source (no external crate required).
+    // Mix job_id into the seed so jobs on the same tick don't all
+    // skip/fire together (thundering herd).
     let seed = {
         let t = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        // Mix bits from the timestamp.
-        (t ^ (t >> 17) ^ (t >> 31)) as u64
+        let job_hash = job_id
+            .bytes()
+            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        ((t ^ (t >> 17) ^ (t >> 31)) as u64) ^ job_hash
     };
     let jitter_ticks = jitter_secs / 60;
     // Skip with probability (jitter_ticks - 1) / jitter_ticks.
