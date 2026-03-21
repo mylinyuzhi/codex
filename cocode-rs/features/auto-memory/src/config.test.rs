@@ -16,7 +16,9 @@ fn with_env_vars<F, R>(vars: &[(&str, Option<&str>)], f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // Save originals
     let originals: Vec<_> = vars

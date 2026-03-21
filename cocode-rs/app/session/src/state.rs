@@ -23,6 +23,7 @@ use cocode_loop::LoopResult;
 use cocode_loop::StopReason;
 use cocode_message::MessageHistory;
 use cocode_plan_mode::PlanModeState;
+use cocode_protocol::Feature;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::ProviderType;
@@ -316,6 +317,15 @@ pub struct SessionState {
     /// `collect_background_agent_tasks()` checks this set to report the agent
     /// as `Killed` rather than `Failed`.
     killed_agents: cocode_tools::context::KilledAgents,
+
+    /// Auto memory state for the session (persists across turns).
+    auto_memory_state: Arc<cocode_auto_memory::AutoMemoryState>,
+
+    /// Team store for querying team membership.
+    team_store: Arc<cocode_team::TeamStore>,
+
+    /// Team mailbox for querying unread messages.
+    team_mailbox: Arc<cocode_team::Mailbox>,
 }
 
 impl SessionState {
@@ -372,9 +382,19 @@ impl SessionState {
         let builtin_stores = cocode_tools::builtin::register_builtin_tools(
             &mut tool_registry,
             &config.features,
-            team_store,
-            team_mailbox,
+            Arc::clone(&team_store),
+            Arc::clone(&team_mailbox),
         );
+
+        // Resolve auto memory configuration and create session state
+        let resolved_auto_memory = cocode_auto_memory::resolve_auto_memory_config(
+            &session.working_dir,
+            &config.auto_memory_config,
+            config.features.enabled(Feature::AutoMemory),
+            config.features.enabled(Feature::RelevantMemories),
+            config.features.enabled(Feature::MemoryExtraction),
+        );
+        let auto_memory_state = cocode_auto_memory::AutoMemoryState::new_arc(resolved_auto_memory);
 
         // Load durable cron jobs from disk and merge into the shared store
         if let Ok(durable_jobs) =
@@ -459,8 +479,9 @@ impl SessionState {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .map(std::time::Duration::from_secs);
-        let mut subagent_manager =
-            SubagentManager::new().with_auto_background_timeout(auto_background_timeout);
+        let mut subagent_manager = SubagentManager::new()
+            .with_auto_background_timeout(auto_background_timeout)
+            .with_auto_memory_state(Arc::clone(&auto_memory_state));
         let mut agent_defs =
             cocode_subagent::all_agents(&config.cocode_home, Some(session.working_dir.as_path()));
 
@@ -738,6 +759,9 @@ impl SessionState {
             )),
             reminder_file_tracker_state: Vec::new(),
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            auto_memory_state,
+            team_store,
+            team_mailbox,
         });
 
         // Clean up orphaned worktrees at session startup (Gap 8 fix)
@@ -958,7 +982,10 @@ impl SessionState {
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
         .cocode_home(self.config.cocode_home.clone())
-        .killed_agents(self.killed_agents.clone());
+        .killed_agents(self.killed_agents.clone())
+        .auto_memory_state(Arc::clone(&self.auto_memory_state))
+        .team_store(Arc::clone(&self.team_store))
+        .team_mailbox(Arc::clone(&self.team_mailbox));
 
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
@@ -2160,6 +2187,8 @@ impl SessionState {
         let lsp_manager = self.lsp_manager.clone();
         let selections = self.session.selections.clone();
         let message_history = self.message_history.clone();
+        let team_store = Arc::clone(&self.team_store);
+        let team_mailbox = Arc::clone(&self.team_mailbox);
 
         Box::new(move |params: AgentExecuteParams| {
             let api_client = api_client.clone();
@@ -2178,6 +2207,8 @@ impl SessionState {
             let selections = selections.clone();
             let message_history = message_history.clone();
             let parent_event_tx = parent_event_tx.clone();
+            let team_store = team_store.clone();
+            let team_mailbox = team_mailbox.clone();
 
             Box::pin(async move {
                 // ── CWD override from spawn input ──────────────────────
@@ -2478,8 +2509,15 @@ impl SessionState {
                 .lsp_manager(lsp_manager)
                 .is_subagent(true)
                 .task_type_restrictions(params.task_type_restrictions)
-                .cocode_home(cocode_home.clone());
+                .cocode_home(cocode_home.clone())
+                .team_store(team_store.clone())
+                .team_mailbox(team_mailbox.clone());
                 // NO .spawn_agent_fn() — prevents infinite recursion
+
+                // Wire auto memory from parent into child loop
+                if let Some(ref state) = params.auto_memory_state {
+                    builder = builder.auto_memory_state(Arc::clone(state));
+                }
 
                 // Apply custom system prompt if the agent definition requested it
                 if let Some(ref custom_prompt) = params.custom_system_prompt {
@@ -2508,7 +2546,7 @@ impl SessionState {
                     parent_agent_id: parent_id,
                     depth: parent_depth + 1,
                     name: params.name.clone(),
-                    team_name: None,
+                    team_name: params.team_name.clone(),
                     color: params.color.clone(),
                     plan_mode_required: params.plan_mode_required,
                 };
@@ -2807,7 +2845,10 @@ impl SessionState {
         .reminder_file_tracker_state(self.reminder_file_tracker_state.clone())
         .message_history(self.message_history.clone())
         .cocode_home(self.config.cocode_home.clone())
-        .killed_agents(self.killed_agents.clone());
+        .killed_agents(self.killed_agents.clone())
+        .auto_memory_state(Arc::clone(&self.auto_memory_state))
+        .team_store(Arc::clone(&self.team_store))
+        .team_mailbox(Arc::clone(&self.team_mailbox));
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {

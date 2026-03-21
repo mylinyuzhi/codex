@@ -281,7 +281,7 @@ async fn extract_index_filenames(state: &cocode_auto_memory::AutoMemoryState) ->
         .raw_content
         .split(|c: char| c == '(' || c == ')' || c == '[' || c == ']' || c.is_whitespace())
         .filter(|s| s.ends_with(".md") && !s.is_empty())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 

@@ -172,7 +172,7 @@ fn test_extract_index_filenames_parsing() {
     let filenames: std::collections::HashSet<String> = index_content
         .split(|c: char| c == '(' || c == ')' || c == '[' || c == ']' || c.is_whitespace())
         .filter(|s| s.ends_with(".md") && !s.is_empty())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     assert!(filenames.contains("user_role.md"));

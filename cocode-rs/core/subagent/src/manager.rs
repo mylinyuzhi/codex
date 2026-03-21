@@ -166,6 +166,11 @@ pub struct AgentExecuteParams {
     /// Enables the child's system-reminder generators to inject memory prompts
     /// and the tool permission pipeline to auto-allow memory file writes.
     pub auto_memory_state: Option<std::sync::Arc<cocode_auto_memory::AutoMemoryState>>,
+    /// Team to associate the agent with.
+    ///
+    /// When set, the agent's `AgentIdentity` will carry this team name,
+    /// enabling team-aware system reminders and mailbox access.
+    pub team_name: Option<String>,
 }
 
 /// Callback type for executing an agent with filtered tools.
@@ -351,6 +356,7 @@ fn build_execute_params(
         plan_mode_required: definition.permission_mode
             == Some(cocode_protocol::PermissionMode::Plan),
         auto_memory_state,
+        team_name: input.team_name.clone(),
     }
 }
 
