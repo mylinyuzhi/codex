@@ -697,9 +697,6 @@ struct TrackerState {
 pub struct FileTracker {
     /// Internal state protected by RwLock for interior mutability.
     state: std::sync::RwLock<TrackerState>,
-    /// Maximum number of entries in the LRU cache (used for LRU capacity at creation).
-    #[allow(dead_code)]
-    max_entries: usize,
     /// Maximum total content size in bytes (default: ~25MB).
     max_size_bytes: usize,
 }
@@ -755,7 +752,6 @@ impl FileTracker {
                 tool_id_to_path: HashMap::new(),
                 current_size_bytes: 0,
             }),
-            max_entries,
             max_size_bytes,
         }
     }
@@ -871,28 +867,19 @@ impl FileTracker {
     }
 
     /// Check if a file has been read.
-    pub fn was_read(&self, path: &PathBuf) -> bool {
+    pub fn was_read(&self, path: &Path) -> bool {
         let state = self.read_guard();
         state.read_files.contains(path)
     }
 
     /// Get the read state for a file (cloned to avoid holding lock).
-    pub fn read_state(&self, path: &PathBuf) -> Option<FileReadState> {
+    pub fn read_state(&self, path: &Path) -> Option<FileReadState> {
         let state = self.read_guard();
         state.read_files.peek(path).cloned()
     }
 
-    /// Get read state for a file, promoting it to most-recently-used in the LRU cache.
-    ///
-    /// Unlike [`read_state`] which only peeks without affecting LRU order,
-    /// this method promotes the entry so it's less likely to be evicted.
-    pub fn read_state_promoted(&self, path: &PathBuf) -> Option<FileReadState> {
-        let mut state = self.write_guard();
-        state.read_files.get_mut(path).map(|s| s.clone())
-    }
-
     /// Check if a file has been modified.
-    pub fn was_modified(&self, path: &PathBuf) -> bool {
+    pub fn was_modified(&self, path: &Path) -> bool {
         let state = self.read_guard();
         state.modified_files.contains(path)
     }
@@ -1302,58 +1289,6 @@ impl FileTracker {
     pub fn read_count(&self) -> usize {
         let state = self.read_guard();
         state.read_files.len()
-    }
-
-    /// Normalize a path for consistent tracking.
-    ///
-    /// Ensures paths are consistent across different representations.
-    /// Handles `.` and `..` components properly without requiring the file to exist.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::path::PathBuf;
-    /// use cocode_tools::FileTracker;
-    ///
-    /// // Resolves .. without needing the file to exist
-    /// let normalized = FileTracker::normalize_path("/project/src/../lib/file.rs");
-    /// assert_eq!(normalized, PathBuf::from("/project/lib/file.rs"));
-    /// ```
-    pub fn normalize_path(path: impl AsRef<Path>) -> PathBuf {
-        use std::path::Component;
-
-        let raw = path.as_ref();
-
-        // First, make it absolute if it isn't already
-        let absolute = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else if let Ok(cwd) = std::env::current_dir() {
-            cwd.join(raw)
-        } else {
-            raw.to_path_buf()
-        };
-
-        // Now normalize by processing components
-        let mut normalized = PathBuf::new();
-        for component in absolute.components() {
-            match component {
-                Component::CurDir => {
-                    // Skip current directory markers
-                }
-                Component::ParentDir => {
-                    // Pop the last component if possible
-                    if !normalized.pop() {
-                        // Can't go above root, keep the ..
-                        normalized.push(component.as_os_str());
-                    }
-                }
-                _ => {
-                    normalized.push(component.as_os_str());
-                }
-            }
-        }
-
-        normalized
     }
 
     // ========================================================================

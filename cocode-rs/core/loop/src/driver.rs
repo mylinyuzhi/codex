@@ -333,7 +333,6 @@ impl AgentLoop {
     /// injected as steering system-reminders. The steering prompt asks the model
     /// to address the message and continue, so no separate post-idle execution
     /// is needed (consume-then-remove pattern).
-    #[allow(clippy::unwrap_used)]
     pub fn queue_command(&self, prompt: impl Into<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -344,19 +343,28 @@ impl AgentLoop {
             prompt: prompt.into(),
             queued_at: now,
         };
-        self.queued_commands.lock().unwrap().push(cmd);
+        self.queued_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(cmd);
     }
 
     /// Drain all queued commands.
-    #[allow(clippy::unwrap_used)]
     pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
-        std::mem::take(&mut *self.queued_commands.lock().unwrap())
+        std::mem::take(
+            &mut *self
+                .queued_commands
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Get the number of queued commands.
-    #[allow(clippy::unwrap_used)]
     pub fn queued_count(&self) -> usize {
-        self.queued_commands.lock().unwrap().len()
+        self.queued_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Get a shared handle to the queued commands.
@@ -1461,8 +1469,12 @@ impl AgentLoop {
 
             // Consume queued commands for steering injection
             {
-                #[allow(clippy::unwrap_used)]
-                let drained = std::mem::take(&mut *self.queued_commands.lock().unwrap());
+                let drained = std::mem::take(
+                    &mut *self
+                        .queued_commands
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
                 if !drained.is_empty() {
                     builder = builder.queued_commands(drained);
                 }
@@ -1613,9 +1625,11 @@ impl AgentLoop {
         // Drain mention_read_records and apply to shared FileTracker
         // This bridges @mention reads back to the canonical tracker
         {
-            #[allow(clippy::unwrap_used)]
-            let records: Vec<MentionReadRecord> =
-                std::mem::take(&mut *mention_read_records.lock().unwrap());
+            let records: Vec<MentionReadRecord> = std::mem::take(
+                &mut *mention_read_records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             self.apply_mention_read_records(&records).await;
         }
 

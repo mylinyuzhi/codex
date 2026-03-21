@@ -48,17 +48,6 @@ pub enum HealthState {
     Unhealthy,
 }
 
-impl HealthState {
-    #[allow(dead_code)]
-    fn as_str(&self) -> &'static str {
-        match self {
-            HealthState::Healthy => "healthy",
-            HealthState::Degraded => "degraded",
-            HealthState::Unhealthy => "unhealthy",
-        }
-    }
-}
-
 /// Health issue found during check.
 #[derive(Debug, Clone)]
 pub struct HealthIssue {
@@ -227,9 +216,10 @@ impl HealthChecker {
         // Determine overall state
         let state = if issues.iter().any(|i| i.severity == IssueSeverity::Critical) {
             HealthState::Unhealthy
-        } else if issues.iter().any(|i| i.severity == IssueSeverity::Error) {
-            HealthState::Degraded
-        } else if issues.iter().any(|i| i.severity == IssueSeverity::Warning) {
+        } else if issues
+            .iter()
+            .any(|i| matches!(i.severity, IssueSeverity::Error | IssueSeverity::Warning))
+        {
             HealthState::Degraded
         } else {
             HealthState::Healthy

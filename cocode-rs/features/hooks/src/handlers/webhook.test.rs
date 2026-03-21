@@ -1,5 +1,6 @@
 use super::*;
 use crate::event::HookEventType;
+use cocode_protocol::ToolName;
 use std::path::PathBuf;
 
 fn make_ctx() -> HookContext {
@@ -8,7 +9,7 @@ fn make_ctx() -> HookContext {
         "test-session".to_string(),
         PathBuf::from("/tmp"),
     )
-    .with_tool_name("Write")
+    .with_tool_name(ToolName::Write.as_str())
 }
 
 #[test]

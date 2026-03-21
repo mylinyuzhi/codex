@@ -50,29 +50,21 @@ impl HookMatcher {
             Self::Or { matchers } => matchers.iter().any(|m| m.matches(value)),
             Self::Regex { pattern } => {
                 // Use cached regex to avoid recompilation on every call
-                if let Ok(mut cache) = REGEX_CACHE.lock() {
-                    if let Some(re) = cache.get(pattern) {
-                        return re.is_match(value);
+                let mut cache = REGEX_CACHE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(re) = cache.get(pattern) {
+                    return re.is_match(value);
+                }
+                match regex::Regex::new(pattern) {
+                    Ok(re) => {
+                        let result = re.is_match(value);
+                        cache.insert(pattern.clone(), re);
+                        result
                     }
-                    match regex::Regex::new(pattern) {
-                        Ok(re) => {
-                            let result = re.is_match(value);
-                            cache.insert(pattern.clone(), re);
-                            result
-                        }
-                        Err(e) => {
-                            tracing::warn!("Invalid regex pattern '{pattern}': {e}");
-                            false
-                        }
-                    }
-                } else {
-                    // Fallback if lock is poisoned
-                    match regex::Regex::new(pattern) {
-                        Ok(re) => re.is_match(value),
-                        Err(e) => {
-                            tracing::warn!("Invalid regex pattern '{pattern}': {e}");
-                            false
-                        }
+                    Err(e) => {
+                        tracing::warn!("Invalid regex pattern '{pattern}': {e}");
+                        false
                     }
                 }
             }

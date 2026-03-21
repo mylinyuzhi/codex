@@ -90,18 +90,8 @@ impl Tool for SendMessageTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let to = input["to"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "'to' must be a string",
-            }
-            .build()
-        })?;
-        let message = input["message"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "'message' must be a string",
-            }
-            .build()
-        })?;
+        let to = super::input_helpers::require_str(&input, "to")?;
+        let message = super::input_helpers::require_str(&input, "message")?;
 
         let message_type = match input["message_type"].as_str() {
             Some(s) if s == MessageType::Broadcast.as_str() => MessageType::Broadcast,

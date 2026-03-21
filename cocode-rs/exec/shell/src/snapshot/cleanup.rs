@@ -87,36 +87,6 @@ pub async fn cleanup_stale_snapshots(
     Ok(removed_count)
 }
 
-/// Removes all snapshot files for a specific session.
-///
-/// This is useful for cleaning up after a session ends.
-#[allow(dead_code)]
-pub async fn cleanup_session_snapshots(snapshot_dir: &Path, session_id: &str) -> Result<()> {
-    let mut entries = match fs::read_dir(snapshot_dir).await {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
-
-    while let Some(entry) = entries.next_entry().await? {
-        if !entry.file_type().await?.is_file() {
-            continue;
-        }
-
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-
-        // Check if this file belongs to the target session
-        if let Some((stem, _ext)) = file_name.rsplit_once('.')
-            && stem == session_id
-        {
-            remove_snapshot_file(&entry.path()).await;
-        }
-    }
-
-    Ok(())
-}
-
 /// Removes a snapshot file, logging any errors.
 async fn remove_snapshot_file(path: &Path) {
     if let Err(err) = fs::remove_file(path).await {

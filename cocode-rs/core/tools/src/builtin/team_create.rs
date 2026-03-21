@@ -67,12 +67,7 @@ impl Tool for TeamCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let name = input["name"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "name must be a string",
-            }
-            .build()
-        })?;
+        let name = super::input_helpers::require_str(&input, "name")?;
 
         if !is_valid_team_name(name) {
             return Ok(ToolOutput::error(

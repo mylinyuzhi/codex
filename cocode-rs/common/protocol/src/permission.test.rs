@@ -1,4 +1,5 @@
 use super::*;
+use crate::ToolName;
 
 #[test]
 fn test_permission_mode_default() {
@@ -178,7 +179,7 @@ fn test_approval_request_proposed_prefix_pattern() {
     // Without prefix pattern (backward compat)
     let request = ApprovalRequest {
         request_id: "1".to_string(),
-        tool_name: "Bash".to_string(),
+        tool_name: ToolName::Bash.as_str().to_string(),
         description: "git push".to_string(),
         risks: vec![],
         allow_remember: true,
@@ -190,7 +191,7 @@ fn test_approval_request_proposed_prefix_pattern() {
     // With prefix pattern
     let request = ApprovalRequest {
         request_id: "2".to_string(),
-        tool_name: "Bash".to_string(),
+        tool_name: ToolName::Bash.as_str().to_string(),
         description: "git push origin main".to_string(),
         risks: vec![],
         allow_remember: true,

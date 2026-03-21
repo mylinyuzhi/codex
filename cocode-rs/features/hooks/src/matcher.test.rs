@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_exact_match() {
@@ -6,7 +7,7 @@ fn test_exact_match() {
         value: "bash".to_string(),
     };
     assert!(m.matches("bash"));
-    assert!(!m.matches("Bash"));
+    assert!(!m.matches(ToolName::Bash.as_str()));
     assert!(!m.matches("bash_tool"));
 }
 

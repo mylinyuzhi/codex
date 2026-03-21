@@ -73,7 +73,7 @@ impl Tool for TaskOutputTool {
             }
             .build()
         })?;
-        let block = input["block"].as_bool().unwrap_or(true);
+        let block = super::input_helpers::bool_or(&input, "block", true);
         let timeout_ms = input["timeout"].as_i64().unwrap_or(30_000);
 
         ctx.emit_progress(format!("Getting output for task {task_id}"))

@@ -116,12 +116,7 @@ impl Tool for TaskUpdateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let id = input["taskId"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "taskId must be a string",
-            }
-            .build()
-        })?;
+        let id = super::input_helpers::require_str(&input, "taskId")?;
 
         // Parse new status once (if provided) — reused for validation, hooks, and mutation.
         let new_status = input["status"]

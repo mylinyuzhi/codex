@@ -10,7 +10,6 @@ use crate::definition::AgentDefinition;
 use cocode_config::BuiltinAgentOverride;
 use cocode_config::BuiltinAgentsConfig;
 use cocode_protocol::execution::ExecutionIdentity;
-use cocode_protocol::model::ModelRole;
 
 /// Returns the complete set of built-in agent definitions.
 ///
@@ -86,7 +85,7 @@ fn apply_override(def: &mut AgentDefinition, cfg: &BuiltinAgentOverride) {
         def.max_turns = Some(max_turns);
     }
     if let Some(ref identity) = cfg.identity {
-        def.identity = Some(parse_identity(identity));
+        def.identity = Some(ExecutionIdentity::parse_loose(identity));
     }
     if let Some(ref tools) = cfg.tools {
         def.tools = tools.clone();
@@ -102,24 +101,6 @@ fn apply_override(def: &mut AgentDefinition, cfg: &BuiltinAgentOverride) {
     }
     if let Some(ref reminder) = cfg.critical_reminder {
         def.critical_reminder = Some(reminder.clone());
-    }
-}
-
-/// Parse an identity string into an ExecutionIdentity.
-///
-/// Supported values:
-/// - "main", "fast", "explore", "plan", "vision", "review", "compact" -> Role(ModelRole::*)
-/// - "inherit" or unknown -> Inherit
-fn parse_identity(s: &str) -> ExecutionIdentity {
-    match s.to_lowercase().as_str() {
-        "main" => ExecutionIdentity::Role(ModelRole::Main),
-        "fast" => ExecutionIdentity::Role(ModelRole::Fast),
-        "explore" => ExecutionIdentity::Role(ModelRole::Explore),
-        "plan" => ExecutionIdentity::Role(ModelRole::Plan),
-        "vision" => ExecutionIdentity::Role(ModelRole::Vision),
-        "review" => ExecutionIdentity::Role(ModelRole::Review),
-        "compact" => ExecutionIdentity::Role(ModelRole::Compact),
-        "inherit" | _ => ExecutionIdentity::Inherit,
     }
 }
 

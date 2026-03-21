@@ -3,11 +3,14 @@
 //! This crate provides common utilities that can be used by all crates
 //! in the workspace without circular dependencies.
 
+pub mod cocode_home;
 pub mod elapsed;
 pub mod format_env_display;
 pub mod fuzzy_match;
 pub mod logging;
 
+pub use cocode_home::COCODE_HOME_ENV;
+pub use cocode_home::find_cocode_home;
 pub use elapsed::format_duration;
 pub use elapsed::format_elapsed;
 pub use format_env_display::format_env_display;

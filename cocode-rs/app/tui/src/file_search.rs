@@ -3,6 +3,7 @@
 //! This module provides debounced file search for the @mention autocomplete
 //! feature, aligned with Claude Code's FileIndex system.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -151,7 +152,7 @@ impl FileSearchManager {
     }
 
     /// Get the current working directory.
-    pub fn cwd(&self) -> &PathBuf {
+    pub fn cwd(&self) -> &Path {
         &self.cwd
     }
 }

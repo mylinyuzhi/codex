@@ -310,7 +310,7 @@ impl Tool for EditTool {
             }
             .build()
         })?;
-        let replace_all = input["replace_all"].as_bool().unwrap_or(false);
+        let replace_all = super::input_helpers::bool_or(&input, "replace_all", false);
 
         let path = ctx.resolve_path(file_path);
 

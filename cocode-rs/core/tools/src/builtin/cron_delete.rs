@@ -57,12 +57,7 @@ impl Tool for CronDeleteTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let id = input["jobId"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "jobId must be a string",
-            }
-            .build()
-        })?;
+        let id = super::input_helpers::require_str(&input, "jobId")?;
 
         let snapshot = {
             let mut store = self.store.lock().await;

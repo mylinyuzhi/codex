@@ -64,7 +64,7 @@ pub struct ApiClientConfig {
     #[serde(default = "default_stall_timeout", with = "humantime_serde")]
     pub stall_timeout: Duration,
     /// Enable stall detection.
-    #[serde(default = "default_stall_enabled")]
+    #[serde(default = "default_true")]
     pub stall_detection_enabled: bool,
     /// Fallback configuration for stream errors and context overflow.
     #[serde(default)]
@@ -73,9 +73,6 @@ pub struct ApiClientConfig {
 
 fn default_stall_timeout() -> Duration {
     Duration::from_secs(30)
-}
-fn default_stall_enabled() -> bool {
-    true
 }
 fn default_true() -> bool {
     true
@@ -169,7 +166,7 @@ impl Default for ApiClientConfig {
         Self {
             retry: RetryConfig::default(),
             stall_timeout: default_stall_timeout(),
-            stall_detection_enabled: default_stall_enabled(),
+            stall_detection_enabled: default_true(),
             fallback: FallbackConfig::default(),
         }
     }

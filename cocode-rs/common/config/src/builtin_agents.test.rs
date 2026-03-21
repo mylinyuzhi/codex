@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_builtin_agent_override_defaults() {
@@ -29,7 +30,13 @@ fn test_parse_config_json() {
     assert_eq!(explore.identity.as_deref(), Some("fast"));
     assert_eq!(
         explore.tools.as_deref(),
-        Some(&["Read".to_string(), "Glob".to_string(), "Grep".to_string()][..])
+        Some(
+            &[
+                ToolName::Read.as_str().to_string(),
+                ToolName::Glob.as_str().to_string(),
+                ToolName::Grep.as_str().to_string()
+            ][..]
+        )
     );
     assert!(explore.disallowed_tools.is_none());
 

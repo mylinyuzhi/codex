@@ -126,6 +126,23 @@ impl ExecutionIdentity {
             _ => None,
         }
     }
+
+    /// Parse a loose identity string (case-insensitive, with aliases).
+    ///
+    /// Accepts: "main", "fast"/"haiku", "explore", "plan", "vision",
+    /// "review", "compact" → Role. Anything else → Inherit.
+    pub fn parse_loose(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "main" => Self::Role(ModelRole::Main),
+            "fast" | "haiku" => Self::Role(ModelRole::Fast),
+            "explore" => Self::Role(ModelRole::Explore),
+            "plan" => Self::Role(ModelRole::Plan),
+            "vision" => Self::Role(ModelRole::Vision),
+            "review" => Self::Role(ModelRole::Review),
+            "compact" => Self::Role(ModelRole::Compact),
+            _ => Self::Inherit,
+        }
+    }
 }
 
 impl Default for ExecutionIdentity {

@@ -1,25 +1,26 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_is_read_state_source_tool() {
-    assert!(is_read_state_source_tool("Read"));
+    assert!(is_read_state_source_tool(ToolName::Read.as_str()));
     assert!(is_read_state_source_tool("ReadManyFiles"));
-    assert!(is_read_state_source_tool("Glob"));
-    assert!(is_read_state_source_tool("Grep"));
+    assert!(is_read_state_source_tool(ToolName::Glob.as_str()));
+    assert!(is_read_state_source_tool(ToolName::Grep.as_str()));
 
-    assert!(!is_read_state_source_tool("Edit"));
-    assert!(!is_read_state_source_tool("Write"));
-    assert!(!is_read_state_source_tool("Bash"));
+    assert!(!is_read_state_source_tool(ToolName::Edit.as_str()));
+    assert!(!is_read_state_source_tool(ToolName::Write.as_str()));
+    assert!(!is_read_state_source_tool(ToolName::Bash.as_str()));
 }
 
 #[test]
 fn test_is_full_content_read_tool() {
-    assert!(is_full_content_read_tool("Read"));
+    assert!(is_full_content_read_tool(ToolName::Read.as_str()));
     assert!(is_full_content_read_tool("ReadManyFiles"));
 
-    assert!(!is_full_content_read_tool("Glob"));
-    assert!(!is_full_content_read_tool("Grep"));
-    assert!(!is_full_content_read_tool("Edit"));
+    assert!(!is_full_content_read_tool(ToolName::Glob.as_str()));
+    assert!(!is_full_content_read_tool(ToolName::Grep.as_str()));
+    assert!(!is_full_content_read_tool(ToolName::Edit.as_str()));
 }
 
 #[test]
@@ -62,24 +63,24 @@ fn test_should_skip_tracked_file() {
 #[test]
 fn test_is_cacheable_read() {
     // Full reads are cacheable
-    assert!(is_cacheable_read("Read", false, false));
+    assert!(is_cacheable_read(ToolName::Read.as_str(), false, false));
     assert!(is_cacheable_read("ReadManyFiles", false, false));
 
     // Partial reads are not cacheable
-    assert!(!is_cacheable_read("Read", true, false));
-    assert!(!is_cacheable_read("Read", false, true));
-    assert!(!is_cacheable_read("Read", true, true));
+    assert!(!is_cacheable_read(ToolName::Read.as_str(), true, false));
+    assert!(!is_cacheable_read(ToolName::Read.as_str(), false, true));
+    assert!(!is_cacheable_read(ToolName::Read.as_str(), true, true));
 
     // Metadata-only tools are not cacheable
-    assert!(!is_cacheable_read("Glob", false, false));
-    assert!(!is_cacheable_read("Grep", false, false));
+    assert!(!is_cacheable_read(ToolName::Glob.as_str(), false, false));
+    assert!(!is_cacheable_read(ToolName::Grep.as_str(), false, false));
 }
 
 #[test]
 fn test_categorize_read_kind() {
     // Full content reads
     assert_eq!(
-        categorize_read_kind("Read", false, false),
+        categorize_read_kind(ToolName::Read.as_str(), false, false),
         FileReadKind::FullContent
     );
     assert_eq!(
@@ -89,21 +90,21 @@ fn test_categorize_read_kind() {
 
     // Partial reads
     assert_eq!(
-        categorize_read_kind("Read", true, false),
+        categorize_read_kind(ToolName::Read.as_str(), true, false),
         FileReadKind::PartialContent
     );
     assert_eq!(
-        categorize_read_kind("Read", false, true),
+        categorize_read_kind(ToolName::Read.as_str(), false, true),
         FileReadKind::PartialContent
     );
 
     // Metadata-only
     assert_eq!(
-        categorize_read_kind("Glob", false, false),
+        categorize_read_kind(ToolName::Glob.as_str(), false, false),
         FileReadKind::MetadataOnly
     );
     assert_eq!(
-        categorize_read_kind("Grep", false, false),
+        categorize_read_kind(ToolName::Grep.as_str(), false, false),
         FileReadKind::MetadataOnly
     );
 }

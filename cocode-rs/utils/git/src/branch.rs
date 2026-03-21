@@ -106,7 +106,7 @@ fn resolve_upstream_if_remote_ahead(
     };
 
     let mut parts = counts.split_whitespace();
-    let _left: i64 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    let _ = parts.next();
     let right: i64 = parts.next().unwrap_or("0").parse().unwrap_or(0);
 
     if right > 0 {

@@ -12,39 +12,17 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
-use std::sync::RwLockReadGuard;
-use std::sync::RwLockWriteGuard;
 use std::time::Instant;
 
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::lock_utils::lock_read;
+use crate::lock_utils::lock_write;
 use crate::result::HookResult;
 
 /// Default timeout for async hooks in seconds.
 pub const DEFAULT_ASYNC_TIMEOUT_SECS: u64 = 15;
-
-/// Acquires a write lock, recovering from poison if necessary.
-fn lock_write<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockWriteGuard<'a, T>> {
-    match lock.write() {
-        Ok(g) => Some(g),
-        Err(poisoned) => {
-            tracing::warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
-        }
-    }
-}
-
-/// Acquires a read lock, recovering from poison if necessary.
-fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockReadGuard<'a, T>> {
-    match lock.read() {
-        Ok(g) => Some(g),
-        Err(poisoned) => {
-            tracing::warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
-        }
-    }
-}
 
 /// Tracks pending and completed async hooks.
 #[derive(Default)]

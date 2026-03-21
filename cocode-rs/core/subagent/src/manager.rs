@@ -303,15 +303,16 @@ struct ResolvedPrompt {
 /// to the generated system prompt (matching CC's `criticalSystemReminder_EXPERIMENTAL`
 /// positioning at the end of the system prompt for highest authority).
 fn resolve_prompt(input: &SpawnInput, definition: &AgentDefinition) -> ResolvedPrompt {
+    let prompt = input.prompt.clone();
     if definition.use_custom_prompt {
         ResolvedPrompt {
-            prompt: input.prompt.clone(),
+            prompt,
             custom_system_prompt: definition.critical_reminder.clone(),
             system_prompt_suffix: None,
         }
     } else {
         ResolvedPrompt {
-            prompt: input.prompt.clone(),
+            prompt,
             custom_system_prompt: None,
             system_prompt_suffix: definition.critical_reminder.clone(),
         }

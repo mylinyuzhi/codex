@@ -180,7 +180,8 @@ impl Tool for LspTool {
                     .get_client(&path)
                     .await
                     .map_err(lsp_err_to_tool_err)?;
-                let include_declaration = input["includeDeclaration"].as_bool().unwrap_or(true);
+                let include_declaration =
+                    super::input_helpers::bool_or(&input, "includeDeclaration", true);
 
                 let locations = if let Some(symbol) = symbol_name {
                     client

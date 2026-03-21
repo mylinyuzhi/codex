@@ -1,4 +1,5 @@
 use super::*;
+use crate::ToolName;
 
 #[test]
 fn test_concurrency_safety_default() {
@@ -29,7 +30,7 @@ fn test_tool_output_with_modifiers() {
             None,
         ))
         .with_modifier(ContextModifier::PermissionGranted {
-            tool: "Read".to_string(),
+            tool: ToolName::Read.as_str().to_string(),
             pattern: "/tmp/*".to_string(),
         });
 

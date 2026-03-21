@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use cocode_protocol::model::ModelRole;
 
 #[test]
@@ -30,8 +31,8 @@ fn test_agent_definition_full() {
         name: "bash".to_string(),
         description: "Bash executor".to_string(),
         agent_type: "bash".to_string(),
-        tools: vec!["Bash".to_string()],
-        disallowed_tools: vec!["Edit".to_string()],
+        tools: vec![ToolName::Bash.as_str().to_string()],
+        disallowed_tools: vec![ToolName::Edit.as_str().to_string()],
         identity: Some(ExecutionIdentity::Role(ModelRole::Main)),
         max_turns: Some(10),
         permission_mode: None,
@@ -50,8 +51,8 @@ fn test_agent_definition_full() {
     let json = serde_json::to_string(&def).expect("serialize");
     let back: AgentDefinition = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.name, "bash");
-    assert_eq!(back.tools, vec!["Bash"]);
-    assert_eq!(back.disallowed_tools, vec!["Edit"]);
+    assert_eq!(back.tools, vec![ToolName::Bash.as_str()]);
+    assert_eq!(back.disallowed_tools, vec![ToolName::Edit.as_str()]);
     assert!(matches!(
         back.identity,
         Some(ExecutionIdentity::Role(ModelRole::Main))

@@ -2,13 +2,14 @@ use super::select_tools_for_model;
 use cocode_api::LanguageModelTool;
 use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::ModelInfo;
+use cocode_protocol::ToolName;
 use cocode_tools::ToolDefinition;
 use cocode_tools::builtin::ApplyPatchTool;
 
 fn sample_defs() -> Vec<ToolDefinition> {
     vec![
-        ToolDefinition::new("Read", serde_json::json!({})),
-        ToolDefinition::new("Edit", serde_json::json!({})),
+        ToolDefinition::new(ToolName::Read.as_str(), serde_json::json!({})),
+        ToolDefinition::new(ToolName::Edit.as_str(), serde_json::json!({})),
         ToolDefinition::new("apply_patch", serde_json::json!({})),
     ]
 }
@@ -76,14 +77,17 @@ fn none_excludes_apply_patch() {
 fn experimental_supported_tools_whitelist() {
     let model_info = ModelInfo {
         apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-        experimental_supported_tools: Some(vec!["Read".to_string(), "apply_patch".to_string()]),
+        experimental_supported_tools: Some(vec![
+            ToolName::Read.as_str().to_string(),
+            "apply_patch".to_string(),
+        ]),
         ..Default::default()
     };
     let result = select_tools_for_model(sample_defs(), &model_info);
     assert_eq!(result.len(), 2);
-    assert!(result.iter().any(|d| d.name() == "Read"));
+    assert!(result.iter().any(|d| d.name() == ToolName::Read.as_str()));
     assert!(result.iter().any(|d| d.name() == "apply_patch"));
-    assert!(result.iter().all(|d| d.name() != "Edit"));
+    assert!(result.iter().all(|d| d.name() != ToolName::Edit.as_str()));
 }
 
 #[test]
@@ -102,14 +106,14 @@ fn empty_supported_tools_does_not_filter() {
 fn excluded_tools_removes_named() {
     let model_info = ModelInfo {
         apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-        excluded_tools: Some(vec!["Edit".to_string()]),
+        excluded_tools: Some(vec![ToolName::Edit.as_str().to_string()]),
         ..Default::default()
     };
     let result = select_tools_for_model(sample_defs(), &model_info);
     assert_eq!(result.len(), 2);
-    assert!(result.iter().any(|d| d.name() == "Read"));
+    assert!(result.iter().any(|d| d.name() == ToolName::Read.as_str()));
     assert!(result.iter().any(|d| d.name() == "apply_patch"));
-    assert!(result.iter().all(|d| d.name() != "Edit"));
+    assert!(result.iter().all(|d| d.name() != ToolName::Edit.as_str()));
 }
 
 #[test]

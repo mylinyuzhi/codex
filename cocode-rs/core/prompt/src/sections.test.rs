@@ -1,6 +1,7 @@
 use cocode_context::ContextInjection;
 use cocode_context::EnvironmentInfo;
 use cocode_context::MemoryFile;
+use cocode_protocol::ToolName;
 
 use super::*;
 
@@ -176,7 +177,11 @@ fn test_render_environment_with_language_preference() {
 
 #[test]
 fn test_generate_tool_policy_lines_with_ls() {
-    let tool_names = vec!["Read".to_string(), "Edit".to_string(), "LS".to_string()];
+    let tool_names = vec![
+        ToolName::Read.as_str().to_string(),
+        ToolName::Edit.as_str().to_string(),
+        ToolName::LS.as_str().to_string(),
+    ];
     let result = generate_tool_policy_lines(&tool_names);
     assert!(result.contains("Use Read for reading files"));
     assert!(result.contains("Use Edit for modifying files"));
@@ -186,7 +191,11 @@ fn test_generate_tool_policy_lines_with_ls() {
 
 #[test]
 fn test_generate_tool_policy_lines_without_ls() {
-    let tool_names = vec!["Read".to_string(), "Edit".to_string(), "Grep".to_string()];
+    let tool_names = vec![
+        ToolName::Read.as_str().to_string(),
+        ToolName::Edit.as_str().to_string(),
+        ToolName::Grep.as_str().to_string(),
+    ];
     let result = generate_tool_policy_lines(&tool_names);
     assert!(result.contains("Use Read for reading files"));
     assert!(result.contains("Use Edit for modifying files"));
@@ -204,12 +213,12 @@ fn test_generate_tool_policy_lines_empty() {
 #[test]
 fn test_generate_tool_policy_lines_all_tools() {
     let tool_names = vec![
-        "Read".to_string(),
-        "Edit".to_string(),
-        "Write".to_string(),
-        "Grep".to_string(),
-        "Glob".to_string(),
-        "LS".to_string(),
+        ToolName::Read.as_str().to_string(),
+        ToolName::Edit.as_str().to_string(),
+        ToolName::Write.as_str().to_string(),
+        ToolName::Grep.as_str().to_string(),
+        ToolName::Glob.as_str().to_string(),
+        ToolName::LS.as_str().to_string(),
     ];
     let result = generate_tool_policy_lines(&tool_names);
     assert!(result.contains("Use Read"));

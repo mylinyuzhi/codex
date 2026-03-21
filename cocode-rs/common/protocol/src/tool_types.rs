@@ -315,14 +315,6 @@ impl ContextModifier {
             }
         )
     }
-
-    /// Get the path if this is a FileRead modifier.
-    pub fn file_read_path(&self) -> Option<&PathBuf> {
-        match self {
-            ContextModifier::FileRead { path, .. } => Some(path),
-            _ => None,
-        }
-    }
 }
 
 /// Result of validating tool input.

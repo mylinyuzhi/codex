@@ -576,7 +576,7 @@ pub fn calculate_n_final(context_length: Option<i32>) -> i32 {
             // Reserve 50% of context for reasoning
             let max_retrieval_tokens = ctx_len / 2;
             let n = max_retrieval_tokens / DEFAULT_TOKENS_PER_CHUNK;
-            n.min(DEFAULT_N_FINAL).max(1)
+            n.clamp(1, DEFAULT_N_FINAL)
         }
         _ => DEFAULT_N_FINAL,
     }

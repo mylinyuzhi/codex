@@ -100,12 +100,7 @@ impl Tool for SkillTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let skill_name = input["skill"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "skill must be a string",
-            }
-            .build()
-        })?;
+        let skill_name = super::input_helpers::require_str(&input, "skill")?;
         let args = input["args"].as_str().unwrap_or("");
 
         ctx.emit_progress(format!("Executing skill: {skill_name}"))

@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use std::collections::HashMap;
 
 fn make_interface_with_hooks(hooks: HashMap<String, Vec<SkillHookConfig>>) -> SkillInterface {
@@ -88,7 +89,7 @@ fn test_convert_skill_hooks_single_with_string_matcher() {
     hooks.insert(
         "PreToolUse".to_string(),
         vec![SkillHookConfig {
-            matcher: Some("Write".to_string()),
+            matcher: Some(ToolName::Write.as_str().to_string()),
             command: Some("npm run lint".to_string()),
             args: Some(vec!["--fix".to_string()]),
             timeout_secs: 60,
@@ -113,7 +114,7 @@ fn test_convert_skill_hooks_single_with_string_matcher() {
     }
 
     if let Some(HookMatcher::Exact { value }) = &def.matcher {
-        assert_eq!(value, "Write");
+        assert_eq!(value, ToolName::Write.as_str());
     } else {
         panic!("Expected Exact matcher");
     }
@@ -166,12 +167,17 @@ fn test_convert_skill_hooks_multiple() {
 
 #[test]
 fn test_convert_string_matcher_pipe_separated() {
-    let matcher = convert_string_matcher("Write|Edit");
+    let input = format!("{}|{}", ToolName::Write.as_str(), ToolName::Edit.as_str());
+    let matcher = convert_string_matcher(&input);
 
     if let HookMatcher::Or { matchers } = matcher {
         assert_eq!(matchers.len(), 2);
-        assert!(matches!(&matchers[0], HookMatcher::Exact { value } if value == "Write"));
-        assert!(matches!(&matchers[1], HookMatcher::Exact { value } if value == "Edit"));
+        assert!(
+            matches!(&matchers[0], HookMatcher::Exact { value } if value == ToolName::Write.as_str())
+        );
+        assert!(
+            matches!(&matchers[1], HookMatcher::Exact { value } if value == ToolName::Edit.as_str())
+        );
     } else {
         panic!("Expected Or matcher");
     }
@@ -185,8 +191,8 @@ fn test_convert_string_matcher_wildcard() {
 
 #[test]
 fn test_convert_string_matcher_exact() {
-    let matcher = convert_string_matcher("Write");
-    assert!(matches!(matcher, HookMatcher::Exact { value } if value == "Write"));
+    let matcher = convert_string_matcher(ToolName::Write.as_str());
+    assert!(matches!(matcher, HookMatcher::Exact { value } if value == ToolName::Write.as_str()));
 }
 
 #[test]

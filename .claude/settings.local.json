@@ -87,7 +87,10 @@
       "Bash(grep -E \"\\\\.\\(rs\\)$\")",
       "Bash(2)",
       "Bash(/tmp/integration_summary.txt:*)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(for crate:*)",
+      "Read(//lyz/codespace/codex/cocode-rs/$crate/**)",
+      "Bash(rustfmt:*)"
     ],
     "deny": [],
     "ask": []

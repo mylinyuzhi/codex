@@ -113,9 +113,8 @@ enum WebSearchErrorType {
     ParseError,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
 impl WebSearchErrorType {
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::ProviderError => "PROVIDER_ERROR",
             Self::NetworkError => "NETWORK_ERROR",

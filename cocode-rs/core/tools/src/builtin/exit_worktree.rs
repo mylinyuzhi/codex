@@ -76,15 +76,10 @@ impl Tool for ExitWorktreeTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let worktree_path_str = input["worktreePath"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "worktreePath must be a string",
-            }
-            .build()
-        })?;
+        let worktree_path_str = super::input_helpers::require_str(&input, "worktreePath")?;
         let worktree_path = PathBuf::from(worktree_path_str);
         let action = input["action"].as_str().unwrap_or("remove");
-        let delete_branch = input["delete_branch"].as_bool().unwrap_or(false);
+        let delete_branch = super::input_helpers::bool_or(&input, "delete_branch", false);
 
         // Restore CWD to previous_cwd before worktree removal (Gap 9 fix)
         if let Some(prev_cwd) = input["previousCwd"].as_str() {

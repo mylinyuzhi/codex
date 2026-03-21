@@ -3,6 +3,7 @@ use crate::contribution::PluginContributions;
 use crate::error::PluginError;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginMetadata;
+use cocode_protocol::ToolName;
 use std::path::PathBuf;
 
 fn make_plugin(name: &str, scope: PluginScope) -> LoadedPlugin {
@@ -91,7 +92,7 @@ fn make_plugin_with_agent(name: &str, scope: PluginScope, agent_name: &str) -> L
         name: agent_name.to_string(),
         description: "Test agent".to_string(),
         agent_type: agent_name.to_string(),
-        tools: vec!["Read".to_string()],
+        tools: vec![ToolName::Read.as_str().to_string()],
         disallowed_tools: vec![],
         identity: None,
         max_turns: None,
@@ -392,5 +393,8 @@ fn test_shell_command_wired_as_skill() {
     let skill = skill_manager.get("lint").expect("lint skill");
     assert_eq!(skill.loaded_from, LoadedFrom::Plugin);
     assert!(skill.prompt.contains("cargo clippy"));
-    assert_eq!(skill.allowed_tools, Some(vec!["Bash".to_string()]));
+    assert_eq!(
+        skill.allowed_tools,
+        Some(vec![ToolName::Bash.as_str().to_string()])
+    );
 }

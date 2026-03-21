@@ -623,29 +623,38 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
-        let mut guard = self.snapshot.write().unwrap();
+        let mut guard = self
+            .snapshot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
-        #[expect(clippy::unwrap_used)]
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *completed = true;
         cv.notify_all();
     }
 }
 
 impl RunReporter {
-    #[expect(clippy::unwrap_used)]
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            completed = cv
+                .wait(completed)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        self.snapshot.read().unwrap().clone()
+        self.snapshot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

@@ -14,21 +14,7 @@ use crate::plan_slug::get_unique_slug;
 /// Default plan directory name within the cocode config directory.
 const PLAN_DIR_NAME: &str = "plans";
 
-/// Resolve the cocode home directory.
-///
-/// Checks `COCODE_HOME` env var first, falls back to `~/.cocode`.
-/// This is a standalone implementation to avoid depending on `cocode-config`.
-fn find_cocode_home() -> PathBuf {
-    std::env::var("COCODE_HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".cocode")
-        })
-}
+use cocode_utils_common::find_cocode_home;
 
 /// Get the plan directory path (`~/.cocode/plans/`).
 pub fn get_plan_dir() -> PathBuf {

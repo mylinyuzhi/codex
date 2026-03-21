@@ -2,6 +2,7 @@ use super::*;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolName;
 use serde_json::Value;
 
 struct SafeTool;
@@ -398,7 +399,7 @@ async fn test_multiple_safe_tools_concurrent() {
 fn test_extract_prefix_pattern_bash_command() {
     let input = serde_json::json!({"command": "git push origin main"});
     assert_eq!(
-        extract_prefix_pattern("Bash", &input),
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
         Some("git *".to_string())
     );
 }
@@ -407,7 +408,7 @@ fn test_extract_prefix_pattern_bash_command() {
 fn test_extract_prefix_pattern_bash_single_word() {
     let input = serde_json::json!({"command": "ls"});
     assert_eq!(
-        extract_prefix_pattern("Bash", &input),
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
         Some("ls *".to_string())
     );
 }
@@ -415,34 +416,52 @@ fn test_extract_prefix_pattern_bash_single_word() {
 #[test]
 fn test_extract_prefix_pattern_non_bash_tool() {
     let input = serde_json::json!({"command": "git push"});
-    assert_eq!(extract_prefix_pattern("Read", &input), None);
-    assert_eq!(extract_prefix_pattern("Edit", &input), None);
-    assert_eq!(extract_prefix_pattern("Write", &input), None);
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Read.as_str(), &input),
+        None
+    );
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Edit.as_str(), &input),
+        None
+    );
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Write.as_str(), &input),
+        None
+    );
 }
 
 #[test]
 fn test_extract_prefix_pattern_missing_command() {
     let input = serde_json::json!({"file_path": "/tmp/test"});
-    assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
+        None
+    );
 }
 
 #[test]
 fn test_extract_prefix_pattern_empty_command() {
     let input = serde_json::json!({"command": ""});
-    assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
+        None
+    );
 }
 
 #[test]
 fn test_extract_prefix_pattern_whitespace_only() {
     let input = serde_json::json!({"command": "   "});
-    assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    assert_eq!(
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
+        None
+    );
 }
 
 #[test]
 fn test_extract_prefix_pattern_complex_command() {
     let input = serde_json::json!({"command": "cargo test --no-fail-fast -- -q"});
     assert_eq!(
-        extract_prefix_pattern("Bash", &input),
+        extract_prefix_pattern(ToolName::Bash.as_str(), &input),
         Some("cargo *".to_string())
     );
 }
@@ -539,21 +558,29 @@ fn test_post_hook_action_stop_continuation_preserves_result() {
 #[test]
 fn test_approval_check_value_bash_extracts_command() {
     let input = serde_json::json!({"command": "git push origin main"});
-    let value = approval_check_value("Bash", &input, "Bash: git push origin main");
+    let value = approval_check_value(
+        ToolName::Bash.as_str(),
+        &input,
+        "Bash: git push origin main",
+    );
     assert_eq!(value, "git push origin main");
 }
 
 #[test]
 fn test_approval_check_value_file_tool_extracts_path() {
     let input = serde_json::json!({"file_path": "/tmp/test.rs"});
-    let value = approval_check_value("Edit", &input, "Edit: /tmp/test.rs");
+    let value = approval_check_value(ToolName::Edit.as_str(), &input, "Edit: /tmp/test.rs");
     assert_eq!(value, "/tmp/test.rs");
 }
 
 #[test]
 fn test_approval_check_value_fallback_to_description() {
     let input = serde_json::json!({"query": "search term"});
-    let value = approval_check_value("WebSearch", &input, "Execute tool: WebSearch");
+    let value = approval_check_value(
+        ToolName::WebSearch.as_str(),
+        &input,
+        "Execute tool: WebSearch",
+    );
     assert_eq!(value, "Execute tool: WebSearch");
 }
 
@@ -563,19 +590,19 @@ fn test_approval_wildcard_matches_raw_command() {
 
     let mut store = ApprovalStore::new();
     // Simulate user approving "git *" prefix pattern
-    store.approve_pattern("Bash", "git *");
+    store.approve_pattern(ToolName::Bash.as_str(), "git *");
 
     // The raw command value (not the prefixed description) should match
     let raw_command = "git push origin main";
     assert!(
-        store.is_approved("Bash", raw_command),
+        store.is_approved(ToolName::Bash.as_str(), raw_command),
         "Wildcard 'git *' should match raw command 'git push origin main'"
     );
 
     // The old buggy description should NOT match
     let description = "Bash: git push origin main";
     assert!(
-        !store.is_approved("Bash", description),
+        !store.is_approved(ToolName::Bash.as_str(), description),
         "Wildcard 'git *' should NOT match prefixed description"
     );
 }
@@ -864,12 +891,30 @@ fn test_is_read_only_or_plan_tool_plan_control_tools() {
     let registry = ToolRegistry::new();
 
     // Plan control tools should always return true, even without registry entries
-    assert!(is_read_only_or_plan_tool(&registry, "EnterPlanMode"));
-    assert!(is_read_only_or_plan_tool(&registry, "ExitPlanMode"));
-    assert!(is_read_only_or_plan_tool(&registry, "AskUserQuestion"));
-    assert!(is_read_only_or_plan_tool(&registry, "TodoWrite"));
-    assert!(is_read_only_or_plan_tool(&registry, "TaskCreate"));
-    assert!(is_read_only_or_plan_tool(&registry, "TaskUpdate"));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::EnterPlanMode.as_str()
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::ExitPlanMode.as_str()
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::AskUserQuestion.as_str()
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::TodoWrite.as_str()
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::TaskCreate.as_str()
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        ToolName::TaskUpdate.as_str()
+    ));
 }
 
 #[test]

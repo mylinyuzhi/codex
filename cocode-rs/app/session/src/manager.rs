@@ -406,11 +406,6 @@ impl SessionManager {
         Ok(cleaned)
     }
 
-    /// Get the storage directory.
-    pub fn storage_dir(&self) -> &PathBuf {
-        &self.storage_dir
-    }
-
     /// Get the number of active sessions.
     pub fn active_count(&self) -> usize {
         self.sessions.len()

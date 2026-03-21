@@ -1,6 +1,7 @@
 use super::*;
 use crate::generator::ApprovedPlanInfo;
 use crate::generator::TodoItem;
+use cocode_protocol::ToolName;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -90,7 +91,12 @@ async fn test_plan_mode_enter_sparse_via_reentry() {
 
     let reminder = result.expect("reminder");
     assert!(!reminder.content().unwrap().contains("Phase 1")); // Sparse doesn't have phases
-    assert!(reminder.content().unwrap().contains("ExitPlanMode"));
+    assert!(
+        reminder
+            .content()
+            .unwrap()
+            .contains(ToolName::ExitPlanMode.as_str())
+    );
 }
 
 #[tokio::test]
@@ -113,7 +119,12 @@ async fn test_plan_mode_enter_sparse_via_flag() {
 
     let reminder = result.expect("reminder");
     assert!(!reminder.content().unwrap().contains("Phase 1")); // Sparse doesn't have phases
-    assert!(reminder.content().unwrap().contains("ExitPlanMode"));
+    assert!(
+        reminder
+            .content()
+            .unwrap()
+            .contains(ToolName::ExitPlanMode.as_str())
+    );
 }
 
 #[tokio::test]

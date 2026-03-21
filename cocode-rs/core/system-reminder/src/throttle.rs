@@ -112,7 +112,10 @@ impl ThrottleManager {
         config: &ThrottleConfig,
         current_turn: i32,
     ) -> bool {
-        let state = self.state.read().expect("lock poisoned");
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.get(&attachment_type);
 
         match entry {
@@ -146,7 +149,10 @@ impl ThrottleManager {
 
     /// Mark that a generator successfully generated output.
     pub fn mark_generated(&self, attachment_type: AttachmentType, turn: i32) {
-        let mut state = self.state.write().expect("lock poisoned");
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.entry(attachment_type).or_default();
         entry.last_generated_turn = Some(turn);
         entry.session_count += 1;
@@ -154,14 +160,20 @@ impl ThrottleManager {
 
     /// Set the trigger turn for an attachment type.
     pub fn set_trigger_turn(&self, attachment_type: AttachmentType, turn: i32) {
-        let mut state = self.state.write().expect("lock poisoned");
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.entry(attachment_type).or_default();
         entry.trigger_turn = Some(turn);
     }
 
     /// Clear the trigger turn for an attachment type.
     pub fn clear_trigger_turn(&self, attachment_type: AttachmentType) {
-        let mut state = self.state.write().expect("lock poisoned");
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = state.get_mut(&attachment_type) {
             entry.trigger_turn = None;
         }
@@ -177,7 +189,10 @@ impl ThrottleManager {
         match config.full_content_every_n {
             None => true,
             Some(n) => {
-                let state = self.state.read().expect("lock poisoned");
+                let state = self
+                    .state
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let count = state
                     .get(&attachment_type)
                     .map(|s| s.session_count)
@@ -190,13 +205,19 @@ impl ThrottleManager {
 
     /// Reset all throttle state (e.g., at session start).
     pub fn reset(&self) {
-        let mut state = self.state.write().expect("lock poisoned");
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.clear();
     }
 
     /// Get the current state for an attachment type.
     pub fn get_state(&self, attachment_type: AttachmentType) -> Option<ThrottleState> {
-        let state = self.state.read().expect("lock poisoned");
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.get(&attachment_type).cloned()
     }
 }

@@ -101,3 +101,71 @@ fn test_serde_inherit() {
     let parsed: ExecutionIdentity = serde_json::from_str(&json).unwrap();
     assert_eq!(identity, parsed);
 }
+
+#[test]
+fn test_parse_loose_roles() {
+    assert_eq!(
+        ExecutionIdentity::parse_loose("main"),
+        ExecutionIdentity::Role(ModelRole::Main)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("fast"),
+        ExecutionIdentity::Role(ModelRole::Fast)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("haiku"),
+        ExecutionIdentity::Role(ModelRole::Fast)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("explore"),
+        ExecutionIdentity::Role(ModelRole::Explore)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("plan"),
+        ExecutionIdentity::Role(ModelRole::Plan)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("vision"),
+        ExecutionIdentity::Role(ModelRole::Vision)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("review"),
+        ExecutionIdentity::Role(ModelRole::Review)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("compact"),
+        ExecutionIdentity::Role(ModelRole::Compact)
+    );
+}
+
+#[test]
+fn test_parse_loose_inherit() {
+    assert_eq!(
+        ExecutionIdentity::parse_loose("inherit"),
+        ExecutionIdentity::Inherit
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("unknown"),
+        ExecutionIdentity::Inherit
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose(""),
+        ExecutionIdentity::Inherit
+    );
+}
+
+#[test]
+fn test_parse_loose_case_insensitive() {
+    assert_eq!(
+        ExecutionIdentity::parse_loose("MAIN"),
+        ExecutionIdentity::Role(ModelRole::Main)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("Fast"),
+        ExecutionIdentity::Role(ModelRole::Fast)
+    );
+    assert_eq!(
+        ExecutionIdentity::parse_loose("HAIKU"),
+        ExecutionIdentity::Role(ModelRole::Fast)
+    );
+}

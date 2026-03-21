@@ -7,7 +7,6 @@ use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_file_ignore::IgnoreConfig;
 use cocode_file_ignore::IgnoreService;
-use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
 use cocode_protocol::PermissionResult;
@@ -246,42 +245,7 @@ impl Tool for GrepTool {
             .map(|p| ctx.resolve_path(p))
             .unwrap_or_else(|| ctx.cwd.clone());
 
-        // Sensitive directory targets → NeedsApproval
-        if crate::sensitive_files::is_sensitive_directory(&search_path) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("grep-sensitive-{}", search_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!(
-                        "Searching sensitive directory: {}",
-                        search_path.display()
-                    ),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        // Outside working directory → NeedsApproval
-        if crate::sensitive_files::is_outside_cwd(&search_path, &ctx.cwd) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("grep-outside-cwd-{}", search_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!(
-                        "Searching outside working directory: {}",
-                        search_path.display()
-                    ),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        // In working directory → Allowed
-        PermissionResult::Allowed
+        crate::sensitive_files::check_directory_permission(self.name(), &search_path, &ctx.cwd)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -292,9 +256,9 @@ impl Tool for GrepTool {
             .build()
         })?;
 
-        let case_insensitive = input["-i"].as_bool().unwrap_or(false);
-        let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
-        let multiline = input["multiline"].as_bool().unwrap_or(false);
+        let case_insensitive = super::input_helpers::bool_or(&input, "-i", false);
+        let show_line_numbers = super::input_helpers::bool_or(&input, "-n", true);
+        let multiline = super::input_helpers::bool_or(&input, "multiline", false);
 
         let context_after = input["-A"].as_i64().unwrap_or(0) as usize;
         let context_before = input["-B"].as_i64().unwrap_or(0) as usize;

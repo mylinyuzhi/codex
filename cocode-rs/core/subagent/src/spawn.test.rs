@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelSpec;
 
@@ -23,7 +24,10 @@ fn test_spawn_input_with_identity() {
         identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
         max_turns: Some(20),
         run_in_background: Some(true),
-        allowed_tools: Some(vec!["Read".to_string(), "Glob".to_string()]),
+        allowed_tools: Some(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Glob.as_str().to_string(),
+        ]),
         resume_from: None,
         name: None,
         team_name: None,

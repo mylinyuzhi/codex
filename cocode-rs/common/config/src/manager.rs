@@ -923,14 +923,28 @@ impl Clone for ConfigManager {
             resolver: RwLock::new(
                 self.resolver
                     .read()
-                    .expect("resolver lock poisoned")
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("resolver lock poisoned, recovering");
+                        e.into_inner()
+                    })
                     .clone(),
             ),
-            config: RwLock::new(self.config.read().expect("config lock poisoned").clone()),
+            config: RwLock::new(
+                self.config
+                    .read()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("config lock poisoned, recovering");
+                        e.into_inner()
+                    })
+                    .clone(),
+            ),
             runtime_selections: RwLock::new(
                 self.runtime_selections
                     .read()
-                    .expect("runtime lock poisoned")
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("runtime_selections lock poisoned, recovering");
+                        e.into_inner()
+                    })
                     .clone(),
             ),
         }

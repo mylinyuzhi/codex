@@ -14,7 +14,11 @@ fn test_explore_agent() {
     );
     assert_eq!(
         agent.disallowed_tools,
-        vec!["Edit", "Write", "NotebookEdit"]
+        vec![
+            ToolName::Edit.as_str(),
+            ToolName::Write.as_str(),
+            ToolName::NotebookEdit.as_str()
+        ]
     );
     assert_eq!(agent.max_turns, Some(20));
     assert!(matches!(

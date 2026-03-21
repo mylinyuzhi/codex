@@ -25,6 +25,8 @@
 
 use std::path::Path;
 
+use cocode_protocol::ToolName;
+
 // Re-export core functions from cocode-message crate
 pub use cocode_message::collect_cleared_read_paths;
 pub use cocode_message::collect_cleared_read_paths_from_input;
@@ -44,7 +46,7 @@ use cocode_protocol::FileReadKind;
 /// - `true` for tools that read full file content
 /// - `false` for tools that only access metadata or partial content
 pub fn is_full_content_read_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "Read" | "ReadManyFiles")
+    tool_name == ToolName::Read.as_str() || tool_name == ToolName::ReadManyFiles.as_str()
 }
 
 /// Check if a file should be skipped for read tracking.
@@ -161,7 +163,7 @@ pub fn is_cacheable_read(tool_name: &str, has_offset: bool, has_limit: bool) -> 
 /// The appropriate `FileReadKind` for this read operation.
 pub fn categorize_read_kind(tool_name: &str, has_offset: bool, has_limit: bool) -> FileReadKind {
     // Glob and Grep don't read actual file content
-    if matches!(tool_name, "Glob" | "Grep") {
+    if tool_name == ToolName::Glob.as_str() || tool_name == ToolName::Grep.as_str() {
         return FileReadKind::MetadataOnly;
     }
 

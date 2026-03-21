@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 fn test_env() -> EnvironmentInfo {
     EnvironmentInfo::builder()
@@ -26,7 +27,10 @@ fn test_builder_minimal() {
 fn test_builder_full() {
     let ctx = ConversationContext::builder()
         .environment(test_env())
-        .tool_names(vec!["Read".to_string(), "Write".to_string()])
+        .tool_names(vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Write.as_str().to_string(),
+        ])
         .mcp_server_names(vec!["github".to_string()])
         .memory_files(vec![MemoryFile {
             path: "CLAUDE.md".to_string(),

@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 fn create_test_request(id: &str, tool: &str) -> ApprovalRequest {
     ApprovalRequest {
@@ -15,7 +16,7 @@ fn create_test_request(id: &str, tool: &str) -> ApprovalRequest {
 async fn test_request_and_respond() {
     let queue = WorkerPermissionQueue::new();
 
-    let request = create_test_request("req-1", "Bash");
+    let request = create_test_request("req-1", ToolName::Bash.as_str());
 
     // Spawn a task to respond
     let queue_clone = queue.requests.clone();
@@ -52,7 +53,7 @@ async fn test_request_and_respond() {
 async fn test_request_timeout() {
     let queue = WorkerPermissionQueue::new().with_default_timeout(Duration::from_millis(100));
 
-    let request = create_test_request("req-1", "Bash");
+    let request = create_test_request("req-1", ToolName::Bash.as_str());
 
     // Request without responding - should timeout
     let result = queue.request_permission(request, "worker-1").await;
@@ -72,7 +73,7 @@ async fn test_pending_requests() {
         requests.insert(
             "req-1".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-1", "Bash"),
+                request: create_test_request("req-1", ToolName::Bash.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-1".to_string(),
@@ -85,7 +86,7 @@ async fn test_pending_requests() {
 
     let pending = queue.pending_requests().await;
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].tool_name, "Bash");
+    assert_eq!(pending[0].tool_name, ToolName::Bash.as_str());
 }
 
 #[tokio::test]
@@ -98,7 +99,7 @@ async fn test_cancel_worker_requests() {
         requests.insert(
             "req-1".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-1", "Bash"),
+                request: create_test_request("req-1", ToolName::Bash.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-1".to_string(),
@@ -108,7 +109,7 @@ async fn test_cancel_worker_requests() {
         requests.insert(
             "req-2".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-2", "Edit"),
+                request: create_test_request("req-2", ToolName::Edit.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-2".to_string(),
@@ -134,7 +135,7 @@ async fn test_cancel_all() {
         requests.insert(
             "req-1".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-1", "Bash"),
+                request: create_test_request("req-1", ToolName::Bash.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-1".to_string(),
@@ -144,7 +145,7 @@ async fn test_cancel_all() {
         requests.insert(
             "req-2".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-2", "Edit"),
+                request: create_test_request("req-2", ToolName::Edit.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-2".to_string(),
@@ -172,7 +173,7 @@ async fn test_stats() {
         requests.insert(
             "req-1".to_string(),
             QueuedPermissionRequest {
-                request: create_test_request("req-1", "Bash"),
+                request: create_test_request("req-1", ToolName::Bash.as_str()),
                 queued_at: Instant::now(),
                 timeout: Duration::from_secs(300),
                 worker_id: "worker-1".to_string(),

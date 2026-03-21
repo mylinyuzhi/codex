@@ -7,7 +7,6 @@ use crate::tool::Tool;
 use async_trait::async_trait;
 use cocode_file_ignore::IgnoreConfig;
 use cocode_file_ignore::IgnoreService;
-use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
 use cocode_protocol::PermissionResult;
@@ -97,42 +96,7 @@ impl Tool for GlobTool {
             .map(|p| ctx.resolve_path(p))
             .unwrap_or_else(|| ctx.cwd.clone());
 
-        // Sensitive directory targets → NeedsApproval
-        if crate::sensitive_files::is_sensitive_directory(&search_path) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("glob-sensitive-{}", search_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!(
-                        "Searching sensitive directory: {}",
-                        search_path.display()
-                    ),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        // Outside working directory → NeedsApproval
-        if crate::sensitive_files::is_outside_cwd(&search_path, &ctx.cwd) {
-            return PermissionResult::NeedsApproval {
-                request: ApprovalRequest {
-                    request_id: format!("glob-outside-cwd-{}", search_path.display()),
-                    tool_name: self.name().to_string(),
-                    description: format!(
-                        "Searching outside working directory: {}",
-                        search_path.display()
-                    ),
-                    risks: vec![],
-                    allow_remember: true,
-                    proposed_prefix_pattern: None,
-                },
-            };
-        }
-
-        // In working directory → Allowed
-        PermissionResult::Allowed
+        crate::sensitive_files::check_directory_permission(self.name(), &search_path, &ctx.cwd)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -156,7 +120,7 @@ impl Tool for GlobTool {
             .build());
         }
 
-        let case_sensitive = input["case_sensitive"].as_bool().unwrap_or(true);
+        let case_sensitive = super::input_helpers::bool_or(&input, "case_sensitive", true);
 
         // Build glob matcher
         let glob = GlobBuilder::new(pattern)

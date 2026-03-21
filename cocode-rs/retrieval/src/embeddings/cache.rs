@@ -126,7 +126,10 @@ impl EmbeddingCache {
     /// Returns `None` if the embedding is not cached or was created with
     /// a different artifact ID.
     pub fn get(&self, filepath: &str, content_hash: &str) -> Option<Vec<f32>> {
-        let conn = self.conn.lock().ok()?;
+        let conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         conn.query_row(
             "SELECT embedding FROM embeddings WHERE filepath = ? AND content_hash = ? AND artifact_id = ?",
             params![filepath, content_hash, self.artifact_id],

@@ -105,6 +105,35 @@ async fn test_cleanup_handles_missing_dir() {
     assert_eq!(removed, 0);
 }
 
+/// Test helper: removes all snapshot files for a specific session.
+async fn cleanup_session_snapshots(
+    snapshot_dir: &std::path::Path,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let mut entries = match fs::read_dir(snapshot_dir).await {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    while let Some(entry) = entries.next_entry().await? {
+        if !entry.file_type().await?.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if let Some((stem, _ext)) = file_name.rsplit_once('.')
+            && stem == session_id
+        {
+            let _ = fs::remove_file(entry.path()).await;
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_cleanup_session_snapshots() {
     let dir = tempdir().expect("create temp dir");

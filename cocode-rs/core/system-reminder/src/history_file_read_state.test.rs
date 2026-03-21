@@ -1,4 +1,5 @@
 use super::*;
+use cocode_protocol::ToolName;
 
 #[test]
 fn test_build_read_state_from_modifier() {
@@ -132,7 +133,7 @@ fn test_build_file_read_state_from_modifiers() {
         read_kind: FileReadKind::FullContent,
     }];
 
-    let tool_calls = vec![("Read", modifiers.as_slice(), 1, true)];
+    let tool_calls = vec![(ToolName::Read.as_str(), modifiers.as_slice(), 1, true)];
 
     let state = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
 
@@ -163,8 +164,8 @@ fn test_build_file_state_prefers_newer_turn() {
     }];
 
     let tool_calls = vec![
-        ("Read", modifiers1.as_slice(), 1, true),
-        ("Read", modifiers2.as_slice(), 2, true),
+        (ToolName::Read.as_str(), modifiers1.as_slice(), 1, true),
+        (ToolName::Read.as_str(), modifiers2.as_slice(), 2, true),
     ];
 
     let states = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
@@ -177,7 +178,7 @@ fn test_build_file_state_prefers_newer_turn() {
 fn test_build_file_state_ignores_calls_without_modifiers() {
     // Tool calls without FileRead modifiers should be ignored
     let empty_modifiers: Vec<ContextModifier> = vec![];
-    let tool_calls = vec![("Read", empty_modifiers.as_slice(), 1, true)];
+    let tool_calls = vec![(ToolName::Read.as_str(), empty_modifiers.as_slice(), 1, true)];
 
     let states = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
     assert!(states.is_empty());
@@ -195,7 +196,7 @@ fn test_build_file_state_ignores_non_read_tools() {
         read_kind: FileReadKind::FullContent,
     }];
 
-    let tool_calls = vec![("Write", modifiers.as_slice(), 1, true)];
+    let tool_calls = vec![(ToolName::Write.as_str(), modifiers.as_slice(), 1, true)];
 
     let states = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
     assert!(states.is_empty());
@@ -213,7 +214,7 @@ fn test_build_file_state_ignores_incomplete_calls() {
         read_kind: FileReadKind::FullContent,
     }];
 
-    let tool_calls = vec![("Read", modifiers.as_slice(), 1, false)]; // not completed
+    let tool_calls = vec![(ToolName::Read.as_str(), modifiers.as_slice(), 1, false)]; // not completed
 
     let states = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
     assert!(states.is_empty());
@@ -230,7 +231,7 @@ fn test_build_file_state_marks_partial_correctly() {
         read_kind: FileReadKind::PartialContent,
     }];
 
-    let tool_calls = vec![("Read", modifiers.as_slice(), 1, true)];
+    let tool_calls = vec![(ToolName::Read.as_str(), modifiers.as_slice(), 1, true)];
 
     let states = build_file_read_state_from_modifiers(tool_calls.into_iter(), 10);
     assert_eq!(states.len(), 1);
@@ -251,7 +252,7 @@ fn test_max_entries_limit() {
             limit: None,
             read_kind: FileReadKind::FullContent,
         }];
-        tool_calls.push(("Read", modifiers, i, true));
+        tool_calls.push((ToolName::Read.as_str(), modifiers, i, true));
     }
 
     let states = build_file_read_state_from_modifiers(

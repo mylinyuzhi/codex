@@ -1617,7 +1617,6 @@ pub fn wrap_hook_additional_context(contexts: &[HookAdditionalContext]) -> Optio
 /// Build token breakdown for telemetry.
 ///
 /// Analyzes messages to calculate token distribution by category.
-#[allow(dead_code)]
 pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
     let mut breakdown = TokenBreakdown::default();
     let mut tool_request_tokens: HashMap<String, i32> = HashMap::new();
@@ -1648,7 +1647,7 @@ pub fn build_token_breakdown(messages: &[serde_json::Value]) -> TokenBreakdown {
                 breakdown.local_command_output_tokens += tokens;
 
                 // P5: Detect duplicate Read file paths
-                if tool_name == Some("Read") {
+                if tool_name == Some(ToolName::Read.as_str()) {
                     let file_path = msg
                         .get("file_path")
                         .or_else(|| msg.get("input").and_then(|i| i.get("file_path")))

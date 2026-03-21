@@ -144,8 +144,6 @@ impl Default for ExecutorConfig {
 #[derive(Debug)]
 struct PendingToolCall {
     tool_call: ToolCall,
-    #[allow(dead_code)]
-    queued_at: std::time::Instant,
 }
 
 /// Result from a tool execution.
@@ -540,18 +538,22 @@ impl StreamingToolExecutor {
     /// to tools the model was never offered (e.g. `apply_patch` when
     /// `apply_patch_tool_type` is `None`, or tools outside
     /// `experimental_supported_tools`).
-    #[allow(clippy::unwrap_used)]
     pub fn set_allowed_tool_names(&self, names: HashSet<String>) {
-        *self.allowed_tool_names.write().unwrap() = Some(names);
+        *self
+            .allowed_tool_names
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(names);
     }
 
     /// Set skill-level tool restrictions.
     ///
     /// When a skill specifies `allowed_tools`, only those tools (plus "Skill")
     /// are allowed during the skill's execution.
-    #[allow(clippy::unwrap_used)]
     pub fn set_skill_allowed_tools(&self, tools: Option<HashSet<String>>) {
-        *self.skill_allowed_tools.write().unwrap() = tools;
+        *self
+            .skill_allowed_tools
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = tools;
     }
 
     /// Check if a tool name is allowed by both the model allowlist and skill restrictions.
@@ -559,10 +561,14 @@ impl StreamingToolExecutor {
     /// Returns `true` only if the tool passes both checks:
     /// 1. Model allowlist: no allowlist set (all tools allowed) or the name is in the set
     /// 2. Skill restriction: no restriction set or the name is in the skill's allowed set
-    #[allow(clippy::unwrap_used)]
     fn is_tool_allowed(&self, name: &str) -> bool {
         // Check model-level allowlist
-        let model_allowed = match self.allowed_tool_names.read().unwrap().as_ref() {
+        let model_allowed = match self
+            .allowed_tool_names
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
             None => true,
             Some(set) => set.contains(name),
         };
@@ -571,7 +577,12 @@ impl StreamingToolExecutor {
         }
 
         // Check skill-level restriction
-        match self.skill_allowed_tools.read().unwrap().as_ref() {
+        match self
+            .skill_allowed_tools
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
             None => true,
             Some(set) => set.contains(name),
         }
@@ -661,10 +672,10 @@ impl StreamingToolExecutor {
             Some(t) => t,
             None => {
                 // Queue for later - might be MCP tool
-                self.pending_unsafe.lock().await.push(PendingToolCall {
-                    tool_call,
-                    queued_at: std::time::Instant::now(),
-                });
+                self.pending_unsafe
+                    .lock()
+                    .await
+                    .push(PendingToolCall { tool_call });
                 return;
             }
         };
@@ -677,10 +688,10 @@ impl StreamingToolExecutor {
                 let active_count = self.active_tasks.lock().await.len();
                 if active_count >= self.config.max_concurrency as usize {
                     // Queue instead of starting immediately
-                    self.pending_unsafe.lock().await.push(PendingToolCall {
-                        tool_call,
-                        queued_at: std::time::Instant::now(),
-                    });
+                    self.pending_unsafe
+                        .lock()
+                        .await
+                        .push(PendingToolCall { tool_call });
                     return;
                 }
 
@@ -689,10 +700,10 @@ impl StreamingToolExecutor {
             }
             false => {
                 // Queue for sequential execution
-                self.pending_unsafe.lock().await.push(PendingToolCall {
-                    tool_call,
-                    queued_at: std::time::Instant::now(),
-                });
+                self.pending_unsafe
+                    .lock()
+                    .await
+                    .push(PendingToolCall { tool_call });
             }
         }
     }

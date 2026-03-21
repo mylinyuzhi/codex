@@ -10,7 +10,13 @@ fn test_guide_agent() {
     assert_eq!(agent.agent_type, "guide");
     assert_eq!(
         agent.tools,
-        vec!["Glob", "Grep", "Read", "WebFetch", "WebSearch"]
+        vec![
+            ToolName::Glob.as_str(),
+            ToolName::Grep.as_str(),
+            ToolName::Read.as_str(),
+            ToolName::WebFetch.as_str(),
+            ToolName::WebSearch.as_str()
+        ]
     );
     assert!(agent.disallowed_tools.is_empty());
     assert_eq!(agent.max_turns, Some(15));

@@ -113,7 +113,7 @@ impl PermissionRuleEvaluator {
         matching_rules.sort_by(|a, b| {
             a.source
                 .cmp(&b.source)
-                .then(Self::action_priority(&a.action).cmp(&Self::action_priority(&b.action)))
+                .then(Self::action_priority(a.action).cmp(&Self::action_priority(b.action)))
         });
 
         matching_rules.first().map(|rule| match rule.action {
@@ -303,8 +303,7 @@ impl PermissionRuleEvaluator {
     }
 
     /// Lower number = higher priority (more restrictive).
-    #[allow(clippy::trivially_copy_pass_by_ref)]
-    fn action_priority(action: &RuleAction) -> i32 {
+    fn action_priority(action: RuleAction) -> i32 {
         match action {
             RuleAction::Deny => 0,
             RuleAction::Ask => 1,

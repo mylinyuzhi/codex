@@ -139,8 +139,6 @@ const LRU_EVICTION_PERCENT: usize = 25;
 /// LSP client for a single language server
 pub struct LspClient {
     connection: Arc<JsonRpcConnection>,
-    #[allow(dead_code)]
-    diagnostics: Arc<DiagnosticsStore>,
     server_id: String,
     root_uri: Url,
     /// Consolidated file tracking (opened files, versions, access times)
@@ -196,7 +194,6 @@ impl LspClient {
 
         let client = Self {
             connection,
-            diagnostics: Arc::clone(&diagnostics),
             server_id,
             root_uri: root_uri.clone(),
             file_tracker: Arc::new(RwLock::new(FileTracker::default())),

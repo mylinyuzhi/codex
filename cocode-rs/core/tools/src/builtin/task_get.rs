@@ -56,12 +56,7 @@ impl Tool for TaskGetTool {
     }
 
     async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let id = input["taskId"].as_str().ok_or_else(|| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: "taskId must be a string",
-            }
-            .build()
-        })?;
+        let id = super::input_helpers::require_str(&input, "taskId")?;
 
         let store = self.store.lock().await;
         let task = store.get(id).ok_or_else(|| {

@@ -57,7 +57,7 @@ impl Tool for CronListTool {
     }
 
     async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let include_completed = input["include_completed"].as_bool().unwrap_or(false);
+        let include_completed = super::input_helpers::bool_or(&input, "include_completed", false);
         let store = self.store.lock().await;
         if include_completed {
             let summary = cron_state::format_cron_summary(&store);

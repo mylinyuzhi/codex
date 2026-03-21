@@ -2,13 +2,6 @@ use super::*;
 use tempfile::TempDir;
 
 #[test]
-fn test_health_state() {
-    assert_eq!(HealthState::Healthy.as_str(), "healthy");
-    assert_eq!(HealthState::Degraded.as_str(), "degraded");
-    assert_eq!(HealthState::Unhealthy.as_str(), "unhealthy");
-}
-
-#[test]
 fn test_metrics_avg_latency() {
     let mut metrics = IndexMetrics::default();
     metrics.search_latency_samples = vec![10, 20, 30, 40, 50];

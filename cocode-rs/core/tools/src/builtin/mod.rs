@@ -43,6 +43,8 @@
 
 mod prompts;
 
+pub(crate) mod input_helpers;
+
 mod apply_patch;
 mod ask_user_question;
 mod bash;

@@ -359,7 +359,9 @@ impl PluginRegistry {
                         name: cmd.name.clone(),
                         description: cmd.description.clone(),
                         prompt,
-                        allowed_tools: Some(vec!["Bash".to_string()]),
+                        allowed_tools: Some(vec![
+                            cocode_protocol::ToolName::Bash.as_str().to_string(),
+                        ]),
                         user_invocable: cmd.visible,
                         disable_model_invocation: false,
                         is_hidden: !cmd.visible,

@@ -98,16 +98,20 @@ impl EventEmitter {
     /// The consumer's `on_event` method will be called for each emitted event.
     /// Use this for consumers that need synchronous notification (e.g., logging).
     pub fn register_consumer(consumer: Arc<RwLock<dyn EventConsumer>>) {
-        if let Ok(mut consumers) = Self::global().sync_consumers.write() {
-            consumers.push(consumer);
-        }
+        Self::global()
+            .sync_consumers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(consumer);
     }
 
     /// Clear all registered synchronous consumers.
     pub fn clear_consumers() {
-        if let Ok(mut consumers) = Self::global().sync_consumers.write() {
-            consumers.clear();
-        }
+        Self::global()
+            .sync_consumers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Enable or disable event emission.
@@ -115,18 +119,18 @@ impl EventEmitter {
     /// When disabled, `emit()` becomes a no-op. Useful for benchmarking
     /// or high-performance scenarios where event overhead is unacceptable.
     pub fn set_enabled(enabled: bool) {
-        if let Ok(mut flag) = Self::global().enabled.write() {
-            *flag = enabled;
-        }
+        *Self::global()
+            .enabled
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = enabled;
     }
 
     /// Check if event emission is enabled.
     pub fn is_enabled() -> bool {
-        Self::global()
+        *Self::global()
             .enabled
             .read()
-            .map(|flag| *flag)
-            .unwrap_or(true)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Get the number of active async subscribers.
@@ -137,8 +141,10 @@ impl EventEmitter {
     /// Internal emit implementation.
     fn emit_internal(&self, event: RetrievalEvent) -> i32 {
         // Check if emission is enabled
-        if let Ok(enabled) = self.enabled.read()
-            && !*enabled
+        if !*self
+            .enabled
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
             return 0;
         }
@@ -147,11 +153,14 @@ impl EventEmitter {
         let async_count = self.sender.send(event.clone()).unwrap_or(0);
 
         // Notify sync consumers
-        if let Ok(consumers) = self.sync_consumers.read() {
-            for consumer in consumers.iter() {
-                if let Ok(mut c) = consumer.write() {
-                    c.on_event(&event);
-                }
+        let consumers = self
+            .sync_consumers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for consumer in consumers.iter() {
+            // Per-consumer lock: if let Ok(...) is intentional — skip broken consumer, serve others
+            if let Ok(mut c) = consumer.write() {
+                c.on_event(&event);
             }
         }
 

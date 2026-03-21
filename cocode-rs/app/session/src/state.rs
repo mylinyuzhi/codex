@@ -1701,7 +1701,6 @@ impl SessionState {
     /// at its next Step 6.5 drain.
     ///
     /// Returns the command ID.
-    #[allow(clippy::unwrap_used)]
     pub fn queue_command(&self, prompt: impl Into<String>) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1713,26 +1712,37 @@ impl SessionState {
             prompt: prompt.into(),
             queued_at: now,
         };
-        self.queued_commands.lock().unwrap().push(cmd);
+        self.queued_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(cmd);
         id
     }
 
     /// Get the number of queued commands.
-    #[allow(clippy::unwrap_used)]
     pub fn queued_count(&self) -> usize {
-        self.queued_commands.lock().unwrap().len()
+        self.queued_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Take all queued commands (for passing to AgentLoop).
-    #[allow(clippy::unwrap_used)]
     pub fn take_queued_commands(&self) -> Vec<QueuedCommandInfo> {
-        std::mem::take(&mut *self.queued_commands.lock().unwrap())
+        std::mem::take(
+            &mut *self
+                .queued_commands
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Clear all queued commands.
-    #[allow(clippy::unwrap_used)]
     pub fn clear_queued_commands(&self) {
-        self.queued_commands.lock().unwrap().clear();
+        self.queued_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Set the active output style.

@@ -32,8 +32,10 @@ impl SkillUsageTracker {
 
     /// Record an invocation of the named skill.
     pub fn track(&self, name: &str) {
-        #[allow(clippy::unwrap_used)]
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = data.entry(name.to_string()).or_insert_with(|| UsageData {
             count: 0,
             last_used: Instant::now(),
@@ -48,8 +50,10 @@ impl SkillUsageTracker {
     ///
     /// Returns 0.0 if the skill has never been used.
     pub fn score(&self, name: &str) -> f64 {
-        #[allow(clippy::unwrap_used)]
-        let data = self.data.lock().unwrap();
+        let data = self
+            .data
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match data.get(name) {
             Some(usage) => {
                 let elapsed_secs = usage.last_used.elapsed().as_secs_f64();
@@ -63,8 +67,10 @@ impl SkillUsageTracker {
 
     /// Get the invocation count for a skill.
     pub fn count(&self, name: &str) -> u64 {
-        #[allow(clippy::unwrap_used)]
-        let data = self.data.lock().unwrap();
+        let data = self
+            .data
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         data.get(name).map_or(0, |d| d.count)
     }
 }

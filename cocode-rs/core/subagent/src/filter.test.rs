@@ -3,18 +3,18 @@ use cocode_protocol::PermissionMode;
 
 fn all_tools() -> Vec<String> {
     vec![
-        "Bash".to_string(),
-        "Read".to_string(),
-        "Edit".to_string(),
-        "Write".to_string(),
-        "Glob".to_string(),
-        "Grep".to_string(),
-        "Task".to_string(),
-        "EnterPlanMode".to_string(),
-        "ExitPlanMode".to_string(),
-        "TaskStop".to_string(),
-        "AskUserQuestion".to_string(),
-        "EnterWorktree".to_string(),
+        ToolName::Bash.as_str().to_string(),
+        ToolName::Read.as_str().to_string(),
+        ToolName::Edit.as_str().to_string(),
+        ToolName::Write.as_str().to_string(),
+        ToolName::Glob.as_str().to_string(),
+        ToolName::Grep.as_str().to_string(),
+        ToolName::Task.as_str().to_string(),
+        ToolName::EnterPlanMode.as_str().to_string(),
+        ToolName::ExitPlanMode.as_str().to_string(),
+        ToolName::TaskStop.as_str().to_string(),
+        ToolName::AskUserQuestion.as_str().to_string(),
+        ToolName::EnterWorktree.as_str().to_string(),
     ]
 }
 
@@ -33,52 +33,91 @@ fn make_def(tools: Vec<&str>, disallowed: Vec<&str>) -> AgentDefinition {
 fn test_system_blocked_always_removed() {
     let def = make_def(vec![], vec![]);
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
-    assert!(!result.tools.contains(&"Task".to_string()));
-    assert!(!result.tools.contains(&"EnterPlanMode".to_string()));
-    assert!(!result.tools.contains(&"ExitPlanMode".to_string()));
-    assert!(!result.tools.contains(&"TaskStop".to_string()));
-    assert!(!result.tools.contains(&"AskUserQuestion".to_string()));
-    assert!(!result.tools.contains(&"EnterWorktree".to_string()));
+    assert!(!result.tools.contains(&ToolName::Task.as_str().to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::EnterPlanMode.as_str().to_string())
+    );
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::ExitPlanMode.as_str().to_string())
+    );
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::TaskStop.as_str().to_string())
+    );
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::AskUserQuestion.as_str().to_string())
+    );
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::EnterWorktree.as_str().to_string())
+    );
 }
 
 #[test]
 fn test_allow_list_filtering() {
-    let def = make_def(vec!["Bash", "Read"], vec![]);
+    let def = make_def(
+        vec![ToolName::Bash.as_str(), ToolName::Read.as_str()],
+        vec![],
+    );
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
-    assert_eq!(result.tools, vec!["Bash", "Read"]);
+    assert_eq!(
+        result.tools,
+        vec![ToolName::Bash.as_str(), ToolName::Read.as_str()]
+    );
 }
 
 #[test]
 fn test_deny_list_filtering() {
-    let def = make_def(vec![], vec!["Edit", "Write"]);
+    let def = make_def(
+        vec![],
+        vec![ToolName::Edit.as_str(), ToolName::Write.as_str()],
+    );
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
-    assert!(result.tools.contains(&"Bash".to_string()));
-    assert!(result.tools.contains(&"Read".to_string()));
-    assert!(!result.tools.contains(&"Edit".to_string()));
-    assert!(!result.tools.contains(&"Write".to_string()));
+    assert!(result.tools.contains(&ToolName::Bash.as_str().to_string()));
+    assert!(result.tools.contains(&ToolName::Read.as_str().to_string()));
+    assert!(!result.tools.contains(&ToolName::Edit.as_str().to_string()));
+    assert!(!result.tools.contains(&ToolName::Write.as_str().to_string()));
 }
 
 #[test]
 fn test_combined_allow_deny() {
-    let def = make_def(vec!["Bash", "Read", "Edit"], vec!["Edit"]);
+    let def = make_def(
+        vec![
+            ToolName::Bash.as_str(),
+            ToolName::Read.as_str(),
+            ToolName::Edit.as_str(),
+        ],
+        vec![ToolName::Edit.as_str()],
+    );
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
-    assert_eq!(result.tools, vec!["Bash", "Read"]);
+    assert_eq!(
+        result.tools,
+        vec![ToolName::Bash.as_str(), ToolName::Read.as_str()]
+    );
 }
 
 #[test]
 fn test_background_limits_to_async_safe() {
     let def = make_def(vec![], vec![]);
     let all = vec![
-        "Bash",
-        "Read",
-        "Edit",
-        "Write",
-        "Glob",
-        "Grep",
-        "WebFetch",
-        "WebSearch",
-        "NotebookEdit",
-        "TaskOutput",
+        ToolName::Bash.as_str(),
+        ToolName::Read.as_str(),
+        ToolName::Edit.as_str(),
+        ToolName::Write.as_str(),
+        ToolName::Glob.as_str(),
+        ToolName::Grep.as_str(),
+        ToolName::WebFetch.as_str(),
+        ToolName::WebSearch.as_str(),
+        ToolName::NotebookEdit.as_str(),
+        ToolName::TaskOutput.as_str(),
         "SomeInteractiveTool",
     ]
     .into_iter()
@@ -86,11 +125,19 @@ fn test_background_limits_to_async_safe() {
     .collect::<Vec<_>>();
     let result = filter_tools_for_agent(&all, &def, true, None);
     assert!(!result.tools.contains(&"SomeInteractiveTool".to_string()));
-    assert!(result.tools.contains(&"Bash".to_string()));
-    assert!(result.tools.contains(&"Read".to_string()));
-    assert!(result.tools.contains(&"Edit".to_string()));
-    assert!(result.tools.contains(&"WebFetch".to_string()));
-    assert!(result.tools.contains(&"TaskOutput".to_string()));
+    assert!(result.tools.contains(&ToolName::Bash.as_str().to_string()));
+    assert!(result.tools.contains(&ToolName::Read.as_str().to_string()));
+    assert!(result.tools.contains(&ToolName::Edit.as_str().to_string()));
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::WebFetch.as_str().to_string())
+    );
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::TaskOutput.as_str().to_string())
+    );
 }
 
 #[test]
@@ -98,9 +145,13 @@ fn test_background_also_applies_system_blocked() {
     let def = make_def(vec![], vec![]);
     let result = filter_tools_for_agent(&all_tools(), &def, true, None);
     // AskUserQuestion is system-blocked for ALL subagents (foreground + background)
-    assert!(!result.tools.contains(&"AskUserQuestion".to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::AskUserQuestion.as_str().to_string())
+    );
     // Task is system-blocked
-    assert!(!result.tools.contains(&"Task".to_string()));
+    assert!(!result.tools.contains(&ToolName::Task.as_str().to_string()));
 }
 
 #[test]
@@ -108,7 +159,11 @@ fn test_ask_user_blocked_for_all_subagents() {
     let def = make_def(vec![], vec![]);
     // AskUserQuestion is blocked even for foreground subagents
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
-    assert!(!result.tools.contains(&"AskUserQuestion".to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::AskUserQuestion.as_str().to_string())
+    );
 }
 
 #[test]
@@ -134,20 +189,24 @@ fn test_task_restriction_single_type() {
 
 #[test]
 fn test_task_restriction_not_task() {
-    assert!(parse_task_restriction("Read").is_none());
-    assert!(parse_task_restriction("Task").is_none());
+    assert!(parse_task_restriction(ToolName::Read.as_str()).is_none());
+    assert!(parse_task_restriction(ToolName::Task.as_str()).is_none());
     assert!(parse_task_restriction("Task()").is_none());
 }
 
 #[test]
 fn test_task_restriction_in_allow_list() {
-    let def = make_def(vec!["Read", "Task(explore, bash)"], vec![]);
-    let all = vec!["Read".to_string(), "Task".to_string(), "Edit".to_string()];
+    let def = make_def(vec![ToolName::Read.as_str(), "Task(explore, bash)"], vec![]);
+    let all = vec![
+        ToolName::Read.as_str().to_string(),
+        ToolName::Task.as_str().to_string(),
+        ToolName::Edit.as_str().to_string(),
+    ];
     let result = filter_tools_for_agent(&all, &def, false, None);
     // Task should be in the filtered tools (normalized from Task(explore, bash))
-    assert!(result.tools.contains(&"Task".to_string()));
-    assert!(result.tools.contains(&"Read".to_string()));
-    assert!(!result.tools.contains(&"Edit".to_string()));
+    assert!(result.tools.contains(&ToolName::Task.as_str().to_string()));
+    assert!(result.tools.contains(&ToolName::Read.as_str().to_string()));
+    assert!(!result.tools.contains(&ToolName::Edit.as_str().to_string()));
     // Restrictions should be extracted
     assert_eq!(
         result.task_type_restrictions,
@@ -157,17 +216,32 @@ fn test_task_restriction_in_allow_list() {
 
 #[test]
 fn test_no_task_restriction_when_plain_tools() {
-    let def = make_def(vec!["Read", "Task"], vec![]);
-    let all = vec!["Read".to_string(), "Task".to_string()];
+    let def = make_def(
+        vec![ToolName::Read.as_str(), ToolName::Task.as_str()],
+        vec![],
+    );
+    let all = vec![
+        ToolName::Read.as_str().to_string(),
+        ToolName::Task.as_str().to_string(),
+    ];
     let result = filter_tools_for_agent(&all, &def, false, None);
     assert!(result.task_type_restrictions.is_none());
 }
 
 #[test]
 fn test_normalize_tool_name() {
-    assert_eq!(normalize_tool_name("Task(explore)"), "Task");
-    assert_eq!(normalize_tool_name("Read"), "Read");
-    assert_eq!(normalize_tool_name("Task"), "Task");
+    assert_eq!(
+        normalize_tool_name("Task(explore)"),
+        ToolName::Task.as_str()
+    );
+    assert_eq!(
+        normalize_tool_name(ToolName::Read.as_str()),
+        ToolName::Read.as_str()
+    );
+    assert_eq!(
+        normalize_tool_name(ToolName::Task.as_str()),
+        ToolName::Task.as_str()
+    );
 }
 
 // ── MCP tool passthrough tests ──
@@ -175,9 +249,9 @@ fn test_normalize_tool_name() {
 #[test]
 fn test_mcp_tools_bypass_all_filtering() {
     // MCP tools should pass through system-blocked, allow-list, deny-list, and background filter
-    let def = make_def(vec!["Read"], vec!["mcp__server__tool"]);
+    let def = make_def(vec![ToolName::Read.as_str()], vec!["mcp__server__tool"]);
     let all = vec![
-        "Read".to_string(),
+        ToolName::Read.as_str().to_string(),
         "mcp__server__tool".to_string(),
         "mcp__other__action".to_string(),
     ];
@@ -186,7 +260,7 @@ fn test_mcp_tools_bypass_all_filtering() {
     let result = filter_tools_for_agent(&all, &def, false, None);
     assert!(result.tools.contains(&"mcp__server__tool".to_string()));
     assert!(result.tools.contains(&"mcp__other__action".to_string()));
-    assert!(result.tools.contains(&"Read".to_string()));
+    assert!(result.tools.contains(&ToolName::Read.as_str().to_string()));
 
     // Background: MCP tools bypass ASYNC_SAFE_TOOLS filter
     let result = filter_tools_for_agent(&all, &def, true, None);
@@ -198,17 +272,17 @@ fn test_mcp_tools_bypass_all_filtering() {
 fn test_mcp_tools_bypass_system_blocked_and_background() {
     let def = make_def(vec![], vec![]);
     let all = vec![
-        "Bash".to_string(),
-        "Task".to_string(),
+        ToolName::Bash.as_str().to_string(),
+        ToolName::Task.as_str().to_string(),
         "mcp__myserver__run".to_string(),
     ];
     // Background mode
     let result = filter_tools_for_agent(&all, &def, true, None);
     // Task is system-blocked
-    assert!(!result.tools.contains(&"Task".to_string()));
+    assert!(!result.tools.contains(&ToolName::Task.as_str().to_string()));
     // mcp__ tool passes through everything
     assert!(result.tools.contains(&"mcp__myserver__run".to_string()));
-    assert!(result.tools.contains(&"Bash".to_string()));
+    assert!(result.tools.contains(&ToolName::Bash.as_str().to_string()));
 }
 
 // ── ExitPlanMode plan mode exception tests ──
@@ -217,31 +291,53 @@ fn test_mcp_tools_bypass_system_blocked_and_background() {
 fn test_exit_plan_mode_allowed_in_plan_permission() {
     let def = make_def(vec![], vec![]);
     let all = vec![
-        "Bash".to_string(),
-        "ExitPlanMode".to_string(),
-        "EnterPlanMode".to_string(),
+        ToolName::Bash.as_str().to_string(),
+        ToolName::ExitPlanMode.as_str().to_string(),
+        ToolName::EnterPlanMode.as_str().to_string(),
     ];
     let result = filter_tools_for_agent(&all, &def, false, Some(&PermissionMode::Plan));
     // ExitPlanMode should be allowed in Plan mode
-    assert!(result.tools.contains(&"ExitPlanMode".to_string()));
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::ExitPlanMode.as_str().to_string())
+    );
     // EnterPlanMode should still be blocked
-    assert!(!result.tools.contains(&"EnterPlanMode".to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::EnterPlanMode.as_str().to_string())
+    );
 }
 
 #[test]
 fn test_exit_plan_mode_blocked_in_default_permission() {
     let def = make_def(vec![], vec![]);
-    let all = vec!["Bash".to_string(), "ExitPlanMode".to_string()];
+    let all = vec![
+        ToolName::Bash.as_str().to_string(),
+        ToolName::ExitPlanMode.as_str().to_string(),
+    ];
     let result = filter_tools_for_agent(&all, &def, false, Some(&PermissionMode::Default));
-    assert!(!result.tools.contains(&"ExitPlanMode".to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::ExitPlanMode.as_str().to_string())
+    );
 }
 
 #[test]
 fn test_exit_plan_mode_blocked_with_no_permission() {
     let def = make_def(vec![], vec![]);
-    let all = vec!["Bash".to_string(), "ExitPlanMode".to_string()];
+    let all = vec![
+        ToolName::Bash.as_str().to_string(),
+        ToolName::ExitPlanMode.as_str().to_string(),
+    ];
     let result = filter_tools_for_agent(&all, &def, false, None);
-    assert!(!result.tools.contains(&"ExitPlanMode".to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::ExitPlanMode.as_str().to_string())
+    );
 }
 
 // ── ASYNC_SAFE_TOOLS completeness tests ──

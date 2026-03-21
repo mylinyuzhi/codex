@@ -148,10 +148,9 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                     };
 
                     // Push mention read record to shared buffer for FileTracker sync
-                    #[allow(clippy::unwrap_used)]
                     ctx.mention_read_records
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push(MentionReadRecord {
                             path: resolved_path.clone(),
                             content: file_content.clone(),

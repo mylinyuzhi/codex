@@ -3,6 +3,7 @@
 //! This module provides types and functions for detecting the user's default shell,
 //! resolving shell paths, and configuring shell execution.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,11 +40,6 @@ impl Shell {
     /// Returns the shell type.
     pub fn shell_type(&self) -> &ShellType {
         &self.shell_type
-    }
-
-    /// Returns the shell path.
-    pub fn shell_path(&self) -> &PathBuf {
-        &self.shell_path
     }
 
     /// Returns the short name of the shell.
@@ -120,7 +116,7 @@ impl Eq for Shell {}
 /// Detects the shell type from a path.
 ///
 /// Returns `None` if the shell type cannot be determined.
-pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+pub fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
     match shell_path.as_os_str().to_str() {
         Some("zsh") => Some(ShellType::Zsh),
         Some("sh") => Some(ShellType::Sh),
@@ -132,7 +128,7 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
             let shell_name = shell_path.file_stem();
             if let Some(shell_name) = shell_name {
                 if shell_name != shell_path.as_os_str() {
-                    detect_shell_type(&PathBuf::from(shell_name))
+                    detect_shell_type(Path::new(shell_name))
                 } else {
                     None
                 }
@@ -174,7 +170,7 @@ fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
 }
 
 /// Gets a shell of the specified type, optionally at a specific path.
-pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell> {
+pub fn get_shell(shell_type: ShellType, path: Option<&Path>) -> Option<Shell> {
     match shell_type {
         ShellType::Zsh => get_zsh_shell(path),
         ShellType::Bash => get_bash_shell(path),
@@ -185,7 +181,7 @@ pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell>
 }
 
 /// Gets a shell by the model-provided path, detecting its type automatically.
-pub fn get_shell_by_path(shell_path: &PathBuf) -> Shell {
+pub fn get_shell_by_path(shell_path: &Path) -> Shell {
     detect_shell_type(shell_path)
         .and_then(|shell_type| get_shell(shell_type, Some(shell_path)))
         .unwrap_or_else(ultimate_fallback_shell)
@@ -218,9 +214,9 @@ fn get_user_shell_path() -> Option<PathBuf> {
     None
 }
 
-fn file_exists(path: &PathBuf) -> Option<PathBuf> {
+fn file_exists(path: &Path) -> Option<PathBuf> {
     if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-        Some(path.clone())
+        Some(path.to_path_buf())
     } else {
         None
     }
@@ -228,7 +224,7 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
 
 fn get_shell_path(
     shell_type: ShellType,
-    provided_path: Option<&PathBuf>,
+    provided_path: Option<&Path>,
     binary_name: &str,
     fallback_paths: Vec<&str>,
 ) -> Option<PathBuf> {
@@ -236,7 +232,7 @@ fn get_shell_path(
     if let Some(path) = provided_path
         && file_exists(path).is_some()
     {
-        return Some(path.clone());
+        return Some(path.to_path_buf());
     }
 
     // Check if the shell we are trying to load is user's default shell
@@ -254,7 +250,7 @@ fn get_shell_path(
 
     // Try fallback paths
     for path in fallback_paths {
-        if let Some(path) = file_exists(&PathBuf::from(path)) {
+        if let Some(path) = file_exists(Path::new(path)) {
             return Some(path);
         }
     }
@@ -262,7 +258,7 @@ fn get_shell_path(
     None
 }
 
-fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_zsh_shell(path: Option<&Path>) -> Option<Shell> {
     let shell_path = get_shell_path(ShellType::Zsh, path, "zsh", vec!["/bin/zsh"])?;
     Some(Shell {
         shell_type: ShellType::Zsh,
@@ -271,7 +267,7 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_bash_shell(path: Option<&Path>) -> Option<Shell> {
     let shell_path = get_shell_path(ShellType::Bash, path, "bash", vec!["/bin/bash"])?;
     Some(Shell {
         shell_type: ShellType::Bash,
@@ -280,7 +276,7 @@ fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_sh_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_sh_shell(path: Option<&Path>) -> Option<Shell> {
     let shell_path = get_shell_path(ShellType::Sh, path, "sh", vec!["/bin/sh"])?;
     Some(Shell {
         shell_type: ShellType::Sh,
@@ -289,7 +285,7 @@ fn get_sh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_powershell_shell(path: Option<&Path>) -> Option<Shell> {
     let shell_path = get_shell_path(
         ShellType::PowerShell,
         path,
@@ -305,7 +301,7 @@ fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_cmd_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_cmd_shell(path: Option<&Path>) -> Option<Shell> {
     let shell_path = get_shell_path(ShellType::Cmd, path, "cmd", vec![])?;
     Some(Shell {
         shell_type: ShellType::Cmd,

@@ -69,7 +69,6 @@ pub enum CellType {
     Raw,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
 impl CellType {
     fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
@@ -80,7 +79,7 @@ impl CellType {
         }
     }
 
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             CellType::Code => "code",
             CellType::Markdown => "markdown",
