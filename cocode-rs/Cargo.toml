@@ -49,6 +49,7 @@ members = [
     "features/plugin",
     "features/plan-mode",
     "features/team",
+    "features/auto-memory",
     "core/loop",
     "core/subagent",
     "core/executor",
@@ -141,6 +142,7 @@ cocode-hooks = { path = "features/hooks" }
 cocode-plugin = { path = "features/plugin" }
 cocode-plan-mode = { path = "features/plan-mode" }
 cocode-team = { path = "features/team" }
+cocode-auto-memory = { path = "features/auto-memory" }
 
 # Internal - app
 cocode-session = { path = "app/session" }

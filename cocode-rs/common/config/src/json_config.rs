@@ -295,6 +295,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub plan: Option<PlanModeConfig>,
 
+    /// Auto memory configuration.
+    #[serde(default, rename = "autoMemory")]
+    pub auto_memory: Option<cocode_protocol::AutoMemoryConfig>,
+
     /// Attachment configuration.
     #[serde(default)]
     pub attachment: Option<AttachmentConfig>,
@@ -518,6 +522,8 @@ pub struct ResolvedAppConfig {
     pub plan: Option<PlanModeConfig>,
     /// Effective attachment configuration.
     pub attachment: Option<AttachmentConfig>,
+    /// Effective auto memory configuration.
+    pub auto_memory: Option<cocode_protocol::AutoMemoryConfig>,
     /// Effective path configuration.
     pub paths: Option<PathConfig>,
     /// Effective language preference.
@@ -562,6 +568,7 @@ impl AppConfig {
             compact: self.compact.clone(),
             plan: self.plan.clone(),
             attachment: self.attachment.clone(),
+            auto_memory: self.auto_memory.clone(),
             paths: self.paths.clone(),
             language_preference: self.language_preference.clone(),
             permissions: self.permissions.clone(),

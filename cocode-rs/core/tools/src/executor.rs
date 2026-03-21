@@ -90,6 +90,8 @@ pub struct ExecutorConfig {
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
+    /// Auto memory directory path (for write permission bypass).
+    pub auto_memory_dir: Option<PathBuf>,
     /// Session directory for storing large tool results.
     ///
     /// When set, tool results exceeding the configured size threshold are
@@ -127,6 +129,7 @@ impl Default for ExecutorConfig {
             default_timeout_secs: 120,
             is_plan_mode: false,
             plan_file_path: None,
+            auto_memory_dir: None,
             session_dir: None,
             tool_config: cocode_protocol::ToolConfig::default(),
             features: cocode_protocol::Features::with_defaults(),
@@ -1149,6 +1152,7 @@ impl StreamingToolExecutor {
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
+            .auto_memory_dir(self.config.auto_memory_dir.clone())
             .features(self.config.features.clone())
             .web_search_config(self.config.web_search_config.clone())
             .web_fetch_config(self.config.web_fetch_config.clone())

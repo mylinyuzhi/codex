@@ -177,6 +177,10 @@ pub struct AgentLoop {
     /// Plan mode state for the session.
     plan_mode_state: PlanModeState,
 
+    // Auto memory
+    /// Auto memory state for the session.
+    auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+
     // Subagent spawning
     /// Shell executor for command execution and background tasks.
     shell_executor: ShellExecutor,
@@ -589,6 +593,11 @@ impl AgentLoop {
         query_tracking: &mut QueryTracking,
         auto_compact_tracking: &mut AutoCompactTracking,
     ) -> crate::error::Result<LoopResult> {
+        // ── STEP 0.5: Refresh auto memory from disk (always fresh) ──
+        if let Some(ref state) = self.auto_memory_state {
+            state.refresh().await;
+        }
+
         // ── STEP 1: Signal stream_request_start ──
         self.emit(LoopEvent::StreamRequestStart).await;
 
@@ -1274,6 +1283,11 @@ impl AgentLoop {
                 })
                 .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
 
+            // Wire auto memory state into generator context
+            if let Some(ref state) = self.auto_memory_state {
+                builder = builder.auto_memory_state(Arc::clone(state));
+            }
+
             // Wire background tasks into the generator context
             if !background_tasks.is_empty() {
                 builder = builder.background_tasks(background_tasks);
@@ -1619,6 +1633,10 @@ impl AgentLoop {
             cwd: self.context.environment.cwd.clone(),
             is_plan_mode: self.plan_mode_state.is_active,
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
+            auto_memory_dir: self
+                .auto_memory_state
+                .as_ref()
+                .map(|s| s.config.directory.clone()),
             features: self.features.clone(),
             web_search_config: self.web_search_config.clone(),
             web_fetch_config: self.web_fetch_config.clone(),

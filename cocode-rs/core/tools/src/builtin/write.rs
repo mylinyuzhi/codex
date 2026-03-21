@@ -95,6 +95,11 @@ impl Tool for WriteTool {
                 };
             }
 
+            // Auto-allow auto memory file writes (even in plan mode)
+            if ctx.auto_memory_allows_write(&path) {
+                return PermissionResult::Allowed;
+            }
+
             // Plan mode: only plan file allowed
             if !ctx.plan_mode_allows_write(&path) {
                 return PermissionResult::Denied {
@@ -196,8 +201,8 @@ impl Tool for WriteTool {
 
         let path = ctx.resolve_path(file_path);
 
-        // Plan mode check: only allow writes to the plan file
-        if !ctx.plan_mode_allows_write(&path) {
+        // Plan mode check (auto-memory paths bypass plan mode restrictions)
+        if !ctx.auto_memory_allows_write(&path) && !ctx.plan_mode_allows_write(&path) {
             return Err(crate::error::tool_error::ExecutionFailedSnafu {
                     message: format!(
                         "Plan mode: cannot write to '{}'. Only the plan file can be modified during plan mode.",
