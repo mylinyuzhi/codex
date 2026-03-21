@@ -153,6 +153,12 @@ pub struct Config {
     pub attachment_config: AttachmentConfig,
 
     // ============================================================
+    // 19. Auto Memory
+    // ============================================================
+    /// Auto memory configuration.
+    pub auto_memory_config: cocode_protocol::AutoMemoryConfig,
+
+    // ============================================================
     // 11. Extended Paths
     // ============================================================
     /// Extended path configuration.
@@ -380,6 +386,7 @@ impl Default for Config {
             compact_config: CompactConfig::default(),
             plan_config: PlanModeConfig::default(),
             attachment_config: AttachmentConfig::default(),
+            auto_memory_config: cocode_protocol::AutoMemoryConfig::default(),
             path_config: PathConfig::default(),
             web_search_config: WebSearchConfig::default(),
             web_fetch_config: WebFetchConfig::default(),

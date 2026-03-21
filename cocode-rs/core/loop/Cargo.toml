@@ -10,6 +10,7 @@ cocode-api.workspace = true
 cocode-tools.workspace = true
 cocode-shell.workspace = true
 cocode-plan-mode.workspace = true
+cocode-auto-memory.workspace = true
 cocode-message.workspace = true
 cocode-context.workspace = true
 cocode-prompt.workspace = true

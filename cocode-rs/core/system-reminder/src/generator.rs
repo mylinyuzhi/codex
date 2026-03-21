@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cocode_tools::FileTracker;
@@ -50,6 +51,15 @@ pub trait AttachmentGenerator: Send + Sync + Debug {
     /// Get the throttle configuration for this generator.
     fn throttle_config(&self) -> ThrottleConfig {
         ThrottleConfig::default()
+    }
+
+    /// Get context-aware throttle configuration.
+    ///
+    /// Override this when the throttle parameters are user-configurable and
+    /// stored in the `GeneratorContext` (e.g., `auto_memory_state.config`).
+    /// The default delegates to [`Self::throttle_config()`].
+    fn throttle_config_for_context(&self, _ctx: &GeneratorContext<'_>) -> ThrottleConfig {
+        self.throttle_config()
     }
 }
 
@@ -517,6 +527,10 @@ pub struct GeneratorContext<'a> {
     /// Information about a rewind that just occurred (consumed once).
     pub rewind_info: Option<RewindContextInfo>,
 
+    // === Auto memory ===
+    /// Auto memory state for prompt injection and relevant memories search.
+    pub auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+
     // === Mention read records ===
     /// Records of files read via @mention syntax during this turn.
     ///
@@ -678,6 +692,7 @@ pub struct GeneratorContextBuilder<'a> {
     rewind_info: Option<RewindContextInfo>,
     mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
     is_auto_compact_enabled: bool,
+    auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -869,6 +884,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn auto_memory_state(mut self, state: Arc<cocode_auto_memory::AutoMemoryState>) -> Self {
+        self.auto_memory_state = Some(state);
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -916,6 +936,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_auto_compact_enabled: self.is_auto_compact_enabled,
             rewind_info: self.rewind_info,
             mention_read_records: self.mention_read_records,
+            auto_memory_state: self.auto_memory_state,
         }
     }
 }

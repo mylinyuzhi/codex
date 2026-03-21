@@ -14,6 +14,7 @@
 
 pub mod agent_status;
 pub mod attachment_config;
+pub mod auto_memory_config;
 pub mod compact_config;
 pub mod correlation;
 pub mod execution;
@@ -154,6 +155,16 @@ pub use tracking::QueryTracking;
 
 // Extended config types
 pub use attachment_config::AttachmentConfig;
+pub use auto_memory_config::AutoMemoryConfig;
+pub use auto_memory_config::DEFAULT_MAX_FILES_TO_SCAN;
+pub use auto_memory_config::DEFAULT_MAX_FRONTMATTER_LINES;
+pub use auto_memory_config::DEFAULT_MAX_LINES_PER_FILE;
+pub use auto_memory_config::DEFAULT_MAX_MEMORY_LINES;
+pub use auto_memory_config::DEFAULT_MAX_RELEVANT_FILES;
+pub use auto_memory_config::DEFAULT_MIN_KEYWORD_LENGTH;
+pub use auto_memory_config::DEFAULT_RELEVANT_MEMORIES_THROTTLE_TURNS;
+pub use auto_memory_config::DEFAULT_RELEVANT_SEARCH_TIMEOUT_MS;
+pub use auto_memory_config::DEFAULT_STALENESS_WARNING_DAYS;
 pub use compact_config::CompactConfig;
 pub use compact_config::FileRestorationConfig;
 pub use compact_config::KeepWindowConfig;

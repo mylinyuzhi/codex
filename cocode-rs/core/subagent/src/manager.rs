@@ -161,6 +161,11 @@ pub struct AgentExecuteParams {
     pub color: Option<String>,
     /// Whether the agent operates in plan mode (read-only until approved).
     pub plan_mode_required: bool,
+    /// Auto memory state shared from the parent agent.
+    ///
+    /// Enables the child's system-reminder generators to inject memory prompts
+    /// and the tool permission pipeline to auto-allow memory file writes.
+    pub auto_memory_state: Option<std::sync::Arc<cocode_auto_memory::AutoMemoryState>>,
 }
 
 /// Callback type for executing an agent with filtered tools.
@@ -320,6 +325,7 @@ fn build_execute_params(
     cancel_token: CancellationToken,
     task_type_restrictions: Option<Vec<String>>,
     output_file: Option<PathBuf>,
+    auto_memory_state: Option<std::sync::Arc<cocode_auto_memory::AutoMemoryState>>,
 ) -> AgentExecuteParams {
     AgentExecuteParams {
         agent_type: input.agent_type.clone(),
@@ -344,6 +350,7 @@ fn build_execute_params(
         color: definition.color.clone(),
         plan_mode_required: definition.permission_mode
             == Some(cocode_protocol::PermissionMode::Plan),
+        auto_memory_state,
     }
 }
 
@@ -385,6 +392,8 @@ pub struct SubagentManager {
     /// If a foreground agent runs longer than this, it is automatically
     /// transitioned to background. `None` disables auto-backgrounding.
     auto_background_timeout: Option<std::time::Duration>,
+    /// Auto memory state to propagate to child agents.
+    auto_memory_state: Option<std::sync::Arc<cocode_auto_memory::AutoMemoryState>>,
 }
 
 impl SubagentManager {
@@ -404,6 +413,7 @@ impl SubagentManager {
             background_stop_hook_fn: None,
             max_background_agents: DEFAULT_MAX_BACKGROUND_AGENTS,
             auto_background_timeout: None,
+            auto_memory_state: None,
         }
     }
 
@@ -422,6 +432,15 @@ impl SubagentManager {
     /// Set the output directory for background agents.
     pub fn with_output_dir(mut self, dir: PathBuf) -> Self {
         self.output_dir = dir;
+        self
+    }
+
+    /// Set the auto memory state to propagate to child agents.
+    pub fn with_auto_memory_state(
+        mut self,
+        state: std::sync::Arc<cocode_auto_memory::AutoMemoryState>,
+    ) -> Self {
+        self.auto_memory_state = Some(state);
         self
     }
 
@@ -713,6 +732,7 @@ impl SubagentManager {
                     cancel_token.clone(),
                     task_type_restrictions.clone(),
                     Some(output_file.clone()),
+                    self.auto_memory_state.clone(),
                 );
 
                 let prompt_for_transcript = resolved.prompt.clone();
@@ -779,6 +799,7 @@ impl SubagentManager {
                     cancel_token.clone(),
                     task_type_restrictions,
                     None,
+                    self.auto_memory_state.clone(),
                 );
 
                 // Pin the future so it can be moved into a background task on Ctrl+B

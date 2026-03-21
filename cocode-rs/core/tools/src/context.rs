@@ -1459,6 +1459,8 @@ pub struct ToolContext {
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
+    /// Auto memory directory path (for write permission bypass).
+    pub auto_memory_dir: Option<PathBuf>,
     /// Shell executor for command execution and background task management.
     pub shell_executor: ShellExecutor,
     /// Optional LSP server manager for language intelligence tools.
@@ -1545,6 +1547,7 @@ impl ToolContext {
             model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
+            auto_memory_dir: None,
             shell_executor,
             lsp_manager: None,
             skill_manager: None,
@@ -1657,6 +1660,12 @@ impl ToolContext {
         self
     }
 
+    /// Set the auto memory directory for write permission bypass.
+    pub fn with_auto_memory_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.auto_memory_dir = dir;
+        self
+    }
+
     /// Set the shell executor.
     pub fn with_shell_executor(mut self, executor: ShellExecutor) -> Self {
         self.shell_executor = executor;
@@ -1726,6 +1735,14 @@ impl ToolContext {
             return true;
         }
         cocode_plan_mode::is_safe_file(path, self.plan_file_path.as_deref())
+    }
+
+    /// Check if a write to the given path should be auto-allowed
+    /// because it's within the auto memory directory.
+    pub fn auto_memory_allows_write(&self, path: &Path) -> bool {
+        self.auto_memory_dir
+            .as_deref()
+            .is_some_and(|dir| cocode_auto_memory::is_auto_memory_path(path, dir))
     }
 
     /// Spawn a subagent using the configured callback.
@@ -1938,6 +1955,7 @@ impl std::fmt::Debug for ToolContext {
             .field("is_cancelled", &self.is_cancelled())
             .field("is_plan_mode", &self.is_plan_mode)
             .field("plan_file_path", &self.plan_file_path)
+            .field("auto_memory_dir", &self.auto_memory_dir)
             .field("lsp_manager", &self.lsp_manager.is_some())
             .field("skill_manager", &self.skill_manager.is_some())
             .field("session_dir", &self.session_dir)
@@ -1968,6 +1986,7 @@ pub struct ToolContextBuilder {
     model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
+    auto_memory_dir: Option<PathBuf>,
     shell_executor: Option<ShellExecutor>,
     lsp_manager: Option<Arc<LspServerManager>>,
     skill_manager: Option<Arc<SkillManager>>,
@@ -2011,6 +2030,7 @@ impl ToolContextBuilder {
             model_call_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
+            auto_memory_dir: None,
             shell_executor: None,
             lsp_manager: None,
             skill_manager: None,
@@ -2126,6 +2146,12 @@ impl ToolContextBuilder {
     pub fn plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
         self.is_plan_mode = is_active;
         self.plan_file_path = plan_file_path;
+        self
+    }
+
+    /// Set the auto memory directory for write permission bypass.
+    pub fn auto_memory_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.auto_memory_dir = dir;
         self
     }
 
@@ -2266,6 +2292,7 @@ impl ToolContextBuilder {
             model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
+            auto_memory_dir: self.auto_memory_dir,
             shell_executor,
             lsp_manager: self.lsp_manager,
             skill_manager: self.skill_manager,

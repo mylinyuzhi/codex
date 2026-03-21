@@ -917,6 +917,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-auto-memory"
+version = "0.0.0"
+dependencies = [
+ "cocode-error",
+ "cocode-protocol",
+ "dirs 6.0.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-cli"
 version = "0.0.0"
 dependencies = [
@@ -1125,6 +1141,7 @@ name = "cocode-loop"
 version = "0.0.0"
 dependencies = [
  "cocode-api",
+ "cocode-auto-memory",
  "cocode-context",
  "cocode-error",
  "cocode-file-backup",
@@ -1514,6 +1531,7 @@ name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
  "cocode-api",
+ "cocode-auto-memory",
  "cocode-config",
  "cocode-error",
  "cocode-message",
@@ -1558,6 +1576,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "cocode-auto-memory",
  "cocode-config",
  "cocode-context",
  "cocode-error",
@@ -1586,6 +1605,7 @@ dependencies = [
  "chrono",
  "cocode-api",
  "cocode-apply-patch",
+ "cocode-auto-memory",
  "cocode-config",
  "cocode-error",
  "cocode-file-backup",

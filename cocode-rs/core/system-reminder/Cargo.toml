@@ -11,6 +11,7 @@ cocode-config.workspace = true
 cocode-context.workspace = true
 cocode-message.workspace = true
 cocode-tools.workspace = true
+cocode-auto-memory.workspace = true
 snafu.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

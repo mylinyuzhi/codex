@@ -150,6 +150,12 @@ pub enum AttachmentType {
     // === Compaction reminder ===
     /// Reminder that auto-compact is enabled (prevents "context anxiety").
     CompactionReminder,
+
+    // === Auto memory ===
+    /// Auto memory prompt (MEMORY.md instructions + content).
+    AutoMemoryPrompt,
+    /// Relevant memory files from semantic search.
+    RelevantMemories,
 }
 
 impl AttachmentType {
@@ -186,7 +192,9 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
-            | AttachmentType::CompactionReminder => XmlTag::SystemReminder,
+            | AttachmentType::CompactionReminder
+            | AttachmentType::AutoMemoryPrompt
+            | AttachmentType::RelevantMemories => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -210,7 +218,8 @@ impl AttachmentType {
             | AttachmentType::PlanToolReminder
             | AttachmentType::PlanModeExit
             | AttachmentType::CriticalInstruction
-            | AttachmentType::NestedMemory => ReminderTier::Core,
+            | AttachmentType::NestedMemory
+            | AttachmentType::AutoMemoryPrompt => ReminderTier::Core,
 
             // MainAgentOnly tier
             AttachmentType::AvailableSkills
@@ -234,7 +243,8 @@ impl AttachmentType {
             | AttachmentType::AlreadyReadFile
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
-            | AttachmentType::CompactionReminder => ReminderTier::MainAgentOnly,
+            | AttachmentType::CompactionReminder
+            | AttachmentType::RelevantMemories => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
@@ -279,6 +289,8 @@ impl AttachmentType {
             AttachmentType::CompactFileReference => "compact_file_reference",
             AttachmentType::Rewind => "rewind",
             AttachmentType::CompactionReminder => "compaction_reminder",
+            AttachmentType::AutoMemoryPrompt => "auto_memory_prompt",
+            AttachmentType::RelevantMemories => "relevant_memories",
         }
     }
 }

@@ -757,6 +757,7 @@ impl ConfigManager {
             merge_section::<cocode_protocol::PlanModeConfig>(&overrides, &resolved, &env_loader);
         let attachment_config =
             merge_section::<cocode_protocol::AttachmentConfig>(&overrides, &resolved, &env_loader);
+        let auto_memory_config = resolved.auto_memory.clone().unwrap_or_default();
         let path_config = merge_path_section(&overrides, &resolved, &env_loader);
 
         // Web search and fetch configs
@@ -787,6 +788,7 @@ impl ConfigManager {
             compact_config,
             plan_config,
             attachment_config,
+            auto_memory_config,
             path_config,
             web_search_config,
             web_fetch_config,
