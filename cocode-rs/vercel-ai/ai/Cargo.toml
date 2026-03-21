@@ -1,0 +1,39 @@
+[package]
+name = "vercel-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vercel AI SDK core functions for Rust"
+
+[dependencies]
+vercel-ai-provider = { path = "../provider" }
+vercel-ai-provider-utils = { path = "../provider-utils", features = ["json-schema", "schema-validation"] }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+schemars = "0.8"
+jsonschema = "0.18"
+base64 = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+vercel-ai-openai = { path = "../openai" }
+vercel-ai-openai-compatible = { path = "../openai-compatible" }
+vercel-ai-anthropic = { path = "../anthropic" }
+vercel-ai-google = { path = "../google" }
+
+[lints]
+workspace = true

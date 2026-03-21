@@ -1,0 +1,30 @@
+[package]
+name = "cocode-subagent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-config = { path = "../../common/config" }
+cocode-message.workspace = true
+cocode-protocol.workspace = true
+cocode-tools.workspace = true
+cocode-auto-memory.workspace = true
+cocode-error.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "fs"] }
+tokio-util.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yml.workspace = true
+snafu.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+once_cell.workspace = true
+
+[dev-dependencies]
+cocode-api.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
