@@ -147,10 +147,7 @@ pub fn create_default_team_stores() -> (
     std::sync::Arc<cocode_team::TeamStore>,
     std::sync::Arc<cocode_team::Mailbox>,
 ) {
-    let team_base_dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".cocode")
-        .join("teams");
+    let team_base_dir = cocode_config::find_cocode_home().join("teams");
     let team_store = std::sync::Arc::new(cocode_team::TeamStore::new(team_base_dir.clone(), true));
     let mailbox = std::sync::Arc::new(cocode_team::Mailbox::new(team_base_dir));
     (team_store, mailbox)

@@ -600,6 +600,7 @@ impl Tool for SmartEditTool {
             }
             .build()
         })?;
+        let encoding = detect_encoding(&bytes);
         let content = encoding.decode(&bytes).map_err(|e| {
             crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!("Failed to decode file: {e}"),

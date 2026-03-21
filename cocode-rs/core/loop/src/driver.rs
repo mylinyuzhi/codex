@@ -1321,12 +1321,10 @@ impl AgentLoop {
                             });
                         }
 
-                        // Query unread messages and mark as read
-                        if let Ok(messages) = mbox.read_unread(team_name, &identity.agent_id).await
+                        // Query unread messages and mark as read in a single file operation
+                        if let Ok(messages) = mbox.take_unread(team_name, &identity.agent_id).await
                         {
                             if !messages.is_empty() {
-                                let ids: Vec<String> =
-                                    messages.iter().map(|m| m.id.clone()).collect();
                                 builder = builder.unread_messages(
                                     messages
                                         .into_iter()
@@ -1339,7 +1337,6 @@ impl AgentLoop {
                                         })
                                         .collect(),
                                 );
-                                let _ = mbox.mark_read(team_name, &identity.agent_id, &ids).await;
                             }
                         }
                     }
@@ -1474,35 +1471,6 @@ impl AgentLoop {
             // Get rewind info if available (already extracted earlier)
             if let Some(rewind_info) = rewind_context_for_builder.clone() {
                 builder = builder.rewind_info(rewind_info);
-            }
-
-            // Collect background tasks from shell executor for system reminders.
-            {
-                let snapshots = self.shell_executor.background_registry.list_tasks().await;
-                if !snapshots.is_empty() {
-                    let bg_infos: Vec<cocode_system_reminder::generator::BackgroundTaskInfo> =
-                        snapshots
-                            .into_iter()
-                            .map(|s| cocode_system_reminder::generator::BackgroundTaskInfo {
-                                task_id: s.id,
-                                task_type:
-                                    cocode_system_reminder::generator::BackgroundTaskType::Shell,
-                                command: s.command,
-                                status: if s.is_running {
-                                    cocode_system_reminder::generator::BackgroundTaskStatus::Running
-                                } else {
-                                    cocode_system_reminder::generator::BackgroundTaskStatus::Completed
-                                },
-                                exit_code: None,
-                                has_new_output: false,
-                                progress_message: None,
-                                is_completion_notification: false,
-                                delta_summary: None,
-                                description: None,
-                            })
-                            .collect();
-                    builder = builder.background_tasks(bg_infos);
-                }
             }
 
             // Convert structured tasks to StructuredTaskInfo for rich reminders.

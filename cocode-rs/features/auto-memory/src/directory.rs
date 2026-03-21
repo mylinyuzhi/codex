@@ -55,10 +55,6 @@ pub fn get_auto_memory_directory(cwd: &Path, custom_dir: Option<&str>) -> PathBu
 
 /// Ensure the memory directory exists.
 pub async fn ensure_memory_dir_exists(dir: &Path) -> crate::Result<()> {
-    if dir.exists() {
-        return Ok(());
-    }
-    debug!(path = %dir.display(), "Creating memory directory");
     tokio::fs::create_dir_all(dir)
         .await
         .context(err::CreateDirSnafu {

@@ -214,9 +214,7 @@ impl Team {
 
     /// Check if an agent is a member (by ID or name).
     pub fn has_member(&self, id_or_name: &str) -> bool {
-        self.members
-            .iter()
-            .any(|m| m.agent_id == id_or_name || m.name.as_deref().is_some_and(|n| n == id_or_name))
+        self.find_member(id_or_name).is_some()
     }
 
     /// Find a member by ID or name.

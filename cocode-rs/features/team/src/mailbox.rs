@@ -5,6 +5,7 @@
 //! Per-recipient locks prevent concurrent read-modify-write races.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ pub struct Mailbox {
     /// Per-recipient write locks keyed by mailbox file path.
     /// Prevents concurrent senders from interleaving read-modify-write.
     locks: Arc<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Team names whose mailbox directories have already been created.
+    ensured_dirs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Mailbox {
@@ -35,6 +38,7 @@ impl Mailbox {
         Self {
             base_dir,
             locks: Arc::new(Mutex::new(HashMap::new())),
+            ensured_dirs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -59,6 +63,30 @@ impl Mailbox {
         let path = self.mailbox_path(team_name, agent_id);
         let messages = self.read_all_raw(&path).await?;
         Ok(messages.into_iter().filter(|m| !m.read).collect())
+    }
+
+    /// Read unread messages and mark them as read in a single file operation.
+    ///
+    /// Avoids the double file read of calling `read_unread` then `mark_read`.
+    pub async fn take_unread(&self, team_name: &str, agent_id: &str) -> Result<Vec<AgentMessage>> {
+        let path = self.mailbox_path(team_name, agent_id);
+
+        let lock = self.get_lock(&path).await;
+        let _guard = lock.lock().await;
+
+        let mut messages = self.read_all_raw(&path).await?;
+        let unread: Vec<AgentMessage> = messages.iter().filter(|m| !m.read).cloned().collect();
+
+        if !unread.is_empty() {
+            for msg in &mut messages {
+                if !msg.read {
+                    msg.read = true;
+                }
+            }
+            self.write_all(&path, &messages).await?;
+        }
+
+        Ok(unread)
     }
 
     /// Mark specific messages as read.
@@ -109,22 +137,19 @@ impl Mailbox {
 
     /// Get the count of pending (unread) messages for an agent.
     pub async fn pending_count(&self, team_name: &str, agent_id: &str) -> Result<usize> {
-        let path = self.mailbox_path(team_name, agent_id);
-        let messages = self.read_all_raw(&path).await?;
-        Ok(messages.iter().filter(|m| !m.read).count())
+        self.read_unread(team_name, agent_id).await.map(|v| v.len())
     }
 
     /// Clear all messages for an agent.
     pub async fn clear(&self, team_name: &str, agent_id: &str) -> Result<()> {
         let path = self.mailbox_path(team_name, agent_id);
-        if path.exists() {
-            tokio::fs::remove_file(&path)
-                .await
-                .context(team_error::MailboxSnafu {
-                    message: format!("removing mailbox: {}", path.display()),
-                })?;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).context(team_error::MailboxSnafu {
+                message: format!("removing mailbox: {}", path.display()),
+            }),
         }
-        Ok(())
     }
 
     /// Read all messages for an agent (including read ones).
@@ -136,8 +161,13 @@ impl Mailbox {
     // === Internal helpers ===
 
     /// Get or create a per-recipient lock for the given mailbox path.
+    ///
+    /// Also prunes stale entries (strong_count == 1 means only the map holds
+    /// a reference, so the lock is no longer in use).
     async fn get_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.locks.lock().await;
+        // Prune stale locks (only the HashMap holds a reference).
+        locks.retain(|_, v| Arc::strong_count(v) > 1);
         locks
             .entry(path.to_path_buf())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -152,23 +182,32 @@ impl Mailbox {
     }
 
     async fn ensure_mailbox_dir(&self, team_name: &str) -> Result<()> {
+        {
+            let ensured = self.ensured_dirs.lock().await;
+            if ensured.contains(team_name) {
+                return Ok(());
+            }
+        }
         let dir = self.base_dir.join(team_name).join("mailbox");
         tokio::fs::create_dir_all(&dir)
             .await
             .context(team_error::MailboxSnafu {
                 message: format!("creating mailbox dir: {}", dir.display()),
-            })
+            })?;
+        self.ensured_dirs.lock().await.insert(team_name.to_string());
+        Ok(())
     }
 
     async fn read_all_raw(&self, path: &Path) -> Result<Vec<AgentMessage>> {
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .context(team_error::MailboxSnafu {
-                message: format!("reading: {}", path.display()),
-            })?;
+        let content = match tokio::fs::read_to_string(path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(e).context(team_error::MailboxSnafu {
+                    message: format!("reading: {}", path.display()),
+                });
+            }
+        };
 
         let mut messages = Vec::new();
         for line in content.lines() {

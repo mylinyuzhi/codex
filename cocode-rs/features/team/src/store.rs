@@ -67,9 +67,6 @@ impl TeamStore {
             })?
         {
             let config_path = entry.path().join("config.json");
-            if !config_path.exists() {
-                continue;
-            }
             match read_team_file(&config_path).await {
                 Ok(team) => {
                     teams.insert(team.name.clone(), team);
@@ -110,9 +107,7 @@ impl TeamStore {
         }
         if self.persist {
             let dir = self.base_dir.join(name);
-            if dir.exists() {
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-            }
+            let _ = tokio::fs::remove_dir_all(&dir).await;
         }
         Ok(())
     }
@@ -224,9 +219,14 @@ impl TeamStore {
             return Ok(());
         }
 
-        let teams = self.teams.lock().await;
-        let Some(team) = teams.get(name) else {
-            return Ok(());
+        // Clone the team data and release the lock before doing I/O,
+        // so other operations aren't blocked by filesystem latency.
+        let team = {
+            let teams = self.teams.lock().await;
+            match teams.get(name) {
+                Some(t) => t.clone(),
+                None => return Ok(()),
+            }
         };
 
         let dir = self.base_dir.join(name);
@@ -237,7 +237,7 @@ impl TeamStore {
             })?;
 
         let config_path = dir.join("config.json");
-        atomic_write_json(&config_path, team).await?;
+        atomic_write_json(&config_path, &team).await?;
         Ok(())
     }
 }
