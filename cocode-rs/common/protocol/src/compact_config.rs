@@ -383,21 +383,31 @@ impl Default for KeepWindowConfig {
     }
 }
 
+/// Validate that a field meets a minimum value, returning a formatted error if not.
+macro_rules! validate_min {
+    ($self:ident . $field:ident >= $min:expr) => {
+        if $self.$field < $min {
+            return Err(format!(
+                concat!(stringify!($field), " must be >= {}, got {}"),
+                $min, $self.$field
+            ));
+        }
+    };
+    ($self:ident . $field:ident >= $min:expr, prefix: $prefix:literal) => {
+        if $self.$field < $min {
+            return Err(format!(
+                concat!($prefix, ".", stringify!($field), " must be >= {}, got {}"),
+                $min, $self.$field
+            ));
+        }
+    };
+}
+
 impl KeepWindowConfig {
     /// Validate configuration values.
     pub fn validate(&self) -> Result<(), String> {
-        if self.min_tokens < 0 {
-            return Err(format!(
-                "keep_window.min_tokens must be >= 0, got {}",
-                self.min_tokens
-            ));
-        }
-        if self.min_text_messages < 0 {
-            return Err(format!(
-                "keep_window.min_text_messages must be >= 0, got {}",
-                self.min_text_messages
-            ));
-        }
+        validate_min!(self.min_tokens >= 0, prefix: "keep_window");
+        validate_min!(self.min_text_messages >= 0, prefix: "keep_window");
         if self.max_tokens < self.min_tokens {
             return Err(format!(
                 "keep_window.max_tokens ({}) must be >= min_tokens ({})",
@@ -532,36 +542,11 @@ impl SessionMemoryExtractionConfig {
 
     /// Validate configuration values.
     pub fn validate(&self) -> Result<(), String> {
-        if self.min_tokens_to_init < 0 {
-            return Err(format!(
-                "session_memory_extraction.min_tokens_to_init must be >= 0, got {}",
-                self.min_tokens_to_init
-            ));
-        }
-        if self.min_tokens_between < 0 {
-            return Err(format!(
-                "session_memory_extraction.min_tokens_between must be >= 0, got {}",
-                self.min_tokens_between
-            ));
-        }
-        if self.tool_calls_between < 0 {
-            return Err(format!(
-                "session_memory_extraction.tool_calls_between must be >= 0, got {}",
-                self.tool_calls_between
-            ));
-        }
-        if self.cooldown_secs < 0 {
-            return Err(format!(
-                "session_memory_extraction.cooldown_secs must be >= 0, got {}",
-                self.cooldown_secs
-            ));
-        }
-        if self.max_summary_tokens < 0 {
-            return Err(format!(
-                "session_memory_extraction.max_summary_tokens must be >= 0, got {}",
-                self.max_summary_tokens
-            ));
-        }
+        validate_min!(self.min_tokens_to_init >= 0, prefix: "session_memory_extraction");
+        validate_min!(self.min_tokens_between >= 0, prefix: "session_memory_extraction");
+        validate_min!(self.tool_calls_between >= 0, prefix: "session_memory_extraction");
+        validate_min!(self.cooldown_secs >= 0, prefix: "session_memory_extraction");
+        validate_min!(self.max_summary_tokens >= 0, prefix: "session_memory_extraction");
         Ok(())
     }
 }
@@ -700,24 +685,9 @@ impl FileRestorationConfig {
 
     /// Validate configuration values.
     pub fn validate(&self) -> Result<(), String> {
-        if self.max_files < 0 {
-            return Err(format!(
-                "file_restoration.max_files must be >= 0, got {}",
-                self.max_files
-            ));
-        }
-        if self.max_tokens_per_file < 0 {
-            return Err(format!(
-                "file_restoration.max_tokens_per_file must be >= 0, got {}",
-                self.max_tokens_per_file
-            ));
-        }
-        if self.total_token_budget < 0 {
-            return Err(format!(
-                "file_restoration.total_token_budget must be >= 0, got {}",
-                self.total_token_budget
-            ));
-        }
+        validate_min!(self.max_files >= 0, prefix: "file_restoration");
+        validate_min!(self.max_tokens_per_file >= 0, prefix: "file_restoration");
+        validate_min!(self.total_token_budget >= 0, prefix: "file_restoration");
         Ok(())
     }
 }
@@ -862,69 +832,15 @@ impl CompactConfig {
             ));
         }
 
-        // Validate non-negative values
-        if self.extraction_cooldown_secs < 0 {
-            return Err(format!(
-                "extraction_cooldown_secs must be >= 0, got {}",
-                self.extraction_cooldown_secs
-            ));
-        }
-
-        if self.context_restore_max_files < 0 {
-            return Err(format!(
-                "context_restore_max_files must be >= 0, got {}",
-                self.context_restore_max_files
-            ));
-        }
-
-        if self.context_restore_budget < 0 {
-            return Err(format!(
-                "context_restore_budget must be >= 0, got {}",
-                self.context_restore_budget
-            ));
-        }
-
-        if self.max_tokens_per_file < 0 {
-            return Err(format!(
-                "max_tokens_per_file must be >= 0, got {}",
-                self.max_tokens_per_file
-            ));
-        }
-
-        if self.min_tokens_to_preserve < 0 {
-            return Err(format!(
-                "min_tokens_to_preserve must be >= 0, got {}",
-                self.min_tokens_to_preserve
-            ));
-        }
-
-        if self.micro_compact_min_savings < 0 {
-            return Err(format!(
-                "micro_compact_min_savings must be >= 0, got {}",
-                self.micro_compact_min_savings
-            ));
-        }
-
-        if self.recent_tool_results_to_keep < 0 {
-            return Err(format!(
-                "recent_tool_results_to_keep must be >= 0, got {}",
-                self.recent_tool_results_to_keep
-            ));
-        }
-
-        if self.max_summary_retries < 1 {
-            return Err(format!(
-                "max_summary_retries must be >= 1, got {}",
-                self.max_summary_retries
-            ));
-        }
-
-        if self.token_safety_margin < 1.0 {
-            return Err(format!(
-                "token_safety_margin must be >= 1.0, got {}",
-                self.token_safety_margin
-            ));
-        }
+        validate_min!(self.extraction_cooldown_secs >= 0);
+        validate_min!(self.context_restore_max_files >= 0);
+        validate_min!(self.context_restore_budget >= 0);
+        validate_min!(self.max_tokens_per_file >= 0);
+        validate_min!(self.min_tokens_to_preserve >= 0);
+        validate_min!(self.micro_compact_min_savings >= 0);
+        validate_min!(self.recent_tool_results_to_keep >= 0);
+        validate_min!(self.max_summary_retries >= 1);
+        validate_min!(self.token_safety_margin >= 1.0);
 
         // Validate nested configs
         self.keep_window.validate()?;

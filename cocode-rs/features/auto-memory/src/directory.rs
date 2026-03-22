@@ -69,8 +69,7 @@ pub fn project_hash(cwd: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(cwd.to_string_lossy().as_bytes());
     let result = hasher.finalize();
-    // First 12 hex chars (6 bytes)
-    result.iter().take(6).map(|b| format!("{b:02x}")).collect()
+    cocode_utils_string::bytes_to_hex(&result[..6])
 }
 
 /// Get a non-empty environment variable value.

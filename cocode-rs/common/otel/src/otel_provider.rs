@@ -1,5 +1,4 @@
 use crate::config::OtelExporter;
-use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
@@ -20,7 +19,6 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
@@ -154,15 +152,7 @@ impl OtelProvider {
 
 impl Drop for OtelProvider {
     fn drop(&mut self) {
-        if let Some(logger) = &self.logger {
-            let _ = logger.shutdown();
-        }
-        if let Some(tracer_provider) = &self.tracer_provider {
-            let _ = tracer_provider.shutdown();
-        }
-        if let Some(metrics) = &self.metrics {
-            let _ = metrics.shutdown();
-        }
+        self.shutdown();
     }
 }
 
@@ -246,15 +236,7 @@ fn build_logger(
             debug!("Using OTLP Grpc exporter: {endpoint}");
 
             let header_map = crate::otlp::build_header_map(&headers);
-
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
-
-            let tls_config = match tls.as_ref() {
-                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
-                None => base_tls_config,
-            };
+            let tls_config = crate::otlp::build_grpc_tls(&endpoint, tls.as_ref())?;
 
             let exporter = LogExporter::builder()
                 .with_tonic()
@@ -273,10 +255,7 @@ fn build_logger(
         } => {
             debug!("Using OTLP Http exporter: {endpoint}");
 
-            let protocol = match protocol {
-                OtelHttpProtocol::Binary => Protocol::HttpBinary,
-                OtelHttpProtocol::Json => Protocol::HttpJson,
-            };
+            let protocol = Protocol::from(protocol);
 
             let mut exporter_builder = LogExporter::builder()
                 .with_http()
@@ -313,15 +292,7 @@ fn build_tracer_provider(
             debug!("Using OTLP Grpc exporter for traces: {endpoint}");
 
             let header_map = crate::otlp::build_header_map(&headers);
-
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
-
-            let tls_config = match tls.as_ref() {
-                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
-                None => base_tls_config,
-            };
+            let tls_config = crate::otlp::build_grpc_tls(&endpoint, tls.as_ref())?;
 
             SpanExporter::builder()
                 .with_tonic()
@@ -338,10 +309,7 @@ fn build_tracer_provider(
         } => {
             debug!("Using OTLP Http exporter for traces: {endpoint}");
 
-            let protocol = match protocol {
-                OtelHttpProtocol::Binary => Protocol::HttpBinary,
-                OtelHttpProtocol::Json => Protocol::HttpJson,
-            };
+            let protocol = Protocol::from(protocol);
 
             let mut exporter_builder = SpanExporter::builder()
                 .with_http()

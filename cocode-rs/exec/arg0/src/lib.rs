@@ -21,17 +21,16 @@
 //!
 //! ```ignore
 //! use cocode_arg0::arg0_dispatch_or_else;
-//! use std::path::PathBuf;
-//! use std::process::ExitCode;
 //!
 //! fn main() -> ExitCode {
-//!     arg0_dispatch_or_else(|sandbox_exe| async move {
-//!         // Your main application logic here
+//!     arg0_dispatch_or_else(|arg0_paths| async move {
+//!         // arg0_paths.cocode_linux_sandbox_exe is available on Linux
 //!         Ok(())
 //!     })
 //! }
 //! ```
 
+use std::fs::File;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -55,7 +54,47 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 /// Environment variable prefix that cannot be set via .env files (security).
 const ILLEGAL_ENV_VAR_PREFIX: &str = "COCODE_";
 
-/// Perform arg0 dispatch and setup, returning the TempDir for PATH if successful.
+/// Lock file name used to coordinate janitor cleanup of stale temp dirs.
+const LOCK_FILENAME: &str = ".lock";
+
+/// Tokio worker thread stack size (16 MB). Prevents stack overflow on deep
+/// async call stacks (e.g. nested JSON processing, recursive tool execution).
+const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Paths to helper executables discovered during arg0 dispatch.
+///
+/// Passed to the main async entry point so downstream code can locate helpers
+/// without scanning PATH.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Arg0DispatchPaths {
+    pub cocode_linux_sandbox_exe: Option<PathBuf>,
+}
+
+/// Keeps the per-session PATH entry alive and locked for the process lifetime.
+///
+/// The embedded file lock prevents the janitor from removing the temp directory
+/// while this process is still running.
+pub struct Arg0PathEntryGuard {
+    _temp_dir: TempDir,
+    _lock_file: File,
+    paths: Arg0DispatchPaths,
+}
+
+impl Arg0PathEntryGuard {
+    fn new(temp_dir: TempDir, lock_file: File, paths: Arg0DispatchPaths) -> Self {
+        Self {
+            _temp_dir: temp_dir,
+            _lock_file: lock_file,
+            paths,
+        }
+    }
+
+    pub fn paths(&self) -> &Arg0DispatchPaths {
+        &self.paths
+    }
+}
+
+/// Perform arg0 dispatch and setup, returning a guard for the PATH entry.
 ///
 /// This function:
 /// 1. Checks argv[0] for special executable names and dispatches accordingly
@@ -63,9 +102,9 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "COCODE_";
 /// 3. Loads dotenv from ~/.cocode/.env
 /// 4. Creates a temp directory with symlinks and prepends it to PATH
 ///
-/// Returns `Some(TempDir)` if PATH was set up, `None` if setup failed but we can proceed.
-/// Never returns if dispatched to a specialized CLI.
-pub fn arg0_dispatch() -> Option<TempDir> {
+/// Returns `Some(Arg0PathEntryGuard)` if PATH was set up, `None` if setup failed
+/// but we can proceed. Never returns if dispatched to a specialized CLI.
+pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // Determine if we were invoked via a special alias.
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
@@ -163,38 +202,38 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// 1. arg0 dispatch for specialized CLIs
 /// 2. Dotenv loading from ~/.cocode/.env
 /// 3. PATH setup with symlinks for apply_patch
-/// 4. Tokio runtime creation
+/// 4. Tokio runtime creation (16 MB worker stack)
 /// 5. Running the provided async main function
 ///
-/// # Arguments
-///
-/// * `main_fn` - The async main function to run. Receives an optional path to
-///   the sandbox executable (on Linux only).
-///
-/// # Returns
-///
-/// Returns the result of the main function, or an error if setup failed.
+/// The callback receives [`Arg0DispatchPaths`] containing helper executable
+/// paths needed by downstream code.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Option<PathBuf>) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
-    // Retain the TempDir so it exists for the lifetime of the invocation of
-    // this executable. Admittedly, we could invoke `keep()` on it, but it
-    // would be nice to avoid leaving temporary directories behind, if possible.
-    let _path_entry = arg0_dispatch();
+    // Retain the guard so the temp dir and lock exist for the process lifetime.
+    let path_entry = arg0_dispatch();
 
-    // Regular invocation – create a Tokio runtime and execute the provided
-    // async entry-point.
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .build()?;
     runtime.block_on(async move {
-        let cocode_linux_sandbox_exe: Option<PathBuf> = if cfg!(target_os = "linux") {
-            std::env::current_exe().ok()
-        } else {
-            None
+        let current_exe = std::env::current_exe().ok();
+        let paths = Arg0DispatchPaths {
+            cocode_linux_sandbox_exe: if cfg!(target_os = "linux") {
+                current_exe.or_else(|| {
+                    path_entry
+                        .as_ref()
+                        .and_then(|g| g.paths().cocode_linux_sandbox_exe.clone())
+                })
+            } else {
+                None
+            },
         };
 
-        main_fn(cocode_linux_sandbox_exe).await
+        main_fn(paths).await
     })
 }
 
@@ -257,7 +296,7 @@ where
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
-pub fn prepend_path_entry_for_cocode_aliases() -> std::io::Result<TempDir> {
+pub fn prepend_path_entry_for_cocode_aliases() -> std::io::Result<Arg0PathEntryGuard> {
     let cocode_home = find_cocode_home()?;
 
     #[cfg(not(debug_assertions))]
@@ -277,7 +316,7 @@ pub fn prepend_path_entry_for_cocode_aliases() -> std::io::Result<TempDir> {
     std::fs::create_dir_all(&cocode_home)?;
 
     // Use a COCODE_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = cocode_home.join("tmp").join("path");
+    let temp_root = cocode_home.join("tmp").join("arg0");
     std::fs::create_dir_all(&temp_root)?;
 
     #[cfg(unix)]
@@ -288,10 +327,24 @@ pub fn prepend_path_entry_for_cocode_aliases() -> std::io::Result<TempDir> {
         std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
     }
 
+    // Best-effort cleanup of stale per-session dirs. Ignore failures so startup proceeds.
+    if let Err(err) = janitor_cleanup(&temp_root) {
+        eprintln!("WARNING: failed to clean up stale arg0 temp dirs: {err}");
+    }
+
     let temp_dir = tempfile::Builder::new()
         .prefix("cocode-arg0")
         .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
+
+    let lock_path = path.join(LOCK_FILENAME);
+    let lock_file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    lock_file.try_lock()?;
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -343,7 +396,72 @@ pub fn prepend_path_entry_for_cocode_aliases() -> std::io::Result<TempDir> {
         std::env::set_var("PATH", updated_path_env_var);
     }
 
-    Ok(temp_dir)
+    let paths = Arg0DispatchPaths {
+        cocode_linux_sandbox_exe: {
+            #[cfg(target_os = "linux")]
+            {
+                Some(path.join(LINUX_SANDBOX_ARG0))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                None
+            }
+        },
+    };
+
+    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file, paths))
+}
+
+/// Remove stale per-session temp directories whose owning process has exited.
+///
+/// A directory is considered stale if its `.lock` file can be acquired (meaning
+/// the process that created it is no longer running).
+fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(temp_root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Skip the directory if locking fails or the lock is currently held.
+        let Some(_lock_file) = try_lock_dir(&path)? else {
+            continue;
+        };
+
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            // Expected TOCTOU race: directory can disappear after read_dir/lock checks.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
+/// Try to acquire an exclusive lock on a directory's `.lock` file.
+///
+/// Returns `Ok(Some(file))` if acquired, `Ok(None)` if the lock is held or
+/// there is no lock file, and `Err` on unexpected I/O errors.
+fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
+    let lock_path = dir.join(LOCK_FILENAME);
+    let lock_file = match File::options().read(true).write(true).open(&lock_path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+
+    match lock_file.try_lock() {
+        Ok(()) => Ok(Some(lock_file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[cfg(test)]
