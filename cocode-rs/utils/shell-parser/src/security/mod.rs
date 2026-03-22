@@ -57,7 +57,7 @@ pub use risks::RiskPhase;
 pub use risks::SecurityAnalysis;
 pub use risks::SecurityRisk;
 
-use crate::parser::ParsedCommand;
+use crate::parser::ParsedShell;
 use crate::tokenizer::TokenKind;
 
 /// Check if a command matches known-safe patterns that don't need full analysis.
@@ -65,7 +65,7 @@ use crate::tokenizer::TokenKind;
 /// Matches Claude Code's Phase A allow-list:
 /// - Empty/whitespace commands
 /// - Safe git commit messages (no variable expansion)
-fn is_safe_pattern(cmd: &ParsedCommand) -> bool {
+fn is_safe_pattern(cmd: &ParsedShell) -> bool {
     // Empty or whitespace-only command
     if cmd.source().trim().is_empty() {
         return true;
@@ -103,7 +103,7 @@ fn is_safe_pattern(cmd: &ParsedCommand) -> bool {
 /// 1. **Layer 0**: Pre-check for single-quote bypass (early return on deny)
 /// 2. **Safe pattern short-circuit**: Skip full analysis for known-safe patterns
 /// 3. **Full analyzer pipeline**: Run all default analyzers
-pub fn analyze(cmd: &ParsedCommand) -> SecurityAnalysis {
+pub fn analyze(cmd: &ParsedShell) -> SecurityAnalysis {
     let mut analysis = SecurityAnalysis::new();
 
     // Layer 0: Pre-check for quote bypass (highest priority)
@@ -125,7 +125,7 @@ pub fn analyze(cmd: &ParsedCommand) -> SecurityAnalysis {
 }
 
 /// Analyze a parsed command with a custom set of analyzers.
-pub fn analyze_with(cmd: &ParsedCommand, analyzers: &[Box<dyn Analyzer>]) -> SecurityAnalysis {
+pub fn analyze_with(cmd: &ParsedShell, analyzers: &[Box<dyn Analyzer>]) -> SecurityAnalysis {
     let mut analysis = SecurityAnalysis::new();
     for analyzer in analyzers {
         analyzer.analyze(cmd, &mut analysis);
@@ -134,12 +134,12 @@ pub fn analyze_with(cmd: &ParsedCommand, analyzers: &[Box<dyn Analyzer>]) -> Sec
 }
 
 /// Quick check if a command has any security risks.
-pub fn has_risks(cmd: &ParsedCommand) -> bool {
+pub fn has_risks(cmd: &ParsedShell) -> bool {
     analyze(cmd).has_risks()
 }
 
 /// Quick check if a command requires user approval.
-pub fn requires_approval(cmd: &ParsedCommand) -> bool {
+pub fn requires_approval(cmd: &ParsedShell) -> bool {
     analyze(cmd).requires_approval()
 }
 

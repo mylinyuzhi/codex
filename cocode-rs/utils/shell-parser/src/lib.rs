@@ -73,12 +73,16 @@ mod redirects;
 mod segments;
 mod tokenizer;
 
+pub mod safety;
 pub mod security;
+pub mod summary;
 
 // Re-export main types
 pub use error::ParseError;
 pub use error::Result;
-pub use parser::ParsedCommand;
+pub use parser::ParsedShell;
+
+// Re-export new summary and safety types
 pub use parser::ShellParser;
 pub use parser::ShellType;
 pub use parser::detect_shell_type;
@@ -87,16 +91,20 @@ pub use redirects::Redirect;
 pub use redirects::RedirectKind;
 pub use redirects::extract_redirects_from_tokens;
 pub use redirects::extract_redirects_from_tree;
+pub use safety::command_might_be_dangerous;
+pub use safety::is_known_safe_command;
 pub use segments::PipeSegment;
 pub use segments::extract_segments_from_tokens;
 pub use segments::extract_segments_from_tree;
+pub use summary::CommandSummary;
+pub use summary::parse_command;
 pub use tokenizer::Span;
 pub use tokenizer::Token;
 pub use tokenizer::TokenKind;
 pub use tokenizer::Tokenizer;
 
 /// Convenience function to parse and analyze a command in one step.
-pub fn parse_and_analyze(source: &str) -> (ParsedCommand, security::SecurityAnalysis) {
+pub fn parse_and_analyze(source: &str) -> (ParsedShell, security::SecurityAnalysis) {
     let mut parser = ShellParser::new();
     let cmd = parser.parse(source);
     let analysis = security::analyze(&cmd);
@@ -110,7 +118,7 @@ pub fn parse_and_analyze(source: &str) -> (ParsedCommand, security::SecurityAnal
 pub fn parse_and_analyze_with(
     parser: &mut ShellParser,
     source: &str,
-) -> (ParsedCommand, security::SecurityAnalysis) {
+) -> (ParsedShell, security::SecurityAnalysis) {
     let cmd = parser.parse(source);
     let analysis = security::analyze(&cmd);
     (cmd, analysis)

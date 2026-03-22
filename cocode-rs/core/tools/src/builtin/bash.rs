@@ -316,6 +316,14 @@ impl Tool for BashTool {
             return PermissionResult::Allowed;
         }
 
+        // Argv-based safe command check: handles compound commands (&&, ||, ;, |)
+        // by recursively verifying each sub-command, and applies per-binary rules
+        // (e.g. find -exec, git branch -d, rg --pre, base64 --output).
+        let shell_argv = vec!["bash".to_string(), "-lc".to_string(), command.to_string()];
+        if cocode_shell_parser::is_known_safe_command(&shell_argv) {
+            return PermissionResult::Allowed;
+        }
+
         // Run security analysis using cocode-shell-parser
         let (parsed, analysis) = cocode_shell_parser::parse_and_analyze(command);
 

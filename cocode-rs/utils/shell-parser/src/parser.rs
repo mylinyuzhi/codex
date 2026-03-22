@@ -37,7 +37,7 @@ const ALLOWED_PUNCT_TOKENS: &[&str] = &["&&", "||", ";", "|", "\"", "'"];
 
 /// A parsed shell command.
 #[derive(Debug)]
-pub struct ParsedCommand {
+pub struct ParsedShell {
     /// The original source string.
     source: String,
     /// Tree-sitter parse tree (if AST parsing succeeded).
@@ -48,7 +48,7 @@ pub struct ParsedCommand {
     has_errors: bool,
 }
 
-impl ParsedCommand {
+impl ParsedShell {
     /// Returns the original source string.
     pub fn source(&self) -> &str {
         &self.source
@@ -133,14 +133,14 @@ impl ShellParser {
     }
 
     /// Parse a shell command string.
-    pub fn parse(&mut self, source: &str) -> ParsedCommand {
+    pub fn parse(&mut self, source: &str) -> ParsedShell {
         let tree = self.parser.parse(source, None);
         let has_errors = tree.as_ref().is_some_and(|t| t.root_node().has_error());
 
         // Always tokenize for fallback and security analysis
         let tokens = self.tokenizer.tokenize(source).unwrap_or_default();
 
-        ParsedCommand {
+        ParsedShell {
             source: source.to_string(),
             tree,
             tokens,
@@ -150,9 +150,9 @@ impl ShellParser {
 
     /// Parse a shell invocation from argv (e.g., ["bash", "-c", "command"]).
     ///
-    /// Returns `Some(ParsedCommand)` if the argv represents a shell invocation
+    /// Returns `Some(ParsedShell)` if the argv represents a shell invocation
     /// with an embedded script, `None` otherwise.
-    pub fn parse_shell_invocation(&mut self, argv: &[String]) -> Option<ParsedCommand> {
+    pub fn parse_shell_invocation(&mut self, argv: &[String]) -> Option<ParsedShell> {
         let (_, script) = extract_shell_script(argv)?;
         Some(self.parse(script))
     }
@@ -224,7 +224,10 @@ pub fn extract_shell_script(argv: &[String]) -> Option<(ShellType, &str)> {
 }
 
 /// Parse word-only commands sequence (from bash.rs).
-fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<Vec<Vec<String>>> {
+pub(crate) fn try_parse_word_only_commands_sequence(
+    tree: &Tree,
+    src: &str,
+) -> Option<Vec<Vec<String>>> {
     if tree.root_node().has_error() {
         return None;
     }

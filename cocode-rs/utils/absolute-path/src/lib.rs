@@ -1,3 +1,4 @@
+use dirs::home_dir;
 use path_absolutize::Absolutize;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -21,16 +22,39 @@ use ts_rs::TS;
 pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
+    fn maybe_expand_home_directory(path: &Path) -> PathBuf {
+        let Some(path_str) = path.to_str() else {
+            return path.to_path_buf();
+        };
+        if cfg!(not(target_os = "windows"))
+            && let Some(home) = home_dir()
+        {
+            if path_str == "~" {
+                return home;
+            }
+            if let Some(rest) = path_str.strip_prefix("~/") {
+                let rest = rest.trim_start_matches('/');
+                if rest.is_empty() {
+                    return home;
+                }
+                return home.join(rest);
+            }
+        }
+        path.to_path_buf()
+    }
+
     pub fn resolve_path_against_base<P: AsRef<Path>, B: AsRef<Path>>(
         path: P,
         base_path: B,
     ) -> std::io::Result<Self> {
-        let absolute_path = path.as_ref().absolutize_from(base_path.as_ref())?;
+        let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        let absolute_path = expanded.absolutize_from(base_path.as_ref())?;
         Ok(Self(absolute_path.into_owned()))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let absolute_path = path.as_ref().absolutize()?;
+        let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        let absolute_path = expanded.absolutize()?;
         Ok(Self(absolute_path.into_owned()))
     }
 
@@ -45,8 +69,11 @@ impl AbsolutePathBuf {
 
     pub fn parent(&self) -> Option<Self> {
         self.0.parent().map(|p| {
-            #[expect(clippy::expect_used)]
-            Self::from_absolute_path(p).expect("parent of AbsolutePathBuf must be absolute")
+            debug_assert!(
+                p.is_absolute(),
+                "parent of AbsolutePathBuf must be absolute"
+            );
+            Self(p.to_path_buf())
         })
     }
 
