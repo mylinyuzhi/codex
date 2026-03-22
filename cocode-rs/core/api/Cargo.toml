@@ -30,6 +30,7 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 dotenvy.workspace = true
 anyhow.workspace = true
+pretty_assertions.workspace = true
 
 [[test]]
 name = "live"

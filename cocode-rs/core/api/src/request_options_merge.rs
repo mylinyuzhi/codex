@@ -34,7 +34,7 @@ pub fn merge_into_provider_options(
 }
 
 /// Map ProviderType to the provider name key used in ProviderOptions.
-fn provider_name_for_type(provider: ProviderType) -> &'static str {
+pub fn provider_name_for_type(provider: ProviderType) -> &'static str {
     match provider {
         ProviderType::Openai | ProviderType::OpenaiCompat => "openai",
         ProviderType::Anthropic => "anthropic",

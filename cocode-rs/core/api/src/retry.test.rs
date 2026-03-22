@@ -1,18 +1,20 @@
+use pretty_assertions::assert_eq;
+
 use super::*;
 
 #[test]
 fn test_retry_config_defaults() {
-    let config = RetryConfig::default();
-    assert_eq!(config.max_retries, 3);
+    let config = ApiRetryConfig::default();
+    assert_eq!(config.max_retries, 5);
     assert_eq!(config.base_delay_ms, 1000);
-    assert_eq!(config.max_delay_ms, 30000);
+    assert_eq!(config.max_delay_ms, 60000);
     assert_eq!(config.multiplier, 2.0);
     assert_eq!(config.jitter, 0.2);
 }
 
 #[test]
 fn test_retry_config_builder() {
-    let config = RetryConfig::default()
+    let config = ApiRetryConfig::default()
         .with_max_retries(5)
         .with_base_delay(Duration::from_millis(500))
         .with_max_delay(Duration::from_secs(60))
@@ -28,7 +30,7 @@ fn test_retry_config_builder() {
 fn test_should_retry() {
     use crate::error::api_error::*;
 
-    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
+    let mut ctx = RetryContext::new(ApiRetryConfig::default().with_max_retries(3));
 
     // First attempt
     let error: ApiError = NetworkSnafu {
@@ -65,21 +67,19 @@ fn test_non_retryable_error() {
 }
 
 #[test]
-fn test_delay_calculation() {
+fn test_delay_calculation_exponential() {
     use crate::error::api_error::*;
 
-    let ctx = RetryContext::new(
-        RetryConfig::default()
+    // Stream errors use exponential backoff and have no retry_after
+    let mut ctx = RetryContext::new(
+        ApiRetryConfig::default()
             .with_base_delay(Duration::from_millis(100))
             .with_multiplier(2.0)
-            .with_jitter(0.0), // Disable jitter for deterministic test
+            .with_jitter(0.0),
     );
 
-    let error: ApiError = NetworkSnafu { message: "test" }.build();
+    let error: ApiError = StreamSnafu { message: "test" }.build();
 
-    // Note: delay calculation uses current_attempt which starts at 0
-    // After first should_retry, it becomes 1
-    let mut ctx = ctx;
     ctx.current_attempt = 1;
     assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(100));
 
@@ -91,19 +91,42 @@ fn test_delay_calculation() {
 }
 
 #[test]
+fn test_delay_calculation_linear_for_network() {
+    use crate::error::api_error::*;
+
+    // Network errors use linear backoff: base * attempt
+    let mut ctx = RetryContext::new(
+        ApiRetryConfig::default()
+            .with_base_delay(Duration::from_millis(1000))
+            .with_jitter(0.0),
+    );
+
+    let error: ApiError = NetworkSnafu { message: "test" }.build();
+
+    ctx.current_attempt = 1;
+    assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(1000));
+
+    ctx.current_attempt = 2;
+    assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(2000));
+
+    ctx.current_attempt = 3;
+    assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(3000));
+}
+
+#[test]
 fn test_delay_respects_max() {
     use crate::error::api_error::*;
 
     let mut ctx = RetryContext::new(
-        RetryConfig::default()
+        ApiRetryConfig::default()
             .with_base_delay(Duration::from_secs(10))
             .with_max_delay(Duration::from_secs(5))
-            .with_jitter(0.0), // Disable jitter for deterministic test
+            .with_jitter(0.0),
     );
 
     ctx.current_attempt = 1;
-    let error: ApiError = NetworkSnafu { message: "test" }.build();
-    // Should be capped at max_delay
+    // Stream error (exponential) — 10s base exceeds 5s max → capped
+    let error: ApiError = StreamSnafu { message: "test" }.build();
     assert_eq!(ctx.calculate_delay(&error), Duration::from_secs(5));
 }
 
@@ -112,7 +135,7 @@ fn test_delay_honors_retry_after() {
     use crate::error::api_error::*;
 
     let mut ctx =
-        RetryContext::new(RetryConfig::default().with_base_delay(Duration::from_secs(10)));
+        RetryContext::new(ApiRetryConfig::default().with_base_delay(Duration::from_secs(10)));
     ctx.current_attempt = 1;
 
     let error: ApiError = RateLimitedSnafu {
@@ -124,10 +147,31 @@ fn test_delay_honors_retry_after() {
 }
 
 #[test]
+fn test_delay_retry_after_exceeding_max_delay_not_capped() {
+    use crate::error::api_error::*;
+
+    // Provider says "retry after 120s" but max_delay_ms is 60s.
+    // The provider hint is authoritative and must NOT be capped.
+    let mut ctx = RetryContext::new(
+        ApiRetryConfig::default()
+            .with_max_delay(Duration::from_secs(60))
+            .with_jitter(0.0),
+    );
+    ctx.current_attempt = 1;
+
+    let error: ApiError = RateLimitedSnafu {
+        message: "test",
+        retry_after_ms: 120_000i64,
+    }
+    .build();
+    assert_eq!(ctx.calculate_delay(&error), Duration::from_secs(120));
+}
+
+#[test]
 fn test_retry_decision() {
     use crate::error::api_error::*;
 
-    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
+    let mut ctx = RetryContext::new(ApiRetryConfig::default().with_max_retries(3));
 
     // Network error - should retry
     let error: ApiError = NetworkSnafu { message: "test" }.build();
@@ -170,7 +214,7 @@ fn test_reset() {
 fn test_diagnostics_trail_accumulates() {
     use crate::error::api_error::*;
 
-    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
+    let mut ctx = RetryContext::new(ApiRetryConfig::default().with_max_retries(3));
     let error: ApiError = NetworkSnafu {
         message: "connection refused",
     }
@@ -192,7 +236,7 @@ fn test_diagnostics_trail_accumulates() {
 fn test_diagnostics_trail_with_provider_context() {
     use crate::error::api_error::*;
 
-    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(2))
+    let mut ctx = RetryContext::new(ApiRetryConfig::default().with_max_retries(2))
         .with_provider_context("openai");
     let error: ApiError = NetworkSnafu { message: "timeout" }.build();
 
@@ -207,7 +251,7 @@ fn test_diagnostics_trail_with_provider_context() {
 fn test_exhausted_error_includes_diagnostics() {
     use crate::error::api_error::*;
 
-    let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(2));
+    let mut ctx = RetryContext::new(ApiRetryConfig::default().with_max_retries(2));
     let error: ApiError = NetworkSnafu {
         message: "connection failed",
     }
@@ -252,16 +296,16 @@ fn test_diagnostics_non_retryable_still_recorded() {
 
 #[test]
 fn test_jitter_config_builder() {
-    let config = RetryConfig::default().with_jitter(0.3);
+    let config = ApiRetryConfig::default().with_jitter(0.3);
     assert_eq!(config.jitter, 0.3);
 }
 
 #[test]
 fn test_jitter_clamped() {
-    let config = RetryConfig::default().with_jitter(1.5);
+    let config = ApiRetryConfig::default().with_jitter(1.5);
     assert_eq!(config.jitter, 1.0);
 
-    let config = RetryConfig::default().with_jitter(-0.5);
+    let config = ApiRetryConfig::default().with_jitter(-0.5);
     assert_eq!(config.jitter, 0.0);
 }
 
@@ -272,7 +316,7 @@ fn test_jitter_delay_within_expected_range() {
     let base_ms = 1000;
     let jitter = 0.2;
     let mut ctx = RetryContext::new(
-        RetryConfig::default()
+        ApiRetryConfig::default()
             .with_base_delay(Duration::from_millis(base_ms))
             .with_multiplier(1.0)
             .with_jitter(jitter),
@@ -299,15 +343,65 @@ fn test_zero_jitter_is_deterministic() {
     use crate::error::api_error::*;
 
     let mut ctx = RetryContext::new(
-        RetryConfig::default()
+        ApiRetryConfig::default()
             .with_base_delay(Duration::from_millis(500))
             .with_multiplier(2.0)
             .with_jitter(0.0),
     );
     ctx.current_attempt = 2;
 
+    // Linear: 500 * 2 = 1000
     let error: ApiError = NetworkSnafu { message: "test" }.build();
     for _ in 0..10 {
         assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(1000));
     }
+}
+
+// =========================================================================
+// Overload counter tests
+// =========================================================================
+
+#[test]
+fn test_consecutive_overload_counter() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(ApiRetryConfig::default());
+
+    // Overloaded errors increment counter
+    let overload: ApiError = OverloadedSnafu {
+        message: "overloaded",
+        retry_after_ms: 1000i64,
+    }
+    .build();
+    ctx.should_retry(&overload);
+    assert_eq!(ctx.consecutive_overload_errors(), 1);
+    ctx.should_retry(&overload);
+    assert_eq!(ctx.consecutive_overload_errors(), 2);
+
+    // Non-overload error resets counter
+    let network: ApiError = NetworkSnafu { message: "timeout" }.build();
+    ctx.should_retry(&network);
+    assert_eq!(ctx.consecutive_overload_errors(), 0);
+
+    // Back to overload
+    ctx.should_retry(&overload);
+    assert_eq!(ctx.consecutive_overload_errors(), 1);
+}
+
+#[test]
+fn test_reset_clears_overload_counter() {
+    use crate::error::api_error::*;
+
+    let mut ctx = RetryContext::new(ApiRetryConfig::default());
+    let overload: ApiError = OverloadedSnafu {
+        message: "overloaded",
+        retry_after_ms: 0i64,
+    }
+    .build();
+    ctx.should_retry(&overload);
+    ctx.should_retry(&overload);
+    assert_eq!(ctx.consecutive_overload_errors(), 2);
+
+    ctx.reset();
+    assert_eq!(ctx.consecutive_overload_errors(), 0);
 }

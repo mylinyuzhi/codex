@@ -499,6 +499,15 @@ pub enum LoopEvent {
         timeout: Duration,
     },
 
+    /// Stream watchdog warning — no SSE event received for `warning_timeout`.
+    ///
+    /// This is the first tier of the two-tier watchdog. The stream continues
+    /// after this event; the abort tier fires if silence persists.
+    StreamWatchdogWarning {
+        /// Seconds elapsed since last event.
+        elapsed_secs: i64,
+    },
+
     // ========== Prompt Caching ==========
     /// Prompt cache hit.
     PromptCacheHit {

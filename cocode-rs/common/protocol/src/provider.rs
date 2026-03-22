@@ -70,10 +70,6 @@ fn default_timeout() -> i64 {
     600
 }
 
-fn default_true() -> bool {
-    true
-}
-
 /// Model within a provider with deployment-specific info.
 ///
 /// This wraps `ModelInfo` with provider-specific deployment information
@@ -164,7 +160,7 @@ pub struct ProviderInfo {
     pub timeout_secs: i64,
 
     /// Enable streaming mode.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub streaming: bool,
 
     /// Wire protocol (responses or chat).

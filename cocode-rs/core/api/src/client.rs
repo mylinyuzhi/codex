@@ -7,11 +7,14 @@ use crate::LanguageModelStreamPart;
 use crate::error::ApiError;
 use crate::error::Result;
 use crate::provider_factory;
-use crate::retry::RetryConfig;
 use crate::retry::RetryContext;
 use crate::retry::RetryDecision;
 use crate::unified_stream::UnifiedStream;
 use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderType;
+
+pub use cocode_protocol::ApiFallbackConfig;
+pub use cocode_protocol::ApiRetryConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -55,125 +58,42 @@ impl StreamOptions {
 }
 
 /// Configuration for the API client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Uses `ApiRetryConfig` and `ApiFallbackConfig` from the protocol crate
+/// as the canonical source of truth for retry and fallback settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiClientConfig {
     /// Retry configuration.
     #[serde(default)]
-    pub retry: RetryConfig,
+    pub retry: ApiRetryConfig,
     /// Stall detection timeout.
     #[serde(default = "default_stall_timeout", with = "humantime_serde")]
     pub stall_timeout: Duration,
     /// Enable stall detection.
-    #[serde(default = "default_true")]
+    #[serde(default = "cocode_protocol::default_true")]
     pub stall_detection_enabled: bool,
     /// Fallback configuration for stream errors and context overflow.
     #[serde(default)]
-    pub fallback: FallbackConfig,
+    pub fallback: ApiFallbackConfig,
 }
 
 fn default_stall_timeout() -> Duration {
-    Duration::from_secs(30)
-}
-fn default_true() -> bool {
-    true
-}
-fn default_fallback_max_tokens() -> Option<u64> {
-    Some(21333)
-}
-fn default_min_output_tokens() -> u64 {
-    3000
-}
-fn default_max_overflow_attempts() -> u32 {
-    3
-}
-
-/// Configuration for fallback behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FallbackConfig {
-    /// Enable automatic fallback from streaming to non-streaming on stream errors.
-    #[serde(default = "default_true")]
-    pub enable_stream_fallback: bool,
-
-    /// Maximum tokens for fallback requests.
-    #[serde(default = "default_fallback_max_tokens")]
-    pub fallback_max_tokens: Option<u64>,
-
-    /// Enable context overflow recovery (auto-reduce max_tokens).
-    #[serde(default = "default_true")]
-    pub enable_overflow_recovery: bool,
-
-    /// Minimum output tokens to preserve during overflow recovery.
-    #[serde(default = "default_min_output_tokens")]
-    pub min_output_tokens: u64,
-
-    /// Maximum overflow recovery attempts.
-    #[serde(default = "default_max_overflow_attempts")]
-    pub max_overflow_attempts: u32,
-}
-
-impl Default for FallbackConfig {
-    fn default() -> Self {
-        Self {
-            enable_stream_fallback: true,
-            fallback_max_tokens: default_fallback_max_tokens(),
-            enable_overflow_recovery: true,
-            min_output_tokens: default_min_output_tokens(),
-            max_overflow_attempts: default_max_overflow_attempts(),
-        }
-    }
-}
-
-impl FallbackConfig {
-    /// Disable all fallback mechanisms.
-    pub fn disabled() -> Self {
-        Self {
-            enable_stream_fallback: false,
-            fallback_max_tokens: None,
-            enable_overflow_recovery: false,
-            min_output_tokens: default_min_output_tokens(),
-            max_overflow_attempts: 0,
-        }
-    }
-
-    pub fn with_stream_fallback(mut self, enabled: bool) -> Self {
-        self.enable_stream_fallback = enabled;
-        self
-    }
-
-    pub fn with_fallback_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
-        self.fallback_max_tokens = max_tokens;
-        self
-    }
-
-    pub fn with_overflow_recovery(mut self, enabled: bool) -> Self {
-        self.enable_overflow_recovery = enabled;
-        self
-    }
-
-    pub fn with_min_output_tokens(mut self, min_tokens: u64) -> Self {
-        self.min_output_tokens = min_tokens;
-        self
-    }
-
-    pub fn with_max_overflow_attempts(mut self, max_attempts: u32) -> Self {
-        self.max_overflow_attempts = max_attempts;
-        self
-    }
+    Duration::from_secs(cocode_protocol::api_config::DEFAULT_STALL_TIMEOUT_SECS as u64)
 }
 
 impl Default for ApiClientConfig {
     fn default() -> Self {
         Self {
-            retry: RetryConfig::default(),
+            retry: ApiRetryConfig::default(),
             stall_timeout: default_stall_timeout(),
-            stall_detection_enabled: default_true(),
-            fallback: FallbackConfig::default(),
+            stall_detection_enabled: true,
+            fallback: ApiFallbackConfig::default(),
         }
     }
 }
 
 impl ApiClientConfig {
-    pub fn with_retry(mut self, retry: RetryConfig) -> Self {
+    pub fn with_retry(mut self, retry: ApiRetryConfig) -> Self {
         self.retry = retry;
         self
     }
@@ -188,7 +108,7 @@ impl ApiClientConfig {
         self
     }
 
-    pub fn with_fallback(mut self, fallback: FallbackConfig) -> Self {
+    pub fn with_fallback(mut self, fallback: ApiFallbackConfig) -> Self {
         self.fallback = fallback;
         self
     }
@@ -237,7 +157,7 @@ impl ApiClient {
         let mut retry_ctx = RetryContext::new(self.config.retry.clone());
         let mut current_request = request;
         let mut use_streaming = options.streaming;
-        let mut overflow_attempts: u32 = 0;
+        let mut overflow_attempts: i32 = 0;
 
         loop {
             debug!(
@@ -267,7 +187,8 @@ impl ApiClient {
                     if api_error.is_context_overflow()
                         && self.config.fallback.enable_overflow_recovery
                         && overflow_attempts < self.config.fallback.max_overflow_attempts
-                        && let Some(new_max) = self.try_overflow_recovery(&current_request)
+                        && let Some(new_max) =
+                            self.try_overflow_recovery(&current_request, &api_error)
                     {
                         info!(
                             old = ?current_request.max_output_tokens,
@@ -292,7 +213,7 @@ impl ApiClient {
                         );
                         use_streaming = false;
                         if let Some(max) = self.config.fallback.fallback_max_tokens {
-                            current_request.max_output_tokens = Some(max);
+                            current_request.max_output_tokens = Some(max as u64);
                         }
                         continue;
                     }
@@ -327,25 +248,61 @@ impl ApiClient {
     }
 
     /// Attempt to recover from context overflow by reducing max_tokens.
-    fn try_overflow_recovery(&self, request: &LanguageModelCallOptions) -> Option<u64> {
-        let current_max = request.max_output_tokens.unwrap_or(8192);
-        let min_tokens = self.config.fallback.min_output_tokens;
-        let new_max = current_max * 3 / 4;
+    ///
+    /// Two strategies (matching Claude Code's `withApiRetry`):
+    /// 1. **Smart recovery**: Parse the error message for `inputTokens` and
+    ///    `contextLimit`, then calculate the exact available output space.
+    /// 2. **Blind fallback**: Reduce `max_tokens` by 25% when parsing fails.
+    ///
+    /// The thinking budget is accounted for so the model can still reason.
+    fn try_overflow_recovery(
+        &self,
+        request: &LanguageModelCallOptions,
+        error: &ApiError,
+    ) -> Option<u64> {
+        let fallback = &self.config.fallback;
+        let floor = fallback.floor_output_tokens;
 
-        if new_max >= min_tokens {
-            Some(new_max)
+        let new_max = if let Some(info) = error.overflow_info() {
+            // Smart recovery: calculate exact available space
+            let input = info.input_tokens.unwrap_or(0);
+            let limit = info.context_limit.unwrap_or(0);
+            let available = limit - input - fallback.buffer_tokens;
+            available.max(floor)
+        } else {
+            // Blind fallback: reduce by 25%
+            let current_max = request.max_output_tokens.unwrap_or(8192) as i64;
+            (current_max * 3 / 4).max(floor)
+        };
+
+        // Account for thinking budget: ensure output space can fit it
+        let thinking_budget = extract_thinking_budget(request);
+        let new_max = if let Some(budget) = thinking_budget {
+            new_max.max(budget + 1)
+        } else {
+            new_max
+        };
+
+        if new_max >= fallback.min_output_tokens {
+            Some(new_max as u64)
         } else {
             None
         }
     }
 
-    /// Make a non-streaming request with retry support.
+    /// Make a non-streaming request with retry and overflow recovery.
+    ///
+    /// Applies the same context overflow recovery as `stream_request()`:
+    /// if the provider reports `context_length_exceeded`, `max_tokens` is
+    /// reduced and the request is retried.
     pub async fn generate(
         &self,
         model: &dyn LanguageModel,
         request: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
         let mut retry_ctx = RetryContext::new(self.config.retry.clone());
+        let mut current_request = request;
+        let mut overflow_attempts: i32 = 0;
 
         loop {
             debug!(
@@ -355,13 +312,33 @@ impl ApiClient {
             );
 
             let result = model
-                .do_generate(request.clone())
+                .do_generate(current_request.clone())
                 .await
                 .map_err(ApiError::from);
 
             match result {
                 Ok(response) => return Ok(response),
                 Err(api_error) => {
+                    // 1. Context overflow recovery (same as stream_request)
+                    if api_error.is_context_overflow()
+                        && self.config.fallback.enable_overflow_recovery
+                        && overflow_attempts < self.config.fallback.max_overflow_attempts
+                        && let Some(new_max) =
+                            self.try_overflow_recovery(&current_request, &api_error)
+                    {
+                        info!(
+                            old = ?current_request.max_output_tokens,
+                            new = new_max,
+                            attempt = overflow_attempts + 1,
+                            max_attempts = self.config.fallback.max_overflow_attempts,
+                            "Recovering from context overflow in generate()"
+                        );
+                        current_request.max_output_tokens = Some(new_max);
+                        overflow_attempts += 1;
+                        continue;
+                    }
+
+                    // 2. Standard retry
                     let decision = retry_ctx.decide(&api_error);
 
                     match decision {
@@ -376,6 +353,12 @@ impl ApiClient {
                             tokio::time::sleep(delay).await;
                         }
                         RetryDecision::GiveUp => {
+                            if retry_ctx.current_attempt() > 0 {
+                                tracing::warn!(
+                                    diagnostics = ?retry_ctx.diagnostics(),
+                                    "All retries exhausted"
+                                );
+                            }
                             return Err(api_error);
                         }
                     }
@@ -489,6 +472,39 @@ impl ApiClient {
     }
 }
 
+/// Extract the thinking budget from provider options, if present.
+///
+/// Inspects the Anthropic, Volcengine, and Z.AI provider option paths
+/// for `thinking.budgetTokens` or `thinking.budget_tokens`.
+fn extract_thinking_budget(request: &LanguageModelCallOptions) -> Option<i64> {
+    let opts = request.provider_options.as_ref()?;
+
+    // Providers that support thinking.budgetTokens
+    const THINKING_BUDGET_PROVIDERS: &[ProviderType] = &[
+        ProviderType::Anthropic,
+        ProviderType::Volcengine,
+        ProviderType::Zai,
+    ];
+
+    for provider_type in THINKING_BUDGET_PROVIDERS {
+        let key = crate::request_options_merge::provider_name_for_type(*provider_type);
+        if let Some(provider_opts) = opts.get(key) {
+            if let Some(thinking) = provider_opts.get("thinking") {
+                // Try "budgetTokens" (camelCase, Anthropic/Volcengine wire format)
+                if let Some(budget) = thinking
+                    .get("budgetTokens")
+                    .or_else(|| thinking.get("budget_tokens"))
+                {
+                    if let Some(n) = budget.as_i64() {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 impl Default for ApiClient {
     fn default() -> Self {
         Self::new()
@@ -500,49 +516,6 @@ impl std::fmt::Debug for ApiClient {
         f.debug_struct("ApiClient")
             .field("config", &self.config)
             .finish()
-    }
-}
-
-/// Builder for creating an API client.
-pub struct ApiClientBuilder {
-    config: ApiClientConfig,
-}
-
-impl ApiClientBuilder {
-    pub fn new() -> Self {
-        Self {
-            config: ApiClientConfig::default(),
-        }
-    }
-
-    pub fn retry(mut self, retry: RetryConfig) -> Self {
-        self.config.retry = retry;
-        self
-    }
-
-    pub fn stall_timeout(mut self, timeout: Duration) -> Self {
-        self.config.stall_timeout = timeout;
-        self
-    }
-
-    pub fn stall_detection(mut self, enabled: bool) -> Self {
-        self.config.stall_detection_enabled = enabled;
-        self
-    }
-
-    pub fn fallback(mut self, fallback: FallbackConfig) -> Self {
-        self.config.fallback = fallback;
-        self
-    }
-
-    pub fn build(self) -> ApiClient {
-        ApiClient::with_config(self.config)
-    }
-}
-
-impl Default for ApiClientBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

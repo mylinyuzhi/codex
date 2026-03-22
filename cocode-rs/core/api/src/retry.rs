@@ -2,102 +2,27 @@
 //!
 //! This module provides [`RetryContext`] with exponential backoff and
 //! retry decisions for the vercel-ai based provider pipeline.
+//!
+//! The retry configuration type ([`ApiRetryConfig`]) lives in the protocol
+//! crate as the single source of truth.
 
 use crate::error::ApiError;
 use cocode_error::ErrorExt;
 use rand::Rng;
-use serde::Deserialize;
-use serde::Serialize;
 use std::time::Duration;
 
-/// Configuration for retry behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryConfig {
-    /// Maximum number of retry attempts.
-    #[serde(default = "default_max_retries")]
-    pub max_retries: i32,
-    /// Base delay for exponential backoff (ms).
-    #[serde(default = "default_base_delay")]
-    pub base_delay_ms: i64,
-    /// Maximum delay cap (ms).
-    #[serde(default = "default_max_delay")]
-    pub max_delay_ms: i64,
-    /// Backoff multiplier.
-    #[serde(default = "default_multiplier")]
-    pub multiplier: f64,
-    /// Jitter fraction applied to delays (0.0–1.0). A value of 0.2 means
-    /// ±20% random variation, preventing thundering-herd retries when
-    /// concurrent requests (main + subagents) hit the same rate limit.
-    #[serde(default = "default_jitter")]
-    pub jitter: f64,
-}
+pub use cocode_protocol::ApiRetryConfig;
 
-fn default_max_retries() -> i32 {
-    3
-}
-fn default_base_delay() -> i64 {
-    1000
-}
-fn default_max_delay() -> i64 {
-    30000
-}
-fn default_multiplier() -> f64 {
-    2.0
-}
-fn default_jitter() -> f64 {
-    0.2
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            max_retries: default_max_retries(),
-            base_delay_ms: default_base_delay(),
-            max_delay_ms: default_max_delay(),
-            multiplier: default_multiplier(),
-            jitter: default_jitter(),
-        }
-    }
-}
-
-impl RetryConfig {
-    /// Create a config with no retries.
-    pub fn no_retry() -> Self {
-        Self {
-            max_retries: 0,
-            ..Default::default()
-        }
-    }
-
-    /// Set jitter fraction (0.0–1.0).
-    pub fn with_jitter(mut self, jitter: f64) -> Self {
-        self.jitter = jitter.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Set maximum retry attempts.
-    pub fn with_max_retries(mut self, max: i32) -> Self {
-        self.max_retries = max;
-        self
-    }
-
-    /// Set base delay.
-    pub fn with_base_delay(mut self, delay: Duration) -> Self {
-        self.base_delay_ms = delay.as_millis() as i64;
-        self
-    }
-
-    /// Set maximum delay.
-    pub fn with_max_delay(mut self, delay: Duration) -> Self {
-        self.max_delay_ms = delay.as_millis() as i64;
-        self
-    }
-
-    /// Set backoff multiplier.
-    pub fn with_multiplier(mut self, multiplier: f64) -> Self {
-        self.multiplier = multiplier;
-        self
-    }
+/// Backoff strategy determined by error type.
+///
+/// Not user-configurable — strategy is determined by error classification,
+/// matching Claude Code's per-error-type retry behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryStrategy {
+    /// `min(max_delay, base * multiplier^attempt)` — default for most errors.
+    Exponential,
+    /// `min(max_delay, base * attempt)` — for network errors (CC: `1000 * attempt`).
+    Linear,
 }
 
 /// Retry context that tracks attempts and provides backoff calculation.
@@ -107,30 +32,36 @@ impl RetryConfig {
 /// and accumulates a diagnostics trail of all failures.
 #[derive(Debug, Clone)]
 pub struct RetryContext {
-    config: RetryConfig,
+    config: ApiRetryConfig,
     current_attempt: i32,
     last_error: Option<String>,
     /// Accumulated failure details from each retry attempt.
     failures: Vec<String>,
     /// Optional provider context for diagnostics.
     provider_context: Option<String>,
+    /// Consecutive overload errors (529/Overloaded).
+    ///
+    /// Reset to 0 on any non-overload error. Exposed for the loop driver
+    /// to detect sustained overload and trigger fast-mode degradation.
+    consecutive_overload_errors: i32,
 }
 
 impl RetryContext {
     /// Create a new retry context with the given configuration.
-    pub fn new(config: RetryConfig) -> Self {
+    pub fn new(config: ApiRetryConfig) -> Self {
         Self {
             config,
             current_attempt: 0,
             last_error: None,
             failures: Vec::new(),
             provider_context: None,
+            consecutive_overload_errors: 0,
         }
     }
 
     /// Create a retry context with default configuration.
     pub fn with_defaults() -> Self {
-        Self::new(RetryConfig::default())
+        Self::new(ApiRetryConfig::default())
     }
 
     /// Set provider context for diagnostics (e.g., provider name).
@@ -143,6 +74,13 @@ impl RetryContext {
     pub fn should_retry(&mut self, error: &ApiError) -> bool {
         self.current_attempt += 1;
         self.last_error = Some(error.to_string());
+
+        // Track consecutive overload errors for fast-mode degradation
+        if matches!(error, ApiError::Overloaded { .. }) {
+            self.consecutive_overload_errors += 1;
+        } else {
+            self.consecutive_overload_errors = 0;
+        }
 
         // Record failure in diagnostics trail
         let prefix = self
@@ -161,17 +99,28 @@ impl RetryContext {
 
     /// Calculate the delay before the next retry.
     ///
-    /// Applies exponential backoff with random jitter (±`jitter` fraction)
-    /// to prevent thundering-herd retries from concurrent requests.
+    /// Uses per-error-type strategy (matching Claude Code):
+    /// - **Network errors**: Linear backoff (`base_delay * attempt`)
+    /// - **All other retryable errors**: Exponential backoff
+    ///
+    /// Applies random jitter (±`jitter` fraction) to prevent thundering-herd
+    /// retries from concurrent requests.
     pub fn calculate_delay(&self, error: &ApiError) -> Duration {
-        // Honor retry-after hint if available
+        // Honor retry-after hint if available.
+        // The provider's hint is authoritative — do not cap it with max_delay_ms.
+        // Capping could cause premature retries while still rate-limited.
         if let Some(delay) = error.retry_after() {
-            return delay.min(Duration::from_millis(self.config.max_delay_ms as u64));
+            return delay;
         }
 
-        // Exponential backoff
+        let strategy = Self::strategy_for_error(error);
         let base = self.config.base_delay_ms as f64;
-        let delay_ms = base * self.config.multiplier.powi(self.current_attempt - 1);
+        let delay_ms = match strategy {
+            RetryStrategy::Linear => base * self.current_attempt as f64,
+            RetryStrategy::Exponential => {
+                base * self.config.multiplier.powi(self.current_attempt - 1)
+            }
+        };
         let delay_ms = delay_ms.min(self.config.max_delay_ms as f64);
 
         // Apply jitter: delay * (1.0 ± jitter)
@@ -184,6 +133,22 @@ impl RetryContext {
         };
 
         Duration::from_millis(delay_ms as u64)
+    }
+
+    /// Determine retry strategy based on error type.
+    fn strategy_for_error(error: &ApiError) -> RetryStrategy {
+        match error {
+            ApiError::Network { .. } => RetryStrategy::Linear,
+            _ => RetryStrategy::Exponential,
+        }
+    }
+
+    /// Get consecutive overload error count.
+    ///
+    /// Used by the loop driver to detect sustained overload and trigger
+    /// fast-mode degradation (matching Claude Code's `consecutive529Errors`).
+    pub fn consecutive_overload_errors(&self) -> i32 {
+        self.consecutive_overload_errors
     }
 
     /// Get the current attempt number.
@@ -211,6 +176,7 @@ impl RetryContext {
         self.current_attempt = 0;
         self.last_error = None;
         self.failures.clear();
+        self.consecutive_overload_errors = 0;
     }
 
     /// Check if retries are exhausted.

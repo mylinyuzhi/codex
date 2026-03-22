@@ -1,3 +1,5 @@
+use pretty_assertions::assert_eq;
+
 use super::api_error::*;
 use super::*;
 
@@ -29,6 +31,51 @@ fn test_error_retryable() {
         !InvalidRequestSnafu { message: "test" }
             .build()
             .is_retryable()
+    );
+}
+
+#[test]
+fn test_is_overload_or_rate_limit() {
+    assert!(
+        OverloadedSnafu {
+            message: "server overloaded",
+            retry_after_ms: 1000i64
+        }
+        .build()
+        .is_overload_or_rate_limit()
+    );
+    assert!(
+        RateLimitedSnafu {
+            message: "rate limited",
+            retry_after_ms: 1000i64
+        }
+        .build()
+        .is_overload_or_rate_limit()
+    );
+    // Other retryable errors must NOT trigger model fallback
+    assert!(
+        !NetworkSnafu { message: "timeout" }
+            .build()
+            .is_overload_or_rate_limit()
+    );
+    assert!(
+        !StreamSnafu {
+            message: "stream error"
+        }
+        .build()
+        .is_overload_or_rate_limit()
+    );
+    assert!(
+        !StreamIdleTimeoutSnafu {
+            timeout_secs: 30i64
+        }
+        .build()
+        .is_overload_or_rate_limit()
+    );
+    assert!(
+        !AuthenticationSnafu { message: "bad key" }
+            .build()
+            .is_overload_or_rate_limit()
     );
 }
 
@@ -595,4 +642,82 @@ fn test_response_body_no_body_falls_to_message() {
     let api_err: ApiError = sdk_err.into();
     // No body, falls to classify_by_message("connection refused") → Network
     assert!(matches!(api_err, ApiError::Network { .. }));
+}
+
+// =========================================================================
+// Context Overflow Info Parsing
+// =========================================================================
+
+use super::ContextOverflowInfo;
+use super::parse_overflow_info;
+
+#[test]
+fn test_parse_overflow_anthropic() {
+    let msg = "input length and `max_tokens` exceed context limit: 50000 + 4096 > 200000";
+    let info = parse_overflow_info(msg);
+    assert_eq!(
+        info,
+        ContextOverflowInfo {
+            input_tokens: Some(50000),
+            max_tokens: Some(4096),
+            context_limit: Some(200000),
+        }
+    );
+    assert!(info.has_recovery_info());
+}
+
+#[test]
+fn test_parse_overflow_openai() {
+    let msg = "This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens.";
+    let info = parse_overflow_info(msg);
+    assert_eq!(
+        info,
+        ContextOverflowInfo {
+            context_limit: Some(128000),
+            input_tokens: Some(140000),
+            max_tokens: None,
+        }
+    );
+    assert!(info.has_recovery_info());
+}
+
+#[test]
+fn test_parse_overflow_gemini() {
+    let msg = "input token count of 200000 exceeds the maximum allowed for model gemini-2.5-pro";
+    let info = parse_overflow_info(msg);
+    assert_eq!(info.input_tokens, Some(200000));
+    // Gemini may or may not have a second number
+}
+
+#[test]
+fn test_parse_overflow_gemini_with_limit() {
+    let msg = "input token count of 200000 exceeds the maximum of 128000 for model";
+    let info = parse_overflow_info(msg);
+    assert_eq!(info.input_tokens, Some(200000));
+    assert_eq!(info.context_limit, Some(128000));
+}
+
+#[test]
+fn test_parse_overflow_unparseable() {
+    let msg = "context length exceeded";
+    let info = parse_overflow_info(msg);
+    assert_eq!(info, ContextOverflowInfo::default());
+    assert!(!info.has_recovery_info());
+}
+
+#[test]
+fn test_overflow_info_from_api_error() {
+    let err: ApiError = api_error::ContextOverflowSnafu {
+        message: "input length and `max_tokens` exceed context limit: 80000 + 8192 > 200000",
+    }
+    .build();
+    let info = err.overflow_info().expect("should parse");
+    assert_eq!(info.input_tokens, Some(80000));
+    assert_eq!(info.context_limit, Some(200000));
+}
+
+#[test]
+fn test_overflow_info_non_overflow_error() {
+    let err: ApiError = api_error::NetworkSnafu { message: "timeout" }.build();
+    assert!(err.overflow_info().is_none());
 }

@@ -89,7 +89,7 @@ pub struct ToolConfig {
     ///
     /// When enabled, tool results exceeding `max_result_size` are automatically
     /// persisted to disk with a preview kept in context.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enable_result_persistence: bool,
 }
 
@@ -115,10 +115,6 @@ fn default_max_result_size() -> i32 {
 
 fn default_result_preview_size() -> i32 {
     DEFAULT_RESULT_PREVIEW_SIZE
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]

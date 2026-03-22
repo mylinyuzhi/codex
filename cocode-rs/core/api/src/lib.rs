@@ -36,9 +36,7 @@ pub mod unified_stream;
 
 // Re-export main types at crate root
 pub use client::ApiClient;
-pub use client::ApiClientBuilder;
 pub use client::ApiClientConfig;
-pub use client::FallbackConfig;
 pub use client::StreamOptions;
 pub use error::ApiError;
 pub use error::Result;
@@ -48,10 +46,10 @@ pub use provider_factory::create_model;
 pub use provider_factory::create_provider;
 pub use request_builder::RequestBuilder;
 pub use request_builder::build_request;
-pub use retry::RetryConfig;
 pub use retry::RetryContext;
 pub use retry::RetryDecision;
 pub use thinking_convert::to_provider_options;
+
 pub use unified_stream::CollectedResponse;
 pub use unified_stream::QueryResultType;
 pub use unified_stream::StreamingQueryResult;
@@ -110,7 +108,6 @@ pub mod prelude {
     pub use crate::client::StreamOptions;
     pub use crate::error::ApiError;
     pub use crate::error::Result;
-    pub use crate::retry::RetryConfig;
     pub use crate::retry::RetryContext;
     pub use crate::unified_stream::StreamingQueryResult;
     pub use crate::unified_stream::UnifiedStream;
