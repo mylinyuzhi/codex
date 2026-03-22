@@ -1,0 +1,32 @@
+[package]
+name = "cocode-symbol-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "cocode_symbol_search"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+cocode-file-ignore = { workspace = true }
+cocode-utils-common = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+notify = { workspace = true }
+tracing = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-tags = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
