@@ -160,7 +160,7 @@ pub fn analyze_command_safety(command: &str) -> SafetyResult {
 
 /// Converts shell-parser security analysis to SafetyResult.
 fn analyze_security_result(
-    cmd: &cocode_shell_parser::ParsedCommand,
+    cmd: &cocode_shell_parser::ParsedShell,
     analysis: SecurityAnalysis,
 ) -> SafetyResult {
     // No risks detected - check if command is word-only (safe structure)

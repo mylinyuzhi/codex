@@ -9,6 +9,9 @@ description = "Shell command parsing and security analysis"
 anyhow.workspace = true
 once_cell.workspace = true
 regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+shlex.workspace = true
 streaming-iterator.workspace = true
 thiserror.workspace = true
 tree-sitter.workspace = true

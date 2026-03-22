@@ -3,7 +3,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use crate::parser::ParsedCommand;
+use crate::parser::ParsedShell;
 use crate::redirects::extract_redirects_from_tree;
 use crate::segments::extract_segments_from_tree;
 use crate::tokenizer::TokenKind;
@@ -16,7 +16,7 @@ use super::risks::SecurityRisk;
 /// Trait for security analyzers.
 pub trait Analyzer {
     /// Analyze a parsed command and add any detected risks to the analysis.
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis);
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis);
 }
 
 /// Extracts (byte_index, char) pairs for characters in unquoted context.
@@ -68,7 +68,7 @@ fn extract_unquoted_chars(source: &str) -> Vec<(usize, char)> {
 pub struct SingleQuoteBypassAnalyzer;
 
 impl Analyzer for SingleQuoteBypassAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
         let bytes = source.as_bytes();
         let len = bytes.len();
@@ -120,7 +120,7 @@ impl Analyzer for SingleQuoteBypassAnalyzer {
 pub struct JqDangerAnalyzer;
 
 impl Analyzer for JqDangerAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static JQ_SYSTEM_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r#"\bsystem\s*\("#).expect("valid regex"));
@@ -162,7 +162,7 @@ impl Analyzer for JqDangerAnalyzer {
 pub struct ObfuscatedFlagsAnalyzer;
 
 impl Analyzer for ObfuscatedFlagsAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         for token in cmd.tokens() {
             match token.kind {
                 TokenKind::AnsiCQuoted => {
@@ -195,7 +195,7 @@ impl Analyzer for ObfuscatedFlagsAnalyzer {
 pub struct ShellMetacharactersAnalyzer;
 
 impl Analyzer for ShellMetacharactersAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static DANGEROUS_METACHAR_RE: Lazy<Regex> = Lazy::new(|| {
             // Look for semicolons, pipes, or ampersands that might be injection
@@ -236,7 +236,7 @@ impl Analyzer for ShellMetacharactersAnalyzer {
 pub struct DangerousVariablesAnalyzer;
 
 impl Analyzer for DangerousVariablesAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         // Look for patterns like $VAR | or ${VAR} | that could inject commands
         #[allow(clippy::expect_used)]
         static VAR_PIPE_RE: Lazy<Regex> = Lazy::new(|| {
@@ -257,7 +257,7 @@ impl Analyzer for DangerousVariablesAnalyzer {
 pub struct NewlineInjectionAnalyzer;
 
 impl Analyzer for NewlineInjectionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         // Check for literal \n followed by what looks like a command
         #[allow(clippy::expect_used)]
         static NEWLINE_CMD_RE: Lazy<Regex> =
@@ -288,7 +288,7 @@ impl Analyzer for NewlineInjectionAnalyzer {
 pub struct IfsInjectionAnalyzer;
 
 impl Analyzer for IfsInjectionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
 
         // Check for IFS assignment
@@ -305,7 +305,7 @@ impl Analyzer for IfsInjectionAnalyzer {
 pub struct ProcEnvironAnalyzer;
 
 impl Analyzer for ProcEnvironAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static PROC_ENVIRON_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r#"/proc/[^/]+/environ"#).expect("valid regex"));
@@ -324,7 +324,7 @@ impl Analyzer for ProcEnvironAnalyzer {
 pub struct BackslashEscapedWhitespaceAnalyzer;
 
 impl Analyzer for BackslashEscapedWhitespaceAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static BS_WS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\[ \t]").expect("valid regex"));
 
@@ -356,7 +356,7 @@ impl Analyzer for BackslashEscapedWhitespaceAnalyzer {
 pub struct BackslashEscapedOperatorsAnalyzer;
 
 impl Analyzer for BackslashEscapedOperatorsAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static BS_OP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\[;|&<>]").expect("valid regex"));
 
@@ -386,7 +386,7 @@ impl Analyzer for BackslashEscapedOperatorsAnalyzer {
 pub struct UnicodeWhitespaceAnalyzer;
 
 impl Analyzer for UnicodeWhitespaceAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
         for ch in source.chars() {
             if ch.is_whitespace() && !ch.is_ascii() {
@@ -410,7 +410,7 @@ impl Analyzer for UnicodeWhitespaceAnalyzer {
 pub struct MidWordHashAnalyzer;
 
 impl Analyzer for MidWordHashAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
         let unquoted = extract_unquoted_chars(source);
         for &(idx, ch) in &unquoted {
@@ -432,7 +432,7 @@ impl Analyzer for MidWordHashAnalyzer {
 pub struct BraceExpansionAnalyzer;
 
 impl Analyzer for BraceExpansionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         #[allow(clippy::expect_used)]
         static BRACE_RE: Lazy<Regex> =
             Lazy::new(|| Regex::new(r"\{[^}]*?(?:,|\.\.)[^}]*\}").expect("valid regex"));
@@ -456,7 +456,7 @@ impl Analyzer for BraceExpansionAnalyzer {
 pub struct ZshDangerousCommandsAnalyzer;
 
 impl Analyzer for ZshDangerousCommandsAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         const ZSH_CMDS: &[&str] = &["zmodload", "emulate", "sysopen", "zcompile", "autoload"];
 
         let commands = cmd.extract_commands();
@@ -477,7 +477,7 @@ impl Analyzer for ZshDangerousCommandsAnalyzer {
 pub struct CommentQuoteDesyncAnalyzer;
 
 impl Analyzer for CommentQuoteDesyncAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
         for line in source.lines() {
             // Find first unquoted `#` using quote-state tracking
@@ -550,7 +550,7 @@ impl Analyzer for CommentQuoteDesyncAnalyzer {
 pub struct QuotedNewlineHashAnalyzer;
 
 impl Analyzer for QuotedNewlineHashAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         for token in cmd.tokens() {
             if token.kind != TokenKind::DoubleQuoted {
                 continue;
@@ -585,7 +585,7 @@ impl Analyzer for QuotedNewlineHashAnalyzer {
 pub struct DangerousSubstitutionAnalyzer;
 
 impl Analyzer for DangerousSubstitutionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         for token in cmd.tokens() {
             match token.kind {
                 TokenKind::CommandSubstitution => {
@@ -637,7 +637,7 @@ impl Analyzer for DangerousSubstitutionAnalyzer {
 pub struct MalformedTokensAnalyzer;
 
 impl Analyzer for MalformedTokensAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         // Check for parse errors in the tree
         if cmd.has_errors() {
             analysis.add_risk(
@@ -704,7 +704,7 @@ impl Analyzer for MalformedTokensAnalyzer {
 pub struct SensitiveRedirectAnalyzer;
 
 impl Analyzer for SensitiveRedirectAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         const SENSITIVE_PATHS: &[&str] = &[
             "/etc/passwd",
             "/etc/shadow",
@@ -782,7 +782,7 @@ impl Analyzer for SensitiveRedirectAnalyzer {
 pub struct NetworkExfiltrationAnalyzer;
 
 impl Analyzer for NetworkExfiltrationAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         const EXFIL_CMDS: &[&str] = &[
             "curl", "wget", "nc", "netcat", "ncat", "telnet", "ssh", "scp", "rsync", "ftp",
         ];
@@ -825,7 +825,7 @@ impl Analyzer for NetworkExfiltrationAnalyzer {
 pub struct PrivilegeEscalationAnalyzer;
 
 impl Analyzer for PrivilegeEscalationAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         const PRIV_ESC_CMDS: &[&str] =
             &["sudo", "su", "doas", "pkexec", "gksudo", "kdesudo", "runas"];
 
@@ -871,7 +871,7 @@ impl Analyzer for PrivilegeEscalationAnalyzer {
 pub struct FileSystemTamperingAnalyzer;
 
 impl Analyzer for FileSystemTamperingAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let commands = cmd.extract_commands();
 
         for args in &commands {
@@ -937,7 +937,7 @@ impl Analyzer for FileSystemTamperingAnalyzer {
 pub struct CodeExecutionAnalyzer;
 
 impl Analyzer for CodeExecutionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let commands = cmd.extract_commands();
 
         for args in &commands {
@@ -1010,7 +1010,7 @@ impl HeredocSubstitutionAnalyzer {
 }
 
 impl Analyzer for HeredocSubstitutionAnalyzer {
-    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         let source = cmd.source();
         let bytes = source.as_bytes();
 

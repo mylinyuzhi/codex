@@ -39,6 +39,9 @@ members = [
     "mcp/rmcp-client",
     "utils/apply-patch",
     "utils/shell-parser",
+    "utils/rustls-provider",
+    "utils/stream-parser",
+    "utils/sleep-inhibitor",
     "retrieval",
     "lsp",
     "exec/shell",
@@ -126,6 +129,9 @@ cocode-utils-string = { path = "utils/string" }
 cocode-stdio-to-uds = { path = "utils/stdio-to-uds" }
 cocode-apply-patch = { path = "utils/apply-patch" }
 cocode-shell-parser = { path = "utils/shell-parser" }
+cocode-utils-rustls-provider = { path = "utils/rustls-provider" }
+cocode-utils-stream-parser = { path = "utils/stream-parser" }
+cocode-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 
 # Internal - MCP
 cocode-mcp-types = { path = "mcp/mcp-types" }
@@ -183,8 +189,10 @@ http = "1.3.1"
 humantime-serde = "1"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
+mime_guess = "2.0.5"
 keyring = "3"
 lazy_static = "1"
+libc = "0.2"
 log = "0.4"
 lru = "0.16.3"
 minijinja = "2"
@@ -203,9 +211,11 @@ rand = "0.9"
 regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"
+rustls = { version = "0.23", features = ["ring"] }
 schemars = "0.8.22"
 serde = "1"
 serde_json = "1"
+shlex = "1"
 serde_yml = "0.0.12"
 similar = "2"
 snafu = "0.8"
