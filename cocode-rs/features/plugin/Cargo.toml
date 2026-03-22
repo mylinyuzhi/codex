@@ -1,0 +1,34 @@
+[package]
+name = "cocode-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plugin system for cocode-rs"
+
+[dependencies]
+cocode-error.workspace = true
+cocode-hooks.workspace = true
+cocode-protocol.workspace = true
+cocode-lsp.workspace = true
+cocode-mcp-types.workspace = true
+cocode-rmcp-client.workspace = true
+cocode-skill.workspace = true
+cocode-subagent.workspace = true
+cocode-tools.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+tokio = { workspace = true, features = ["process", "fs"] }
+tracing.workspace = true
+walkdir.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true

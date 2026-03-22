@@ -1,0 +1,235 @@
+//! Complete inference context for LLM requests.
+
+use super::AgentKind;
+use super::ExecutionIdentity;
+use crate::model::ModelInfo;
+use crate::model::ModelSpec;
+use crate::thinking::ThinkingLevel;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+
+/// Complete inference context for an LLM request.
+///
+/// `InferenceContext` carries all the resolved information needed to build
+/// a request, enabling centralized parameter assembly in `RequestBuilder`.
+///
+/// # Lifecycle
+///
+/// 1. Created by `ModelHub::prepare_main_with_selections()` after resolving the `ExecutionIdentity`
+/// 2. Passed to `RequestBuilder` along with messages and tools
+/// 3. Used by `RequestBuilder::build()` to assemble the final `GenerateRequest`
+///
+/// # Example
+///
+/// ```ignore
+/// // In AgentLoop:
+/// let (ctx, model) = model_hub.prepare_main_with_selections(
+///     &self.selections,  // Session owns selections
+///     session_id,
+///     turn_number,
+/// )?;
+///
+/// let request = RequestBuilder::new(ctx)
+///     .messages(messages)
+///     .tools(tools)
+///     .build();
+///
+/// model.stream(request).await?;
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceContext {
+    // === Identity Tracking ===
+    /// Unique identifier for this inference call.
+    pub call_id: String,
+
+    /// Session ID for correlation.
+    pub session_id: String,
+
+    /// Turn number within the session.
+    pub turn_number: i32,
+
+    // === Resolved Model Configuration ===
+    /// Resolved model specification (provider/model).
+    pub model_spec: ModelSpec,
+
+    /// Full model information (capabilities, limits, thinking config).
+    pub model_info: ModelInfo,
+
+    // === Thinking Configuration ===
+    /// Merged thinking level (from RoleSelection override or ModelInfo default).
+    ///
+    /// This is the final, resolved thinking level to use for this request.
+    /// It takes into account:
+    /// 1. Explicit `RoleSelection.thinking_level` override (highest priority)
+    /// 2. `ModelInfo.default_thinking_level` (fallback)
+    /// 3. Model's supported thinking levels (for validation/snapping)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
+
+    // === Agent Metadata ===
+    /// Type of agent making this request.
+    pub agent_kind: AgentKind,
+
+    /// Original identity that was resolved to produce this context.
+    ///
+    /// Preserved for debugging and logging purposes.
+    pub original_identity: ExecutionIdentity,
+
+    // === Extended Parameters ===
+    /// Request options from ModelInfo, passed through to provider SDKs.
+    ///
+    /// Contains unknown config keys (e.g., seed, response_format) that are
+    /// merged into ProviderOptions at request build time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_options: Option<HashMap<String, serde_json::Value>>,
+
+    /// HTTP interceptor names from provider config, applied as extra headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interceptor_names: Vec<String>,
+}
+
+impl InferenceContext {
+    /// Create a new inference context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        call_id: impl Into<String>,
+        session_id: impl Into<String>,
+        turn_number: i32,
+        model_spec: ModelSpec,
+        model_info: ModelInfo,
+        agent_kind: AgentKind,
+        original_identity: ExecutionIdentity,
+    ) -> Self {
+        Self {
+            call_id: call_id.into(),
+            session_id: session_id.into(),
+            turn_number,
+            model_spec,
+            model_info,
+            thinking_level: None,
+            agent_kind,
+            original_identity,
+            request_options: None,
+            interceptor_names: Vec::new(),
+        }
+    }
+
+    /// Set the thinking level.
+    pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
+        self.thinking_level = Some(level);
+        self
+    }
+
+    /// Set request options for provider SDK passthrough.
+    pub fn with_request_options(mut self, opts: HashMap<String, serde_json::Value>) -> Self {
+        self.request_options = Some(opts);
+        self
+    }
+
+    /// Set HTTP interceptor names.
+    pub fn with_interceptor_names(mut self, names: Vec<String>) -> Self {
+        self.interceptor_names = names;
+        self
+    }
+
+    /// Get the provider name.
+    pub fn provider(&self) -> &str {
+        &self.model_spec.provider
+    }
+
+    /// Get the model name.
+    pub fn model(&self) -> &str {
+        &self.model_spec.slug
+    }
+
+    /// Get the context window size.
+    pub fn context_window(&self) -> Option<i64> {
+        self.model_info.context_window
+    }
+
+    /// Get the max output tokens.
+    pub fn max_output_tokens(&self) -> Option<i64> {
+        self.model_info.max_output_tokens
+    }
+
+    /// Get the timeout in seconds.
+    pub fn timeout_secs(&self) -> Option<i64> {
+        self.model_info.timeout_secs
+    }
+
+    /// Get the temperature.
+    pub fn temperature(&self) -> Option<f32> {
+        self.model_info.temperature
+    }
+
+    /// Get the top_p value.
+    pub fn top_p(&self) -> Option<f32> {
+        self.model_info.top_p
+    }
+
+    /// Check if thinking is enabled for this context.
+    pub fn is_thinking_enabled(&self) -> bool {
+        self.thinking_level
+            .as_ref()
+            .is_some_and(ThinkingLevel::is_enabled)
+    }
+
+    /// Get the effective thinking level.
+    ///
+    /// Returns the explicitly set thinking level, or falls back to the
+    /// model's default thinking level.
+    pub fn effective_thinking_level(&self) -> Option<&ThinkingLevel> {
+        self.thinking_level
+            .as_ref()
+            .or(self.model_info.default_thinking_level.as_ref())
+    }
+
+    /// Get a request option value by key.
+    pub fn get_request_option(&self, key: &str) -> Option<&serde_json::Value> {
+        self.request_options.as_ref().and_then(|e| e.get(key))
+    }
+
+    /// Check if this is a main agent context.
+    pub fn is_main(&self) -> bool {
+        self.agent_kind.is_main()
+    }
+
+    /// Check if this is a subagent context.
+    pub fn is_subagent(&self) -> bool {
+        self.agent_kind.is_subagent()
+    }
+
+    /// Check if this is a compaction context.
+    pub fn is_compaction(&self) -> bool {
+        self.agent_kind.is_compaction()
+    }
+
+    /// Create a child context for a subagent.
+    ///
+    /// The child context inherits the model configuration but has its own
+    /// call_id and agent_kind.
+    pub fn child_context(
+        &self,
+        call_id: impl Into<String>,
+        agent_type: impl Into<String>,
+        identity: ExecutionIdentity,
+    ) -> Self {
+        Self {
+            call_id: call_id.into(),
+            session_id: self.session_id.clone(),
+            turn_number: self.turn_number,
+            model_spec: self.model_spec.clone(),
+            model_info: self.model_info.clone(),
+            thinking_level: self.thinking_level.clone(),
+            agent_kind: AgentKind::subagent(&self.session_id, agent_type),
+            original_identity: identity,
+            request_options: self.request_options.clone(),
+            interceptor_names: self.interceptor_names.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "inference_context.test.rs"]
+mod tests;

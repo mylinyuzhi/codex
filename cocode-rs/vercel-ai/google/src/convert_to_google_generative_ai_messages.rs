@@ -1,0 +1,462 @@
+//! Convert Vercel AI SDK messages to Google Generative AI format.
+
+use base64::Engine as _;
+use serde_json::Value;
+use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::DataContent;
+use vercel_ai_provider::LanguageModelV4Message;
+use vercel_ai_provider::ToolContentPart;
+use vercel_ai_provider::ToolResultContent;
+use vercel_ai_provider::ToolResultContentPart;
+use vercel_ai_provider::UserContentPart;
+
+use crate::google_generative_ai_prompt::FileDataPart;
+use crate::google_generative_ai_prompt::FunctionCallPart;
+use crate::google_generative_ai_prompt::FunctionResponsePart;
+use crate::google_generative_ai_prompt::GoogleContentRole;
+use crate::google_generative_ai_prompt::GoogleGenerativeAIContent;
+use crate::google_generative_ai_prompt::GoogleGenerativeAIContentPart;
+use crate::google_generative_ai_prompt::GoogleGenerativeAIPrompt;
+use crate::google_generative_ai_prompt::GoogleGenerativeAISystemInstruction;
+use crate::google_generative_ai_prompt::GoogleTextPart;
+use crate::google_generative_ai_prompt::InlineDataPart;
+
+/// Options for message conversion.
+pub struct ConvertOptions {
+    /// Whether the model supports system instructions (Gemma models don't).
+    pub supports_system_instruction: bool,
+    /// Provider options namespace ("google" or "vertex") for thoughtSignature extraction.
+    pub provider_options_name: String,
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            supports_system_instruction: true,
+            provider_options_name: "google".to_string(),
+        }
+    }
+}
+
+/// Convert Vercel AI SDK messages to Google Generative AI prompt format.
+///
+/// Returns `Err` if system messages appear after non-system messages.
+pub fn convert_to_google_generative_ai_messages(
+    prompt: &[LanguageModelV4Message],
+    options: &ConvertOptions,
+) -> Result<GoogleGenerativeAIPrompt, String> {
+    let mut system_instruction_parts: Vec<GoogleTextPart> = Vec::new();
+    let mut contents: Vec<GoogleGenerativeAIContent> = Vec::new();
+    let mut system_messages_allowed = true;
+
+    for message in prompt {
+        match message {
+            LanguageModelV4Message::System { content, .. } => {
+                if !system_messages_allowed {
+                    return Err(
+                        "system messages are only supported at the beginning of the conversation"
+                            .to_string(),
+                    );
+                }
+                system_instruction_parts.push(GoogleTextPart {
+                    text: content.clone(),
+                });
+            }
+            LanguageModelV4Message::User { content, .. } => {
+                system_messages_allowed = false;
+                let parts = convert_user_content_parts(content);
+                if !parts.is_empty() {
+                    contents.push(GoogleGenerativeAIContent {
+                        role: GoogleContentRole::User,
+                        parts,
+                    });
+                }
+            }
+            LanguageModelV4Message::Assistant { content, .. } => {
+                system_messages_allowed = false;
+                let parts =
+                    convert_assistant_content_parts(content, &options.provider_options_name)?;
+                if !parts.is_empty() {
+                    contents.push(GoogleGenerativeAIContent {
+                        role: GoogleContentRole::Model,
+                        parts,
+                    });
+                }
+            }
+            LanguageModelV4Message::Tool { content, .. } => {
+                system_messages_allowed = false;
+                let parts = convert_tool_content_parts(content);
+                if !parts.is_empty() {
+                    contents.push(GoogleGenerativeAIContent {
+                        role: GoogleContentRole::User,
+                        parts,
+                    });
+                }
+            }
+        }
+    }
+
+    // For Gemma models: prepend system text to first user message
+    if !options.supports_system_instruction
+        && !system_instruction_parts.is_empty()
+        && !contents.is_empty()
+        && contents[0].role == GoogleContentRole::User
+    {
+        let system_text = system_instruction_parts
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        contents[0].parts.insert(
+            0,
+            GoogleGenerativeAIContentPart::Text {
+                text: format!("{system_text}\n\n"),
+                thought: None,
+                thought_signature: None,
+            },
+        );
+    }
+
+    // Only emit systemInstruction when the model supports it
+    let system_instruction =
+        if system_instruction_parts.is_empty() || !options.supports_system_instruction {
+            None
+        } else {
+            Some(GoogleGenerativeAISystemInstruction {
+                parts: system_instruction_parts,
+            })
+        };
+
+    Ok(GoogleGenerativeAIPrompt {
+        system_instruction,
+        contents,
+    })
+}
+
+fn convert_user_content_parts(parts: &[UserContentPart]) -> Vec<GoogleGenerativeAIContentPart> {
+    let mut result = Vec::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => {
+                result.push(GoogleGenerativeAIContentPart::Text {
+                    text: text_part.text.clone(),
+                    thought: None,
+                    thought_signature: None,
+                });
+            }
+            UserContentPart::File(file_part) => {
+                result.push(convert_file_part(&file_part.data, &file_part.media_type));
+            }
+        }
+    }
+    result
+}
+
+/// Extract thoughtSignature from a part's provider metadata.
+fn extract_thought_signature(
+    provider_metadata: &Option<vercel_ai_provider::ProviderMetadata>,
+    provider_options_name: &str,
+) -> Option<String> {
+    let meta = provider_metadata.as_ref()?;
+    // Try provider-specific namespace first, then fallback
+    let fallback = if provider_options_name == "vertex" {
+        "google"
+    } else {
+        "vertex"
+    };
+    let opts = meta
+        .get(provider_options_name)
+        .or_else(|| meta.get(fallback))?;
+    opts.get("thoughtSignature")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn convert_assistant_content_parts(
+    parts: &[AssistantContentPart],
+    provider_options_name: &str,
+) -> Result<Vec<GoogleGenerativeAIContentPart>, String> {
+    let mut result = Vec::new();
+    for part in parts {
+        match part {
+            AssistantContentPart::Text(text_part) => {
+                if text_part.text.is_empty() {
+                    continue;
+                }
+                let ts =
+                    extract_thought_signature(&text_part.provider_metadata, provider_options_name);
+                result.push(GoogleGenerativeAIContentPart::Text {
+                    text: text_part.text.clone(),
+                    thought: None,
+                    thought_signature: ts,
+                });
+            }
+            AssistantContentPart::File(file_part) => {
+                if matches!(&file_part.data, DataContent::Url(_)) {
+                    return Err(
+                        "File data URLs in assistant messages are not supported".to_string()
+                    );
+                }
+                let ts =
+                    extract_thought_signature(&file_part.provider_metadata, provider_options_name);
+                let thought = file_part
+                    .provider_metadata
+                    .as_ref()
+                    .and_then(|m| {
+                        let key = provider_options_name;
+                        let fallback = if key == "vertex" { "google" } else { "vertex" };
+                        m.get(key).or_else(|| m.get(fallback))
+                    })
+                    .and_then(|opts| opts.get("thought"))
+                    .and_then(serde_json::Value::as_bool)
+                    .filter(|&v| v)
+                    .map(|_| true);
+                let base_part = convert_file_part_to_inline(&file_part.data, &file_part.media_type);
+                match base_part {
+                    GoogleGenerativeAIContentPart::InlineData { inline_data, .. } => {
+                        result.push(GoogleGenerativeAIContentPart::InlineData {
+                            inline_data,
+                            thought,
+                            thought_signature: ts,
+                        });
+                    }
+                    other => result.push(other),
+                }
+            }
+            AssistantContentPart::ReasoningFile(rf_part) => {
+                if matches!(&rf_part.data, DataContent::Url(_)) {
+                    return Err(
+                        "File data URLs in assistant messages are not supported".to_string()
+                    );
+                }
+                let ts =
+                    extract_thought_signature(&rf_part.provider_metadata, provider_options_name);
+                let base_part = convert_file_part_to_inline(&rf_part.data, &rf_part.media_type);
+                match base_part {
+                    GoogleGenerativeAIContentPart::InlineData { inline_data, .. } => {
+                        result.push(GoogleGenerativeAIContentPart::InlineData {
+                            inline_data,
+                            thought: Some(true),
+                            thought_signature: ts,
+                        });
+                    }
+                    other => result.push(other),
+                }
+            }
+            AssistantContentPart::Reasoning(reasoning_part) => {
+                if reasoning_part.text.is_empty() {
+                    continue;
+                }
+                let ts = extract_thought_signature(
+                    &reasoning_part.provider_metadata,
+                    provider_options_name,
+                );
+                result.push(GoogleGenerativeAIContentPart::Text {
+                    text: reasoning_part.text.clone(),
+                    thought: Some(true),
+                    thought_signature: ts,
+                });
+            }
+            AssistantContentPart::ToolCall(tool_call_part) => {
+                let ts = extract_thought_signature(
+                    &tool_call_part.provider_metadata,
+                    provider_options_name,
+                );
+                result.push(GoogleGenerativeAIContentPart::FunctionCall {
+                    function_call: FunctionCallPart {
+                        name: tool_call_part.tool_name.clone(),
+                        args: tool_call_part.input.clone(),
+                    },
+                    thought_signature: ts,
+                });
+            }
+            AssistantContentPart::ToolResult(_) => {
+                // Tool results in assistant messages are not sent to Google.
+            }
+            AssistantContentPart::Source(_) => {
+                // Source parts are informational, not sent to Google.
+            }
+            AssistantContentPart::ToolApprovalRequest(_) => {
+                // Tool approval requests are not sent to Google.
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn convert_tool_content_parts(parts: &[ToolContentPart]) -> Vec<GoogleGenerativeAIContentPart> {
+    let mut result = Vec::new();
+    for part in parts {
+        match part {
+            ToolContentPart::ToolResult(tool_result) => {
+                convert_tool_result_output(
+                    &tool_result.tool_name,
+                    &tool_result.output,
+                    &mut result,
+                );
+            }
+            ToolContentPart::ToolApprovalResponse(_) => {
+                // Tool approval responses are not directly sent to Google.
+            }
+        }
+    }
+    result
+}
+
+fn convert_tool_result_output(
+    tool_name: &str,
+    output: &ToolResultContent,
+    result: &mut Vec<GoogleGenerativeAIContentPart>,
+) {
+    match output {
+        ToolResultContent::Content { value, .. } => {
+            // For multi-part content, iterate parts with type-specific handling
+            for content_part in value {
+                match content_part {
+                    ToolResultContentPart::Text { text, .. } => {
+                        result.push(GoogleGenerativeAIContentPart::FunctionResponse {
+                            function_response: FunctionResponsePart {
+                                name: tool_name.to_string(),
+                                response: serde_json::json!({
+                                    "name": tool_name,
+                                    "content": text,
+                                }),
+                            },
+                        });
+                    }
+                    ToolResultContentPart::FileData {
+                        data, media_type, ..
+                    } => {
+                        result.push(GoogleGenerativeAIContentPart::InlineData {
+                            inline_data: InlineDataPart {
+                                mime_type: media_type.clone(),
+                                data: data.clone(),
+                            },
+                            thought: None,
+                            thought_signature: None,
+                        });
+                        result.push(GoogleGenerativeAIContentPart::Text {
+                            text:
+                                "Tool executed successfully and returned this image as a response"
+                                    .to_string(),
+                            thought: None,
+                            thought_signature: None,
+                        });
+                    }
+                    other => {
+                        // Default: JSON.stringify the part
+                        let json_str = serde_json::to_string(other).unwrap_or_default();
+                        result.push(GoogleGenerativeAIContentPart::Text {
+                            text: json_str,
+                            thought: None,
+                            thought_signature: None,
+                        });
+                    }
+                }
+            }
+        }
+        _ => {
+            // All non-content types: wrap as { name, content }
+            let content_value = match output {
+                ToolResultContent::Text { value, .. } => Value::String(value.clone()),
+                ToolResultContent::Json { value, .. } => value.clone(),
+                ToolResultContent::ExecutionDenied { reason, .. } => Value::String(
+                    reason
+                        .as_deref()
+                        .unwrap_or("Tool execution denied.")
+                        .to_string(),
+                ),
+                ToolResultContent::ErrorText { value, .. } => Value::String(value.clone()),
+                ToolResultContent::ErrorJson { value, .. } => value.clone(),
+                ToolResultContent::Content { .. } => unreachable!(),
+            };
+            result.push(GoogleGenerativeAIContentPart::FunctionResponse {
+                function_response: FunctionResponsePart {
+                    name: tool_name.to_string(),
+                    response: serde_json::json!({
+                        "name": tool_name,
+                        "content": content_value,
+                    }),
+                },
+            });
+        }
+    }
+}
+
+/// Convert file data to an InlineData part (for assistant context where URLs are rejected beforehand).
+fn convert_file_part_to_inline(
+    data: &DataContent,
+    media_type: &str,
+) -> GoogleGenerativeAIContentPart {
+    let media_type = if media_type == "image/*" {
+        "image/jpeg"
+    } else {
+        media_type
+    };
+    match data {
+        DataContent::Base64(base64) => GoogleGenerativeAIContentPart::InlineData {
+            inline_data: InlineDataPart {
+                mime_type: media_type.to_string(),
+                data: base64.clone(),
+            },
+            thought: None,
+            thought_signature: None,
+        },
+        DataContent::Bytes(bytes) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+        DataContent::Url(url) => GoogleGenerativeAIContentPart::FileData {
+            file_data: FileDataPart {
+                mime_type: media_type.to_string(),
+                file_uri: url.clone(),
+            },
+        },
+    }
+}
+
+fn convert_file_part(data: &DataContent, media_type: &str) -> GoogleGenerativeAIContentPart {
+    let media_type = if media_type == "image/*" {
+        "image/jpeg"
+    } else {
+        media_type
+    };
+    match data {
+        DataContent::Url(url) => GoogleGenerativeAIContentPart::FileData {
+            file_data: FileDataPart {
+                mime_type: media_type.to_string(),
+                file_uri: url.clone(),
+            },
+        },
+        DataContent::Base64(base64) => GoogleGenerativeAIContentPart::InlineData {
+            inline_data: InlineDataPart {
+                mime_type: media_type.to_string(),
+                data: base64.clone(),
+            },
+            thought: None,
+            thought_signature: None,
+        },
+        DataContent::Bytes(bytes) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "convert_to_google_generative_ai_messages.test.rs"]
+mod tests;

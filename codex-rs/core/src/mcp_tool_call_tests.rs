@@ -619,6 +619,39 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 }
 
 #[test]
+fn codex_apps_tool_call_request_meta_includes_codex_apps_meta() {
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Create Event".to_string()),
+        tool_description: Some("Create a calendar event.".to_string()),
+        codex_apps_meta: Some(
+            serde_json::json!({
+                "resource_uri": "connector://calendar/tools/calendar_create_event",
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            })
+            .as_object()
+            .cloned()
+            .expect("_codex_apps metadata should be an object"),
+        ),
+    };
+
+    assert_eq!(
+        build_mcp_tool_call_request_meta(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata)),
+        Some(serde_json::json!({
+            MCP_TOOL_CODEX_APPS_META_KEY: {
+                "resource_uri": "connector://calendar/tools/calendar_create_event",
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            },
+        }))
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {
