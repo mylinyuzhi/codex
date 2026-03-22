@@ -1,0 +1,163 @@
+use super::*;
+
+#[test]
+fn test_resolve_provider_api() {
+    assert_eq!(resolve_provider_api("anthropic"), ProviderApi::Anthropic);
+    assert_eq!(resolve_provider_api("Anthropic"), ProviderApi::Anthropic);
+    assert_eq!(resolve_provider_api("openai"), ProviderApi::Openai);
+    assert_eq!(resolve_provider_api("OpenAI"), ProviderApi::Openai);
+    assert_eq!(resolve_provider_api("gemini"), ProviderApi::Gemini);
+    assert_eq!(resolve_provider_api("genai"), ProviderApi::Gemini);
+    assert_eq!(resolve_provider_api("google"), ProviderApi::Gemini);
+    assert_eq!(resolve_provider_api("volcengine"), ProviderApi::Volcengine);
+    assert_eq!(resolve_provider_api("ark"), ProviderApi::Volcengine);
+    assert_eq!(resolve_provider_api("zai"), ProviderApi::Zai);
+    assert_eq!(resolve_provider_api("zhipu"), ProviderApi::Zai);
+    assert_eq!(
+        resolve_provider_api("openai_compat"),
+        ProviderApi::OpenaiCompat
+    );
+    assert_eq!(
+        resolve_provider_api("openai-compat"),
+        ProviderApi::OpenaiCompat
+    );
+    // Unknown providers default to OpenaiCompat
+    assert_eq!(resolve_provider_api("unknown"), ProviderApi::OpenaiCompat);
+    assert_eq!(
+        resolve_provider_api("custom-provider"),
+        ProviderApi::OpenaiCompat
+    );
+}
+
+#[test]
+fn test_parse_valid() {
+    let spec: ModelSpec = "anthropic/claude-opus-4".parse().unwrap();
+    assert_eq!(spec.provider, "anthropic");
+    assert_eq!(spec.slug, "claude-opus-4");
+    assert_eq!(spec.api, ProviderApi::Anthropic);
+}
+
+#[test]
+fn test_parse_with_slashes_in_model() {
+    // Model names can contain slashes (e.g., "accounts/fireworks/models/llama-v3")
+    let spec: ModelSpec = "fireworks/accounts/fireworks/models/llama-v3"
+        .parse()
+        .unwrap();
+    assert_eq!(spec.provider, "fireworks");
+    assert_eq!(spec.slug, "accounts/fireworks/models/llama-v3");
+    // Unknown provider defaults to OpenaiCompat
+    assert_eq!(spec.api, ProviderApi::OpenaiCompat);
+}
+
+#[test]
+fn test_parse_invalid_no_slash() {
+    let result: Result<ModelSpec, _> = "claude-opus-4".parse();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().0.contains("invalid format"));
+}
+
+#[test]
+fn test_parse_invalid_empty_provider() {
+    let result: Result<ModelSpec, _> = "/claude-opus-4".parse();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_parse_invalid_empty_model() {
+    let result: Result<ModelSpec, _> = "anthropic/".parse();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_new_auto_resolves_provider_api() {
+    let spec = ModelSpec::new("openai", "gpt-5");
+    assert_eq!(spec.provider, "openai");
+    assert_eq!(spec.slug, "gpt-5");
+    assert_eq!(spec.api, ProviderApi::Openai);
+
+    let spec = ModelSpec::new("gemini", "gemini-2.0-flash");
+    assert_eq!(spec.api, ProviderApi::Gemini);
+}
+
+#[test]
+fn test_with_type_explicit() {
+    // Create with explicit provider type (even if it doesn't match the name)
+    let spec = ModelSpec::with_type("my-custom-anthropic", ProviderApi::Anthropic, "model-x");
+    assert_eq!(spec.provider, "my-custom-anthropic");
+    assert_eq!(spec.slug, "model-x");
+    assert_eq!(spec.api, ProviderApi::Anthropic);
+}
+
+#[test]
+fn test_display() {
+    let spec = ModelSpec::new("openai", "gpt-5");
+    assert_eq!(spec.to_string(), "openai/gpt-5");
+}
+
+#[test]
+fn test_serde_roundtrip() {
+    let spec = ModelSpec::new("anthropic", "claude-opus-4");
+    let json = serde_json::to_string(&spec).unwrap();
+    assert_eq!(json, r#""anthropic/claude-opus-4""#);
+
+    let parsed: ModelSpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, spec);
+}
+
+#[test]
+fn test_serde_deserialize_invalid() {
+    let result: Result<ModelSpec, _> = serde_json::from_str(r#""invalid""#);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_equality() {
+    let a = ModelSpec::new("anthropic", "claude-opus-4");
+    let b = ModelSpec::new("anthropic", "claude-opus-4");
+    let c = ModelSpec::new("openai", "gpt-5");
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+#[test]
+fn test_hash() {
+    use std::collections::HashSet;
+
+    let mut set = HashSet::new();
+    set.insert(ModelSpec::new("anthropic", "claude-opus-4"));
+    set.insert(ModelSpec::new("openai", "gpt-5"));
+
+    assert!(set.contains(&ModelSpec::new("anthropic", "claude-opus-4")));
+    assert!(!set.contains(&ModelSpec::new("genai", "gemini-3")));
+}
+
+#[test]
+fn test_display_name_defaults_to_slug() {
+    let spec = ModelSpec::new("openai", "gpt-5");
+    assert_eq!(spec.display_name, "gpt-5");
+}
+
+#[test]
+fn test_display_name_custom() {
+    let spec = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    assert_eq!(spec.display_name, "GPT-5");
+}
+
+#[test]
+fn test_display_name_excluded_from_equality() {
+    let a = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    let b = ModelSpec::new("openai", "gpt-5").with_display_name("Different Name");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn test_display_name_excluded_from_hash() {
+    use std::collections::HashSet;
+
+    let a = ModelSpec::new("openai", "gpt-5").with_display_name("GPT-5");
+    let b = ModelSpec::new("openai", "gpt-5").with_display_name("Different Name");
+
+    let mut set = HashSet::new();
+    set.insert(a);
+    assert!(set.contains(&b));
+}

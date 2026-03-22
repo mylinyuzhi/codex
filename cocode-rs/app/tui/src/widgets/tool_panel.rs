@@ -1,0 +1,121 @@
+//! Tool execution panel widget.
+//!
+//! Displays currently running and recently completed tools.
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::List;
+use ratatui::widgets::ListItem;
+use ratatui::widgets::Widget;
+
+use crate::i18n::t;
+use crate::state::ToolExecution;
+use crate::state::ToolStatus;
+use crate::theme::Theme;
+
+/// Tool panel widget showing tool execution status.
+pub struct ToolPanel<'a> {
+    tools: &'a [ToolExecution],
+    theme: &'a Theme,
+    max_display: usize,
+}
+
+impl<'a> ToolPanel<'a> {
+    /// Create a new tool panel.
+    pub fn new(tools: &'a [ToolExecution], theme: &'a Theme) -> Self {
+        Self {
+            tools,
+            theme,
+            max_display: 5,
+        }
+    }
+
+    /// Set the maximum number of tools to display.
+    pub fn max_display(mut self, max: usize) -> Self {
+        self.max_display = max;
+        self
+    }
+
+    /// Format a tool for display.
+    fn format_tool(tool: &ToolExecution, theme: &Theme) -> ListItem<'static> {
+        let status_icon = match tool.status {
+            ToolStatus::Running => Span::raw("⏳").fg(theme.tool_running),
+            ToolStatus::Completed => Span::raw("✓").fg(theme.tool_completed),
+            ToolStatus::Failed => Span::raw("✗").fg(theme.tool_error),
+        };
+
+        let name = Span::raw(format!(" {}", tool.name));
+
+        let progress = tool
+            .progress
+            .as_ref()
+            .map(|p| Span::raw(format!(" - {p}")).fg(theme.text_dim))
+            .unwrap_or_else(|| Span::raw(""));
+
+        // Show elapsed time for running tools
+        let elapsed = if tool.status == ToolStatus::Running {
+            tool.started_at
+                .map(|t| {
+                    let secs = t.elapsed().as_secs();
+                    if secs > 0 {
+                        Span::raw(format!(" {secs}s")).fg(theme.text_dim)
+                    } else {
+                        Span::raw("")
+                    }
+                })
+                .unwrap_or_else(|| Span::raw(""))
+        } else {
+            Span::raw("")
+        };
+
+        let line = Line::from(vec![status_icon, name, progress, elapsed]);
+        ListItem::new(line)
+    }
+}
+
+impl Widget for ToolPanel<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.height < 2 || self.tools.is_empty() {
+            return;
+        }
+
+        // Take the most recent tools
+        let display_tools: Vec<_> = self.tools.iter().rev().take(self.max_display).collect();
+
+        let items: Vec<ListItem> = display_tools
+            .iter()
+            .rev()
+            .map(|t| Self::format_tool(t, self.theme))
+            .collect();
+
+        let running_count = self
+            .tools
+            .iter()
+            .filter(|t| t.status == ToolStatus::Running)
+            .count();
+
+        let title = if running_count > 0 {
+            format!(" {} ", t!("tool.title_running", count = running_count))
+        } else {
+            format!(" {} ", t!("tool.title"))
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(self.theme.border))
+            .title(title);
+
+        let list = List::new(items).block(block);
+
+        list.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+#[path = "tool_panel.test.rs"]
+mod tests;
