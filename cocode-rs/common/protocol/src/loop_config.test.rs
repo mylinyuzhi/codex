@@ -29,6 +29,29 @@ fn test_stall_detection_config_default() {
     assert_eq!(config.stall_timeout, Duration::from_secs(30));
     assert_eq!(config.recovery, StallRecovery::Retry);
     assert!(config.enabled);
+    assert!(config.watchdog.enabled);
+    assert_eq!(config.watchdog.warning_timeout, Duration::from_secs(60));
+    assert_eq!(config.watchdog.abort_timeout, Duration::from_secs(180));
+}
+
+#[test]
+fn test_watchdog_config_default() {
+    let config = WatchdogConfig::default();
+    assert!(config.enabled);
+    assert_eq!(config.warning_timeout, Duration::from_secs(60));
+    assert_eq!(config.abort_timeout, Duration::from_secs(180));
+}
+
+#[test]
+fn test_watchdog_config_serde_roundtrip() {
+    let config = WatchdogConfig {
+        enabled: true,
+        warning_timeout: Duration::from_secs(15),
+        abort_timeout: Duration::from_secs(45),
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let parsed: WatchdogConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, config);
 }
 
 #[test]

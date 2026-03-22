@@ -70,7 +70,7 @@ pub const DEFAULT_TOOL_CACHE_TTL_SECS: i32 = 300;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpAutoSearchConfig {
     /// Enable auto-search mode (default: true).
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
 
     /// Context threshold for enabling search (default: 0.10 = 10%).
@@ -85,7 +85,7 @@ pub struct McpAutoSearchConfig {
     pub min_context_window: i32,
 
     /// Trigger tool refresh on tools/list_changed notification (default: true).
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub search_on_list_changed: bool,
 
     /// Chars per token estimate for threshold calculation (default: 2.5).
@@ -218,7 +218,7 @@ impl McpAutoSearchConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpToolCacheConfig {
     /// Enable tool caching (default: true).
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
 
     /// Cache TTL in seconds (default: 300 = 5 minutes).
@@ -226,7 +226,7 @@ pub struct McpToolCacheConfig {
     pub ttl_secs: i32,
 
     /// Invalidate cache on tools/list_changed notification (default: true).
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub invalidate_on_list_changed: bool,
 }
 
@@ -292,10 +292,6 @@ impl McpConfig {
 // ============================================================================
 // Default value functions for serde
 // ============================================================================
-
-fn default_true() -> bool {
-    true
-}
 
 fn default_context_threshold() -> f32 {
     DEFAULT_AUTOSEARCH_CONTEXT_THRESHOLD

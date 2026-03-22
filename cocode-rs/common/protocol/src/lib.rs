@@ -13,6 +13,7 @@
 //! - Agent status and correlation tracking
 
 pub mod agent_status;
+pub mod api_config;
 pub mod attachment_config;
 pub mod auto_memory_config;
 pub mod compact_config;
@@ -38,6 +39,11 @@ pub mod tools;
 pub mod tracking;
 pub mod web_fetch_config;
 pub mod web_search_config;
+
+// API client config types
+pub use api_config::ApiFallbackConfig;
+pub use api_config::ApiRetryConfig;
+pub use api_config::DEFAULT_MAX_CONSECUTIVE_OVERLOAD_ERRORS;
 
 // Model types
 pub use model::Capability;
@@ -100,6 +106,7 @@ pub use loop_config::PromptCachingConfig;
 pub use loop_config::SessionMemoryConfig;
 pub use loop_config::StallDetectionConfig;
 pub use loop_config::StallRecovery;
+pub use loop_config::WatchdogConfig;
 
 // Loop event types
 pub use loop_event::AbortReason;
@@ -246,3 +253,10 @@ pub use tools::ToolName;
 
 // Subagent types
 pub use subagent::SubagentType;
+
+/// Shared serde default helper returning `true`.
+///
+/// Used by `#[serde(default = "...")]` across protocol and downstream crates.
+pub fn default_true() -> bool {
+    true
+}

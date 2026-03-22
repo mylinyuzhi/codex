@@ -60,16 +60,12 @@ pub struct SessionMemoryConfig {
     #[serde(default)]
     pub restoration_priority: FileRestorationPriority,
     /// Whether session memory is enabled.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
 }
 
 fn default_budget_tokens() -> i32 {
     4096
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for SessionMemoryConfig {
@@ -119,8 +115,14 @@ pub struct StallDetectionConfig {
     #[serde(default)]
     pub recovery: StallRecovery,
     /// Whether stall detection is enabled.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
+    /// Two-tier watchdog configuration.
+    ///
+    /// Provides a warning phase before the abort phase, matching
+    /// Claude Code's stream watchdog behavior.
+    #[serde(default)]
+    pub watchdog: WatchdogConfig,
 }
 
 fn default_stall_timeout() -> Duration {
@@ -133,6 +135,7 @@ impl Default for StallDetectionConfig {
             stall_timeout: default_stall_timeout(),
             recovery: StallRecovery::default(),
             enabled: true,
+            watchdog: WatchdogConfig::default(),
         }
     }
 }
@@ -164,6 +167,50 @@ impl StallRecovery {
 impl std::fmt::Display for StallRecovery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// Two-tier stream watchdog configuration.
+///
+/// Matches Claude Code's watchdog behavior:
+/// - **Warning tier** (default 60s): Log warning and emit UI event
+/// - **Abort tier** (default 180s): Kill stream, trigger fallback
+///
+/// Both timeouts are measured from the last received SSE event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WatchdogConfig {
+    /// Enable the two-tier watchdog.
+    #[serde(default = "crate::default_true")]
+    pub enabled: bool,
+    /// Warning timeout — emit a warning event after this gap.
+    #[serde(with = "humantime_serde", default = "default_warning_timeout")]
+    pub warning_timeout: Duration,
+    /// Abort timeout — kill the stream after this gap.
+    #[serde(with = "humantime_serde", default = "default_abort_timeout")]
+    pub abort_timeout: Duration,
+}
+
+/// Claude Code uses 30s. We use 60s to tolerate slower models
+/// (e.g., self-hosted or high-latency providers) that may take longer
+/// between SSE events without actually being stalled.
+fn default_warning_timeout() -> Duration {
+    Duration::from_secs(60)
+}
+
+/// Claude Code uses 60s. We use 180s to tolerate slower models
+/// that legitimately need more time per chunk (e.g., large-context
+/// requests on constrained infrastructure).
+fn default_abort_timeout() -> Duration {
+    Duration::from_secs(180)
+}
+
+impl Default for WatchdogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            warning_timeout: default_warning_timeout(),
+            abort_timeout: default_abort_timeout(),
+        }
     }
 }
 

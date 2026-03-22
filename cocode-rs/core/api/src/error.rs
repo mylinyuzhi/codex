@@ -117,12 +117,44 @@ impl ApiError {
         matches!(self, ApiError::InvalidRequest { message, .. } if message.starts_with("No model configured"))
     }
 
+    /// Check if this is an overload or rate-limit error.
+    ///
+    /// Used to decide whether model fallback should be attempted.
+    /// Matches Claude Code's `iF6(isOverloadedError)` which only triggers
+    /// fallback on 529/overloaded or 429/rate-limited — NOT on transient
+    /// network errors or stream errors.
+    pub fn is_overload_or_rate_limit(&self) -> bool {
+        matches!(
+            self,
+            ApiError::Overloaded { .. } | ApiError::RateLimited { .. }
+        )
+    }
+
     /// Check if this is a stream-related error that should trigger fallback.
     pub fn is_stream_error(&self) -> bool {
         matches!(
             self,
             ApiError::Stream { .. } | ApiError::StreamIdleTimeout { .. }
         )
+    }
+
+    /// Parse token information from a context overflow error message.
+    ///
+    /// Returns `Some` if the error is a `ContextOverflow` and token info
+    /// can be extracted from the message. Used by the API client to
+    /// calculate the exact available output space during overflow recovery.
+    pub fn overflow_info(&self) -> Option<ContextOverflowInfo> {
+        match self {
+            ApiError::ContextOverflow { message, .. } => {
+                let info = parse_overflow_info(message);
+                if info.has_recovery_info() {
+                    Some(info)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Get the diagnostics trail from a `RetriesExhausted` error.
@@ -456,6 +488,148 @@ impl From<crate::AISdkError> for ApiError {
     fn from(err: crate::AISdkError) -> Self {
         classify_sdk_error(&err)
     }
+}
+
+// =============================================================================
+// Context Overflow Info Parsing
+// =============================================================================
+
+/// Token information extracted from a context overflow error message.
+///
+/// Providers embed token counts in error messages using different formats.
+/// This struct captures whatever values can be parsed, with `None` for
+/// values that couldn't be extracted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextOverflowInfo {
+    /// Number of input tokens reported by the provider.
+    pub input_tokens: Option<i64>,
+    /// Maximum tokens value from the request.
+    pub max_tokens: Option<i64>,
+    /// Total context window limit for the model.
+    pub context_limit: Option<i64>,
+}
+
+impl ContextOverflowInfo {
+    /// Check if enough information is available for smart recovery.
+    ///
+    /// Returns `true` if at least `input_tokens` and `context_limit` are known,
+    /// which allows calculating the exact available space.
+    pub fn has_recovery_info(&self) -> bool {
+        self.input_tokens.is_some() && self.context_limit.is_some()
+    }
+}
+
+/// Parse token information from a context overflow error message.
+///
+/// Handles known provider patterns:
+/// - **Anthropic**: `"...exceed context limit: {input} + {max} > {limit}"`
+/// - **OpenAI**: `"maximum context length is {limit} tokens...resulted in {input} tokens"`
+/// - **Gemini**: `"input token count of {input} exceeds the maximum...for model"`
+///
+/// Falls back to generic number extraction when no pattern matches.
+pub fn parse_overflow_info(message: &str) -> ContextOverflowInfo {
+    // Try Anthropic pattern: "...context limit: {input} + {max} > {limit}"
+    if let Some(info) = parse_anthropic_overflow(message) {
+        return info;
+    }
+    // Try OpenAI pattern: "maximum context length is {limit}...resulted in {input} tokens"
+    if let Some(info) = parse_openai_overflow(message) {
+        return info;
+    }
+    // Try Gemini pattern: "input token count of {input} exceeds"
+    if let Some(info) = parse_gemini_overflow(message) {
+        return info;
+    }
+    ContextOverflowInfo::default()
+}
+
+/// Anthropic: `"...context limit: 50000 + 4096 > 200000"`
+fn parse_anthropic_overflow(message: &str) -> Option<ContextOverflowInfo> {
+    // Look for the pattern with ": {n} + {n} > {n}"
+    let marker = "context limit:";
+    let idx = message.to_ascii_lowercase().find(marker)?;
+    let after = &message[idx + marker.len()..];
+    let nums = extract_numbers(after);
+    if nums.len() >= 3 {
+        Some(ContextOverflowInfo {
+            input_tokens: Some(nums[0]),
+            max_tokens: Some(nums[1]),
+            context_limit: Some(nums[2]),
+        })
+    } else {
+        None
+    }
+}
+
+/// OpenAI: `"maximum context length is {limit} tokens. However, your messages resulted in {input} tokens"`
+fn parse_openai_overflow(message: &str) -> Option<ContextOverflowInfo> {
+    let lower = message.to_ascii_lowercase();
+    if !lower.contains("maximum context length") {
+        return None;
+    }
+    let nums = extract_numbers(message);
+    if nums.len() >= 2 {
+        Some(ContextOverflowInfo {
+            context_limit: Some(nums[0]),
+            input_tokens: Some(nums[1]),
+            max_tokens: None,
+        })
+    } else if nums.len() == 1 {
+        Some(ContextOverflowInfo {
+            context_limit: Some(nums[0]),
+            input_tokens: None,
+            max_tokens: None,
+        })
+    } else {
+        None
+    }
+}
+
+/// Gemini: `"input token count of {input} exceeds the maximum"`
+fn parse_gemini_overflow(message: &str) -> Option<ContextOverflowInfo> {
+    let lower = message.to_ascii_lowercase();
+    if !lower.contains("input token count") {
+        return None;
+    }
+    let nums = extract_numbers(message);
+    match nums.len() {
+        0 => None,
+        1 => Some(ContextOverflowInfo {
+            input_tokens: Some(nums[0]),
+            max_tokens: None,
+            context_limit: None,
+        }),
+        _ => Some(ContextOverflowInfo {
+            input_tokens: Some(nums[0]),
+            max_tokens: None,
+            context_limit: Some(nums[1]),
+        }),
+    }
+}
+
+/// Extract all integer sequences from a string.
+fn extract_numbers(s: &str) -> Vec<i64> {
+    let mut nums = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            let mut num_str = String::new();
+            while let Some(&d) = chars.peek() {
+                if d.is_ascii_digit() {
+                    num_str.push(d);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if let Ok(n) = num_str.parse::<i64>() {
+                nums.push(n);
+            }
+        } else {
+            chars.next();
+        }
+    }
+    nums
 }
 
 /// Result type for API operations.

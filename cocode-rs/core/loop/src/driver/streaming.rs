@@ -117,10 +117,21 @@ impl AgentLoop {
         let mut final_usage: Option<TokenUsage> = None;
         let mut final_finish_reason = FinishReason::stop();
 
-        // Stall detection configuration
-        let stall_timeout = self.config.stall_detection.stall_timeout;
+        // Stall detection and two-tier watchdog configuration.
+        //
+        // Tier 1 (warning): Emit StreamWatchdogWarning after warning_timeout.
+        // Tier 2 (abort): Kill stream after abort_timeout or stall_timeout.
         let stall_enabled = self.config.stall_detection.enabled;
+        let watchdog = &self.config.stall_detection.watchdog;
+        let abort_timeout = if watchdog.enabled {
+            watchdog.abort_timeout
+        } else {
+            self.config.stall_detection.stall_timeout
+        };
+        let warning_timeout = watchdog.warning_timeout;
+        let watchdog_enabled = watchdog.enabled && stall_enabled;
         let mut last_event_time = Instant::now();
+        let mut warning_emitted = false;
 
         // Process streaming results with stall detection
         loop {
@@ -128,7 +139,13 @@ impl AgentLoop {
 
             // Use tokio::select! for stall detection and cancellation
             let result = if stall_enabled {
-                let timeout_at = last_event_time + stall_timeout;
+                // Choose deadline: warning (if not yet emitted) or abort
+                let effective_timeout = if watchdog_enabled && !warning_emitted {
+                    warning_timeout
+                } else {
+                    abort_timeout
+                };
+                let timeout_at = last_event_time + effective_timeout;
                 let remaining = timeout_at.saturating_duration_since(Instant::now());
 
                 tokio::select! {
@@ -139,7 +156,25 @@ impl AgentLoop {
                     }
                     result = next_event => result,
                     _ = tokio::time::sleep(remaining) => {
-                        // Stream stall detected
+                        // Tier 1: Warning phase — emit event and continue waiting
+                        if watchdog_enabled && !warning_emitted {
+                            let elapsed = last_event_time.elapsed().as_secs() as i64;
+                            warn!(
+                                turn_id,
+                                elapsed_secs = elapsed,
+                                "Stream watchdog warning: no event received"
+                            );
+                            self.emit(LoopEvent::StreamWatchdogWarning {
+                                elapsed_secs: elapsed,
+                            }).await;
+                            warning_emitted = true;
+                            // Continue the loop — the next iteration will use
+                            // abort_timeout as the deadline.
+                            continue;
+                        }
+
+                        // Tier 2: Abort phase — stream is stalled beyond recovery
+                        let stall_timeout = abort_timeout;
                         self.emit(LoopEvent::StreamStallDetected {
                             turn_id: turn_id.to_string(),
                             timeout: stall_timeout,
@@ -153,28 +188,7 @@ impl AgentLoop {
                                 warn!(turn_id, timeout = ?stall_timeout, "Stream stalled, retrying");
                             }
                             cocode_protocol::StallRecovery::Fallback => {
-                                // Attempt model fallback
-                                if self.fallback_state.should_fallback(&self.fallback_config)
-                                    && let Some(fallback_model) = self.fallback_state.next_model(&self.fallback_config) {
-                                        let from_model = self.fallback_state.current_model.clone();
-                                        self.emit(LoopEvent::ModelFallbackStarted {
-                                            from: from_model.clone(),
-                                            to: fallback_model.clone(),
-                                            reason: format!("Stream stalled for {stall_timeout:?}"),
-                                        }).await;
-                                        self.fire_notification_hook(
-                                            "model_fallback",
-                                            "Model fallback",
-                                            &format!("Falling back from {from_model} to {fallback_model}"),
-                                        ).await;
-                                        self.fallback_state.record_fallback(
-                                            fallback_model,
-                                            format!("Stream stalled for {stall_timeout:?}"),
-                                        );
-                                        if let Some(otel) = &self.otel_manager {
-                                            otel.counter("cocode.model.fallback", 1, &[]);
-                                        }
-                                    }
+                                self.try_model_fallback(&format!("Stream stalled for {stall_timeout:?}")).await;
                             }
                         }
 
@@ -194,35 +208,27 @@ impl AgentLoop {
                 }
             };
 
-            // Process the result
-            let Some(result) = result else {
-                break; // Stream ended
+            // Process the result — consolidated match handles None (stream end)
+            // and Err (provider error with fallback) in one place.
+            let result = match result {
+                None => break, // Stream ended
+                Some(Err(e)) => {
+                    let err_str = e.to_string();
+                    // Only attempt model fallback for overload/rate-limit errors.
+                    // Transient network errors should NOT trigger a model switch.
+                    let classified = cocode_api::error::classify_by_message(&err_str);
+                    if classified.is_overload_or_rate_limit() {
+                        self.try_model_fallback(&err_str).await;
+                    }
+                    error!("Stream error from provider: {err_str}");
+                    return agent_loop_error::StreamSnafu { message: err_str }.fail();
+                }
+                Some(Ok(r)) => r,
             };
 
-            let result = result.map_err(|e| {
-                // Check if this is an overload error for fallback handling
-                let err_str = e.to_string();
-                if (err_str.contains("overload") || err_str.contains("rate_limit"))
-                    && self.fallback_state.should_fallback(&self.fallback_config)
-                    && let Some(fallback_model) =
-                        self.fallback_state.next_model(&self.fallback_config)
-                {
-                    // Note: We can't emit async events here, but we record the fallback
-                    self.fallback_state
-                        .record_fallback(fallback_model, format!("API error: {err_str}"));
-                    if let Some(otel) = &self.otel_manager {
-                        otel.counter("cocode.model.fallback", 1, &[]);
-                    }
-                }
-                error!("Stream error from provider: {e}");
-                agent_loop_error::StreamSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?;
-
-            // Update stall timer on any event
+            // Update stall timer on any event and reset watchdog warning
             last_event_time = Instant::now();
+            warning_emitted = false;
 
             match result.result_type {
                 QueryResultType::Assistant => {
@@ -288,23 +294,10 @@ impl AgentLoop {
                         .is_retryable
                         .unwrap_or_else(|| classified.is_retryable());
 
-                    // Attempt model fallback for retryable overload/rate-limit errors
-                    if is_retryable
-                        && self.fallback_state.should_fallback(&self.fallback_config)
-                        && let Some(fallback_model) =
-                            self.fallback_state.next_model(&self.fallback_config)
-                    {
-                        self.emit(LoopEvent::ModelFallbackStarted {
-                            from: self.fallback_state.current_model.clone(),
-                            to: fallback_model.clone(),
-                            reason: msg.clone(),
-                        })
-                        .await;
-                        self.fallback_state
-                            .record_fallback(fallback_model, msg.clone());
-                        if let Some(otel) = &self.otel_manager {
-                            otel.counter("cocode.model.fallback", 1, &[]);
-                        }
+                    // Only attempt model fallback for overload/rate-limit errors.
+                    // Transient network errors should NOT trigger a model switch.
+                    if is_retryable && classified.is_overload_or_rate_limit() {
+                        self.try_model_fallback(&msg).await;
                     }
 
                     error!("Stream error from provider: {msg}");
@@ -321,6 +314,42 @@ impl AgentLoop {
             usage: final_usage,
             finish_reason: final_finish_reason,
         })
+    }
+
+    /// Attempt model fallback for a retryable error.
+    ///
+    /// Checks whether fallback is configured and available. If so, emits
+    /// `ModelFallbackStarted`, fires the notification hook, records the
+    /// fallback in state, and increments the telemetry counter.
+    ///
+    /// Returns `true` if a fallback was initiated.
+    async fn try_model_fallback(&mut self, reason: &str) -> bool {
+        if !self.fallback_state.should_fallback(&self.fallback_config) {
+            return false;
+        }
+        let Some(fallback_model) = self.fallback_state.next_model(&self.fallback_config) else {
+            return false;
+        };
+
+        let from_model = self.fallback_state.current_model.clone();
+        self.emit(LoopEvent::ModelFallbackStarted {
+            from: from_model.clone(),
+            to: fallback_model.clone(),
+            reason: reason.to_string(),
+        })
+        .await;
+        self.fire_notification_hook(
+            "model_fallback",
+            "Model fallback",
+            &format!("Falling back from {from_model} to {fallback_model}"),
+        )
+        .await;
+        self.fallback_state
+            .record_fallback(fallback_model, reason.to_string());
+        if let Some(otel) = &self.otel_manager {
+            otel.counter("cocode.model.fallback", 1, &[]);
+        }
+        true
     }
 
     /// Build messages and tool definitions for the API request.
@@ -502,10 +531,6 @@ pub(super) fn select_tools_for_model(
 }
 
 /// Format a `LanguageModelMessage` as `[role]: text` for conversation summaries.
-#[cfg(test)]
-#[path = "streaming.test.rs"]
-mod tests;
-
 pub(super) fn format_language_model_message(m: &LanguageModelMessage) -> String {
     match m {
         LanguageModelMessage::System { content, .. } => format!("[system]: {content}"),
@@ -544,3 +569,7 @@ pub(super) fn format_language_model_message(m: &LanguageModelMessage) -> String 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "streaming.test.rs"]
+mod tests;

@@ -329,7 +329,7 @@ pub struct CompactConfig {
     /// When true and a cached summary.md exists, compaction uses it for
     /// zero-API-cost context reduction. When false, always falls back to
     /// full LLM compact. Can be overridden via `COCODE_ENABLE_SM_COMPACT`.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enable_sm_compact: bool,
 
     /// Path to the session memory file (summary.md) for Tier 1 compaction.
@@ -444,7 +444,7 @@ impl KeepWindowConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SessionMemoryExtractionConfig {
     /// Enable background extraction agent.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
 
     /// Minimum tokens accumulated before first extraction (default: 5,000).
@@ -564,10 +564,6 @@ impl SessionMemoryExtractionConfig {
         }
         Ok(())
     }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_extraction_min_tokens_to_init() -> i32 {
