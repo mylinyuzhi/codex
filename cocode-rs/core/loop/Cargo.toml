@@ -1,0 +1,38 @@
+[package]
+name = "cocode-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-api.workspace = true
+cocode-tools.workspace = true
+cocode-shell.workspace = true
+cocode-plan-mode.workspace = true
+cocode-auto-memory.workspace = true
+cocode-team.workspace = true
+cocode-subagent.workspace = true
+cocode-message.workspace = true
+cocode-context.workspace = true
+cocode-prompt.workspace = true
+cocode-hooks.workspace = true
+cocode-system-reminder.workspace = true
+cocode-lsp.workspace = true
+cocode-otel.workspace = true
+cocode-skill.workspace = true
+cocode-file-backup.workspace = true
+cocode-error.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
