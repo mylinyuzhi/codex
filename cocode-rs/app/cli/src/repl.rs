@@ -1,0 +1,339 @@
+//! Interactive REPL for chat sessions.
+
+use cocode_session::SessionState;
+use cocode_skill::SkillContext;
+use cocode_skill::SkillManager;
+use cocode_skill::execute_skill;
+use cocode_skill::find_local_command;
+use std::io::BufRead;
+use std::io::Write;
+use std::io::{self};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
+use tracing::warn;
+
+use crate::output;
+
+/// Interactive REPL for chat sessions.
+pub struct Repl<'a> {
+    session: &'a mut SessionState,
+    /// Skill manager for handling slash commands.
+    skill_manager: Arc<Mutex<SkillManager>>,
+}
+
+impl<'a> Repl<'a> {
+    /// Create a new REPL with the given session.
+    pub fn new(session: &'a mut SessionState) -> Self {
+        Self {
+            session,
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+        }
+    }
+
+    /// Create a new REPL with a skill manager.
+    #[allow(dead_code)]
+    pub fn with_skill_manager(
+        session: &'a mut SessionState,
+        skill_manager: Arc<Mutex<SkillManager>>,
+    ) -> Self {
+        Self {
+            session,
+            skill_manager,
+        }
+    }
+
+    /// Run the interactive REPL loop.
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        output::print_session_start(
+            self.session.session_id(),
+            self.session.model(),
+            self.session.provider(),
+        );
+
+        loop {
+            // Print prompt
+            print!("> ");
+            io::stdout().flush()?;
+
+            // Read input
+            let input = match self.read_input() {
+                Ok(Some(input)) => input,
+                Ok(None) => {
+                    // EOF - exit
+                    println!();
+                    println!("Goodbye!");
+                    break;
+                }
+                Err(e) => {
+                    output::print_error(&e.to_string());
+                    continue;
+                }
+            };
+
+            // Skip empty input
+            if input.trim().is_empty() {
+                continue;
+            }
+
+            // Handle commands
+            if input.starts_with('/') {
+                if self.handle_command(&input).await? {
+                    // Command requested exit
+                    break;
+                }
+                continue;
+            }
+
+            // Run the turn
+            match self.session.run_turn(&input).await {
+                Ok(result) => {
+                    // Print the response
+                    println!();
+                    println!("{}", result.final_text);
+                    output::print_turn_summary(
+                        result.usage.input_tokens,
+                        result.usage.output_tokens,
+                    );
+                    println!();
+                }
+                Err(e) => {
+                    output::print_error(&e.to_string());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Read a line of input from stdin.
+    fn read_input(&self) -> anyhow::Result<Option<String>> {
+        let stdin = io::stdin();
+        let mut line = String::new();
+        let bytes = stdin.lock().read_line(&mut line)?;
+
+        if bytes == 0 {
+            // EOF
+            return Ok(None);
+        }
+
+        Ok(Some(line.trim().to_string()))
+    }
+
+    /// Handle a / command.
+    ///
+    /// Returns true if the REPL should exit.
+    async fn handle_command(&mut self, input: &str) -> anyhow::Result<bool> {
+        // Parse the command name from input (strip leading `/`)
+        let (cmd_name, _args) = cocode_skill::parse_skill_command(input).unwrap_or(("", ""));
+
+        // Try local commands first (unified via find_local_command)
+        if let Some(local_cmd) = find_local_command(cmd_name) {
+            match local_cmd.name {
+                "exit" => {
+                    println!("Goodbye!");
+                    return Ok(true);
+                }
+                "help" => {
+                    self.print_help().await;
+                }
+                "status" => {
+                    println!("Session ID: {}", self.session.session_id());
+                    println!(
+                        "Model:      {}/{}",
+                        self.session.provider(),
+                        self.session.model()
+                    );
+                    println!("Turns:      {}", self.session.total_turns());
+                    println!(
+                        "Tokens:     {} in / {} out",
+                        self.session.total_input_tokens(),
+                        self.session.total_output_tokens()
+                    );
+                }
+                "clear" => {
+                    print!("\x1B[2J\x1B[1;1H");
+                    io::stdout().flush()?;
+                }
+                "cancel" => {
+                    self.session.cancel();
+                    println!("Operation cancelled.");
+                }
+                "skills" => {
+                    self.list_skills().await;
+                }
+                "agents" => {
+                    let mgr = self.session.subagent_manager().lock().await;
+                    let defs = mgr.definitions();
+                    if defs.is_empty() {
+                        println!("No agents registered.");
+                    } else {
+                        println!("Registered agents ({}):", defs.len());
+                        for def in defs {
+                            let model = def
+                                .identity
+                                .as_ref()
+                                .map(|i| format!("{i:?}"))
+                                .unwrap_or_else(|| "inherit".to_string());
+                            let tools_info = if def.tools.is_empty() {
+                                "all".to_string()
+                            } else {
+                                def.tools.join(", ")
+                            };
+                            println!(
+                                "  {} [{:?}] - {} (model: {}, tools: {})",
+                                def.agent_type, def.source, def.description, model, tools_info,
+                            );
+                        }
+                    }
+                }
+                "todos" => {
+                    // Read task list directly from the most recent TodoWrite call
+                    println!("{}", self.session.current_todos());
+                }
+                "compact" => {
+                    println!("Requesting compaction...");
+                    match self
+                        .session
+                        .run_turn("Please compact the conversation context now.")
+                        .await
+                    {
+                        Ok(result) => {
+                            println!();
+                            println!("{}", result.final_text);
+                        }
+                        Err(e) => {
+                            output::print_error(&e.to_string());
+                        }
+                    }
+                }
+                "model" => {
+                    println!("/{} is not yet supported in REPL mode.", local_cmd.name);
+                }
+                _ => {
+                    println!("/{} is not yet supported in REPL mode.", local_cmd.name);
+                }
+            }
+            return Ok(false);
+        }
+
+        // Try to execute as a skill command
+        if self.try_execute_skill(input).await? {
+            // Skill was executed - result already printed
+        } else {
+            println!("Unknown command: /{cmd_name}");
+            println!("Type /help for available commands or /skills to list available skills.");
+        }
+
+        Ok(false)
+    }
+
+    /// Print help including available skills.
+    async fn print_help(&self) {
+        let manager = self.skill_manager.lock().await;
+
+        println!("Commands:");
+        for cmd in manager.all_commands() {
+            println!("  /{} - {}", cmd.name, cmd.description);
+        }
+    }
+
+    /// List all available skills.
+    async fn list_skills(&self) {
+        let manager = self.skill_manager.lock().await;
+        let visible = manager.user_visible_skills();
+        if visible.is_empty() {
+            println!("No skills loaded.");
+            println!("Skills are loaded from .cocode/skills/ directories.");
+        } else {
+            println!("Available skills ({}):", visible.len());
+            for skill in visible {
+                println!("  /{} - {}", skill.name, skill.description);
+            }
+        }
+    }
+
+    /// Try to execute a skill command.
+    ///
+    /// Returns true if a skill was found and executed.
+    /// Handles model override, fork context dispatch, and allowed_tools.
+    async fn try_execute_skill(&mut self, input: &str) -> anyhow::Result<bool> {
+        let manager = self.skill_manager.lock().await;
+        let result = execute_skill(&manager, input);
+        drop(manager); // Release lock before running turn
+
+        match result {
+            Some(skill_result) => {
+                // Handle fork context — spawn subagent
+                if skill_result.context == SkillContext::Fork {
+                    let agent_type = skill_result
+                        .agent
+                        .clone()
+                        .unwrap_or_else(|| "general".to_string());
+                    info!(
+                        skill = %skill_result.skill_name,
+                        agent_type,
+                        "Spawning subagent for fork context skill"
+                    );
+
+                    match self
+                        .session
+                        .spawn_subagent_for_skill(
+                            &agent_type,
+                            &skill_result.prompt,
+                            skill_result.model.as_deref(),
+                            skill_result.allowed_tools.clone(),
+                        )
+                        .await
+                    {
+                        Ok(result) => {
+                            println!("{}", result.output.unwrap_or_default());
+                            return Ok(true);
+                        }
+                        Err(e) => {
+                            warn!(
+                                skill = %skill_result.skill_name,
+                                error = %e,
+                                "Fork spawn failed; falling back to inline execution"
+                            );
+                            // Fall through to inline execution
+                        }
+                    }
+                }
+
+                if let Some(ref tools) = skill_result.allowed_tools {
+                    info!(
+                        skill = %skill_result.skill_name,
+                        tools = ?tools,
+                        "Skill specifies allowed_tools (not enforced in REPL)"
+                    );
+                }
+
+                println!("Executing skill: /{}", skill_result.skill_name);
+                println!();
+
+                // Run the skill prompt with optional model override
+                let turn_result = self
+                    .session
+                    .run_skill_turn(&skill_result.prompt, skill_result.model.as_deref())
+                    .await;
+
+                match turn_result {
+                    Ok(result) => {
+                        println!("{}", result.final_text);
+                        output::print_turn_summary(
+                            result.usage.input_tokens,
+                            result.usage.output_tokens,
+                        );
+                        println!();
+                    }
+                    Err(e) => {
+                        output::print_error(&e.to_string());
+                    }
+                }
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+}

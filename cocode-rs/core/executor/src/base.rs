@@ -1,0 +1,456 @@
+//! Top-level agent executor that drives a single agent session.
+
+use std::sync::Arc;
+
+use cocode_api::ApiClient;
+use cocode_api::ModelHub;
+use cocode_context::ConversationContext;
+use cocode_context::EnvironmentInfo;
+use cocode_error::boxed_err;
+use cocode_hooks::HookRegistry;
+use cocode_loop::AgentLoop;
+use cocode_loop::FallbackConfig;
+use cocode_loop::LoopConfig;
+use cocode_loop::LoopResult;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::ModelSpec;
+use cocode_protocol::RoleSelections;
+use cocode_tools::SpawnAgentFn;
+use cocode_tools::ToolRegistry;
+use snafu::ResultExt;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+use crate::Result;
+use crate::error::executor_error;
+
+/// Configuration for the agent executor.
+#[derive(Debug, Clone)]
+pub struct ExecutorConfig {
+    /// Model specification (provider + model name).
+    pub model: ModelSpec,
+    /// Maximum number of turns before stopping.
+    pub max_turns: Option<i32>,
+    /// Context window size.
+    pub context_window: i32,
+    /// Maximum output tokens.
+    pub max_output_tokens: i32,
+    /// Enable micro-compaction.
+    pub enable_micro_compaction: bool,
+    /// Enable streaming tools.
+    pub enable_streaming_tools: bool,
+    /// Feature flags propagated to subagent tool executors.
+    pub features: cocode_protocol::Features,
+    /// Web search configuration propagated to tool executors.
+    pub web_search_config: cocode_protocol::WebSearchConfig,
+    /// Web fetch configuration propagated to tool executors.
+    pub web_fetch_config: cocode_protocol::WebFetchConfig,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            model: ModelSpec::new("unknown", "unknown"),
+            max_turns: Some(200),
+            context_window: 200_000,
+            max_output_tokens: 16_384,
+            enable_micro_compaction: true,
+            enable_streaming_tools: true,
+            features: cocode_protocol::Features::with_defaults(),
+            web_search_config: cocode_protocol::WebSearchConfig::default(),
+            web_fetch_config: cocode_protocol::WebFetchConfig::default(),
+        }
+    }
+}
+
+/// Top-level agent executor that drives a single agent session.
+///
+/// The executor wires together the ApiClient, ToolRegistry, and AgentLoop
+/// to process user prompts and return final results.
+pub struct AgentExecutor {
+    /// Unique session identifier.
+    session_id: String,
+
+    /// API client for model inference.
+    api_client: ApiClient,
+
+    /// Model hub for model resolution.
+    model_hub: Arc<ModelHub>,
+
+    /// Role selections for model role mappings.
+    selections: RoleSelections,
+
+    /// Tool registry for tool execution.
+    tool_registry: Arc<ToolRegistry>,
+
+    /// Hook registry for event interception.
+    hooks: Arc<HookRegistry>,
+
+    /// Executor configuration.
+    config: ExecutorConfig,
+
+    /// Cancellation token for graceful shutdown.
+    cancel_token: CancellationToken,
+
+    /// Optional callback for spawning subagents (used by Task tool).
+    spawn_agent_fn: Option<SpawnAgentFn>,
+
+    /// Pre-configured permission rules loaded from settings files.
+    permission_rules: Vec<cocode_tools::PermissionRule>,
+
+    /// Optional OTel manager for metrics and traces.
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+}
+
+impl AgentExecutor {
+    /// Create a new executor with the given API client, model hub, selections, and tool registry.
+    pub fn new(
+        api_client: ApiClient,
+        model_hub: Arc<ModelHub>,
+        selections: RoleSelections,
+        tool_registry: Arc<ToolRegistry>,
+        config: ExecutorConfig,
+    ) -> Self {
+        Self {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            api_client,
+            model_hub,
+            selections,
+            tool_registry,
+            hooks: Arc::new(HookRegistry::new()),
+            config,
+            cancel_token: CancellationToken::new(),
+            spawn_agent_fn: None,
+            permission_rules: Vec::new(),
+            otel_manager: None,
+        }
+    }
+
+    /// Create a builder for configuring the executor.
+    pub fn builder() -> ExecutorBuilder {
+        ExecutorBuilder::new()
+    }
+
+    /// Get the session ID.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Get the model specification.
+    pub fn model(&self) -> &ModelSpec {
+        &self.config.model
+    }
+
+    /// Set the hook registry.
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Set the cancellation token.
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.cancel_token = token;
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Execute the agent with the given prompt.
+    ///
+    /// Returns the final output text from the agent.
+    pub async fn execute(&self, prompt: &str) -> Result<String> {
+        info!(
+            session_id = %self.session_id,
+            model = %self.config.model,
+            prompt_len = prompt.len(),
+            "Executing agent"
+        );
+
+        // Create event channel
+        let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+
+        // Spawn a task to log events (in production, this would update UI)
+        let _event_task = tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                match &event {
+                    LoopEvent::TurnStarted {
+                        turn_id,
+                        turn_number,
+                    } => {
+                        tracing::debug!(turn_id, turn_number, "Turn started");
+                    }
+                    LoopEvent::TurnCompleted { turn_id, usage } => {
+                        tracing::debug!(
+                            turn_id,
+                            input_tokens = usage.input_tokens,
+                            output_tokens = usage.output_tokens,
+                            "Turn completed"
+                        );
+                    }
+                    LoopEvent::ToolUseQueued { name, call_id, .. } => {
+                        tracing::debug!(name, call_id, "Tool queued");
+                    }
+                    LoopEvent::Error { error } => {
+                        tracing::error!(code = %error.code, message = %error.message, "Loop error");
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Build environment info
+        let environment = EnvironmentInfo::builder()
+            .cwd(std::env::current_dir().unwrap_or_default())
+            .context_window(self.config.context_window)
+            .max_output_tokens(self.config.max_output_tokens)
+            .build()
+            .map_err(boxed_err)
+            .context(executor_error::ContextSnafu {
+                message: "Failed to build environment".to_string(),
+            })?;
+
+        // Build conversation context
+        let context = ConversationContext::builder()
+            .environment(environment)
+            .tool_names(self.tool_registry.tool_names())
+            .build()
+            .map_err(boxed_err)
+            .context(executor_error::ContextSnafu {
+                message: "Failed to build conversation context".to_string(),
+            })?;
+
+        // Build loop config
+        let loop_config = LoopConfig {
+            max_turns: self.config.max_turns,
+            enable_micro_compaction: self.config.enable_micro_compaction,
+            enable_streaming_tools: self.config.enable_streaming_tools,
+            ..LoopConfig::default()
+        };
+
+        // Build and run the agent loop
+        let mut builder = AgentLoop::builder(
+            self.api_client.clone(),
+            self.model_hub.clone(),
+            self.selections.clone(),
+            self.tool_registry.clone(),
+            context,
+            event_tx,
+        )
+        .config(loop_config)
+        .fallback_config(FallbackConfig::default())
+        .hooks(self.hooks.clone())
+        .cancel_token(self.cancel_token.clone())
+        .features(self.config.features.clone())
+        .web_search_config(self.config.web_search_config.clone())
+        .web_fetch_config(self.config.web_fetch_config.clone())
+        .permission_rules(self.permission_rules.clone())
+        .otel_manager(self.otel_manager.clone());
+
+        // Add spawn_agent_fn if available for Task tool
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        let mut loop_instance = builder.build();
+
+        let result = loop_instance
+            .run(prompt)
+            .await
+            .map_err(boxed_err)
+            .context(executor_error::LoopSnafu)?;
+
+        self.format_result(&result)
+    }
+
+    /// Format the loop result as a string.
+    fn format_result(&self, result: &LoopResult) -> Result<String> {
+        // Return the final text from the model
+        if result.final_text.is_empty() {
+            // If no text, provide a summary
+            Ok(format!(
+                "Completed {} turns. Input tokens: {}, Output tokens: {}",
+                result.turns_completed, result.total_input_tokens, result.total_output_tokens
+            ))
+        } else {
+            Ok(result.final_text.clone())
+        }
+    }
+
+    /// Cancel the execution.
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
+    }
+}
+
+/// Builder for creating an [`AgentExecutor`].
+pub struct ExecutorBuilder {
+    api_client: Option<ApiClient>,
+    model_hub: Option<Arc<ModelHub>>,
+    selections: Option<RoleSelections>,
+    tool_registry: Option<Arc<ToolRegistry>>,
+    hooks: Option<Arc<HookRegistry>>,
+    config: ExecutorConfig,
+    cancel_token: CancellationToken,
+    spawn_agent_fn: Option<SpawnAgentFn>,
+    features: cocode_protocol::Features,
+    permission_rules: Vec<cocode_tools::PermissionRule>,
+    otel_manager: Option<Arc<cocode_otel::OtelManager>>,
+}
+
+impl ExecutorBuilder {
+    /// Create a new builder with defaults.
+    pub fn new() -> Self {
+        Self {
+            api_client: None,
+            model_hub: None,
+            selections: None,
+            tool_registry: None,
+            hooks: None,
+            config: ExecutorConfig::default(),
+            cancel_token: CancellationToken::new(),
+            spawn_agent_fn: None,
+            features: cocode_protocol::Features::with_defaults(),
+            permission_rules: Vec::new(),
+            otel_manager: None,
+        }
+    }
+
+    /// Set the model hub.
+    pub fn model_hub(mut self, hub: Arc<ModelHub>) -> Self {
+        self.model_hub = Some(hub);
+        self
+    }
+
+    /// Set the API client.
+    pub fn api_client(mut self, client: ApiClient) -> Self {
+        self.api_client = Some(client);
+        self
+    }
+
+    /// Set the role selections.
+    pub fn selections(mut self, selections: RoleSelections) -> Self {
+        self.selections = Some(selections);
+        self
+    }
+
+    /// Set the tool registry.
+    pub fn tool_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
+        self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Set the hook registry.
+    pub fn hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    /// Set the model specification.
+    pub fn model(mut self, model: ModelSpec) -> Self {
+        self.config.model = model;
+        self
+    }
+
+    /// Set the maximum turns.
+    pub fn max_turns(mut self, max: i32) -> Self {
+        self.config.max_turns = Some(max);
+        self
+    }
+
+    /// Set the context window size.
+    pub fn context_window(mut self, size: i32) -> Self {
+        self.config.context_window = size;
+        self
+    }
+
+    /// Set the maximum output tokens.
+    pub fn max_output_tokens(mut self, limit: i32) -> Self {
+        self.config.max_output_tokens = limit;
+        self
+    }
+
+    /// Enable or disable micro-compaction.
+    pub fn enable_micro_compaction(mut self, enabled: bool) -> Self {
+        self.config.enable_micro_compaction = enabled;
+        self
+    }
+
+    /// Enable or disable streaming tools.
+    pub fn enable_streaming_tools(mut self, enabled: bool) -> Self {
+        self.config.enable_streaming_tools = enabled;
+        self
+    }
+
+    /// Set the cancellation token.
+    pub fn cancel_token(mut self, token: CancellationToken) -> Self {
+        self.cancel_token = token;
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the feature flags for subagent tool executors.
+    pub fn features(mut self, features: cocode_protocol::Features) -> Self {
+        self.features = features;
+        self
+    }
+
+    /// Set pre-configured permission rules.
+    pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
+        self.permission_rules = rules;
+        self
+    }
+
+    /// Set the OTel manager for metrics and traces.
+    pub fn otel_manager(mut self, otel: Option<Arc<cocode_otel::OtelManager>>) -> Self {
+        self.otel_manager = otel;
+        self
+    }
+
+    /// Build the executor.
+    ///
+    /// # Panics
+    /// Panics if `api_client`, `model_hub`, or `tool_registry` have not been set.
+    #[allow(clippy::expect_used)]
+    pub fn build(self) -> AgentExecutor {
+        let mut config = self.config;
+        config.features = self.features;
+
+        let mut executor = AgentExecutor::new(
+            self.api_client.expect("api_client is required"),
+            self.model_hub.expect("model_hub is required"),
+            self.selections.unwrap_or_default(),
+            self.tool_registry.expect("tool_registry is required"),
+            config,
+        );
+
+        if let Some(hooks) = self.hooks {
+            executor.hooks = hooks;
+        }
+
+        executor.cancel_token = self.cancel_token;
+        executor.spawn_agent_fn = self.spawn_agent_fn;
+        executor.permission_rules = self.permission_rules;
+        executor.otel_manager = self.otel_manager;
+        executor
+    }
+}
+
+impl Default for ExecutorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+#[path = "base.test.rs"]
+mod tests;

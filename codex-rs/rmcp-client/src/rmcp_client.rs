@@ -527,7 +527,7 @@ impl RmcpClient {
             None => None,
         };
         let rmcp_params = CallToolRequestParams {
-            meta: None,
+            meta,
             name: name.into(),
             arguments,
             task: None,

@@ -1,0 +1,398 @@
+# Simplified Chinese translations for cocode TUI
+# 简体中文翻译
+
+# ============================================================
+# 命令翻译 (TuiCommand Display)
+# ============================================================
+
+# 模式切换
+command.toggle_plan_mode: "切换计划模式"
+command.cycle_thinking_level: "切换思考级别"
+command.cycle_model: "切换模型"
+command.show_model_picker: "显示模型选择器"
+
+# 文件自动完成
+command.select_next_suggestion: "选择下一个建议"
+command.select_prev_suggestion: "选择上一个建议"
+command.accept_suggestion: "接受建议"
+command.dismiss_suggestions: "关闭建议"
+
+# 技能自动完成
+command.select_next_skill_suggestion: "选择下一个技能建议"
+command.select_prev_skill_suggestion: "选择上一个技能建议"
+command.accept_skill_suggestion: "接受技能建议"
+command.dismiss_skill_suggestions: "关闭技能建议"
+
+# Agent 自动补全
+command.select_next_agent_suggestion: "选择下一个代理建议"
+command.select_prev_agent_suggestion: "选择上一个代理建议"
+command.accept_agent_suggestion: "接受代理建议"
+command.dismiss_agent_suggestions: "关闭代理建议"
+
+# 符号自动补全
+command.select_next_symbol_suggestion: "选择下一个符号建议"
+command.select_prev_symbol_suggestion: "选择上一个符号建议"
+command.accept_symbol_suggestion: "接受符号建议"
+command.dismiss_symbol_suggestions: "关闭符号建议"
+
+# 输入操作
+command.submit_input: "提交输入"
+command.interrupt: "中断"
+command.clear_screen: "清屏"
+command.cancel: "取消"
+
+# 导航
+command.scroll_up: "向上滚动"
+command.scroll_down: "向下滚动"
+command.page_up: "向上翻页"
+command.page_down: "向下翻页"
+command.focus_next: "下一焦点"
+command.focus_previous: "上一焦点"
+
+# 编辑
+command.insert_char: "插入 '%{c}'"
+command.delete_backward: "向前删除"
+command.delete_forward: "向后删除"
+command.cursor_left: "光标左移"
+command.cursor_right: "光标右移"
+command.cursor_up: "光标上移"
+command.cursor_down: "光标下移"
+command.cursor_home: "光标到行首"
+command.cursor_end: "光标到行尾"
+command.word_left: "上一个单词"
+command.word_right: "下一个单词"
+command.delete_word_backward: "删除前一个单词"
+command.delete_word_forward: "删除后一个单词"
+command.insert_newline: "插入换行"
+
+# 审批
+command.approve: "批准"
+command.deny: "拒绝"
+command.approve_all: "全部批准"
+
+# 外部编辑器
+command.open_external_editor: "打开外部编辑器"
+
+# 帮助
+command.show_help: "显示帮助"
+
+# 命令面板
+command.show_command_palette: "显示命令面板"
+
+# 会话浏览器
+command.show_session_browser: "显示会话浏览器"
+command.load_session: "加载会话 %{id}"
+command.delete_session: "删除会话 %{id}"
+
+# 插件管理器
+command.show_plugin_manager: "显示插件管理器"
+command.plugin_manager_next_tab: "下一个插件选项卡"
+command.plugin_manager_prev_tab: "上一个插件选项卡"
+
+# 思考切换
+command.toggle_thinking: "切换思考显示"
+
+# 剪贴板粘贴
+command.paste_from_clipboard: "从剪贴板粘贴"
+
+# 队列
+command.queue_input: "排队输入"
+
+# 后台
+command.background_all_tasks: "后台运行所有任务"
+
+# 工具折叠
+command.toggle_tool_collapse: "切换工具结果折叠"
+
+# 回退
+command.show_rewind_selector: "回退 / 检查点"
+command.rewind: "回退"
+
+# 退出
+command.quit: "退出"
+
+# ============================================================
+# 状态栏翻译
+# ============================================================
+
+status.hints: "Tab:计划 Ctrl+T:思考 Ctrl+M:模型 ?:帮助"
+
+# 思考级别标签
+status.think_off: "关"
+status.think_min: "最低"
+status.think_low: "低"
+status.think_med: "中"
+status.think_high: "高"
+status.think_max: "最高"
+status.think_label: "思考:%{level}"
+
+# 计划模式
+status.plan: "计划"
+
+# 输出风格
+status.output_style: "风格:%{name}"
+
+# MCP 状态
+status.mcp: "MCP:%{count}"
+
+# Token 显示
+status.tokens: "%{count} tokens"
+
+# 队列状态
+status.queued: "%{count} 排队"
+status.waiting: "等待中:"
+status.dialogs_waiting: "%{count} 等待中"
+
+# 思考状态
+status.thinking: "思考中..."
+status.thinking_with_duration: "思考中... %{duration}秒"
+status.thought_for: "思考了 %{duration}秒"
+
+# ============================================================
+# 对话框/覆盖层翻译
+# ============================================================
+
+# 权限覆盖层
+dialog.permission_required: "需要权限"
+dialog.tool: "工具:"
+dialog.approve: "[Y] 批准"
+dialog.deny: "[N] 拒绝"
+dialog.approve_all: "[A] 全部批准"
+
+# 模型选择器
+dialog.select_model: "选择模型"
+dialog.select_model_filter: "选择模型 [%{filter}]"
+dialog.no_models_match: "没有匹配的模型"
+dialog.model_picker_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 帮助覆盖层
+dialog.keyboard_shortcuts: "键盘快捷键"
+dialog.press_esc_close: "按 Esc 关闭"
+
+# 命令面板
+dialog.command_palette: "命令面板"
+dialog.command_palette_filter: "命令面板 [%{filter}]"
+dialog.no_commands_match: "没有匹配的命令"
+dialog.command_palette_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 会话浏览器
+dialog.session_browser: "会话浏览器"
+dialog.session_browser_filter: "会话浏览器 [%{filter}]"
+dialog.no_saved_sessions: "没有保存的会话"
+dialog.session_message_count: "(%{count} 条消息)"
+dialog.session_browser_hints: "↑/↓: 导航  Enter: 加载  Del: 删除  Esc: 取消"
+
+# 插件管理器覆盖层
+dialog.plugin_manager: "插件管理器"
+dialog.plugin_manager_filter: "插件管理器 [%{filter}]"
+dialog.plugin_tab_discover: "发现"
+dialog.plugin_tab_installed: "已安装"
+dialog.plugin_tab_marketplaces: "市场"
+dialog.plugin_tab_errors: "错误"
+dialog.plugin_no_discover: "没有可用插件。请先添加市场。"
+dialog.plugin_no_installed: "没有已安装的插件"
+dialog.plugin_no_marketplaces: "没有配置的市场"
+dialog.plugin_no_errors: "没有错误"
+dialog.plugin_manager_hints: "Tab/Shift+Tab: 切换选项卡  ↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 输出风格选择器
+dialog.select_output_style: "选择输出风格"
+dialog.select_output_style_filter: "选择输出风格 [%{filter}]"
+dialog.no_styles_match: "没有匹配的风格"
+dialog.output_style_picker_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 回退选择器
+dialog.rewind_select_checkpoint: "回退到检查点"
+dialog.rewind_select_mode: "回退模式"
+dialog.rewind_files: "个文件"
+dialog.rewind_target: "目标"
+dialog.rewind_checkpoint_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消"
+dialog.rewind_mode_hints: "↑/↓: 导航  Enter: 确认  Esc: 返回"
+dialog.rewind_mode_code_and_conversation: "回退代码 + 对话"
+dialog.rewind_mode_conversation_only: "仅回退对话（保留文件更改）"
+dialog.rewind_mode_code_only: "仅回退代码（保留对话）"
+dialog.rewind_mode_summarize: "从此处总结"
+dialog.rewind_warning_bash: "注意：回退不会影响手动或通过 bash 编辑的文件"
+dialog.rewind_more_files: "...以及 %{count} 个更多文件"
+dialog.rewind_summarize_context: "总结上下文"
+dialog.rewind_summarize_context_prompt: "总结应该关注什么？（可选）"
+dialog.rewind_summarize_context_placeholder: "(按 Enter 跳过)"
+dialog.rewind_summarize_context_hints: "Enter: 确认  Esc: 返回  输入以添加上下文"
+dialog.rewind_loading_restore: "正在恢复..."
+dialog.rewind_loading_summarize: "正在总结..."
+
+# 错误覆盖层
+dialog.error: "错误"
+dialog.press_esc_enter_dismiss: "按 Esc 或 Enter 关闭"
+
+# 计划退出审批
+dialog.plan_exit_title: "退出计划模式"
+dialog.plan_exit_clear_accept: "是，清除上下文并自动接受编辑"
+dialog.plan_exit_clear_bypass: "是，清除上下文并跳过权限"
+dialog.plan_exit_keep_elevate: "是，保留上下文并提升权限"
+dialog.plan_exit_keep_default: "是，保留上下文并手动审批"
+dialog.plan_exit_keep_planning: "否，继续计划"
+dialog.plan_exit_hints: "↑/↓: 导航  Enter: 选择  Esc: 继续计划"
+
+# Question overlay (AskUserQuestion)
+dialog.question_title: "提问"
+dialog.question_other: "其他（输入自定义答案）"
+dialog.question_hints: "↑/↓: 导航  Enter: 选择  Space: 切换  Esc: 取消"
+dialog.plan_exit_plan_preview: "计划预览"
+
+# ============================================================
+# 帮助覆盖层快捷键
+# ============================================================
+
+help.tab: "切换计划模式"
+help.ctrl_t: "切换思考级别"
+help.ctrl_shift_t: "切换思考显示"
+help.ctrl_m: "切换模型"
+help.ctrl_v: "粘贴（图片或文本）"
+help.ctrl_e: "打开外部编辑器"
+help.ctrl_l: "清屏"
+help.ctrl_b: "后台运行任务"
+help.ctrl_c: "中断"
+help.ctrl_q: "退出"
+help.enter: "提交消息"
+help.shift_enter: "换行"
+help.esc: "取消/关闭覆盖层"
+help.question_f1: "显示帮助"
+help.up_down: "历史导航"
+help.alt_up_down: "滚动聊天"
+help.pgup_pgdn: "翻页"
+help.ctrl_left_right: "单词移动"
+help.ctrl_bksp: "删除前一个单词"
+help.ctrl_shift_e: "切换工具结果显示"
+help.esc_esc: "回退 / 检查点选择器"
+
+# ============================================================
+# 提示通知
+# ============================================================
+
+# 上下文警告 (剩余/总量格式)
+toast.context_warning: "上下文剩余 %{percent}% (%{remain}/%{total})"
+
+# 压缩
+toast.compacting: "正在压缩上下文..."
+toast.compacted: "已压缩 %{messages} 条消息 (%{tokens} tokens)"
+toast.compaction_failed: "压缩失败: %{error}"
+
+# 模型回退
+toast.model_fallback: "回退: %{from} -> %{to}"
+
+# MCP
+toast.mcp_ready: "MCP: %{server} 已就绪"
+toast.mcp_failed: "MCP: %{server} 失败"
+toast.mcp_connected: "%{count} 个 MCP 服务器已连接"
+toast.mcp_error: "MCP %{name}: %{error}"
+
+# ============================================================
+# 聊天组件
+# ============================================================
+
+chat.you: "你"
+chat.assistant: "助手"
+chat.system: "系统"
+chat.messages_count: "%{count} 条消息"
+
+# 思考显示
+chat.thinking_tokens: "思考 (%{tokens} tokens):"
+chat.thinking_collapsed: "思考 (%{tokens} tokens) [Ctrl+Shift+T 展开]"
+chat.thinking_active: "思考中 (%{duration}):"
+chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [Ctrl+Shift+T 展开]"
+
+# ============================================================
+# 输入组件
+# ============================================================
+
+input.title: "消息"
+input.placeholder: "输入消息... (Enter 发送, Shift+Enter 换行)"
+
+# 图片粘贴
+toast.image_pasted: "已从剪贴板粘贴图片"
+
+# 后台提示消息
+toast.tasks_backgrounded: "已后台运行 %{count} 个任务"
+
+# 队列提示消息
+toast.command_queued: "已排队 (%{count} 等待中)"
+toast.steering_added: "引导已添加"
+
+# 回退
+toast.rewind_success: "已回退第 %{turn} 轮（恢复了 %{files} 个文件）"
+toast.rewind_failed: "回退失败：%{error}"
+toast.rewind_no_checkpoints: "没有可用的回退检查点"
+toast.summarize_success: "已从第 %{turn} 轮总结对话"
+toast.summarize_failed: "总结失败：%{error}"
+
+# ============================================================
+# 命令面板项目
+# ============================================================
+
+palette.toggle_plan_mode: "切换计划模式"
+palette.toggle_plan_mode_desc: "启用或禁用计划模式"
+palette.cycle_thinking: "切换思考级别"
+palette.cycle_thinking_desc: "更改 AI 思考深度"
+palette.switch_model: "切换模型"
+palette.switch_model_desc: "更改 AI 模型"
+palette.show_help: "显示帮助"
+palette.show_help_desc: "显示键盘快捷键"
+palette.session_browser: "会话浏览器"
+palette.session_browser_desc: "浏览保存的会话"
+palette.plugin_manager: "插件管理器"
+palette.plugin_manager_desc: "管理插件和市场"
+palette.clear_screen: "清屏"
+palette.clear_screen_desc: "清除聊天历史"
+palette.interrupt: "中断"
+palette.interrupt_desc: "取消当前操作"
+palette.quit: "退出"
+palette.quit_desc: "退出应用程序"
+
+# ============================================================
+# 头部栏
+# ============================================================
+
+header.new_session: "新会话"
+header.turn_count: "%{count} 轮"
+header.compacting: "压缩中..."
+header.fallback: "回退: %{model}"
+
+# ============================================================
+# 状态栏（附加）
+# ============================================================
+
+status.context_gauge: "%{percent}%"
+
+# ============================================================
+# 帮助覆盖层分类
+# ============================================================
+
+help.category_navigation: "导航"
+help.category_editing: "编辑"
+help.category_mode: "模式"
+help.category_tools: "工具"
+help.category_ui: "界面"
+help.ctrl_p: "命令面板"
+help.ctrl_s: "会话浏览器"
+
+# ============================================================
+# 工具面板
+# ============================================================
+
+tool.title: "工具"
+tool.title_running: "工具 (%{count} 运行中)"
+tool.running: "运行中"
+tool.completed: "已完成"
+tool.failed: "失败"
+
+# ============================================================
+# 子代理面板
+# ============================================================
+
+subagent.title: "子代理"
+subagent.running: "运行中"
+subagent.completed: "已完成"
+subagent.backgrounded: "后台运行"
+subagent.step_progress: "步骤 %{current}/%{total}"
+subagent.more: "+%{count} 更多..."
