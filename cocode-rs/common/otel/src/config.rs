@@ -47,6 +47,15 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
+impl From<OtelHttpProtocol> for opentelemetry_otlp::Protocol {
+    fn from(protocol: OtelHttpProtocol) -> Self {
+        match protocol {
+            OtelHttpProtocol::Binary => Self::HttpBinary,
+            OtelHttpProtocol::Json => Self::HttpJson,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct OtelTlsConfig {
     pub ca_certificate: Option<AbsolutePathBuf>,

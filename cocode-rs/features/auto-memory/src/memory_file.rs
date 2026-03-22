@@ -185,14 +185,17 @@ pub fn truncate_content(content: &str, max_lines: i32) -> (String, bool) {
         return (String::new(), !content.is_empty());
     }
 
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len() as i32;
+    let total = content.lines().count() as i32;
 
     if total <= max_lines {
         return (content.to_string(), false);
     }
 
-    let mut result: String = lines[..max_lines as usize].join("\n");
+    let mut result: String = content
+        .lines()
+        .take(max_lines as usize)
+        .collect::<Vec<_>>()
+        .join("\n");
     result.push_str(&format!(
         "\n\n... (truncated — {total} total lines, showing first {max_lines}. \
          Keep MEMORY.md concise to stay under the {max_lines}-line limit.)"

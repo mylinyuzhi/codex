@@ -111,6 +111,17 @@ fn parse_markdown_hash_location_point(point: &str) -> Option<(&str, Option<&str>
     }
 }
 
+/// Encodes a byte slice as a lowercase hex string.
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;

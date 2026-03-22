@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use strum::Display;
+use strum::IntoStaticStr;
 
 use crate::loop_event::ToolResultContent;
 
@@ -47,8 +49,11 @@ impl FileReadKind {
 /// Concurrency safety level for a tool.
 ///
 /// Determines whether a tool can be executed concurrently with other tools.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum ConcurrencySafety {
     /// Tool is safe to run concurrently with other tools.
     #[default]
@@ -65,16 +70,7 @@ impl ConcurrencySafety {
 
     /// Get the safety level as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            ConcurrencySafety::Safe => "safe",
-            ConcurrencySafety::Unsafe => "unsafe",
-        }
-    }
-}
-
-impl std::fmt::Display for ConcurrencySafety {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 

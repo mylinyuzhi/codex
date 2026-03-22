@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 #[test]
 fn test_apply_patch_arg1_constant() {
@@ -42,4 +43,53 @@ fn test_set_filtered_blocks_cocode_prefix() {
 
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].0, "SAFE_VAR");
+}
+
+fn create_lock(dir: &std::path::Path) -> std::io::Result<File> {
+    let lock_path = dir.join(LOCK_FILENAME);
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+}
+
+#[test]
+fn test_janitor_skips_dirs_without_lock_file() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("no-lock");
+    fs::create_dir(&dir)?;
+
+    janitor_cleanup(root.path())?;
+
+    assert!(dir.exists());
+    Ok(())
+}
+
+#[test]
+fn test_janitor_skips_dirs_with_held_lock() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("locked");
+    fs::create_dir(&dir)?;
+    let lock_file = create_lock(&dir)?;
+    lock_file.try_lock()?;
+
+    janitor_cleanup(root.path())?;
+
+    assert!(dir.exists());
+    Ok(())
+}
+
+#[test]
+fn test_janitor_removes_dirs_with_unlocked_lock() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("stale");
+    fs::create_dir(&dir)?;
+    create_lock(&dir)?;
+
+    janitor_cleanup(root.path())?;
+
+    assert!(!dir.exists());
+    Ok(())
 }

@@ -97,40 +97,32 @@ impl HookRegistry {
     /// `tracker.complete()` when they finish, enabling result delivery via
     /// system reminders.
     pub fn set_async_hook_tracker(&self, tracker: Arc<AsyncHookTracker>) {
-        if let Some(mut slot) = lock_write(&self.async_tracker, "async_tracker") {
-            *slot = Some(tracker);
-        }
+        *lock_write(&self.async_tracker, "async_tracker") = Some(tracker);
     }
 
     /// Sets the LLM callback for Prompt handler verification mode.
     pub fn set_model_call_fn(&self, f: HookModelCallFn) {
-        if let Some(mut slot) = lock_write(&self.model_call_fn, "model_call_fn") {
-            *slot = Some(f);
-        }
+        *lock_write(&self.model_call_fn, "model_call_fn") = Some(f);
     }
 
     /// Sets the agent spawn callback for Agent handler verification mode.
     pub fn set_agent_fn(&self, f: HookAgentFn) {
-        if let Some(mut slot) = lock_write(&self.agent_fn, "agent_fn") {
-            *slot = Some(f);
-        }
+        *lock_write(&self.agent_fn, "agent_fn") = Some(f);
     }
 
     /// Returns a clone of the model call callback if set.
     fn get_model_call_fn(&self) -> Option<HookModelCallFn> {
-        lock_read(&self.model_call_fn, "model_call_fn").and_then(|slot| slot.clone())
+        lock_read(&self.model_call_fn, "model_call_fn").clone()
     }
 
     /// Returns a clone of the agent callback if set.
     fn get_agent_fn(&self) -> Option<HookAgentFn> {
-        lock_read(&self.agent_fn, "agent_fn").and_then(|slot| slot.clone())
+        lock_read(&self.agent_fn, "agent_fn").clone()
     }
 
     /// Updates the hook settings (e.g., `disable_all_hooks`, `allow_managed_hooks_only`).
     pub fn set_settings(&self, new_settings: HookSettings) {
-        if let Some(mut settings) = lock_write(&self.settings, "settings") {
-            *settings = new_settings;
-        }
+        *lock_write(&self.settings, "settings") = new_settings;
     }
 
     /// Registers a hook definition.
@@ -141,9 +133,7 @@ impl HookRegistry {
             once = hook.once,
             "Registered hook"
         );
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            hooks.push(hook);
-        }
+        lock_write(&self.hooks, "hooks").push(hook);
     }
 
     /// Registers multiple hook definitions.
@@ -160,22 +150,16 @@ impl HookRegistry {
     pub fn register_inline(&self, hook: HookDefinition, handler: InlineHandler) {
         let name = hook.name.clone();
         self.register(hook);
-        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
-            handlers.insert(name, handler);
-        }
+        lock_write(&self.inline_handlers, "inline_handlers").insert(name, handler);
     }
 
     /// Returns all hooks registered for a given event type.
     pub fn hooks_for_event(&self, event_type: &HookEventType) -> Vec<HookDefinition> {
-        if let Some(hooks) = lock_read(&self.hooks, "hooks") {
-            hooks
-                .iter()
-                .filter(|h| h.enabled && h.event_type == *event_type)
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        }
+        lock_read(&self.hooks, "hooks")
+            .iter()
+            .filter(|h| h.enabled && h.event_type == *event_type)
+            .cloned()
+            .collect()
     }
 
     /// Executes all matching hooks for the given context.
@@ -188,48 +172,48 @@ impl HookRegistry {
     /// One-shot hooks (`once: true`) are removed after successful execution.
     /// They are NOT removed on timeout or failure, allowing retry.
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
-        // Check settings at execution time (Issue C fix: previously only checked during aggregation)
-        if let Some(settings) = lock_read(&self.settings, "settings")
-            && settings.disable_all_hooks
-        {
+        // Snapshot settings once to avoid holding lock across filtering
+        let (disable_all, allow_managed_only, workspace_trusted) = {
+            let settings = lock_read(&self.settings, "settings");
+            (
+                settings.disable_all_hooks,
+                settings.allow_managed_hooks_only,
+                settings.workspace_trusted,
+            )
+        };
+        if disable_all {
             return Vec::new();
         }
 
         // Get matching hooks (clone to release lock during execution)
         // The match target varies by event type (tool_name, source, notification_type, etc.)
         let match_target = ctx.match_target();
-        let (allow_managed_only, workspace_trusted) = lock_read(&self.settings, "settings")
-            .map(|s| (s.allow_managed_hooks_only, s.workspace_trusted))
-            .unwrap_or((false, true));
 
-        let matching: Vec<HookDefinition> = if let Some(hooks) = lock_read(&self.hooks, "hooks") {
-            hooks
-                .iter()
-                .filter(|h| h.enabled && h.event_type == ctx.event_type)
-                .filter(|h| {
-                    // When allow_managed_hooks_only is set, or workspace is untrusted,
-                    // skip non-managed hooks
-                    if (allow_managed_only || !workspace_trusted) && !h.source.is_managed() {
-                        return false;
-                    }
-                    true
-                })
-                .filter(|h| {
-                    match (&h.matcher, match_target) {
-                        (Some(matcher), Some(target)) => matcher.matches(target),
-                        (Some(_), None) => false, // matcher present but no target to match against
-                        (None, _) => true,        // no matcher means always match
-                    }
-                })
-                .cloned()
-                .collect()
-        } else {
-            return Vec::new();
-        };
+        let matching: Vec<HookDefinition> = lock_read(&self.hooks, "hooks")
+            .iter()
+            .filter(|h| h.enabled && h.event_type == ctx.event_type)
+            .filter(|h| {
+                // When allow_managed_hooks_only is set, or workspace is untrusted,
+                // skip non-managed hooks
+                if (allow_managed_only || !workspace_trusted) && !h.source.is_managed() {
+                    return false;
+                }
+                true
+            })
+            .filter(|h| {
+                match (&h.matcher, match_target) {
+                    (Some(matcher), Some(target)) => matcher.matches(target),
+                    (Some(_), None) => false, // matcher present but no target to match against
+                    (None, _) => true,        // no matcher means always match
+                }
+            })
+            .cloned()
+            .collect();
 
         // Pre-execute inline handlers synchronously (closures can't be sent across threads)
         let mut inline_results: HashMap<String, HookResult> = HashMap::new();
-        if let Some(handlers) = lock_read(&self.inline_handlers, "inline_handlers") {
+        {
+            let handlers = lock_read(&self.inline_handlers, "inline_handlers");
             for hook in &matching {
                 if matches!(hook.handler, HookHandler::Inline)
                     && let Some(handler) = handlers.get(&hook.name)
@@ -243,8 +227,7 @@ impl HookRegistry {
         // Snapshot callbacks and tracker for use in spawned tasks
         let model_call_fn = self.get_model_call_fn();
         let agent_fn = self.get_agent_fn();
-        let async_tracker =
-            lock_read(&self.async_tracker, "async_tracker").and_then(|slot| slot.clone());
+        let async_tracker = lock_read(&self.async_tracker, "async_tracker").clone();
 
         // Stable-sort matched hooks by handler type for deterministic result aggregation.
         // Command(0) > Webhook(1) > Prompt(2) > Agent(3) > Inline(4)
@@ -428,53 +411,49 @@ impl HookRegistry {
     /// preventing accidental removal of non-one-shot hooks with the same name.
     fn remove_once_hooks_by_name(&self, names: &[String]) {
         let names_set: HashSet<_> = names.iter().collect();
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            let before = hooks.len();
-            hooks.retain(|h| !(h.once && names_set.contains(&h.name)));
-            let removed = before - hooks.len();
-            if removed > 0 {
-                info!(
-                    count = removed,
-                    "Removed one-shot hooks after successful execution"
-                );
-            }
+        let mut hooks = lock_write(&self.hooks, "hooks");
+        let before = hooks.len();
+        hooks.retain(|h| !(h.once && names_set.contains(&h.name)));
+        let removed = before - hooks.len();
+        if removed > 0 {
+            info!(
+                count = removed,
+                "Removed one-shot hooks after successful execution"
+            );
         }
-        // Also clean up inline handlers for removed one-shot hooks
-        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
-            for name in names {
-                handlers.remove(name);
-            }
+        drop(hooks);
+        let mut handlers = lock_write(&self.inline_handlers, "inline_handlers");
+        for name in names {
+            handlers.remove(name);
         }
     }
 
     /// Removes all hooks from a specific source (e.g., when a skill ends).
     pub fn remove_hooks_by_source_name(&self, source_name: &str) {
         let mut removed_names = Vec::new();
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            let before = hooks.len();
-            hooks.retain(|h| {
-                if h.source.name() == Some(source_name) {
-                    if matches!(h.handler, HookHandler::Inline) {
-                        removed_names.push(h.name.clone());
-                    }
-                    false
-                } else {
-                    true
+        let mut hooks = lock_write(&self.hooks, "hooks");
+        let before = hooks.len();
+        hooks.retain(|h| {
+            if h.source.name() == Some(source_name) {
+                if matches!(h.handler, HookHandler::Inline) {
+                    removed_names.push(h.name.clone());
                 }
-            });
-            let removed = before - hooks.len();
-            if removed > 0 {
-                info!(
-                    source = source_name,
-                    count = removed,
-                    "Removed hooks by source"
-                );
+                false
+            } else {
+                true
             }
+        });
+        let removed = before - hooks.len();
+        if removed > 0 {
+            info!(
+                source = source_name,
+                count = removed,
+                "Removed hooks by source"
+            );
         }
-        // Clean up inline handlers for removed hooks
-        if !removed_names.is_empty()
-            && let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers")
-        {
+        drop(hooks);
+        if !removed_names.is_empty() {
+            let mut handlers = lock_write(&self.inline_handlers, "inline_handlers");
             for name in &removed_names {
                 handlers.remove(name);
             }
@@ -483,31 +462,24 @@ impl HookRegistry {
 
     /// Removes all hooks with the specified scope.
     pub fn remove_hooks_by_scope(&self, scope: crate::scope::HookScope) {
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            let before = hooks.len();
-            hooks.retain(|h| h.source.scope() != scope);
-            let removed = before - hooks.len();
-            if removed > 0 {
-                info!(scope = %scope, count = removed, "Removed hooks by scope");
-            }
+        let mut hooks = lock_write(&self.hooks, "hooks");
+        let before = hooks.len();
+        hooks.retain(|h| h.source.scope() != scope);
+        let removed = before - hooks.len();
+        if removed > 0 {
+            info!(scope = %scope, count = removed, "Removed hooks by scope");
         }
     }
 
     /// Removes all registered hooks.
     pub fn clear(&self) {
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            hooks.clear();
-        }
-        if let Some(mut handlers) = lock_write(&self.inline_handlers, "inline_handlers") {
-            handlers.clear();
-        }
+        lock_write(&self.hooks, "hooks").clear();
+        lock_write(&self.inline_handlers, "inline_handlers").clear();
     }
 
     /// Returns the number of registered hooks.
     pub fn len(&self) -> usize {
-        lock_read(&self.hooks, "hooks")
-            .map(|h| h.len())
-            .unwrap_or(0)
+        lock_read(&self.hooks, "hooks").len()
     }
 
     /// Returns `true` if no hooks are registered.
@@ -517,9 +489,7 @@ impl HookRegistry {
 
     /// Returns a copy of all registered hooks.
     pub fn all_hooks(&self) -> Vec<HookDefinition> {
-        lock_read(&self.hooks, "hooks")
-            .map(|h| h.clone())
-            .unwrap_or_default()
+        lock_read(&self.hooks, "hooks").clone()
     }
 
     /// Registers a group of hooks with a shared group ID.
@@ -527,17 +497,16 @@ impl HookRegistry {
     /// Used by subagent hooks: all hooks in the group share the same
     /// `group_id` so they can be unregistered together when the agent completes.
     pub fn register_group(&self, group_id: &str, hooks: impl IntoIterator<Item = HookDefinition>) {
-        if let Some(mut all) = lock_write(&self.hooks, "hooks") {
-            for mut hook in hooks {
-                hook.group_id = Some(group_id.to_string());
-                info!(
-                    name = %hook.name,
-                    event = %hook.event_type,
-                    group_id,
-                    "Registered grouped hook"
-                );
-                all.push(hook);
-            }
+        let mut all = lock_write(&self.hooks, "hooks");
+        for mut hook in hooks {
+            hook.group_id = Some(group_id.to_string());
+            info!(
+                name = %hook.name,
+                event = %hook.event_type,
+                group_id,
+                "Registered grouped hook"
+            );
+            all.push(hook);
         }
     }
 
@@ -545,13 +514,12 @@ impl HookRegistry {
     ///
     /// Used to clean up subagent hooks when the agent completes.
     pub fn unregister_group(&self, group_id: &str) {
-        if let Some(mut hooks) = lock_write(&self.hooks, "hooks") {
-            let before = hooks.len();
-            hooks.retain(|h| h.group_id.as_deref() != Some(group_id));
-            let removed = before - hooks.len();
-            if removed > 0 {
-                info!(group_id, count = removed, "Removed hooks by group");
-            }
+        let mut hooks = lock_write(&self.hooks, "hooks");
+        let before = hooks.len();
+        hooks.retain(|h| h.group_id.as_deref() != Some(group_id));
+        let removed = before - hooks.len();
+        if removed > 0 {
+            info!(group_id, count = removed, "Removed hooks by group");
         }
     }
 }

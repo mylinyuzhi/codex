@@ -21,6 +21,28 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+/// Insert items into a map, returning an error on duplicate keys.
+fn add_items_unique<T>(
+    map: &mut HashMap<String, T>,
+    items: Vec<T>,
+    key_fn: impl Fn(&T) -> &str,
+    item_type: &str,
+    source: &impl std::fmt::Display,
+) -> Result<(), crate::error::ConfigError> {
+    for item in items {
+        let key = key_fn(&item);
+        if map.contains_key(key) {
+            return ConfigValidationSnafu {
+                file: source.to_string(),
+                message: format!("duplicate {item_type}: {key}"),
+            }
+            .fail();
+        }
+        map.insert(key.to_string(), item);
+    }
+    Ok(())
+}
+
 /// Internal storage for model configurations.
 ///
 /// **Important**: External config files use **array format**:
@@ -41,25 +63,12 @@ pub struct ModelsFile {
 
 impl ModelsFile {
     /// Add models from a list, error on duplicate slug.
-    ///
-    /// Each model in the list is keyed by its `slug` field.
-    /// Returns an error if a model with the same slug already exists.
     pub fn add_models(
         &mut self,
         models: Vec<ModelInfo>,
         source: impl std::fmt::Display,
     ) -> Result<(), crate::error::ConfigError> {
-        for model in models {
-            if self.models.contains_key(&model.slug) {
-                return ConfigValidationSnafu {
-                    file: source.to_string(),
-                    message: format!("duplicate model slug: {}", model.slug),
-                }
-                .fail();
-            }
-            self.models.insert(model.slug.clone(), model);
-        }
-        Ok(())
+        add_items_unique(&mut self.models, models, |m| &m.slug, "model slug", &source)
     }
 }
 
@@ -83,25 +92,18 @@ pub struct ProvidersFile {
 
 impl ProvidersFile {
     /// Add providers from a list, error on duplicate name.
-    ///
-    /// Each provider in the list is keyed by its `name` field.
-    /// Returns an error if a provider with the same name already exists.
     pub fn add_providers(
         &mut self,
         providers: Vec<ProviderConfig>,
         source: impl std::fmt::Display,
     ) -> Result<(), crate::error::ConfigError> {
-        for provider in providers {
-            if self.providers.contains_key(&provider.name) {
-                return ConfigValidationSnafu {
-                    file: source.to_string(),
-                    message: format!("duplicate provider name: {}", provider.name),
-                }
-                .fail();
-            }
-            self.providers.insert(provider.name.clone(), provider);
-        }
-        Ok(())
+        add_items_unique(
+            &mut self.providers,
+            providers,
+            |p| &p.name,
+            "provider name",
+            &source,
+        )
     }
 }
 

@@ -78,47 +78,36 @@ impl OtelManager {
     }
 
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
-        let res: MetricsResult<()> = (|| {
-            let Some(metrics) = &self.metrics else {
-                return Ok(());
-            };
-
-            let tags = self.tags_with_metadata(tags)?;
-            metrics.counter(name, inc, &tags)
-        })();
-
-        if let Err(e) = res {
-            tracing::warn!("metrics counter [{name}] failed: {e}");
-        }
+        self.emit_metric("counter", name, tags, |m, t| m.counter(name, inc, t));
     }
 
     pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
-        let res: MetricsResult<()> = (|| {
-            let Some(metrics) = &self.metrics else {
-                return Ok(());
-            };
-
-            let tags = self.tags_with_metadata(tags)?;
-            metrics.histogram(name, value, &tags)
-        })();
-
-        if let Err(e) = res {
-            tracing::warn!("metrics histogram [{name}] failed: {e}");
-        }
+        self.emit_metric("histogram", name, tags, |m, t| m.histogram(name, value, t));
     }
 
     pub fn record_duration(&self, name: &str, duration: Duration, tags: &[(&str, &str)]) {
+        self.emit_metric("duration", name, tags, |m, t| {
+            m.record_duration(name, duration, t)
+        });
+    }
+
+    fn emit_metric(
+        &self,
+        kind: &str,
+        name: &str,
+        tags: &[(&str, &str)],
+        f: impl FnOnce(&MetricsClient, &[(&str, &str)]) -> MetricsResult<()>,
+    ) {
         let res: MetricsResult<()> = (|| {
             let Some(metrics) = &self.metrics else {
                 return Ok(());
             };
-
             let tags = self.tags_with_metadata(tags)?;
-            metrics.record_duration(name, duration, &tags)
+            f(metrics, &tags)
         })();
 
         if let Err(e) = res {
-            tracing::warn!("metrics duration [{name}] failed: {e}");
+            tracing::warn!("metrics {kind} [{name}] failed: {e}");
         }
     }
 

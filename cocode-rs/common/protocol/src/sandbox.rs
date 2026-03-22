@@ -2,6 +2,8 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum::Display;
+use strum::IntoStaticStr;
 
 /// Sandbox mode for command execution.
 ///
@@ -20,8 +22,11 @@ use serde::Serialize;
 /// let mode: SandboxMode = serde_json::from_str("\"workspace-write\"").unwrap();
 /// assert_eq!(mode, SandboxMode::WorkspaceWrite);
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum SandboxMode {
     /// Read-only access (safest).
     ///
@@ -57,17 +62,7 @@ impl SandboxMode {
 
     /// Get the mode as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            SandboxMode::ReadOnly => "read-only",
-            SandboxMode::WorkspaceWrite => "workspace-write",
-            SandboxMode::FullAccess => "full-access",
-        }
-    }
-}
-
-impl std::fmt::Display for SandboxMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 

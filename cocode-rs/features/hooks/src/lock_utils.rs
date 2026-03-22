@@ -10,26 +10,23 @@ use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 
 /// Acquires a write lock, recovering from poison if necessary.
-pub(crate) fn lock_write<'a, T>(
-    lock: &'a RwLock<T>,
-    name: &str,
-) -> Option<RwLockWriteGuard<'a, T>> {
+pub(crate) fn lock_write<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
     match lock.write() {
-        Ok(g) => Some(g),
+        Ok(g) => g,
         Err(poisoned) => {
             tracing::warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
+            poisoned.into_inner()
         }
     }
 }
 
 /// Acquires a read lock, recovering from poison if necessary.
-pub(crate) fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> Option<RwLockReadGuard<'a, T>> {
+pub(crate) fn lock_read<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
     match lock.read() {
-        Ok(g) => Some(g),
+        Ok(g) => g,
         Err(poisoned) => {
             tracing::warn!("{name} lock poisoned, recovering");
-            Some(poisoned.into_inner())
+            poisoned.into_inner()
         }
     }
 }
