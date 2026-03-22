@@ -9,6 +9,8 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum::Display;
+use strum::IntoStaticStr;
 
 /// Tracking information for a query chain.
 ///
@@ -292,8 +294,11 @@ impl FileChange {
 }
 
 /// Type of file change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum FileChangeType {
     /// File was modified.
     Modified,
@@ -306,17 +311,7 @@ pub enum FileChangeType {
 impl FileChangeType {
     /// Get the change type as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            FileChangeType::Modified => "modified",
-            FileChangeType::Deleted => "deleted",
-            FileChangeType::Created => "created",
-        }
-    }
-}
-
-impl std::fmt::Display for FileChangeType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 

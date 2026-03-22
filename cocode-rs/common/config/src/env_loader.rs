@@ -76,6 +76,34 @@ pub const ENV_ENABLE_TOKEN_USAGE: &str = "COCODE_ENABLE_TOKEN_USAGE_ATTACHMENT";
 // Fallback prefixes (for compatibility)
 const FALLBACK_PREFIX: &str = "CLAUDE_CODE_";
 
+/// Loads an environment variable and assigns it to a config field.
+macro_rules! load_env {
+    ($self:ident, bool, $env:expr, $config:ident . $field:ident) => {
+        if $self.get_bool($env) {
+            $config.$field = true;
+            debug!(env = $env, "loaded");
+        }
+    };
+    ($self:ident, path, $env:expr, $config:ident . $field:ident) => {
+        if let Some(val) = $self.get_path($env) {
+            debug!(env = $env, path = %val.display(), "loaded");
+            $config.$field = Some(val);
+        }
+    };
+    ($self:ident, $getter:ident, $env:expr, $config:ident . $field:ident, option) => {
+        if let Some(val) = $self.$getter($env) {
+            $config.$field = Some(val);
+            debug!(env = $env, value = val, "loaded");
+        }
+    };
+    ($self:ident, $getter:ident, $env:expr, $config:ident . $field:ident) => {
+        if let Some(val) = $self.$getter($env) {
+            $config.$field = val;
+            debug!(env = $env, value = val, "loaded");
+        }
+    };
+}
+
 /// Environment loader for configuration.
 ///
 /// Loads configuration values from environment variables, supporting
@@ -92,17 +120,19 @@ impl EnvLoader {
     /// Load tool configuration from environment variables.
     pub fn load_tool_config(&self) -> ToolConfig {
         let mut config = ToolConfig::default();
-
-        if let Some(val) = self.get_i32(ENV_MAX_TOOL_CONCURRENCY) {
-            config.max_tool_concurrency = val;
-            debug!(env = ENV_MAX_TOOL_CONCURRENCY, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_MCP_TOOL_TIMEOUT) {
-            config.mcp_tool_timeout = Some(val);
-            debug!(env = ENV_MCP_TOOL_TIMEOUT, value = val, "loaded");
-        }
-
+        load_env!(
+            self,
+            get_i32,
+            ENV_MAX_TOOL_CONCURRENCY,
+            config.max_tool_concurrency
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_MCP_TOOL_TIMEOUT,
+            config.mcp_tool_timeout,
+            option
+        );
         config
     }
 
@@ -111,121 +141,142 @@ impl EnvLoader {
         let mut config = CompactConfig::default();
 
         // Feature toggles
-        if self.get_bool(ENV_DISABLE_COMPACT) {
-            config.disable_compact = true;
-            debug!(env = ENV_DISABLE_COMPACT, "loaded");
-        }
-
-        if self.get_bool(ENV_DISABLE_AUTO_COMPACT) {
-            config.disable_auto_compact = true;
-            debug!(env = ENV_DISABLE_AUTO_COMPACT, "loaded");
-        }
-
-        if self.get_bool(ENV_DISABLE_MICRO_COMPACT) {
-            config.disable_micro_compact = true;
-            debug!(env = ENV_DISABLE_MICRO_COMPACT, "loaded");
-        }
+        load_env!(self, bool, ENV_DISABLE_COMPACT, config.disable_compact);
+        load_env!(
+            self,
+            bool,
+            ENV_DISABLE_AUTO_COMPACT,
+            config.disable_auto_compact
+        );
+        load_env!(
+            self,
+            bool,
+            ENV_DISABLE_MICRO_COMPACT,
+            config.disable_micro_compact
+        );
 
         // Overrides
-        if let Some(val) = self.get_i32(ENV_AUTOCOMPACT_PCT) {
-            config.auto_compact_pct = Some(val);
-            debug!(env = ENV_AUTOCOMPACT_PCT, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_BLOCKING_LIMIT) {
-            config.blocking_limit_override = Some(val);
-            debug!(env = ENV_BLOCKING_LIMIT, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_AUTOCOMPACT_PCT,
+            config.auto_compact_pct,
+            option
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_BLOCKING_LIMIT,
+            config.blocking_limit_override,
+            option
+        );
 
         // Session memory
-        if let Some(val) = self.get_i32(ENV_SESSION_MEMORY_MIN) {
-            config.session_memory_min_tokens = val;
-            debug!(env = ENV_SESSION_MEMORY_MIN, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_SESSION_MEMORY_MAX) {
-            config.session_memory_max_tokens = val;
-            debug!(env = ENV_SESSION_MEMORY_MAX, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_EXTRACTION_COOLDOWN) {
-            config.extraction_cooldown_secs = val;
-            debug!(env = ENV_EXTRACTION_COOLDOWN, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_SESSION_MEMORY_MIN,
+            config.session_memory_min_tokens
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_SESSION_MEMORY_MAX,
+            config.session_memory_max_tokens
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_EXTRACTION_COOLDOWN,
+            config.extraction_cooldown_secs
+        );
 
         // Context restoration
-        if let Some(val) = self.get_i32(ENV_CONTEXT_RESTORE_FILES) {
-            config.context_restore_max_files = val;
-            debug!(env = ENV_CONTEXT_RESTORE_FILES, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_CONTEXT_RESTORE_BUDGET) {
-            config.context_restore_budget = val;
-            debug!(env = ENV_CONTEXT_RESTORE_BUDGET, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_MAX_TOKENS_PER_FILE) {
-            config.max_tokens_per_file = val;
-            debug!(env = ENV_MAX_TOKENS_PER_FILE, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_CONTEXT_RESTORE_FILES,
+            config.context_restore_max_files
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_CONTEXT_RESTORE_BUDGET,
+            config.context_restore_budget
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_MAX_TOKENS_PER_FILE,
+            config.max_tokens_per_file
+        );
 
         // Threshold control
-        if let Some(val) = self.get_i32(ENV_MIN_TOKENS_TO_PRESERVE) {
-            config.min_tokens_to_preserve = val;
-            debug!(env = ENV_MIN_TOKENS_TO_PRESERVE, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_WARNING_THRESHOLD_OFFSET) {
-            config.warning_threshold_offset = val;
-            debug!(env = ENV_WARNING_THRESHOLD_OFFSET, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_ERROR_THRESHOLD_OFFSET) {
-            config.error_threshold_offset = val;
-            debug!(env = ENV_ERROR_THRESHOLD_OFFSET, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_MIN_BLOCKING_OFFSET) {
-            config.min_blocking_offset = val;
-            debug!(env = ENV_MIN_BLOCKING_OFFSET, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_MIN_TOKENS_TO_PRESERVE,
+            config.min_tokens_to_preserve
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_WARNING_THRESHOLD_OFFSET,
+            config.warning_threshold_offset
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_ERROR_THRESHOLD_OFFSET,
+            config.error_threshold_offset
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_MIN_BLOCKING_OFFSET,
+            config.min_blocking_offset
+        );
 
         // Micro-compact
-        if let Some(val) = self.get_i32(ENV_MICRO_COMPACT_MIN_SAVINGS) {
-            config.micro_compact_min_savings = val;
-            debug!(env = ENV_MICRO_COMPACT_MIN_SAVINGS, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_MICRO_COMPACT_THRESHOLD) {
-            config.micro_compact_threshold = val;
-            debug!(env = ENV_MICRO_COMPACT_THRESHOLD, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_RECENT_TOOL_RESULTS_TO_KEEP) {
-            config.recent_tool_results_to_keep = val;
-            debug!(env = ENV_RECENT_TOOL_RESULTS_TO_KEEP, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_MICRO_COMPACT_MIN_SAVINGS,
+            config.micro_compact_min_savings
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_MICRO_COMPACT_THRESHOLD,
+            config.micro_compact_threshold
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_RECENT_TOOL_RESULTS_TO_KEEP,
+            config.recent_tool_results_to_keep
+        );
 
         // Full compact
-        if let Some(val) = self.get_i32(ENV_MAX_SUMMARY_RETRIES) {
-            config.max_summary_retries = val;
-            debug!(env = ENV_MAX_SUMMARY_RETRIES, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_MAX_COMPACT_OUTPUT_TOKENS) {
-            config.max_compact_output_tokens = val;
-            debug!(env = ENV_MAX_COMPACT_OUTPUT_TOKENS, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_f64(ENV_TOKEN_SAFETY_MARGIN) {
-            config.token_safety_margin = val;
-            debug!(env = ENV_TOKEN_SAFETY_MARGIN, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_TOKENS_PER_IMAGE) {
-            config.tokens_per_image = val;
-            debug!(env = ENV_TOKENS_PER_IMAGE, value = val, "loaded");
-        }
+        load_env!(
+            self,
+            get_i32,
+            ENV_MAX_SUMMARY_RETRIES,
+            config.max_summary_retries
+        );
+        load_env!(
+            self,
+            get_i32,
+            ENV_MAX_COMPACT_OUTPUT_TOKENS,
+            config.max_compact_output_tokens
+        );
+        load_env!(
+            self,
+            get_f64,
+            ENV_TOKEN_SAFETY_MARGIN,
+            config.token_safety_margin
+        );
+        load_env!(self, get_i32, ENV_TOKENS_PER_IMAGE, config.tokens_per_image);
 
         config
     }
@@ -233,59 +284,41 @@ impl EnvLoader {
     /// Load plan mode configuration from environment variables.
     pub fn load_plan_config(&self) -> PlanModeConfig {
         let mut config = PlanModeConfig::default();
-
-        if let Some(val) = self.get_i32(ENV_PLAN_AGENT_COUNT) {
-            config.agent_count = val;
-            debug!(env = ENV_PLAN_AGENT_COUNT, value = val, "loaded");
-        }
-
-        if let Some(val) = self.get_i32(ENV_PLAN_EXPLORE_AGENT_COUNT) {
-            config.explore_agent_count = val;
-            debug!(env = ENV_PLAN_EXPLORE_AGENT_COUNT, value = val, "loaded");
-        }
-
-        // Clamp values to valid range
+        load_env!(self, get_i32, ENV_PLAN_AGENT_COUNT, config.agent_count);
+        load_env!(
+            self,
+            get_i32,
+            ENV_PLAN_EXPLORE_AGENT_COUNT,
+            config.explore_agent_count
+        );
         config.clamp_all();
-
         config
     }
 
     /// Load attachment configuration from environment variables.
     pub fn load_attachment_config(&self) -> AttachmentConfig {
         let mut config = AttachmentConfig::default();
-
-        if self.get_bool(ENV_DISABLE_ATTACHMENTS) {
-            config.disable_attachments = true;
-            debug!(env = ENV_DISABLE_ATTACHMENTS, "loaded");
-        }
-
-        if self.get_bool(ENV_ENABLE_TOKEN_USAGE) {
-            config.enable_token_usage_attachment = true;
-            debug!(env = ENV_ENABLE_TOKEN_USAGE, "loaded");
-        }
-
+        load_env!(
+            self,
+            bool,
+            ENV_DISABLE_ATTACHMENTS,
+            config.disable_attachments
+        );
+        load_env!(
+            self,
+            bool,
+            ENV_ENABLE_TOKEN_USAGE,
+            config.enable_token_usage_attachment
+        );
         config
     }
 
     /// Load path configuration from environment variables.
     pub fn load_path_config(&self) -> PathConfig {
         let mut config = PathConfig::default();
-
-        if let Some(val) = self.get_path(ENV_PROJECT_DIR) {
-            config.project_dir = Some(val.clone());
-            debug!(env = ENV_PROJECT_DIR, path = %val.display(), "loaded");
-        }
-
-        if let Some(val) = self.get_path(ENV_PLUGIN_ROOT) {
-            config.plugin_root = Some(val.clone());
-            debug!(env = ENV_PLUGIN_ROOT, path = %val.display(), "loaded");
-        }
-
-        if let Some(val) = self.get_path(ENV_ENV_FILE) {
-            config.env_file = Some(val.clone());
-            debug!(env = ENV_ENV_FILE, path = %val.display(), "loaded");
-        }
-
+        load_env!(self, path, ENV_PROJECT_DIR, config.project_dir);
+        load_env!(self, path, ENV_PLUGIN_ROOT, config.plugin_root);
+        load_env!(self, path, ENV_ENV_FILE, config.env_file);
         config
     }
 
