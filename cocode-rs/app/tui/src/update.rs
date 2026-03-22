@@ -1323,8 +1323,19 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                     msg.turn_number = Some(turn_number);
                 }
             }
+            // Start query timing tracker
+            state.ui.query_timing.start();
         }
         LoopEvent::TurnCompleted { turn_id, usage } => {
+            // Check for slow query before stopping the timer
+            if state.ui.query_timing.is_slow_query() {
+                if let Some(duration) = state.ui.query_timing.actual_duration() {
+                    state
+                        .ui
+                        .toast_info(format!("Query took {:.1}s", duration.as_secs_f64()));
+                }
+            }
+            state.ui.query_timing.stop();
             // Stop thinking timer if still running
             if state.ui.is_thinking() {
                 state.ui.stop_thinking();
@@ -1359,9 +1370,23 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             state.ui.start_thinking();
             state.ui.append_streaming_thinking(&delta);
         }
+        LoopEvent::ToolCallDelta { call_id, delta } => {
+            // Accumulate partial tool call JSON for streaming display
+            state.ui.append_tool_call_delta(&call_id, &delta);
+        }
 
         // ========== Tool Execution ==========
+        LoopEvent::ToolUseQueued {
+            call_id,
+            name,
+            input: _,
+        } => {
+            // Track tool use during streaming for spinner/status display
+            state.ui.add_streaming_tool_use(call_id, name);
+        }
         LoopEvent::ToolUseStarted { call_id, name, .. } => {
+            // When tool execution begins, transition mode to ToolUse
+            state.ui.set_stream_mode_tool_use();
             state.session.start_tool(call_id, name);
         }
         LoopEvent::ToolProgress { call_id, progress } => {
@@ -1385,6 +1410,8 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // ========== Permission ==========
         LoopEvent::ApprovalRequired { request } => {
+            // Pause query timing while user reviews permission
+            state.ui.query_timing.on_permission_dialog_open();
             if request.tool_name == cocode_protocol::ToolName::ExitPlanMode.as_str() {
                 // Use the 4-option plan exit overlay for ExitPlanMode
                 state.ui.set_overlay(Overlay::PlanExitApproval(
@@ -1402,6 +1429,8 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             request_id,
             questions,
         } => {
+            // Pause query timing while user answers questions
+            state.ui.query_timing.on_permission_dialog_open();
             state
                 .ui
                 .set_overlay(Overlay::Question(crate::state::QuestionOverlay::new(
@@ -1480,13 +1509,15 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // ========== Errors ==========
         LoopEvent::Error { error } => {
+            state.ui.query_timing.stop();
             state
                 .ui
                 .set_overlay(Overlay::Error(format!("{}: {}", error.code, error.message)));
         }
         LoopEvent::Interrupted => {
-            // Stop streaming if active
+            // Stop streaming and timing if active
             state.ui.stop_streaming();
+            state.ui.query_timing.stop();
             tracing::info!("Operation interrupted");
         }
 

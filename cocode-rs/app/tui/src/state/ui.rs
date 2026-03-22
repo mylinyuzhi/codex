@@ -29,6 +29,13 @@ pub struct UiState {
     /// Active overlay (modal dialog).
     pub overlay: Option<Overlay>,
 
+    /// Queued overlays waiting to be displayed (lower priority than active overlay).
+    ///
+    /// When a permission or question overlay arrives while another overlay is
+    /// active, it is queued here. When the active overlay is cleared, the
+    /// highest-priority queued overlay is promoted.
+    pub overlay_queue: VecDeque<Overlay>,
+
     /// Streaming content state.
     pub streaming: Option<StreamingState>,
 
@@ -79,17 +86,92 @@ pub struct UiState {
 
     /// Timestamp of the last Esc keypress (for double-Esc detection).
     pub last_esc_time: Option<Instant>,
+
+    /// Query timing tracker for slow-query notification and
+    /// permission-pause exclusion.
+    pub query_timing: QueryTiming,
 }
 
 impl UiState {
-    /// Set the overlay.
+    /// Set the overlay, queuing it if a higher-priority overlay is active.
+    ///
+    /// Agent-driven overlays (permissions, questions, errors) are queued when
+    /// another overlay is active. User-triggered overlays replace the current
+    /// overlay, moving any displaced agent-driven overlay to the queue.
+    /// Maximum queued overlays to prevent unbounded growth.
+    const MAX_OVERLAY_QUEUE: usize = 16;
+
     pub fn set_overlay(&mut self, overlay: Overlay) {
-        self.overlay = Some(overlay);
+        if let Some(ref current) = self.overlay {
+            if overlay.is_agent_driven() && current.priority() <= overlay.priority() {
+                // Current overlay has equal or higher priority — queue the new one
+                if self.overlay_queue.len() < Self::MAX_OVERLAY_QUEUE {
+                    self.overlay_queue.push_back(overlay);
+                }
+            } else if current.is_agent_driven() && !overlay.is_agent_driven() {
+                // User-triggered overlay takes over; queue the displaced agent overlay
+                if let Some(displaced) = self.overlay.take() {
+                    self.overlay_queue.push_front(displaced);
+                }
+                self.overlay = Some(overlay);
+            } else {
+                // Higher-priority agent replaces current, or user-to-user replacement.
+                // Queue displaced agent-driven overlay so it resurfaces later.
+                if current.is_agent_driven() {
+                    if let Some(displaced) = self.overlay.take() {
+                        if self.overlay_queue.len() < Self::MAX_OVERLAY_QUEUE {
+                            self.overlay_queue.push_back(displaced);
+                        }
+                    }
+                }
+                self.overlay = Some(overlay);
+            }
+        } else {
+            self.overlay = Some(overlay);
+        }
     }
 
-    /// Clear the overlay.
+    /// Clear the overlay and promote the next queued overlay (if any).
+    ///
+    /// If the cleared overlay was a permission dialog, resumes the query
+    /// timing tracker (permission pause ends when user responds).
     pub fn clear_overlay(&mut self) {
+        // Resume query timing if a blocking dialog was dismissed
+        if matches!(
+            self.overlay,
+            Some(Overlay::Permission(_) | Overlay::PlanExitApproval(_) | Overlay::Question(_))
+        ) {
+            self.query_timing.on_permission_dialog_close();
+        }
         self.overlay = None;
+        // Promote the highest-priority queued overlay
+        if !self.overlay_queue.is_empty() {
+            let best_idx = self
+                .overlay_queue
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, o)| o.priority())
+                .map(|(i, _)| i);
+            if let Some(idx) = best_idx {
+                self.overlay = self.overlay_queue.remove(idx);
+                // Re-pause timing if promoted overlay also blocks the user
+                if matches!(
+                    self.overlay,
+                    Some(
+                        Overlay::Permission(_)
+                            | Overlay::PlanExitApproval(_)
+                            | Overlay::Question(_)
+                    )
+                ) {
+                    self.query_timing.on_permission_dialog_open();
+                }
+            }
+        }
+    }
+
+    /// Get the number of queued overlays waiting behind the active one.
+    pub fn queued_overlay_count(&self) -> i32 {
+        self.overlay_queue.len() as i32
     }
 
     /// Start streaming.
@@ -102,17 +184,45 @@ impl UiState {
         self.streaming = None;
     }
 
-    /// Append to streaming content.
+    /// Append to streaming content and transition mode to Responding.
     pub fn append_streaming(&mut self, delta: &str) {
         if let Some(ref mut streaming) = self.streaming {
             streaming.content.push_str(delta);
+            streaming.mode = StreamMode::Responding;
         }
     }
 
-    /// Append to streaming thinking content.
+    /// Append to streaming thinking content and transition mode to Thinking.
     pub fn append_streaming_thinking(&mut self, delta: &str) {
         if let Some(ref mut streaming) = self.streaming {
             streaming.thinking.push_str(delta);
+            streaming.mode = StreamMode::Thinking;
+        }
+    }
+
+    /// Get the current stream mode (if streaming).
+    pub fn stream_mode(&self) -> Option<StreamMode> {
+        self.streaming.as_ref().map(|s| s.mode)
+    }
+
+    /// Set the stream mode to ToolUse (message complete, tools pending).
+    pub fn set_stream_mode_tool_use(&mut self) {
+        if let Some(ref mut streaming) = self.streaming {
+            streaming.mode = StreamMode::ToolUse;
+        }
+    }
+
+    /// Track a new tool use during streaming.
+    pub fn add_streaming_tool_use(&mut self, call_id: String, name: String) {
+        if let Some(ref mut streaming) = self.streaming {
+            streaming.add_tool_use(call_id, name);
+        }
+    }
+
+    /// Append a tool call delta to the matching streaming tool use.
+    pub fn append_tool_call_delta(&mut self, call_id: &str, delta: &str) {
+        if let Some(ref mut streaming) = self.streaming {
+            streaming.append_tool_call_delta(call_id, delta);
         }
     }
 
@@ -915,6 +1025,45 @@ pub enum Overlay {
     Help,
     /// Error message.
     Error(String),
+}
+
+impl Overlay {
+    /// Get the priority of this overlay (lower = higher priority).
+    ///
+    /// Matches Claude Code's dialog priority dispatcher:
+    /// - Permission/PlanExit: highest (security-critical, blocks execution)
+    /// - Question: high (tool needs user input to continue)
+    /// - Error: medium (user must acknowledge)
+    /// - User-triggered overlays (model picker, etc.): lowest
+    pub fn priority(&self) -> i32 {
+        match self {
+            Overlay::Permission(_) | Overlay::PlanExitApproval(_) => 0,
+            Overlay::Question(_) => 1,
+            Overlay::Error(_) => 2,
+            Overlay::RewindSelector(_) => 3,
+            Overlay::PluginManager(_) => 4,
+            Overlay::ModelPicker(_) => 5,
+            Overlay::OutputStylePicker(_) => 5,
+            Overlay::CommandPalette(_) => 5,
+            Overlay::SessionBrowser(_) => 5,
+            Overlay::Help => 6,
+        }
+    }
+
+    /// Whether this overlay type should be queued when another is active.
+    ///
+    /// Agent-driven overlays (permissions, questions) are queueable because
+    /// multiple can arrive concurrently. User-triggered overlays replace
+    /// the current one since the user explicitly requested them.
+    pub fn is_agent_driven(&self) -> bool {
+        matches!(
+            self,
+            Overlay::Permission(_)
+                | Overlay::PlanExitApproval(_)
+                | Overlay::Question(_)
+                | Overlay::Error(_)
+        )
+    }
 }
 
 /// Permission approval overlay state.
@@ -1735,6 +1884,39 @@ impl PluginManagerOverlay {
     }
 }
 
+/// Current phase of streaming from the LLM.
+///
+/// Tracks what the model is currently outputting, used for spinner display
+/// and status text. Matches Claude Code's 5-mode streaming state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamMode {
+    /// Request is being sent to the API.
+    #[default]
+    Requesting,
+    /// Text content is being streamed.
+    Responding,
+    /// Extended thinking content is being streamed.
+    Thinking,
+    /// Tool call input JSON is being streamed.
+    ToolInput,
+    /// Message complete, tool execution pending.
+    ToolUse,
+}
+
+/// A tool use being accumulated during streaming.
+///
+/// Tracks partial JSON input as it arrives via `ToolCallDelta` events,
+/// allowing the UI to display in-progress tool call details.
+#[derive(Debug, Clone)]
+pub struct StreamingToolUse {
+    /// Tool call identifier.
+    pub call_id: String,
+    /// Tool name.
+    pub name: String,
+    /// Accumulated partial JSON input (not yet parseable).
+    pub accumulated_input: String,
+}
+
 /// State for streaming content.
 #[derive(Debug, Clone)]
 pub struct StreamingState {
@@ -1744,8 +1926,10 @@ pub struct StreamingState {
     pub content: String,
     /// Thinking content being streamed.
     pub thinking: String,
-    /// Whether currently streaming thinking content (before main content).
-    pub is_thinking: bool,
+    /// Current streaming mode.
+    pub mode: StreamMode,
+    /// Tool uses being accumulated during streaming.
+    pub tool_uses: Vec<StreamingToolUse>,
 }
 
 impl StreamingState {
@@ -1755,7 +1939,8 @@ impl StreamingState {
             turn_id,
             content: String::new(),
             thinking: String::new(),
-            is_thinking: false,
+            mode: StreamMode::Requesting,
+            tool_uses: Vec::new(),
         }
     }
 
@@ -1763,6 +1948,95 @@ impl StreamingState {
     pub fn thinking_tokens(&self) -> i32 {
         let word_count = self.thinking.split_whitespace().count();
         (word_count as f64 * 1.3) as i32
+    }
+
+    /// Append a tool call delta to the matching streaming tool use.
+    pub fn append_tool_call_delta(&mut self, call_id: &str, delta: &str) {
+        if let Some(tool) = self.tool_uses.iter_mut().find(|t| t.call_id == call_id) {
+            tool.accumulated_input.push_str(delta);
+        } else {
+            tracing::debug!(call_id, "Tool call delta for unknown call_id");
+        }
+    }
+
+    /// Start tracking a new tool use.
+    pub fn add_tool_use(&mut self, call_id: String, name: String) {
+        self.tool_uses.push(StreamingToolUse {
+            call_id,
+            name,
+            accumulated_input: String::new(),
+        });
+        self.mode = StreamMode::ToolInput;
+    }
+}
+
+/// Tracks query timing with permission-pause exclusion.
+///
+/// Models Claude Code's timing refs pattern: query start time, cumulative
+/// permission pause duration, and slow-query threshold detection.
+///
+/// When the user is viewing a permission dialog, that time is excluded from
+/// the query duration so the "slow query" notification reflects actual LLM
+/// processing time, not time spent waiting for human approval.
+#[derive(Debug, Clone, Default)]
+pub struct QueryTiming {
+    /// When the current query started (set on `TurnStarted`).
+    start: Option<Instant>,
+    /// When the current permission dialog opened (for pause tracking).
+    pause_start: Option<Instant>,
+    /// Cumulative duration spent in permission dialogs during the current query.
+    total_paused: Duration,
+}
+
+impl QueryTiming {
+    /// Slow query threshold — matches Claude Code's 30-second notification.
+    const SLOW_QUERY_THRESHOLD: Duration = Duration::from_secs(30);
+
+    /// Start tracking a new query.
+    pub fn start(&mut self) {
+        self.start = Some(Instant::now());
+        self.pause_start = None;
+        self.total_paused = Duration::ZERO;
+    }
+
+    /// Record that a permission dialog has opened (start pausing the clock).
+    pub fn on_permission_dialog_open(&mut self) {
+        if self.pause_start.is_none() {
+            self.pause_start = Some(Instant::now());
+        }
+    }
+
+    /// Record that a permission dialog has closed (resume the clock).
+    pub fn on_permission_dialog_close(&mut self) {
+        if let Some(pause_start) = self.pause_start.take() {
+            self.total_paused += pause_start.elapsed();
+        }
+    }
+
+    /// Get the actual query duration (excluding permission pause time).
+    pub fn actual_duration(&self) -> Option<Duration> {
+        self.start
+            .map(|s| s.elapsed().saturating_sub(self.total_paused))
+    }
+
+    /// Check if the query exceeds the slow-query threshold.
+    pub fn is_slow_query(&self) -> bool {
+        self.actual_duration()
+            .is_some_and(|d| d > Self::SLOW_QUERY_THRESHOLD)
+    }
+
+    /// Stop tracking (query completed or aborted).
+    pub fn stop(&mut self) {
+        // Close any open pause before stopping
+        if let Some(pause_start) = self.pause_start.take() {
+            self.total_paused += pause_start.elapsed();
+        }
+        self.start = None;
+    }
+
+    /// Whether a query is being tracked.
+    pub fn is_active(&self) -> bool {
+        self.start.is_some()
     }
 }
 

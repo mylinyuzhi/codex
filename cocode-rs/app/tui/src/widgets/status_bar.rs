@@ -46,6 +46,8 @@ pub struct StatusBar<'a> {
     mcp_server_count: i32,
     /// Number of queued commands.
     queued_count: i32,
+    /// Number of queued dialog overlays waiting behind the active one.
+    queued_dialogs: i32,
     /// Context window tokens used.
     context_window_used: i32,
     /// Context window total capacity.
@@ -79,6 +81,7 @@ impl<'a> StatusBar<'a> {
             plan_phase: None,
             mcp_server_count: 0,
             queued_count: 0,
+            queued_dialogs: 0,
             context_window_used: 0,
             context_window_total: 0,
             estimated_cost_cents: 0,
@@ -117,9 +120,10 @@ impl<'a> StatusBar<'a> {
         self
     }
 
-    /// Set the queue count.
-    pub fn queue_counts(mut self, queued: i32, _steering: i32) -> Self {
+    /// Set the queue counts.
+    pub fn queue_counts(mut self, queued: i32, queued_dialogs: i32) -> Self {
         self.queued_count = queued;
+        self.queued_dialogs = queued_dialogs;
         self
     }
 
@@ -267,12 +271,25 @@ impl<'a> StatusBar<'a> {
 
     /// Format the queue status indicator.
     fn format_queue_status(&self) -> Option<Span<'static>> {
-        if self.queued_count == 0 {
-            return None;
+        match (self.queued_count, self.queued_dialogs) {
+            (0, 0) => None,
+            (q, 0) => {
+                let text = format!(" {} ", t!("status.queued", count = q));
+                Some(Span::raw(text).fg(self.theme.warning))
+            }
+            (0, d) => {
+                let text = format!(" {} ", t!("status.dialogs_waiting", count = d));
+                Some(Span::raw(text).fg(self.theme.warning))
+            }
+            (q, d) => {
+                let text = format!(
+                    " {} +{} ",
+                    t!("status.queued", count = q),
+                    t!("status.dialogs_waiting", count = d)
+                );
+                Some(Span::raw(text).fg(self.theme.warning))
+            }
         }
-
-        let text = format!(" {} ", t!("status.queued", count = self.queued_count));
-        Some(Span::raw(text).fg(self.theme.warning))
     }
 
     /// Format the cost estimate.

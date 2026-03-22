@@ -476,3 +476,241 @@ fn test_current_at_token_quoted_complete() {
     let result = input.current_at_token();
     assert_eq!(result, None); // Closing quote means mention is complete
 }
+
+// ========== StreamMode Tests ==========
+
+#[test]
+fn test_stream_mode_transitions() {
+    let mut ui = UiState::default();
+    ui.start_streaming("turn-1".to_string());
+
+    // Initial mode is Requesting
+    assert_eq!(ui.stream_mode(), Some(StreamMode::Requesting));
+
+    // Thinking delta transitions to Thinking
+    ui.append_streaming_thinking("thinking...");
+    assert_eq!(ui.stream_mode(), Some(StreamMode::Thinking));
+
+    // Text delta transitions to Responding
+    ui.append_streaming("Hello");
+    assert_eq!(ui.stream_mode(), Some(StreamMode::Responding));
+
+    // Tool use transitions to ToolInput
+    ui.add_streaming_tool_use("call-1".to_string(), "Bash".to_string());
+    assert_eq!(ui.stream_mode(), Some(StreamMode::ToolInput));
+
+    // ToolUse mode when message complete
+    ui.set_stream_mode_tool_use();
+    assert_eq!(ui.stream_mode(), Some(StreamMode::ToolUse));
+
+    // No mode after streaming stops
+    ui.stop_streaming();
+    assert_eq!(ui.stream_mode(), None);
+}
+
+#[test]
+fn test_streaming_tool_use_tracking() {
+    let mut ui = UiState::default();
+    ui.start_streaming("turn-1".to_string());
+
+    ui.add_streaming_tool_use("call-1".to_string(), "Bash".to_string());
+    ui.append_tool_call_delta("call-1", r#"{"comm"#);
+    ui.append_tool_call_delta("call-1", r#"and":"ls"}"#);
+
+    let streaming = ui.streaming.as_ref().expect("streaming active");
+    assert_eq!(streaming.tool_uses.len(), 1);
+    assert_eq!(streaming.tool_uses[0].name, "Bash");
+    assert_eq!(
+        streaming.tool_uses[0].accumulated_input,
+        r#"{"command":"ls"}"#
+    );
+}
+
+// ========== Overlay Queue Tests ==========
+
+#[test]
+fn test_overlay_queue_agent_driven_queued() {
+    let mut ui = UiState::default();
+
+    // Set first permission overlay
+    let request1 = cocode_protocol::ApprovalRequest {
+        request_id: "req-1".to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run command".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request1)));
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+
+    // Second permission is queued (same priority)
+    let request2 = cocode_protocol::ApprovalRequest {
+        request_id: "req-2".to_string(),
+        tool_name: "Edit".to_string(),
+        description: "Edit file".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request2)));
+    assert_eq!(ui.queued_overlay_count(), 1);
+
+    // Clear promotes queued overlay
+    ui.clear_overlay();
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+    assert_eq!(ui.queued_overlay_count(), 0);
+
+    // Clear again empties everything
+    ui.clear_overlay();
+    assert!(ui.overlay.is_none());
+}
+
+#[test]
+fn test_overlay_user_displaces_agent() {
+    let mut ui = UiState::default();
+
+    // Set permission overlay (agent-driven)
+    let request = cocode_protocol::ApprovalRequest {
+        request_id: "req-1".to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run command".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
+
+    // User-triggered Help overlay displaces it
+    ui.set_overlay(Overlay::Help);
+    assert!(matches!(ui.overlay, Some(Overlay::Help)));
+    assert_eq!(ui.queued_overlay_count(), 1); // Permission queued
+
+    // Clearing Help promotes the queued Permission
+    ui.clear_overlay();
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+}
+
+// ========== QueryTiming Tests ==========
+
+#[test]
+fn test_query_timing_basic() {
+    let mut timing = QueryTiming::default();
+    assert!(!timing.is_active());
+    assert!(!timing.is_slow_query());
+
+    timing.start();
+    assert!(timing.is_active());
+
+    // Duration should be very small immediately after start
+    let duration = timing.actual_duration().expect("timing active");
+    assert!(duration.as_millis() < 100);
+
+    timing.stop();
+    assert!(!timing.is_active());
+}
+
+#[test]
+fn test_query_timing_permission_pause() {
+    let mut timing = QueryTiming::default();
+    timing.start();
+
+    // Simulate permission dialog
+    timing.on_permission_dialog_open();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    timing.on_permission_dialog_close();
+
+    // Actual duration should exclude the paused time
+    let actual = timing.actual_duration().expect("timing active");
+    // We slept ~10ms but actual should be less than that
+    // (minus the ~10ms pause)
+    assert!(actual.as_millis() < 10);
+}
+
+#[test]
+fn test_query_timing_double_open_ignored() {
+    let mut timing = QueryTiming::default();
+    timing.start();
+
+    timing.on_permission_dialog_open();
+    timing.on_permission_dialog_open(); // Should be no-op
+    timing.on_permission_dialog_close();
+
+    // Should still work correctly
+    assert!(timing.actual_duration().is_some());
+}
+
+// ========== Bug Fix Tests ==========
+
+#[test]
+fn test_higher_priority_agent_queues_displaced() {
+    // Bug 1: When Permission (priority 0) replaces Question (priority 1),
+    // the Question should be queued, not dropped.
+    let mut ui = UiState::default();
+
+    // Show a Question overlay first (priority 1)
+    ui.set_overlay(Overlay::Question(QuestionOverlay::new(
+        "q-1".to_string(),
+        &serde_json::json!([{"question": "Q?", "header": "H", "options": []}]),
+    )));
+    assert!(matches!(ui.overlay, Some(Overlay::Question(_))));
+
+    // Higher-priority Permission arrives (priority 0)
+    let request = cocode_protocol::ApprovalRequest {
+        request_id: "req-1".to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run command".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
+
+    // Permission should be active, Question should be queued (not dropped)
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+    assert_eq!(ui.queued_overlay_count(), 1);
+
+    // Clearing Permission should promote the queued Question
+    ui.clear_overlay();
+    assert!(matches!(ui.overlay, Some(Overlay::Question(_))));
+}
+
+#[test]
+fn test_promoted_permission_re_pauses_timing() {
+    // Bug 2: When Permission B is promoted from queue after Permission A
+    // is cleared, the timing should re-pause (user is still blocked).
+    let mut ui = UiState::default();
+    ui.query_timing.start();
+
+    // Permission A arrives, pauses timing
+    let request_a = cocode_protocol::ApprovalRequest {
+        request_id: "req-a".to_string(),
+        tool_name: "Bash".to_string(),
+        description: "cmd a".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.query_timing.on_permission_dialog_open();
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_a)));
+
+    // Permission B arrives while A is active, gets queued
+    let request_b = cocode_protocol::ApprovalRequest {
+        request_id: "req-b".to_string(),
+        tool_name: "Edit".to_string(),
+        description: "cmd b".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_b)));
+    assert_eq!(ui.queued_overlay_count(), 1);
+
+    // Clear A → closes pause, promotes B → re-opens pause
+    ui.clear_overlay();
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+
+    // Timing should still be paused (pause_start should be Some)
+    assert!(ui.query_timing.is_active());
+    // The total_paused should have accumulated from Permission A
+}

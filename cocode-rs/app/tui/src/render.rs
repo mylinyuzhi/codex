@@ -290,7 +290,10 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     .thinking_duration(state.ui.thinking_duration())
     .plan_phase(state.session.plan_phase)
     .mcp_server_count(state.session.connected_mcp_count())
-    .queue_counts(state.session.queued_count(), 0)
+    .queue_counts(
+        state.session.queued_count(),
+        state.ui.queued_overlay_count(),
+    )
     .context_window(
         state.session.context_window_used,
         state.session.context_window_total,

@@ -141,6 +141,7 @@ status.tokens: "%{count} tokens"
 # 队列状态
 status.queued: "%{count} 排队"
 status.waiting: "等待中:"
+status.dialogs_waiting: "%{count} 等待中"
 
 # 思考状态
 status.thinking: "思考中..."

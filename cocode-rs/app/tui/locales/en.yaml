@@ -141,6 +141,7 @@ status.tokens: "%{count} tokens"
 # Queue status
 status.queued: "%{count} queued"
 status.waiting: "Waiting:"
+status.dialogs_waiting: "%{count} waiting"
 
 # Thinking status
 status.thinking: "thinking..."
