@@ -78,27 +78,21 @@ impl AsyncHookTracker {
 
     /// Registers a new async hook task with a custom timeout.
     pub fn register_with_timeout(&self, task_id: String, hook_name: String, timeout_secs: u64) {
-        if let Some(mut pending) = lock_write(&self.pending, "pending") {
-            pending.insert(
-                task_id.clone(),
-                PendingAsyncHook {
-                    task_id,
-                    hook_name,
-                    started_at: Instant::now(),
-                    timeout_secs,
-                },
-            );
-        }
+        lock_write(&self.pending, "pending").insert(
+            task_id.clone(),
+            PendingAsyncHook {
+                task_id,
+                hook_name,
+                started_at: Instant::now(),
+                timeout_secs,
+            },
+        );
     }
 
     /// Marks an async hook as completed with its result.
     pub fn complete(&self, task_id: &str, result: HookResult) {
         // Get and remove the pending hook
-        let pending_hook = if let Some(mut pending) = lock_write(&self.pending, "pending") {
-            pending.remove(task_id)
-        } else {
-            return;
-        };
+        let pending_hook = lock_write(&self.pending, "pending").remove(task_id);
 
         let Some(pending) = pending_hook else {
             tracing::warn!(task_id, "Completed unknown async hook task");
@@ -127,34 +121,24 @@ impl AsyncHookTracker {
             blocking_reason,
         };
 
-        if let Some(mut completed_list) = lock_write(&self.completed, "completed") {
-            completed_list.push(completed);
-        }
+        lock_write(&self.completed, "completed").push(completed);
     }
 
     /// Takes all completed hooks, clearing the completed list.
     ///
     /// Returns the completed hooks for processing (e.g., generating system reminders).
     pub fn take_completed(&self) -> Vec<CompletedAsyncHook> {
-        if let Some(mut completed) = lock_write(&self.completed, "completed") {
-            std::mem::take(&mut *completed)
-        } else {
-            Vec::new()
-        }
+        std::mem::take(&mut *lock_write(&self.completed, "completed"))
     }
 
     /// Returns the number of pending async hooks.
     pub fn pending_count(&self) -> i32 {
-        lock_read(&self.pending, "pending")
-            .map(|p| p.len() as i32)
-            .unwrap_or(0)
+        lock_read(&self.pending, "pending").len() as i32
     }
 
     /// Returns the number of completed but not yet processed hooks.
     pub fn completed_count(&self) -> i32 {
-        lock_read(&self.completed, "completed")
-            .map(|c| c.len() as i32)
-            .unwrap_or(0)
+        lock_read(&self.completed, "completed").len() as i32
     }
 
     /// Checks if there are any pending or completed hooks.
@@ -167,11 +151,9 @@ impl AsyncHookTracker {
     /// This removes the hook from pending without adding it to completed.
     /// Useful when a hook times out or is cancelled.
     pub fn cancel(&self, task_id: &str) -> bool {
-        if let Some(mut pending) = lock_write(&self.pending, "pending") {
-            pending.remove(task_id).is_some()
-        } else {
-            false
-        }
+        lock_write(&self.pending, "pending")
+            .remove(task_id)
+            .is_some()
     }
 
     /// Returns task IDs of expired async hooks (exceeded their timeout).
@@ -179,28 +161,21 @@ impl AsyncHookTracker {
     /// Call this periodically (e.g., from the system-reminder generator tick)
     /// to detect timed-out async hooks.
     pub fn check_expired(&self) -> Vec<String> {
-        if let Some(pending) = lock_read(&self.pending, "pending") {
-            pending
-                .values()
-                .filter(|h| h.started_at.elapsed().as_secs() >= h.timeout_secs)
-                .map(|h| h.task_id.clone())
-                .collect()
-        } else {
-            Vec::new()
-        }
+        lock_read(&self.pending, "pending")
+            .values()
+            .filter(|h| h.started_at.elapsed().as_secs() >= h.timeout_secs)
+            .map(|h| h.task_id.clone())
+            .collect()
     }
 
     /// Cancels all pending async hooks and returns the count cancelled.
     ///
     /// Used for session-end cleanup to ensure no dangling background hooks.
     pub fn cancel_all(&self) -> usize {
-        if let Some(mut pending) = lock_write(&self.pending, "pending") {
-            let count = pending.len();
-            pending.clear();
-            count
-        } else {
-            0
-        }
+        let mut pending = lock_write(&self.pending, "pending");
+        let count = pending.len();
+        pending.clear();
+        count
     }
 }
 

@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum::Display;
+use strum::IntoStaticStr;
 
 use crate::PermissionMode;
 
@@ -79,8 +81,11 @@ impl Default for SessionMemoryConfig {
 }
 
 /// Priority for restoring files during session recovery.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum FileRestorationPriority {
     /// Restore most recently accessed files first.
     #[default]
@@ -92,16 +97,7 @@ pub enum FileRestorationPriority {
 impl FileRestorationPriority {
     /// Get the priority as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            FileRestorationPriority::MostRecent => "most-recent",
-            FileRestorationPriority::MostAccessed => "most-accessed",
-        }
-    }
-}
-
-impl std::fmt::Display for FileRestorationPriority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
@@ -141,8 +137,11 @@ impl Default for StallDetectionConfig {
 }
 
 /// Recovery action when a stream stall is detected.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum StallRecovery {
     /// Retry the request.
     #[default]
@@ -156,17 +155,7 @@ pub enum StallRecovery {
 impl StallRecovery {
     /// Get the recovery action as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            StallRecovery::Retry => "retry",
-            StallRecovery::Abort => "abort",
-            StallRecovery::Fallback => "fallback",
-        }
-    }
-}
-
-impl std::fmt::Display for StallRecovery {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
@@ -235,8 +224,11 @@ pub struct CacheBreakpoint {
 }
 
 /// Type of cache for prompt caching.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum CacheType {
     /// Ephemeral cache (short-lived).
     #[default]
@@ -246,15 +238,7 @@ pub enum CacheType {
 impl CacheType {
     /// Get the cache type as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            CacheType::Ephemeral => "ephemeral",
-        }
-    }
-}
-
-impl std::fmt::Display for CacheType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
