@@ -5,12 +5,28 @@ use std::collections::BTreeMap;
 use super::ModelSpec;
 use serde::Deserialize;
 use serde::Serialize;
+use strum::Display;
+use strum::IntoStaticStr;
 
 /// Model role identifier.
 ///
 /// Different roles allow using specialized models for specific tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum ModelRole {
     /// Primary model for main interactions.
     Main,
@@ -44,21 +60,7 @@ impl ModelRole {
 
     /// Get the role name as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            ModelRole::Main => "main",
-            ModelRole::Fast => "fast",
-            ModelRole::Vision => "vision",
-            ModelRole::Review => "review",
-            ModelRole::Plan => "plan",
-            ModelRole::Explore => "explore",
-            ModelRole::Compact => "compact",
-        }
-    }
-}
-
-impl std::fmt::Display for ModelRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 

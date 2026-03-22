@@ -5,12 +5,17 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum::Display;
+use strum::IntoStaticStr;
 
 /// Permission mode that controls how the agent handles tool execution permissions.
 ///
 /// Determines the overall permission strategy for a session.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum PermissionMode {
     /// Default mode - ask for permission on sensitive operations.
     #[default]
@@ -57,19 +62,7 @@ impl PermissionMode {
 
     /// Get the mode as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            PermissionMode::Default => "default",
-            PermissionMode::Plan => "plan",
-            PermissionMode::AcceptEdits => "accept-edits",
-            PermissionMode::Bypass => "bypass",
-            PermissionMode::DontAsk => "dont-ask",
-        }
-    }
-}
-
-impl std::fmt::Display for PermissionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
@@ -215,8 +208,11 @@ impl PermissionDecision {
 /// Session has the highest priority (user's real-time decisions override
 /// all other sources), followed by Command, Cli, Flag, Local, Project,
 /// Policy, and User (lowest).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum RuleSource {
     /// Policy-level rules.
     Policy,
@@ -267,22 +263,7 @@ impl Ord for RuleSource {
 impl RuleSource {
     /// Get the source as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            RuleSource::Policy => "policy",
-            RuleSource::Project => "project",
-            RuleSource::Local => "local",
-            RuleSource::User => "user",
-            RuleSource::Flag => "flag",
-            RuleSource::Cli => "cli",
-            RuleSource::Command => "command",
-            RuleSource::Session => "session",
-        }
-    }
-}
-
-impl std::fmt::Display for RuleSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
@@ -429,8 +410,11 @@ pub struct SecurityRisk {
 }
 
 /// Type of security risk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum RiskType {
     /// Operation could destroy or modify data.
     Destructive,
@@ -449,26 +433,27 @@ pub enum RiskType {
 impl RiskType {
     /// Get the risk type as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            RiskType::Destructive => "destructive",
-            RiskType::Network => "network",
-            RiskType::SystemConfig => "system-config",
-            RiskType::SensitiveFile => "sensitive-file",
-            RiskType::Elevated => "elevated",
-            RiskType::Unknown => "unknown",
-        }
-    }
-}
-
-impl std::fmt::Display for RiskType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
 /// Severity level of a security risk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum RiskSeverity {
     /// Low severity - minor impact.
     Low,
@@ -483,23 +468,12 @@ pub enum RiskSeverity {
 impl RiskSeverity {
     /// Get the severity as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            RiskSeverity::Low => "low",
-            RiskSeverity::Medium => "medium",
-            RiskSeverity::High => "high",
-            RiskSeverity::Critical => "critical",
-        }
+        (*self).into()
     }
 
     /// Check if this severity is at least the given level.
     pub fn at_least(&self, other: RiskSeverity) -> bool {
         *self >= other
-    }
-}
-
-impl std::fmt::Display for RiskSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
     }
 }
 

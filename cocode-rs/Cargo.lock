@@ -956,6 +956,7 @@ version = "0.0.0"
 dependencies = [
  "cocode-error",
  "cocode-protocol",
+ "cocode-utils-string",
  "dirs 6.0.0",
  "serde",
  "serde_json",
@@ -1538,6 +1539,7 @@ dependencies = [
  "cocode-error",
  "cocode-hooks",
  "cocode-protocol",
+ "cocode-utils-string",
  "serde",
  "serde_json",
  "serde_yml",

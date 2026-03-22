@@ -10,6 +10,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use strum::Display;
+use strum::IntoStaticStr;
 
 use crate::ApprovalDecision;
 use crate::ApprovalRequest;
@@ -20,8 +22,11 @@ use crate::PermissionDecision;
 // ============================================================================
 
 /// Trigger type for compaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum CompactTrigger {
     /// Automatic compaction based on token thresholds.
     #[default]
@@ -33,16 +38,7 @@ pub enum CompactTrigger {
 impl CompactTrigger {
     /// Get the trigger as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            CompactTrigger::Auto => "auto",
-            CompactTrigger::Manual => "manual",
-        }
-    }
-}
-
-impl std::fmt::Display for CompactTrigger {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 
@@ -854,8 +850,11 @@ impl Default for ToolResultContent {
 }
 
 /// Reason for aborting tool execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum AbortReason {
     /// Fallback to non-streaming due to streaming error.
     StreamingFallback,
@@ -868,17 +867,7 @@ pub enum AbortReason {
 impl AbortReason {
     /// Get the reason as a string.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            AbortReason::StreamingFallback => "streaming_fallback",
-            AbortReason::SiblingError => "sibling_error",
-            AbortReason::UserInterrupted => "user_interrupted",
-        }
-    }
-}
-
-impl std::fmt::Display for AbortReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        (*self).into()
     }
 }
 

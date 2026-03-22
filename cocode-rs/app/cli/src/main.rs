@@ -188,7 +188,7 @@ fn main() -> anyhow::Result<()> {
 /// Note: Logging is NOT initialized here. Instead:
 /// - TUI mode: Initializes file logging in tui_runner.rs
 /// - REPL mode: Initializes stderr logging in commands/chat.rs
-async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Load configuration first

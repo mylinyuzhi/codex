@@ -32,11 +32,51 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
 use tracing::debug;
 use tracing::info;
 
 /// Type alias for the result of `build_model_cache()`: (models by role, providers).
 type ModelCacheResult = (HashMap<ModelRole, ModelInfo>, HashMap<String, ProviderInfo>);
+
+/// Acquire a read lock, converting poison errors to `ConfigError`.
+fn acquire_read<'a, T>(
+    lock: &'a RwLock<T>,
+    name: &str,
+) -> Result<RwLockReadGuard<'a, T>, ConfigError> {
+    lock.read().map_err(|e| {
+        InternalSnafu {
+            message: format!("Failed to acquire {name} read lock: {e}"),
+        }
+        .build()
+    })
+}
+
+/// Acquire a write lock, converting poison errors to `ConfigError`.
+fn acquire_write<'a, T>(
+    lock: &'a RwLock<T>,
+    name: &str,
+) -> Result<RwLockWriteGuard<'a, T>, ConfigError> {
+    lock.write().map_err(|e| {
+        InternalSnafu {
+            message: format!("Failed to acquire {name} write lock: {e}"),
+        }
+        .build()
+    })
+}
+
+/// Clone an `RwLock`'s contents, recovering from poison.
+fn clone_rwlock_recovering<T: Clone>(lock: &RwLock<T>, name: &str) -> RwLock<T> {
+    RwLock::new(
+        lock.read()
+            .unwrap_or_else(|e| {
+                tracing::warn!("{name} lock poisoned, recovering");
+                e.into_inner()
+            })
+            .clone(),
+    )
+}
 
 /// Configuration manager for multi-provider setup.
 ///
@@ -252,20 +292,7 @@ impl ConfigManager {
     /// This updates the runtime overrides (in-memory only).
     /// To persist, edit `config.toml` directly.
     pub fn switch_spec(&self, spec: &ModelSpec) -> Result<(), ConfigError> {
-        // Validate the provider
-        self.validate_provider(&spec.provider)?;
-
-        // Resolve full selection with thinking levels from ModelInfo
-        let selection = self
-            .resolve_selection(&spec.provider, &spec.slug)
-            .unwrap_or_else(|_| RoleSelection::new(spec.clone()));
-
-        // Update runtime overrides (in-memory)
-        let mut runtime = self.write_runtime()?;
-        runtime.set(ModelRole::Main, selection);
-
-        info!(provider = %spec.provider, model = %spec.slug, "Switched to new model");
-        Ok(())
+        self.switch_role_spec(ModelRole::Main, spec)
     }
 
     /// Switch model for a specific role using a typed `ModelSpec`.
@@ -337,12 +364,7 @@ impl ConfigManager {
     /// Returns `Ok(true)` if the profile exists, `Ok(false)` if the profile
     /// doesn't exist (profile will still be set, but won't have any effect).
     pub fn set_profile(&self, profile: &str) -> Result<bool, ConfigError> {
-        let mut config = self.config.write().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire write lock: {e}"),
-            }
-            .build()
-        })?;
+        let mut config = self.write_config()?;
 
         let exists = config.has_profile(profile);
         config.profile = Some(profile.to_string());
@@ -427,26 +449,26 @@ impl ConfigManager {
         model: &str,
     ) -> Result<RoleSelection, ConfigError> {
         let api = self.provider_api(provider)?;
-        let mut spec = ModelSpec::with_type(provider, api, model);
+        let spec = ModelSpec::with_type(provider, api, model);
         let model_info = self.resolve_model_info(provider, model).ok();
+        Ok(Self::build_selection(spec, model_info))
+    }
 
-        if let Some(ref info) = model_info {
-            spec.display_name = info.display_name_or_slug().to_string();
-        }
-
-        let mut selection = match model_info
-            .as_ref()
-            .and_then(|i| i.default_thinking_level.clone())
-        {
+    /// Build a `RoleSelection` from a `ModelSpec` and optional `ModelInfo`.
+    ///
+    /// Populates display_name, thinking_level, and supported_thinking_levels
+    /// from the model info when available.
+    fn build_selection(mut spec: ModelSpec, model_info: Option<ModelInfo>) -> RoleSelection {
+        let Some(info) = model_info else {
+            return RoleSelection::new(spec);
+        };
+        spec.display_name = info.display_name_or_slug().to_string();
+        let mut selection = match info.default_thinking_level.clone() {
             Some(level) => RoleSelection::with_thinking(spec, level),
             None => RoleSelection::new(spec),
         };
-
-        if let Some(info) = model_info {
-            selection.supported_thinking_levels = info.supported_thinking_levels;
-        }
-
-        Ok(selection)
+        selection.supported_thinking_levels = info.supported_thinking_levels;
+        selection
     }
 
     /// Build a `RoleSelection` for the current main model.
@@ -510,31 +532,13 @@ impl ConfigManager {
 
         let mut selections = Vec::new();
         for provider_name in resolver.list_providers() {
-            let provider_api = match resolver.provider_api(provider_name) {
-                Ok(pt) => pt,
-                Err(_) => continue,
+            let Ok(provider_api) = resolver.provider_api(provider_name) else {
+                continue;
             };
             for slug in resolver.list_models(provider_name) {
                 let model_info = resolver.resolve_model_info(provider_name, slug).ok();
-
-                let mut spec = ModelSpec::with_type(provider_name, provider_api, slug);
-                if let Some(ref info) = model_info {
-                    spec.display_name = info.display_name_or_slug().to_string();
-                }
-
-                let mut selection = match model_info
-                    .as_ref()
-                    .and_then(|i| i.default_thinking_level.clone())
-                {
-                    Some(level) => RoleSelection::with_thinking(spec, level),
-                    None => RoleSelection::new(spec),
-                };
-
-                if let Some(info) = model_info {
-                    selection.supported_thinking_levels = info.supported_thinking_levels;
-                }
-
-                selections.push(selection);
+                let spec = ModelSpec::with_type(provider_name, provider_api, slug);
+                selections.push(Self::build_selection(spec, model_info));
             }
         }
         selections
@@ -571,25 +575,8 @@ impl ConfigManager {
         let new_resolver =
             ConfigResolver::with_config_dir(loaded.models, loaded.providers, &self.config_path);
 
-        {
-            let mut resolver = self.resolver.write().map_err(|e| {
-                InternalSnafu {
-                    message: format!("Failed to acquire write lock: {e}"),
-                }
-                .build()
-            })?;
-            *resolver = new_resolver;
-        }
-
-        {
-            let mut config = self.config.write().map_err(|e| {
-                InternalSnafu {
-                    message: format!("Failed to acquire write lock: {e}"),
-                }
-                .build()
-            })?;
-            *config = loaded.config;
-        }
+        *self.write_resolver()? = new_resolver;
+        *self.write_config()? = loaded.config;
 
         info!("Reloaded configuration");
         Ok(())
@@ -841,46 +828,28 @@ impl ConfigManager {
 
     // Private helper methods for lock management
 
-    /// Acquire read lock on resolver.
-    fn read_resolver(&self) -> Result<std::sync::RwLockReadGuard<'_, ConfigResolver>, ConfigError> {
-        self.resolver.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire resolver read lock: {e}"),
-            }
-            .build()
-        })
+    fn read_resolver(&self) -> Result<RwLockReadGuard<'_, ConfigResolver>, ConfigError> {
+        acquire_read(&self.resolver, "resolver")
     }
 
-    /// Acquire read lock on config.
-    fn read_config(&self) -> Result<std::sync::RwLockReadGuard<'_, AppConfig>, ConfigError> {
-        self.config.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire config read lock: {e}"),
-            }
-            .build()
-        })
+    fn read_config(&self) -> Result<RwLockReadGuard<'_, AppConfig>, ConfigError> {
+        acquire_read(&self.config, "config")
     }
 
-    /// Acquire read lock on runtime selections.
-    fn read_runtime(&self) -> Result<std::sync::RwLockReadGuard<'_, RoleSelections>, ConfigError> {
-        self.runtime_selections.read().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire runtime read lock: {e}"),
-            }
-            .build()
-        })
+    fn read_runtime(&self) -> Result<RwLockReadGuard<'_, RoleSelections>, ConfigError> {
+        acquire_read(&self.runtime_selections, "runtime")
     }
 
-    /// Acquire write lock on runtime selections.
-    fn write_runtime(
-        &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, RoleSelections>, ConfigError> {
-        self.runtime_selections.write().map_err(|e| {
-            InternalSnafu {
-                message: format!("Failed to acquire runtime write lock: {e}"),
-            }
-            .build()
-        })
+    fn write_resolver(&self) -> Result<RwLockWriteGuard<'_, ConfigResolver>, ConfigError> {
+        acquire_write(&self.resolver, "resolver")
+    }
+
+    fn write_config(&self) -> Result<RwLockWriteGuard<'_, AppConfig>, ConfigError> {
+        acquire_write(&self.config, "config")
+    }
+
+    fn write_runtime(&self) -> Result<RwLockWriteGuard<'_, RoleSelections>, ConfigError> {
+        acquire_write(&self.runtime_selections, "runtime")
     }
 
     /// Validate that a provider exists (in config or built-in).
@@ -911,38 +880,16 @@ fn suggest_models_for_provider(api: ProviderApi) -> Vec<&'static str> {
     }
 }
 
-#[allow(clippy::expect_used)]
 impl Clone for ConfigManager {
     fn clone(&self) -> Self {
         Self {
             config_path: self.config_path.clone(),
             loader: ConfigLoader::from_path(&self.config_path),
-            resolver: RwLock::new(
-                self.resolver
-                    .read()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("resolver lock poisoned, recovering");
-                        e.into_inner()
-                    })
-                    .clone(),
-            ),
-            config: RwLock::new(
-                self.config
-                    .read()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("config lock poisoned, recovering");
-                        e.into_inner()
-                    })
-                    .clone(),
-            ),
-            runtime_selections: RwLock::new(
-                self.runtime_selections
-                    .read()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("runtime_selections lock poisoned, recovering");
-                        e.into_inner()
-                    })
-                    .clone(),
+            resolver: clone_rwlock_recovering(&self.resolver, "resolver"),
+            config: clone_rwlock_recovering(&self.config, "config"),
+            runtime_selections: clone_rwlock_recovering(
+                &self.runtime_selections,
+                "runtime_selections",
             ),
         }
     }

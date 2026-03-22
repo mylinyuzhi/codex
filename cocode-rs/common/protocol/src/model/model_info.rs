@@ -180,10 +180,9 @@ impl ModelInfo {
         merge_field!(base_instructions_file);
         // Request options: merge maps, other takes precedence for overlapping keys
         if let Some(other_opts) = &other.options {
-            let self_opts = self.options.get_or_insert_with(HashMap::new);
-            for (key, value) in other_opts {
-                self_opts.insert(key.clone(), value.clone());
-            }
+            self.options
+                .get_or_insert_with(HashMap::new)
+                .extend(other_opts.clone());
         }
     }
 

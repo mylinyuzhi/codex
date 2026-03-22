@@ -31,11 +31,15 @@ pub(crate) fn build_header_map(headers: &std::collections::HashMap<String, Strin
     header_map
 }
 
-pub(crate) fn build_grpc_tls_config(
+pub(crate) fn build_grpc_tls(
     endpoint: &str,
-    tls_config: ClientTlsConfig,
-    tls: &OtelTlsConfig,
+    tls: Option<&OtelTlsConfig>,
 ) -> Result<ClientTlsConfig, Box<dyn Error>> {
+    let base = ClientTlsConfig::new()
+        .with_enabled_roots()
+        .assume_http2(true);
+    let Some(tls) = tls else { return Ok(base) };
+
     let uri: Uri = endpoint.parse()?;
     let host = uri.host().ok_or_else(|| {
         config_error(format!(
@@ -43,25 +47,18 @@ pub(crate) fn build_grpc_tls_config(
         ))
     })?;
 
-    let mut config = tls_config.domain_name(host.to_owned());
+    let mut config = base.domain_name(host.to_owned());
 
     if let Some(path) = tls.ca_certificate.as_ref() {
         let (pem, _) = read_bytes(path)?;
         config = config.ca_certificate(TonicCertificate::from_pem(pem));
     }
 
-    match (&tls.client_certificate, &tls.client_private_key) {
-        (Some(cert_path), Some(key_path)) => {
-            let (cert_pem, _) = read_bytes(cert_path)?;
-            let (key_pem, _) = read_bytes(key_path)?;
-            config = config.identity(TonicIdentity::from_pem(cert_pem, key_pem));
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(config_error(
-                "client_certificate and client_private_key must both be provided for mTLS",
-            ));
-        }
-        (None, None) => {}
+    validate_mtls_config(tls)?;
+    if let (Some(cert_path), Some(key_path)) = (&tls.client_certificate, &tls.client_private_key) {
+        let (cert_pem, _) = read_bytes(cert_path)?;
+        let (key_pem, _) = read_bytes(key_path)?;
+        config = config.identity(TonicIdentity::from_pem(cert_pem, key_pem));
     }
 
     Ok(config)
@@ -102,31 +99,33 @@ fn build_http_client_inner(
             .add_root_certificate(certificate);
     }
 
-    match (&tls.client_certificate, &tls.client_private_key) {
-        (Some(cert_path), Some(key_path)) => {
-            let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
-            let (key_pem, key_location) = read_bytes(key_path)?;
-            cert_pem.extend_from_slice(key_pem.as_slice());
-            let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
-                config_error(format!(
-                    "failed to parse client identity using {} and {}: {error}",
-                    cert_location.display(),
-                    key_location.display()
-                ))
-            })?;
-            builder = builder.identity(identity).https_only(true);
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(config_error(
-                "client_certificate and client_private_key must both be provided for mTLS",
-            ));
-        }
-        (None, None) => {}
+    validate_mtls_config(tls)?;
+    if let (Some(cert_path), Some(key_path)) = (&tls.client_certificate, &tls.client_private_key) {
+        let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
+        let (key_pem, key_location) = read_bytes(key_path)?;
+        cert_pem.extend_from_slice(key_pem.as_slice());
+        let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
+            config_error(format!(
+                "failed to parse client identity using {} and {}: {error}",
+                cert_location.display(),
+                key_location.display()
+            ))
+        })?;
+        builder = builder.identity(identity).https_only(true);
     }
 
     builder
         .build()
         .map_err(|error| Box::new(error) as Box<dyn Error>)
+}
+
+fn validate_mtls_config(tls: &OtelTlsConfig) -> Result<(), Box<dyn Error>> {
+    if tls.client_certificate.is_some() != tls.client_private_key.is_some() {
+        return Err(config_error(
+            "client_certificate and client_private_key must both be provided for mTLS",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_otlp_timeout(signal_var: &str) -> Duration {

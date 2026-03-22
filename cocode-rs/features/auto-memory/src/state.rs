@@ -4,6 +4,8 @@
 //! the loaded MEMORY.md index. Refreshed from disk each turn.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -22,6 +24,8 @@ pub struct AutoMemoryState {
     pub config: ResolvedAutoMemoryConfig,
     /// Loaded MEMORY.md index (refreshed each turn).
     index: RwLock<Option<MemoryIndex>>,
+    /// Whether the memory directory has been successfully created.
+    dir_created: AtomicBool,
 }
 
 impl AutoMemoryState {
@@ -30,6 +34,7 @@ impl AutoMemoryState {
         Self {
             config,
             index: RwLock::new(None),
+            dir_created: AtomicBool::new(false),
         }
     }
 
@@ -48,11 +53,14 @@ impl AutoMemoryState {
             return;
         }
 
-        // Ensure the memory directory exists before attempting to load.
-        // On the first turn this creates it; subsequent calls are a no-op.
-        if let Err(e) = crate::directory::ensure_memory_dir_exists(&self.config.directory).await {
-            warn!(error = %e, "Failed to ensure memory directory exists");
-            return;
+        // Ensure the memory directory exists (only on first successful call).
+        if !self.dir_created.load(Ordering::Relaxed) {
+            if let Err(e) = crate::directory::ensure_memory_dir_exists(&self.config.directory).await
+            {
+                warn!(error = %e, "Failed to ensure memory directory exists");
+                return;
+            }
+            self.dir_created.store(true, Ordering::Relaxed);
         }
 
         // Run sync file I/O off the async runtime to avoid blocking.
