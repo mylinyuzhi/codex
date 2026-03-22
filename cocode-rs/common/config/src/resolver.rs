@@ -235,18 +235,9 @@ impl ConfigResolver {
             let slug = model_entry.slug();
 
             // Resolve model info: use cache if available, otherwise resolve fresh
-            let model_info = if let Some(cache) = model_cache {
-                let cache_key = ModelSpec::new(provider_name, slug);
-                if let Some(cached_info) = cache.get(&cache_key) {
-                    cached_info.clone()
-                } else {
-                    // Fall back to resolution if not in cache
-                    self.resolve_model_info_for_provider(provider_config, slug)
-                }
-            } else {
-                // No cache provided, resolve directly
-                self.resolve_model_info_for_provider(provider_config, slug)
-            };
+            let model_info = model_cache
+                .and_then(|c| c.get(&ModelSpec::new(provider_name, slug)).cloned())
+                .unwrap_or_else(|| self.resolve_model_info_for_provider(provider_config, slug));
 
             // Create ProviderModel with api_model_name and model_options preserved
             let mut provider_model = if let Some(alias) = &model_entry.api_model_name {

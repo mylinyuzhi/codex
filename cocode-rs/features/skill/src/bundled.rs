@@ -51,18 +51,7 @@ pub fn compute_fingerprint(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
     let result = hasher.finalize();
-    hex_encode(&result)
-}
-
-/// Encodes bytes as a lowercase hex string.
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            use std::fmt::Write;
-            let _ = write!(s, "{b:02x}");
-            s
-        })
+    cocode_utils_string::bytes_to_hex(&result)
 }
 
 /// Returns the list of bundled skills.
