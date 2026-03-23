@@ -49,7 +49,19 @@ If merge conflicts occur:
    - For complex conflicts that cannot be auto-resolved:
      - Show the conflict to user
      - Ask user for resolution preference
-3. After resolving all conflicts:
+3. **Special handling for `.claude/settings.local.json`**:
+   - When merging `permissions.allow` entries, only keep **generic, reusable** entries
+   - **Remove** entries that are:
+     - Bound to specific local/absolute paths (e.g. `Bash(find /lyz/codespace/...)`, `Read(//lyz/codespace/worktrees/...)`)
+     - Bound to specific temp files or session paths (e.g. `Read(//tmp/**)`, `Bash(/tmp/...)`)
+     - Shell loop fragments that aren't standalone commands (e.g. `Bash(done)`, `Bash(do echo:*)`, `Bash(do sleep:*)`)
+     - Accidental or meaningless entries (e.g. `Bash(2)`)
+   - **Keep** entries that are:
+     - Tool/command wildcards (e.g. `Bash(cargo:*)`, `Bash(git:*)`)
+     - Domain-scoped WebFetch (e.g. `WebFetch(domain:docs.rs)`)
+     - Skill invocations (e.g. `Skill(update-claude-md)`)
+     - Generic system commands (e.g. `Bash(dpkg -l)`, `Bash(apt list:*)`)
+4. After resolving all conflicts:
    - Stage resolved files: `git add <file>`
    - Complete merge: `git commit -m "Merge branch '$ARGUMENTS'"`
 

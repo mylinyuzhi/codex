@@ -67,7 +67,10 @@ pub fn provider_base_options(provider: ProviderApi) -> Option<ProviderOptions> {
 }
 
 /// Build a ProviderOptions with a single provider entry.
-fn build_options(provider_name: &str, opts: HashMap<String, serde_json::Value>) -> ProviderOptions {
+pub(crate) fn build_options(
+    provider_name: &str,
+    opts: HashMap<String, serde_json::Value>,
+) -> ProviderOptions {
     let mut map = HashMap::new();
     map.insert(provider_name.to_string(), opts);
     ProviderOptions::from_map(map)

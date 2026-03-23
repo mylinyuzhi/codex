@@ -81,6 +81,15 @@ pub struct SessionState {
 
     /// Current turn number (set by TurnStarted, used for message tagging).
     pub current_turn_number: Option<i32>,
+
+    /// Active worktree count (for header display).
+    pub active_worktrees: i32,
+
+    /// Active background tasks.
+    pub background_tasks: Vec<BackgroundTask>,
+
+    /// Active MCP tool calls (tracked separately from regular tools).
+    pub mcp_tool_calls: Vec<McpToolCall>,
 }
 
 impl SessionState {
@@ -156,6 +165,7 @@ impl SessionState {
             progress: None,
             output: None,
             started_at: Some(Instant::now()),
+            elapsed: None,
         });
     }
 
@@ -177,6 +187,7 @@ impl SessionState {
             .iter_mut()
             .find(|t| t.call_id == call_id)
         {
+            tool.elapsed = tool.started_at.map(|t| t.elapsed());
             tool.status = if is_error {
                 ToolStatus::Failed
             } else {
@@ -227,6 +238,7 @@ impl SessionState {
             result: None,
             output_file: None,
             color,
+            started_at: Instant::now(),
         });
     }
 
@@ -292,6 +304,125 @@ impl SessionState {
         }
     }
 
+    // ========== Background Task Management ==========
+
+    /// Start tracking a background task.
+    pub fn start_background_task(&mut self, task_id: String, task_type: cocode_protocol::TaskType) {
+        self.background_tasks.push(BackgroundTask {
+            task_id,
+            task_type,
+            status: BackgroundTaskStatus::Running,
+            progress: None,
+            started_at: Instant::now(),
+        });
+    }
+
+    /// Update progress of a background task.
+    pub fn update_background_task_progress(&mut self, task_id: &str, message: String) {
+        if let Some(task) = self
+            .background_tasks
+            .iter_mut()
+            .find(|t| t.task_id == task_id)
+        {
+            task.progress = Some(message);
+        }
+    }
+
+    /// Complete a background task.
+    pub fn complete_background_task(&mut self, task_id: &str) {
+        if let Some(task) = self
+            .background_tasks
+            .iter_mut()
+            .find(|t| t.task_id == task_id)
+        {
+            task.status = BackgroundTaskStatus::Completed;
+        }
+    }
+
+    /// Remove completed background tasks beyond `max_completed`.
+    pub fn cleanup_completed_background_tasks(&mut self, max_completed: usize) {
+        let completed_count = self
+            .background_tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    BackgroundTaskStatus::Completed | BackgroundTaskStatus::Failed
+                )
+            })
+            .count();
+
+        if completed_count > max_completed {
+            let to_remove = completed_count - max_completed;
+            let mut removed = 0;
+            self.background_tasks.retain(|t| {
+                if removed >= to_remove {
+                    return true;
+                }
+                if matches!(
+                    t.status,
+                    BackgroundTaskStatus::Completed | BackgroundTaskStatus::Failed
+                ) {
+                    removed += 1;
+                    return false;
+                }
+                true
+            });
+        }
+    }
+
+    // ========== MCP Tool Call Management ==========
+
+    /// Start tracking an MCP tool call.
+    pub fn start_mcp_tool_call(&mut self, call_id: String, server: String, tool: String) {
+        self.mcp_tool_calls.push(McpToolCall {
+            call_id,
+            server,
+            tool,
+            status: ToolStatus::Running,
+            started_at: Instant::now(),
+        });
+    }
+
+    /// Complete an MCP tool call.
+    pub fn complete_mcp_tool_call(&mut self, call_id: &str, is_error: bool) {
+        if let Some(call) = self
+            .mcp_tool_calls
+            .iter_mut()
+            .find(|c| c.call_id == call_id)
+        {
+            call.status = if is_error {
+                ToolStatus::Failed
+            } else {
+                ToolStatus::Completed
+            };
+        }
+    }
+
+    /// Remove completed MCP tool calls beyond `max_completed`.
+    pub fn cleanup_completed_mcp_calls(&mut self, max_completed: usize) {
+        let completed_count = self
+            .mcp_tool_calls
+            .iter()
+            .filter(|c| matches!(c.status, ToolStatus::Completed | ToolStatus::Failed))
+            .count();
+
+        if completed_count > max_completed {
+            let to_remove = completed_count - max_completed;
+            let mut removed = 0;
+            self.mcp_tool_calls.retain(|c| {
+                if removed >= to_remove {
+                    return true;
+                }
+                if matches!(c.status, ToolStatus::Completed | ToolStatus::Failed) {
+                    removed += 1;
+                    return false;
+                }
+                true
+            });
+        }
+    }
+
     // ========== Queue Management ==========
 
     /// Queue a visible command for later processing (Enter during streaming).
@@ -329,6 +460,47 @@ impl SessionState {
     }
 }
 
+/// Status of a background task tracked by the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundTaskStatus {
+    /// Task is currently running.
+    Running,
+    /// Task completed successfully.
+    Completed,
+    /// Task failed.
+    Failed,
+}
+
+/// A background task being tracked in the TUI.
+#[derive(Debug, Clone)]
+pub struct BackgroundTask {
+    /// Task identifier.
+    pub task_id: String,
+    /// Type of task (for display).
+    pub task_type: cocode_protocol::TaskType,
+    /// Current status.
+    pub status: BackgroundTaskStatus,
+    /// Progress message (if available).
+    pub progress: Option<String>,
+    /// When this task started.
+    pub started_at: Instant,
+}
+
+/// An MCP tool call being tracked in the TUI.
+#[derive(Debug, Clone)]
+pub struct McpToolCall {
+    /// Call identifier.
+    pub call_id: String,
+    /// Server name.
+    pub server: String,
+    /// Tool name.
+    pub tool: String,
+    /// Current status.
+    pub status: ToolStatus,
+    /// When this call started.
+    pub started_at: Instant,
+}
+
 /// A message in the conversation.
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -352,6 +524,10 @@ pub struct ChatMessage {
 
     /// Turn number this message belongs to (for precise rewind).
     pub turn_number: Option<i32>,
+
+    /// Whether this is a meta message (hidden from chat, visible to model).
+    /// System reminders and injected context use this flag.
+    pub is_meta: bool,
 }
 
 /// An inline tool call displayed within a chat message.
@@ -363,6 +539,8 @@ pub struct InlineToolCall {
     pub status: ToolStatus,
     /// Short description (e.g., "ls -la src/" or "src/main.rs").
     pub description: String,
+    /// How long the tool took (for completed tools).
+    pub elapsed: Option<std::time::Duration>,
 }
 
 impl ChatMessage {
@@ -376,6 +554,7 @@ impl ChatMessage {
             thinking: None,
             tool_calls: Vec::new(),
             turn_number: None,
+            is_meta: false,
         }
     }
 
@@ -389,6 +568,21 @@ impl ChatMessage {
             thinking: None,
             tool_calls: Vec::new(),
             turn_number: None,
+            is_meta: false,
+        }
+    }
+
+    /// Create a new system message (e.g., errors, notifications).
+    pub fn system(id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            role: MessageRole::System,
+            content: content.into(),
+            streaming: false,
+            thinking: None,
+            tool_calls: Vec::new(),
+            turn_number: None,
+            is_meta: false,
         }
     }
 
@@ -402,6 +596,7 @@ impl ChatMessage {
             thinking: None,
             tool_calls: Vec::new(),
             turn_number: None,
+            is_meta: false,
         }
     }
 
@@ -460,6 +655,8 @@ pub struct ToolExecution {
     pub output: Option<String>,
     /// When this tool started executing.
     pub started_at: Option<Instant>,
+    /// How long the tool took (set on completion).
+    pub elapsed: Option<std::time::Duration>,
 }
 
 /// Status of a subagent.
@@ -555,6 +752,8 @@ pub struct SubagentInstance {
     pub output_file: Option<PathBuf>,
     /// Display color from agent definition (for TUI rendering).
     pub color: Option<String>,
+    /// When this subagent was spawned.
+    pub started_at: Instant,
 }
 
 #[cfg(test)]

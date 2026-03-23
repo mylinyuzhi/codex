@@ -595,7 +595,7 @@ impl Tool for ReadTool {
             let line_num = start + idx + 1;
             // Truncate lines > 2000 characters
             let truncated = if line.len() > 2000 {
-                format!("{}...", &line[..2000])
+                format!("{}...", &line[..line.floor_char_boundary(2000)])
             } else {
                 line.to_string()
             };

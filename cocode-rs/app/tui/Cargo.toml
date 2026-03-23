@@ -55,6 +55,7 @@ serde_json = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }
+chrono = { workspace = true }
 
 # i18n
 rust-i18n = { workspace = true }

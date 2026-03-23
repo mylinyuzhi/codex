@@ -1008,8 +1008,10 @@ dependencies = [
  "dirs 5.0.1",
  "http",
  "jsonc-parser",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "serial_test",
  "snafu",
  "tempfile",
@@ -1053,6 +1055,7 @@ dependencies = [
  "cocode-hooks",
  "cocode-loop",
  "cocode-otel",
+ "cocode-policy",
  "cocode-protocol",
  "cocode-subagent",
  "cocode-tools",
@@ -1186,6 +1189,7 @@ dependencies = [
  "cocode-message",
  "cocode-otel",
  "cocode-plan-mode",
+ "cocode-policy",
  "cocode-prompt",
  "cocode-protocol",
  "cocode-shell",
@@ -1320,6 +1324,20 @@ dependencies = [
  "tracing",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "cocode-policy"
+version = "0.0.0"
+dependencies = [
+ "cocode-config",
+ "cocode-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1478,6 +1496,7 @@ dependencies = [
  "cocode-otel",
  "cocode-plan-mode",
  "cocode-plugin",
+ "cocode-policy",
  "cocode-protocol",
  "cocode-rmcp-client",
  "cocode-shell",
@@ -1679,6 +1698,7 @@ dependencies = [
  "cocode-message",
  "cocode-otel",
  "cocode-plan-mode",
+ "cocode-policy",
  "cocode-protocol",
  "cocode-rmcp-client",
  "cocode-shell",
@@ -1714,6 +1734,7 @@ version = "0.0.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "chrono",
  "cocode-api",
  "cocode-config",
  "cocode-error",

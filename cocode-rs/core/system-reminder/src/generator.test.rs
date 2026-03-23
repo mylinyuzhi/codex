@@ -18,8 +18,8 @@ fn test_context_builder() {
     assert_eq!(ctx.turn_number, 5);
     assert!(ctx.is_main_agent);
     assert!(ctx.has_user_input);
-    assert!(!ctx.in_plan_mode());
-    assert!(!ctx.has_background_tasks());
+    assert!(!ctx.is_plan_mode);
+    assert!(ctx.background_tasks.is_empty());
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_context_plan_mode() {
         .plan_file_path(PathBuf::from("/tmp/plan.md"))
         .build();
 
-    assert!(ctx.in_plan_mode());
+    assert!(ctx.is_plan_mode);
     assert_eq!(ctx.plan_file_path, Some(PathBuf::from("/tmp/plan.md")));
 }
 
@@ -66,9 +66,21 @@ fn test_todo_filtering() {
         ])
         .build();
 
-    assert!(ctx.has_todos());
-    assert_eq!(ctx.pending_todos().count(), 1);
-    assert_eq!(ctx.in_progress_todos().count(), 1);
+    assert!(!ctx.todos.is_empty());
+    assert_eq!(
+        ctx.todos
+            .iter()
+            .filter(|t| t.status == TodoStatus::Pending)
+            .count(),
+        1
+    );
+    assert_eq!(
+        ctx.todos
+            .iter()
+            .filter(|t| t.status == TodoStatus::InProgress)
+            .count(),
+        1
+    );
 }
 
 #[test]

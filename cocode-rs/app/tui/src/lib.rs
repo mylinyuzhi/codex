@@ -41,15 +41,18 @@
 // Initialize i18n at crate root - this generates the _rust_i18n_t function
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub mod agent_event_handler;
 pub mod agent_search;
 pub mod app;
 pub mod clipboard_paste;
 pub mod command;
+pub mod constants;
 pub mod editor;
 pub mod event;
 pub mod file_search;
 pub mod i18n;
 pub mod paste;
+pub mod path_display;
 pub mod render;
 pub mod skill_search;
 pub mod state;

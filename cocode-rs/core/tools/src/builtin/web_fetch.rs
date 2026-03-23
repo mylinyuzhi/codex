@@ -312,7 +312,8 @@ impl Tool for WebFetchTool {
 
         // Truncate if needed (UTF-8 safe)
         let truncated = if text_content.len() > max_content_length {
-            let truncated_content = truncate_utf8_safe(&text_content, max_content_length);
+            let truncated_content =
+                &text_content[..text_content.floor_char_boundary(max_content_length)];
             format!(
                 "{}\n\n[Content truncated. Showing first {} of {} bytes]",
                 truncated_content,
@@ -363,18 +364,6 @@ fn transform_github_url(url: &str) -> String {
     } else {
         url.to_string()
     }
-}
-
-/// Truncate string at a valid UTF-8 character boundary.
-fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut boundary = max_bytes;
-    while boundary > 0 && !s.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    &s[..boundary]
 }
 
 /// Convert HTML to plain text using html2text.

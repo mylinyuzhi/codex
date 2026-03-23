@@ -9,6 +9,7 @@ fn make_tool(name: &str, status: ToolStatus) -> ToolExecution {
         progress: None,
         output: None,
         started_at: None,
+        elapsed: None,
     }
 }
 

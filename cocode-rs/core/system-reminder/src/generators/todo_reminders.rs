@@ -44,12 +44,12 @@ impl AttachmentGenerator for TodoRemindersGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        if !ctx.has_todos() {
+        if ctx.todos.is_empty() && ctx.structured_tasks.is_empty() {
             return Ok(None);
         }
 
         // Prefer structured tasks when available, fall back to plain todos
-        let content = if ctx.has_structured_tasks() {
+        let content = if !ctx.structured_tasks.is_empty() {
             format_structured_tasks(&ctx.structured_tasks)
         } else {
             format_plain_todos(ctx)
@@ -134,8 +134,16 @@ fn format_plain_todos(ctx: &GeneratorContext<'_>) -> String {
     let mut content = String::new();
     content.push_str("## Current Tasks\n\n");
 
-    let in_progress: Vec<_> = ctx.in_progress_todos().collect();
-    let pending: Vec<_> = ctx.pending_todos().collect();
+    let in_progress: Vec<_> = ctx
+        .todos
+        .iter()
+        .filter(|t| t.status == TodoStatus::InProgress)
+        .collect();
+    let pending: Vec<_> = ctx
+        .todos
+        .iter()
+        .filter(|t| t.status == TodoStatus::Pending)
+        .collect();
 
     if !in_progress.is_empty() {
         content.push_str("### In Progress\n");

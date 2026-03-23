@@ -92,9 +92,21 @@ impl Widget for SubagentPanel<'_> {
                 _ => "",
             };
 
-            // Format: "icon type_icon type: description"
+            // Format: "icon type_icon type: description (elapsed)"
             let type_str = &subagent.agent_type;
             let desc_str = &subagent.description;
+
+            // Elapsed time for running agents
+            let elapsed_str = if subagent.status == SubagentStatus::Running {
+                let secs = subagent.started_at.elapsed().as_secs();
+                if secs > 0 {
+                    format!(" {secs}s")
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
 
             // Render status icon
             buf.set_string(inner.x, y, icon, style);
@@ -114,19 +126,79 @@ impl Widget for SubagentPanel<'_> {
                 buf.set_string(colon_x, y, ": ", Style::default().fg(self.theme.text_dim));
             }
 
-            // Render description (truncated if needed)
+            // Render description (truncated if needed) + elapsed
             let desc_x = colon_x + 2;
             if desc_x < inner.x + inner.width - 1 {
-                let available = (inner.x + inner.width - desc_x) as usize;
+                let elapsed_reserve = elapsed_str.len();
+                let available = (inner.x + inner.width - desc_x) as usize - elapsed_reserve;
                 let desc = if desc_str.len() > available {
                     format!("{}...", &desc_str[..available.saturating_sub(3)])
                 } else {
                     desc_str.clone()
                 };
-                buf.set_string(desc_x, y, desc, Style::default());
+                buf.set_string(desc_x, y, &desc, Style::default());
+                if !elapsed_str.is_empty() {
+                    let elapsed_x = desc_x + desc.len() as u16;
+                    if elapsed_x < inner.x + inner.width {
+                        buf.set_string(
+                            elapsed_x,
+                            y,
+                            &elapsed_str,
+                            Style::default().fg(self.theme.text_dim),
+                        );
+                    }
+                }
             }
 
             y += 1;
+
+            // Render output file path for backgrounded agents
+            if subagent.status == SubagentStatus::Backgrounded
+                && y < inner.y + inner.height
+                && let Some(ref output_file) = subagent.output_file
+            {
+                let path_str = output_file.to_string_lossy();
+                let truncated = if path_str.len() > 40 {
+                    format!("...{}", &path_str[path_str.len() - 37..])
+                } else {
+                    path_str.to_string()
+                };
+                let file_line = format!("  \u{2192} {truncated}");
+                let available = inner.width as usize;
+                let text = if file_line.len() > available {
+                    format!("{}...", &file_line[..available.saturating_sub(3)])
+                } else {
+                    file_line
+                };
+                buf.set_string(inner.x, y, text, Style::default().fg(self.theme.text_dim));
+                y += 1;
+            }
+
+            // Render result preview for completed agents
+            if subagent.status == SubagentStatus::Completed
+                && y < inner.y + inner.height
+                && let Some(ref result) = subagent.result
+            {
+                let preview = if result.len() > 60 {
+                    format!("{}...", &result[..57])
+                } else {
+                    result.clone()
+                };
+                let preview_line = format!("  {preview}");
+                let available = inner.width as usize;
+                let text = if preview_line.len() > available {
+                    format!("{}...", &preview_line[..available.saturating_sub(3)])
+                } else {
+                    preview_line
+                };
+                buf.set_string(
+                    inner.x,
+                    y,
+                    text,
+                    Style::default().fg(self.theme.text_dim).italic(),
+                );
+                y += 1;
+            }
 
             // Render progress on next line if available
             if let Some(ref progress) = subagent.progress

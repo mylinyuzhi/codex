@@ -11,7 +11,6 @@
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
 use crate::ToolCall;
-use crate::context::ApprovalStore;
 use crate::context::FileTracker;
 use crate::context::ModelCallFn;
 use crate::context::SpawnAgentFn;
@@ -25,6 +24,7 @@ use cocode_hooks::HookContext;
 use cocode_hooks::HookEventType;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookResult;
+use cocode_policy::ApprovalStore;
 use cocode_protocol::AbortReason;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
@@ -228,7 +228,7 @@ pub struct StreamingToolExecutor {
     /// Optional permission requester for interactive approval flow.
     permission_requester: Option<Arc<dyn crate::context::PermissionRequester>>,
     /// Optional permission rule evaluator.
-    permission_evaluator: Option<crate::permission_rules::PermissionRuleEvaluator>,
+    permission_evaluator: Option<cocode_policy::PermissionRuleEvaluator>,
     /// Allowlist of tool names the model was actually given.
     ///
     /// Set after `select_tools_for_model()` via [`set_allowed_tool_names`].
@@ -473,7 +473,7 @@ impl StreamingToolExecutor {
     /// Set the permission rule evaluator.
     pub fn with_permission_evaluator(
         mut self,
-        evaluator: crate::permission_rules::PermissionRuleEvaluator,
+        evaluator: cocode_policy::PermissionRuleEvaluator,
     ) -> Self {
         self.permission_evaluator = Some(evaluator);
         self
@@ -1733,23 +1733,13 @@ async fn check_permission_pipeline(
     let command_input = extract_command_input(name, input);
 
     if let Some(ref evaluator) = ctx.permission_evaluator {
-        // Stage 1: Check DENY rules
-        if let Some(decision) = evaluator.evaluate_behavior(
-            name,
-            file_path.as_deref(),
-            crate::permission_rules::RuleAction::Deny,
-            command_input.as_deref(),
-        ) {
-            return decision.result;
-        }
-
-        // Stage 2: Check ASK rules
-        if let Some(decision) = evaluator.evaluate_behavior(
-            name,
-            file_path.as_deref(),
-            crate::permission_rules::RuleAction::Ask,
-            command_input.as_deref(),
-        ) {
+        // Stages 1+2: Check DENY then ASK rules
+        if let Some(decision) =
+            evaluator.evaluate_deny_ask(name, file_path.as_deref(), command_input.as_deref())
+        {
+            if decision.result.is_denied() {
+                return decision.result;
+            }
             // ASK rule matched — the tool must ask for approval
             return cocode_protocol::PermissionResult::NeedsApproval {
                 request: cocode_protocol::ApprovalRequest {
@@ -1775,7 +1765,7 @@ async fn check_permission_pipeline(
         if let Some(decision) = evaluator.evaluate_behavior(
             name,
             file_path.as_deref(),
-            crate::permission_rules::RuleAction::Allow,
+            cocode_policy::RuleAction::Allow,
             command_input.as_deref(),
         ) && decision.result.is_allowed()
         {

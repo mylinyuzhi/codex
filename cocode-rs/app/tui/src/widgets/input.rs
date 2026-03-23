@@ -205,6 +205,8 @@ pub struct InputWidget<'a> {
     plan_mode: bool,
     queued_count: i32,
     placeholder: Option<&'a str>,
+    /// Whether the agent is currently streaming (Enter queues instead of submitting).
+    is_streaming: bool,
 }
 
 impl<'a> InputWidget<'a> {
@@ -217,6 +219,7 @@ impl<'a> InputWidget<'a> {
             plan_mode: false,
             queued_count: 0,
             placeholder: None,
+            is_streaming: false,
         }
     }
 
@@ -241,6 +244,12 @@ impl<'a> InputWidget<'a> {
     /// Set the placeholder text.
     pub fn placeholder(mut self, text: &'a str) -> Self {
         self.placeholder = Some(text);
+        self
+    }
+
+    /// Set whether the agent is streaming (Enter queues instead of submitting).
+    pub fn is_streaming(mut self, streaming: bool) -> Self {
+        self.is_streaming = streaming;
         self
     }
 
@@ -379,7 +388,9 @@ impl Widget for InputWidget<'_> {
         let lines = self.get_lines();
 
         // Create block
-        let border_style = if self.focused {
+        let border_style = if self.plan_mode {
+            ratatui::style::Style::default().fg(self.theme.plan_mode)
+        } else if self.focused {
             ratatui::style::Style::default().fg(self.theme.border_focused)
         } else {
             ratatui::style::Style::default().fg(self.theme.border)
@@ -392,13 +403,17 @@ impl Widget for InputWidget<'_> {
         } else {
             String::new()
         };
+        let streaming_tag = if self.is_streaming { " ⏳" } else { "" };
         let title_text = if self.plan_mode {
             format!(
-                " {} [PLAN]{queue_tag} [{line_num}:{col}] ",
+                " {} [PLAN]{queue_tag}{streaming_tag} [{line_num}:{col}] ",
                 t!("input.title")
             )
         } else {
-            format!(" {}{queue_tag} [{line_num}:{col}] ", t!("input.title"))
+            format!(
+                " {}{queue_tag}{streaming_tag} [{line_num}:{col}] ",
+                t!("input.title")
+            )
         };
 
         let block = Block::default()
