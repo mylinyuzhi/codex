@@ -16,8 +16,9 @@ use crate::rule::RuleAction;
 
 /// Evaluates permission rules against tool calls.
 ///
-/// Rules are evaluated in priority order: source priority first (Session > Command > ... > User),
-/// then action severity (Deny > Ask > Allow). The first matching rule wins.
+/// Rules are evaluated in staged pipeline order: deny rules first, then ask,
+/// then allow. Within each stage, the source with the highest priority (lowest
+/// ordinal: User > Project > Local > ... > Session) wins.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionRuleEvaluator {
     rules: Vec<PermissionRule>,
@@ -101,34 +102,6 @@ impl PermissionRuleEvaluator {
         rules
     }
 
-    /// Evaluate rules for a tool call.
-    ///
-    /// Returns `None` if no rule matches (fall through to the tool's own check).
-    pub fn evaluate(
-        &self,
-        tool_name: &str,
-        file_path: Option<&Path>,
-    ) -> Option<PermissionDecision> {
-        let mut matching_rules: Vec<&PermissionRule> = self
-            .rules
-            .iter()
-            .filter(|r| Self::matches_tool(&r.tool_pattern, tool_name))
-            .filter(|r| Self::matches_file(&r.file_pattern, file_path))
-            .collect();
-
-        // Sort by source priority (lower ordinal = higher priority), then by
-        // action severity (Deny=0 < Ask=1 < Allow=2, so most restrictive first).
-        matching_rules.sort_by(|a, b| {
-            a.source
-                .cmp(&b.source)
-                .then(Self::action_priority(a.action).cmp(&Self::action_priority(b.action)))
-        });
-
-        matching_rules
-            .first()
-            .map(|rule| Self::make_decision(rule, tool_name))
-    }
-
     /// Evaluate rules for a specific behavior (deny/ask/allow).
     ///
     /// Used by the permission pipeline for staged evaluation:
@@ -168,11 +141,6 @@ impl PermissionRuleEvaluator {
             .map(|rule| Self::make_decision(rule, tool_name))
     }
 
-    /// Check if `pattern` matches `tool_name`.
-    pub(crate) fn matches_tool(pattern: &str, tool_name: &str) -> bool {
-        Self::matches_tool_with_input(pattern, tool_name, None)
-    }
-
     /// Check if `pattern` matches `tool_name`, optionally checking
     /// a command pattern against `command_input`.
     ///
@@ -190,24 +158,27 @@ impl PermissionRuleEvaluator {
             return true;
         }
 
-        // Parse "Tool:command_pattern" or "Tool(command_pattern)" forms
+        // Parse "Tool:command_pattern" or "Tool(command_pattern)" forms.
+        // Empty patterns ("Bash:", "Bash()") are treated as bare tool matches.
         let (tool_part, cmd_pattern) = if let Some((tool, cmd)) = pattern.split_once(':') {
-            (tool, Some(cmd))
+            (tool, if cmd.is_empty() { None } else { Some(cmd) })
         } else if let Some((tool, cmd)) = pattern.strip_suffix(')').and_then(|s| s.split_once('('))
         {
-            (tool, Some(cmd))
+            (tool, if cmd.is_empty() { None } else { Some(cmd) })
         } else {
             (pattern, None)
         };
 
-        if tool_part != tool_name {
+        // Use wildcard matching for tool names to support MCP server
+        // wildcards like "mcp__github__*" matching "mcp__github__get_issues".
+        if !crate::rule::matches_wildcard_pattern(tool_part, tool_name) {
             return false;
         }
 
         // If there's a command pattern, check it against the input
         match (cmd_pattern, command_input) {
-            (None, _) => true,       // No command pattern — tool name match is sufficient
-            (Some(_), None) => true, // Has pattern but no input to check — match on tool name
+            (None, _) => true,        // No command pattern — tool name match is sufficient
+            (Some(_), None) => false, // Pattern requires input — can't match without it
             (Some(pat), Some(cmd)) => Self::matches_command_pattern(pat, cmd),
         }
     }
@@ -306,15 +277,6 @@ impl PermissionRuleEvaluator {
         }
 
         px == pat_chars.len()
-    }
-
-    /// Lower number = higher priority (more restrictive).
-    fn action_priority(action: RuleAction) -> i32 {
-        match action {
-            RuleAction::Deny => 0,
-            RuleAction::Ask => 1,
-            RuleAction::Allow => 2,
-        }
     }
 
     fn make_decision(rule: &PermissionRule, tool_name: &str) -> PermissionDecision {

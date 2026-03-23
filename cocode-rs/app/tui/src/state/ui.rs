@@ -54,6 +54,9 @@ pub struct UiState {
     /// Whether to show thinking content in chat messages.
     pub show_thinking: bool,
 
+    /// Whether to show system reminders in chat (debug mode).
+    pub show_system_reminders: bool,
+
     /// Whether the user has manually scrolled (disables auto-scroll).
     pub user_scrolled: bool,
 
@@ -72,8 +75,8 @@ pub struct UiState {
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
 
-    /// Animation frame counter (0-7 cycle) for animated elements.
-    pub animation_frame: u8,
+    /// Time-based animation for spinners and indicators.
+    pub animation: crate::animation::Animation,
 
     /// Toast ID counter for generating unique IDs.
     toast_id_counter: i32,
@@ -205,6 +208,9 @@ impl UiState {
         if let Some(ref mut streaming) = self.streaming {
             streaming.content.push_str(delta);
             streaming.mode = StreamMode::Responding;
+            streaming
+                .display
+                .on_content_appended(streaming.content.len());
         }
     }
 
@@ -285,6 +291,15 @@ impl UiState {
         tracing::debug!(
             show_thinking = self.show_thinking,
             "Toggled thinking display"
+        );
+    }
+
+    /// Toggle display of system reminders in chat.
+    pub fn toggle_system_reminders(&mut self) {
+        self.show_system_reminders = !self.show_system_reminders;
+        tracing::debug!(
+            show_system_reminders = self.show_system_reminders,
+            "Toggled system reminder display"
         );
     }
 
@@ -509,15 +524,9 @@ impl UiState {
 
     // ========== Animation ==========
 
-    /// Increment the animation frame.
-    pub fn tick_animation(&mut self) {
-        self.animation_frame =
-            (self.animation_frame + 1) % crate::constants::ANIMATION_FRAME_COUNT as u8;
-    }
-
-    /// Get the current animation frame (0-7).
-    pub fn animation_frame(&self) -> u8 {
-        self.animation_frame
+    /// Get the current spinner frame string (time-based).
+    pub fn spinner_frame(&self) -> &str {
+        self.animation.current_frame()
     }
 }
 
@@ -538,6 +547,9 @@ pub struct InputState {
 
     /// Current history index (for up/down navigation).
     pub history_index: Option<i32>,
+
+    /// Emacs-style kill buffer for Ctrl+K/Ctrl+Y.
+    pub kill_buffer: Option<String>,
 }
 
 /// A history entry with frecency scoring.
@@ -781,6 +793,38 @@ impl InputState {
     /// Insert a newline.
     pub fn insert_newline(&mut self) {
         self.insert_char('\n');
+    }
+
+    /// Kill text from cursor to end of line, storing in kill buffer.
+    pub fn kill_to_end_of_line(&mut self) {
+        let byte_pos = self.char_to_byte(self.cursor);
+        if byte_pos >= self.text.len() {
+            return;
+        }
+
+        // Find end of current line (next \n or end of text)
+        let rest = &self.text[byte_pos..];
+        if rest.starts_with('\n') {
+            // Cursor is at EOL: kill the newline character (join lines)
+            self.kill_buffer = Some("\n".to_string());
+            self.text = format!("{}{}", &self.text[..byte_pos], &self.text[byte_pos + 1..]);
+        } else {
+            // Kill from cursor to end of line (or end of text)
+            let line_end = rest.find('\n').map_or(rest.len(), |pos| pos);
+            let killed = rest[..line_end].to_string();
+            let after = byte_pos + line_end;
+            self.kill_buffer = Some(killed);
+            self.text = format!("{}{}", &self.text[..byte_pos], &self.text[after..]);
+        }
+    }
+
+    /// Yank (paste) the kill buffer contents at cursor position.
+    pub fn yank(&mut self) {
+        if let Some(buf) = self.kill_buffer.clone() {
+            for c in buf.chars() {
+                self.insert_char(c);
+            }
+        }
     }
 
     /// Clear the input and return the text.
@@ -2024,6 +2068,8 @@ pub enum CommandAction {
     ClearScreen,
     /// Interrupt.
     Interrupt,
+    /// Kill all running agents.
+    KillAllAgents,
     /// Quit.
     Quit,
 }
@@ -2361,6 +2407,8 @@ pub struct StreamingState {
     pub mode: StreamMode,
     /// Tool uses being accumulated during streaming.
     pub tool_uses: Vec<StreamingToolUse>,
+    /// Adaptive display pacing — tracks how much content has been "revealed".
+    pub display: crate::streaming::StreamDisplay,
 }
 
 impl StreamingState {
@@ -2372,7 +2420,25 @@ impl StreamingState {
             thinking: String::new(),
             mode: StreamMode::Requesting,
             tool_uses: Vec::new(),
+            display: crate::streaming::StreamDisplay::new(),
         }
+    }
+
+    /// The portion of content currently visible to the user.
+    pub fn visible_content(&self) -> &str {
+        let cursor = self.display.cursor().min(self.content.len());
+        &self.content[..cursor]
+    }
+
+    /// Advance the display cursor (called on SpinnerTick).
+    /// Returns true if the display changed.
+    pub fn advance_display(&mut self) -> bool {
+        self.display.advance(&self.content)
+    }
+
+    /// Reveal all content immediately (used on turn completion).
+    pub fn reveal_all(&mut self) {
+        self.display.reveal_all(self.content.len());
     }
 
     /// Get estimated thinking token count (rough estimate: words * 1.3).

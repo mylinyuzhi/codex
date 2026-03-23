@@ -139,6 +139,10 @@ enum Commands {
         #[arg(short, long)]
         title: Option<String>,
 
+        /// Session name for listing and resume-by-name
+        #[arg(short = 'n', long)]
+        name: Option<String>,
+
         /// Maximum turns before stopping
         #[arg(long)]
         max_turns: Option<i32>,
@@ -211,10 +215,15 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
 
     // Dispatch to appropriate command
     match cli.command {
-        Some(Commands::Chat { title, max_turns }) => {
+        Some(Commands::Chat {
+            title,
+            name,
+            max_turns,
+        }) => {
             run_interactive(
                 None, // No initial prompt for chat mode
                 title,
+                name,
                 max_turns,
                 &config,
                 cli.no_tui,
@@ -237,6 +246,7 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
                 run_interactive(
                     Some(prompt),
                     None,
+                    None,    // No session name for single prompt
                     Some(1), // Single turn for prompt mode
                     &config,
                     true, // Force no-tui for single prompt
@@ -251,6 +261,7 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
                 run_interactive(
                     None,
                     None,
+                    None, // No session name for default mode
                     None,
                     &config,
                     cli.no_tui,
@@ -270,6 +281,7 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
 async fn run_interactive(
     initial_prompt: Option<String>,
     title: Option<String>,
+    name: Option<String>,
     max_turns: Option<i32>,
     config: &ConfigManager,
     no_tui: bool,
@@ -321,6 +333,7 @@ async fn run_interactive(
         return commands::chat::run(
             initial_prompt,
             title,
+            name,
             max_turns,
             config,
             verbose,
@@ -331,7 +344,15 @@ async fn run_interactive(
     }
 
     // Interactive mode: use TUI
-    tui_runner::run_tui(title, config, verbose, system_prompt_suffix, cli_agents).await
+    tui_runner::run_tui(
+        title,
+        name,
+        config,
+        verbose,
+        system_prompt_suffix,
+        cli_agents,
+    )
+    .await
 }
 
 /// Parse `--agents` JSON into agent definitions.

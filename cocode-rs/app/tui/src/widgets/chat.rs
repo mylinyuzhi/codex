@@ -39,8 +39,8 @@ pub struct ChatWidget<'a> {
     show_thinking: bool,
     /// Whether currently thinking (for animation).
     is_thinking: bool,
-    /// Current animation frame (0-7).
-    animation_frame: u8,
+    /// Current spinner frame string (time-based).
+    spinner_frame: &'a str,
     /// Duration of current or last thinking phase.
     thinking_duration: Option<Duration>,
     /// Theme for styling.
@@ -53,6 +53,8 @@ pub struct ChatWidget<'a> {
     user_scrolled: bool,
     /// Streaming tool uses (partial tool JSON being built).
     streaming_tool_uses: &'a [StreamingToolUse],
+    /// Whether to show system reminders (meta messages) in the chat.
+    show_system_reminders: bool,
 }
 
 impl<'a> ChatWidget<'a> {
@@ -65,13 +67,14 @@ impl<'a> ChatWidget<'a> {
             streaming_thinking: None,
             show_thinking: false,
             is_thinking: false,
-            animation_frame: 0,
+            spinner_frame: "⠋",
             thinking_duration: None,
             theme,
             collapsed_tools: &EMPTY_SET,
             width: 80,
             user_scrolled: false,
             streaming_tool_uses: &[],
+            show_system_reminders: false,
         }
     }
 
@@ -105,9 +108,9 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
-    /// Set the animation frame.
-    pub fn animation_frame(mut self, frame: u8) -> Self {
-        self.animation_frame = frame;
+    /// Set the spinner frame string (from `Animation::current_frame()`).
+    pub fn spinner_frame(mut self, frame: &'a str) -> Self {
+        self.spinner_frame = frame;
         self
     }
 
@@ -141,6 +144,12 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
+    /// Set whether system reminders (meta messages) should be visible.
+    pub fn show_system_reminders(mut self, show: bool) -> Self {
+        self.show_system_reminders = show;
+        self
+    }
+
     /// Format duration for display (e.g., "2.3s").
     fn format_duration(duration: Duration) -> String {
         let secs = duration.as_secs_f64();
@@ -154,10 +163,9 @@ impl<'a> ChatWidget<'a> {
         }
     }
 
-    /// Get the animation character for the thinking indicator.
-    fn thinking_animation_char(&self) -> char {
-        let frames = &crate::constants::SPINNER_FRAMES;
-        frames[self.animation_frame as usize % frames.len()]
+    /// Get the spinner frame for the thinking indicator.
+    fn spinner(&self) -> &str {
+        self.spinner_frame
     }
 
     /// Render inline tool calls for a message.
@@ -291,6 +299,15 @@ impl<'a> ChatWidget<'a> {
             lines.push(Line::from(Span::raw("  ▌").slow_blink()));
         }
 
+        // Apply subtle background tint to user messages for visual separation
+        if message.role == MessageRole::User
+            && let Some(bg) = self.theme.user_message_bg
+        {
+            for line in &mut lines {
+                line.style.bg = Some(bg);
+            }
+        }
+
         // Empty line after message
         lines.push(Line::from(""));
 
@@ -310,7 +327,12 @@ impl Widget for ChatWidget<'_> {
         // Build all lines
         let mut all_lines: Vec<Line> = Vec::new();
 
-        let visible_messages: Vec<_> = self.messages.iter().filter(|msg| !msg.is_meta).collect();
+        let show_reminders = self.show_system_reminders;
+        let visible_messages: Vec<_> = self
+            .messages
+            .iter()
+            .filter(|msg| !msg.is_meta || show_reminders)
+            .collect();
 
         let has_streaming = self.streaming_content.is_some()
             || self
@@ -342,7 +364,26 @@ impl Widget for ChatWidget<'_> {
         }
 
         for message in &visible_messages {
-            all_lines.extend(self.format_message(message));
+            if message.is_meta {
+                // Render meta (system reminder) messages as collapsed dim lines
+                let flat = message.content.replace('\n', " ");
+                let (preview, suffix) = if flat.len() > 60 {
+                    let boundary = flat.floor_char_boundary(60);
+                    (&flat[..boundary], "...")
+                } else {
+                    (flat.as_str(), "")
+                };
+                all_lines.push(
+                    Line::from(format!(
+                        "  [{sr}] {preview}{suffix}",
+                        sr = t!("chat.system_reminder")
+                    ))
+                    .fg(self.theme.text_dim)
+                    .italic(),
+                );
+            } else {
+                all_lines.extend(self.format_message(message));
+            }
         }
 
         // Add streaming content if present
@@ -357,12 +398,13 @@ impl Widget for ChatWidget<'_> {
             let has_content = self.streaming_content.is_some_and(|c| !c.is_empty())
                 || self.streaming_thinking.is_some_and(|t| !t.is_empty());
             if !has_content {
-                let spinner = self.thinking_animation_char();
-                all_lines.push(Line::from(
-                    Span::raw(format!("  {spinner} {}", t!("chat.waiting_for_response")))
-                        .dim()
-                        .italic(),
-                ));
+                let waiting_text = format!("  {} ", t!("chat.waiting_for_response"));
+                let mut spans = crate::shimmer::shimmer_spans(&waiting_text);
+                // Apply italic to all shimmer spans
+                for span in &mut spans {
+                    span.style = span.style.add_modifier(ratatui::style::Modifier::ITALIC);
+                }
+                all_lines.push(Line::from(spans));
             }
 
             // Show thinking content (collapsed indicator or expanded)
@@ -378,7 +420,7 @@ impl Widget for ChatWidget<'_> {
                 if self.show_thinking {
                     // Show expanded thinking content with animated header
                     let header = if self.is_thinking {
-                        let spinner = self.thinking_animation_char();
+                        let spinner = self.spinner();
                         format!(
                             "  {spinner} {}",
                             t!("chat.thinking_active", duration = duration_str)
@@ -409,7 +451,7 @@ impl Widget for ChatWidget<'_> {
                     let tokens =
                         (word_count as f64 * crate::constants::THINKING_TOKEN_MULTIPLIER) as i32;
                     let indicator = if self.is_thinking {
-                        let spinner = self.thinking_animation_char();
+                        let spinner = self.spinner();
                         format!(
                             "  {spinner} {}",
                             t!(
@@ -443,7 +485,7 @@ impl Widget for ChatWidget<'_> {
 
             // Show streaming tool uses (partial tool JSON being built)
             for tool in self.streaming_tool_uses {
-                let spinner = self.thinking_animation_char();
+                let spinner = self.spinner();
                 all_lines.push(Line::from(vec![
                     Span::raw(format!("  {spinner} ")).fg(self.theme.tool_running),
                     Span::raw(tool.name.clone()).bold().fg(self.theme.primary),
@@ -469,8 +511,12 @@ impl Widget for ChatWidget<'_> {
             }
         }
 
-        // Create the block (count only visible messages, excluding is_meta)
-        let visible_count = self.messages.iter().filter(|m| !m.is_meta).count();
+        // Count visible messages (meta messages visible only when toggled on)
+        let visible_count = self
+            .messages
+            .iter()
+            .filter(|m| !m.is_meta || show_reminders)
+            .count();
         let bottom_title = if self.user_scrolled {
             format!(
                 " {} | {} ",

@@ -157,7 +157,12 @@ impl SessionState {
     }
 
     /// Start a tool execution.
-    pub fn start_tool(&mut self, call_id: String, name: String) {
+    pub fn start_tool_with_batch(
+        &mut self,
+        call_id: String,
+        name: String,
+        batch_id: Option<String>,
+    ) {
         self.tool_executions.push(ToolExecution {
             call_id,
             name,
@@ -166,6 +171,7 @@ impl SessionState {
             output: None,
             started_at: Some(Instant::now()),
             elapsed: None,
+            batch_id,
         });
     }
 
@@ -657,6 +663,8 @@ pub struct ToolExecution {
     pub started_at: Option<Instant>,
     /// How long the tool took (set on completion).
     pub elapsed: Option<std::time::Duration>,
+    /// Batch ID for parallel execution grouping.
+    pub batch_id: Option<String>,
 }
 
 /// Status of a subagent.

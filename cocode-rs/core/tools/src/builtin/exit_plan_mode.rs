@@ -80,6 +80,10 @@ impl Tool for ExitPlanModeTool {
         true
     }
 
+    fn requires_user_interaction(&self) -> bool {
+        true
+    }
+
     /// Requires user approval before exiting plan mode.
     ///
     /// The TUI shows an approval overlay where the user can:

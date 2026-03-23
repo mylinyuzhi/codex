@@ -75,6 +75,10 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
+    /// Human-readable session name for listing and resume-by-name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// Whether the session is ephemeral (not persisted).
     #[serde(default)]
     pub ephemeral: bool,
@@ -95,6 +99,7 @@ impl Session {
             selections: RoleSelections::with_main(main_selection),
             max_turns: Some(200),
             title: None,
+            name: None,
             ephemeral: false,
         }
     }
@@ -117,6 +122,7 @@ impl Session {
             selections: RoleSelections::with_main(main_selection),
             max_turns: Some(200),
             title: None,
+            name: None,
             ephemeral: false,
         }
     }
@@ -136,6 +142,7 @@ impl Session {
             selections,
             max_turns: Some(200),
             title: None,
+            name: None,
             ephemeral: false,
         }
     }
@@ -190,6 +197,7 @@ impl Session {
             selections: self.selections.clone(),
             max_turns: self.max_turns,
             title: self.title.clone(),
+            name: None, // Child sessions start without a name
             ephemeral: self.ephemeral,
         }
     }
@@ -266,6 +274,7 @@ pub struct SessionBuilder {
     main_selection: Option<RoleSelection>,
     max_turns: Option<i32>,
     title: Option<String>,
+    name: Option<String>,
     ephemeral: bool,
 }
 
@@ -332,6 +341,12 @@ impl SessionBuilder {
         self
     }
 
+    /// Set the session name (human-readable identifier).
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
     /// Set ephemeral mode.
     pub fn ephemeral(mut self, ephemeral: bool) -> Self {
         self.ephemeral = ephemeral;
@@ -362,6 +377,7 @@ impl SessionBuilder {
             session.max_turns = Some(max);
         }
         session.title = self.title;
+        session.name = self.name;
         session.ephemeral = self.ephemeral;
 
         session

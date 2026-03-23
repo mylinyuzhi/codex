@@ -62,7 +62,7 @@ impl QuestionResponder {
         self.pending
             .lock()
             .unwrap_or_else(|e| {
-                tracing::warn!("Lock poisoned — concurrent bug detected");
+                tracing::error!("QuestionResponder lock poisoned — concurrent bug detected");
                 e.into_inner()
             })
             .insert(request_id, tx);
@@ -77,7 +77,7 @@ impl QuestionResponder {
             .pending
             .lock()
             .unwrap_or_else(|e| {
-                tracing::warn!("Lock poisoned — concurrent bug detected");
+                tracing::error!("QuestionResponder lock poisoned — concurrent bug detected");
                 e.into_inner()
             })
             .remove(request_id)

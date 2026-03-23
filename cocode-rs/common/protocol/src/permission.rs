@@ -66,36 +66,6 @@ impl PermissionMode {
     }
 }
 
-/// Behavior for a specific permission check.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PermissionBehavior {
-    /// Allow the operation without asking.
-    Allow,
-    /// Ask the user for permission.
-    #[default]
-    Ask,
-    /// Deny the operation without asking.
-    Deny,
-}
-
-impl PermissionBehavior {
-    /// Check if this behavior allows the operation.
-    pub fn is_allowed(&self) -> bool {
-        matches!(self, PermissionBehavior::Allow)
-    }
-
-    /// Check if this behavior requires asking the user.
-    pub fn requires_approval(&self) -> bool {
-        matches!(self, PermissionBehavior::Ask)
-    }
-
-    /// Check if this behavior denies the operation.
-    pub fn is_denied(&self) -> bool {
-        matches!(self, PermissionBehavior::Deny)
-    }
-}
-
 /// Result of a permission check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
@@ -217,46 +187,52 @@ impl PermissionDecision {
 
 /// Source of a permission rule.
 ///
-/// Ordering: smaller value = higher priority.
-/// Session has the highest priority (user's real-time decisions override
-/// all other sources), followed by Command, Cli, Flag, Local, Project,
-/// Policy, and User (lowest).
+/// Ordering: smaller value = higher priority (checked first).
+/// Persistent file-based sources are checked first so that configured
+/// deny rules cannot be bypassed by session-level overrides. Within
+/// each behavior step (deny/ask/allow), the first matching source wins.
+///
+/// Priority: User > Project > Local > Flag > Policy > Cli > Command > Session.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
 )]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum RuleSource {
-    /// Policy-level rules.
-    Policy,
+    /// User-level settings (~/.cocode/settings.json) — highest priority.
+    User,
     /// Project-level settings (.cocode/settings.json in project).
     Project,
     /// Local settings (.cocode/settings.local.json).
     Local,
-    /// User-level settings (~/.cocode/settings.json).
-    User,
     /// CLI flag overrides.
     Flag,
+    /// Enterprise managed policy (read-only).
+    Policy,
     /// CLI argument overrides.
     Cli,
     /// Per-command overrides.
     Command,
-    /// Session-level approvals (highest priority).
+    /// Session-level approvals (runtime grants) — lowest priority.
     Session,
 }
 
 impl RuleSource {
-    /// Returns a numeric priority value. Lower = higher priority.
+    /// Returns a numeric priority value. Lower = higher priority (checked first).
+    ///
+    /// Persistent file-based sources (User, Project, Local) are checked before
+    /// runtime sources (Cli, Command, Session) so that configured deny rules
+    /// cannot be bypassed by session-level overrides.
     fn priority(self) -> i32 {
         match self {
-            RuleSource::Session => 0,
-            RuleSource::Command => 1,
-            RuleSource::Cli => 2,
+            RuleSource::User => 0,
+            RuleSource::Project => 1,
+            RuleSource::Local => 2,
             RuleSource::Flag => 3,
-            RuleSource::Local => 4,
-            RuleSource::Project => 5,
-            RuleSource::Policy => 6,
-            RuleSource::User => 7,
+            RuleSource::Policy => 4,
+            RuleSource::Cli => 5,
+            RuleSource::Command => 6,
+            RuleSource::Session => 7,
         }
     }
 }
@@ -274,6 +250,14 @@ impl Ord for RuleSource {
 }
 
 impl RuleSource {
+    /// Whether this source represents a persistent (file-based) rule.
+    pub fn is_persistent(&self) -> bool {
+        matches!(
+            self,
+            RuleSource::User | RuleSource::Project | RuleSource::Local | RuleSource::Policy
+        )
+    }
+
     /// Get the source as a string.
     pub fn as_str(&self) -> &'static str {
         (*self).into()
@@ -396,19 +380,6 @@ pub struct ApprovalRequest {
     /// E.g. "git *" for command "git push origin main".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposed_prefix_pattern: Option<String>,
-}
-
-/// Result of a permission check with additional context.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PermissionCheckResult {
-    /// The behavior to apply.
-    pub behavior: PermissionBehavior,
-    /// Optional message explaining the decision.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    /// Security risks identified during the check.
-    #[serde(default)]
-    pub risks: Vec<SecurityRisk>,
 }
 
 /// A security risk associated with an operation.

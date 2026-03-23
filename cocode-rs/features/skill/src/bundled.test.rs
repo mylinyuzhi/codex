@@ -48,16 +48,34 @@ fn test_bundled_skills_returns_vec() {
 }
 
 #[test]
-fn test_bundled_skills_are_local_jsx() {
+fn test_bundled_skills_have_valid_command_types() {
     let skills = bundled_skills();
     for skill in &skills {
-        assert_eq!(
-            skill.command_type,
-            crate::command::CommandType::LocalJsx,
-            "bundled skill '{}' should be LocalJsx",
-            skill.name
-        );
+        // Each bundled skill must have a recognized command type
+        match skill.command_type {
+            crate::command::CommandType::Prompt
+            | crate::command::CommandType::Local
+            | crate::command::CommandType::LocalJsx => {}
+        }
     }
+    // The loop skill is Prompt type (LLM-processed)
+    assert_eq!(
+        skills
+            .iter()
+            .find(|s| s.name == "loop")
+            .expect("loop skill")
+            .command_type,
+        crate::command::CommandType::Prompt,
+    );
+    // The plugin skill is LocalJsx type (local rendering)
+    assert_eq!(
+        skills
+            .iter()
+            .find(|s| s.name == "plugin")
+            .expect("plugin skill")
+            .command_type,
+        crate::command::CommandType::LocalJsx,
+    );
 }
 
 #[test]

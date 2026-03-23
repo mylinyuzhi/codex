@@ -229,6 +229,15 @@ pub struct StreamingToolExecutor {
     permission_requester: Option<Arc<dyn crate::context::PermissionRequester>>,
     /// Optional permission rule evaluator.
     permission_evaluator: Option<cocode_policy::PermissionRuleEvaluator>,
+    /// Current batch ID for parallel tool execution grouping (UI only).
+    ///
+    /// A fresh UUID is generated in [`set_allowed_tool_names`] at the start of
+    /// each streaming turn. All tools emitted during that turn — both safe
+    /// (concurrent) and unsafe (sequential) — share the same batch ID. The TUI
+    /// uses this to visually group tools that were dispatched together; it does
+    /// not affect execution ordering.
+    current_batch_id: Arc<std::sync::RwLock<Option<String>>>,
+
     /// Allowlist of tool names the model was actually given.
     ///
     /// Set after `select_tools_for_model()` via [`set_allowed_tool_names`].
@@ -365,6 +374,7 @@ impl StreamingToolExecutor {
             parent_selections: None,
             permission_requester: None,
             permission_evaluator: None,
+            current_batch_id: Arc::new(std::sync::RwLock::new(None)),
             allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
@@ -544,6 +554,13 @@ impl StreamingToolExecutor {
             .allowed_tool_names
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(names);
+
+        // Generate a fresh batch ID for this streaming session's parallel tools
+        *self
+            .current_batch_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(uuid::Uuid::new_v4().to_string());
     }
 
     /// Set skill-level tool restrictions.
@@ -740,20 +757,36 @@ impl StreamingToolExecutor {
         };
 
         if pre_hook.skip_permission {
-            let pattern = format!("hook-override-{call_id}");
-            self.approval_store
-                .lock()
-                .await
-                .approve_pattern(name, &pattern);
+            // Security guard: tools that require interactive confirmation (e.g.
+            // ExitPlanMode) must still go through the permission pipeline even
+            // if a hook pre-approved them.
+            let tool_requires_interaction = self
+                .registry
+                .get(name)
+                .is_some_and(|t| t.requires_user_interaction());
+
+            if !tool_requires_interaction {
+                let pattern = format!("hook-override-{call_id}");
+                self.approval_store
+                    .lock()
+                    .await
+                    .approve_pattern(name, &pattern);
+            }
         }
 
         for ctx_str in &pre_hook.additional_contexts {
             debug!(tool = %name, "Pre-hook additional context: {ctx_str}");
         }
 
+        let batch_id = self
+            .current_batch_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         self.emit_event(LoopEvent::ToolUseStarted {
             call_id: call_id.to_string(),
             name: name.to_string(),
+            batch_id,
         })
         .await;
 
@@ -1786,7 +1819,7 @@ async fn check_permission_pipeline(
 /// Apply permission mode on top of pipeline result.
 ///
 /// Converts results based on the current mode:
-/// - Bypass: everything → Allowed
+/// - Bypass: everything except Denied → Allowed (deny is absolute)
 /// - DontAsk: NeedsApproval → Denied
 /// - AcceptEdits: edit/write NeedsApproval → Allowed
 /// - Plan: non-read-only → Denied
@@ -1797,7 +1830,11 @@ fn apply_permission_mode(
     registry: &ToolRegistry,
 ) -> cocode_protocol::PermissionResult {
     match mode {
-        PermissionMode::Bypass => cocode_protocol::PermissionResult::Allowed,
+        // Bypass allows everything EXCEPT explicit denials — deny is absolute.
+        PermissionMode::Bypass => match result {
+            cocode_protocol::PermissionResult::Denied { .. } => result,
+            _ => cocode_protocol::PermissionResult::Allowed,
+        },
         PermissionMode::DontAsk => match result {
             cocode_protocol::PermissionResult::NeedsApproval { request } => {
                 cocode_protocol::PermissionResult::Denied {

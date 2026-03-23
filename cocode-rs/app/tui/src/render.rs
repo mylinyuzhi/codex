@@ -174,7 +174,11 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
     };
 
     // Chat widget
-    let streaming_content = state.ui.streaming.as_ref().map(|s| s.content.as_str());
+    let streaming_content = state
+        .ui
+        .streaming
+        .as_ref()
+        .map(crate::state::StreamingState::visible_content);
     let streaming_thinking = state.ui.streaming.as_ref().map(|s| s.thinking.as_str());
     let streaming_tool_uses = state
         .ui
@@ -189,12 +193,13 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .streaming_thinking(streaming_thinking)
         .show_thinking(state.ui.show_thinking)
         .is_thinking(state.ui.is_thinking())
-        .animation_frame(state.ui.animation_frame())
+        .spinner_frame(state.ui.spinner_frame())
         .thinking_duration(state.ui.thinking_duration())
         .collapsed_tools(&state.ui.collapsed_tools)
         .width(area.width)
         .user_scrolled(state.ui.user_scrolled)
-        .streaming_tool_uses(streaming_tool_uses);
+        .streaming_tool_uses(streaming_tool_uses)
+        .show_system_reminders(state.ui.show_system_reminders);
     frame.render_widget(chat, chunks[0]);
 
     // Queued list widget (if any queued commands)
@@ -333,7 +338,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     .working_dir(state.session.working_dir.as_deref())
     .output_style(state.session.output_style.as_deref())
     .spinner_text(state.ui.spinner_text.as_deref())
-    .animation_frame(state.ui.animation_frame());
+    .spinner_frame(state.ui.spinner_frame());
     frame.render_widget(status_bar, area);
 }
 
@@ -1020,7 +1025,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme, scroll_offs
         category_style(format!("── {} ──", t!("help.category_tools"))),
         shortcut("Ctrl+C", t!("help.ctrl_c").to_string()),
         shortcut("Ctrl+B", t!("help.ctrl_b").to_string()),
+        shortcut("Ctrl+F", t!("help.ctrl_f").to_string()),
         shortcut("Ctrl+Shift+E", t!("help.ctrl_shift_e").to_string()),
+        shortcut("Ctrl+Shift+R", t!("help.ctrl_shift_r").to_string()),
         Line::from(""),
         // UI
         category_style(format!("── {} ──", t!("help.category_ui"))),
