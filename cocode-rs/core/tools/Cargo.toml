@@ -22,12 +22,14 @@ cocode-file-encoding.workspace = true
 cocode-file-ignore.workspace = true
 cocode-plan-mode.workspace = true
 cocode-team.workspace = true
+cocode-cron.workspace = true
 dirs.workspace = true
 cocode-lsp.workspace = true
 cocode-skill.workspace = true
 cocode-otel.workspace = true
 cocode-file-backup.workspace = true
 cocode-git.workspace = true
+cocode-utils-string.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -47,7 +49,6 @@ urlencoding.workspace = true
 sha2.workspace = true
 html2text.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-chrono.workspace = true
 base64.workspace = true
 futures = { workspace = true, default-features = false, features = ["alloc"] }
 

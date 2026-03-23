@@ -64,6 +64,8 @@ command.word_right: "Word Right"
 command.delete_word_backward: "Delete Word Backward"
 command.delete_word_forward: "Delete Word Forward"
 command.insert_newline: "Insert Newline"
+command.kill_to_end_of_line: "Kill to End of Line"
+command.yank: "Yank"
 command.select_all: "Select All"
 
 # Approval
@@ -102,8 +104,14 @@ command.queue_input: "Queue Input"
 # Background
 command.background_all_tasks: "Background All Tasks"
 
+# Kill agents
+command.kill_all_agents: "Kill All Agents"
+
 # Tool collapse
 command.toggle_tool_collapse: "Toggle Tool Collapse"
+
+# System reminders
+command.toggle_system_reminders: "Toggle System Reminders"
 
 # Rewind
 command.show_rewind_selector: "Rewind / Checkpoint"
@@ -255,6 +263,7 @@ help.ctrl_v: "Paste (image or text)"
 help.ctrl_e: "Open external editor"
 help.ctrl_l: "Clear screen"
 help.ctrl_b: "Background running tasks"
+help.ctrl_f: "Kill all running agents"
 help.ctrl_c: "Interrupt"
 help.ctrl_q: "Quit"
 help.enter: "Submit message"
@@ -267,6 +276,7 @@ help.pgup_pgdn: "Page scroll"
 help.ctrl_left_right: "Word movement"
 help.ctrl_bksp: "Delete word backward"
 help.ctrl_shift_e: "Toggle tool results"
+help.ctrl_shift_r: "Toggle system reminders"
 help.esc_esc: "Rewind / Checkpoint selector"
 
 # ============================================================
@@ -297,6 +307,10 @@ toast.stream_watchdog: "Stream watchdog warning"
 # Idle
 toast.idle_waiting: "Claude is waiting for your input"
 
+# System reminders
+toast.system_reminders_shown: "System reminders visible"
+toast.system_reminders_hidden: "System reminders hidden"
+
 # Mode changes
 toast.interrupted: "Interrupted"
 toast.sessions_unavailable: "Session browser not yet available"
@@ -321,6 +335,7 @@ toast.no_output_styles: "No output styles available."
 toast.background_task_started: "Background task started: %{task_type}"
 toast.background_task_completed: "Background task completed"
 toast.agents_killed: "%{count} agent(s) terminated"
+toast.killing_all_agents: "Killing all running agents..."
 
 # API / retry
 toast.retry: "Retrying (%{attempt}/%{max})..."
@@ -349,6 +364,10 @@ toast.unsupported_command: "/%{name} is not yet supported in TUI."
 # Slow query
 toast.slow_query: "Query took %{duration}s"
 
+# Cron
+toast.cron_job_disabled: "Cron job %{job_id} disabled after %{failures} consecutive failures"
+toast.cron_jobs_missed: "%{count} scheduled task(s) missed during downtime:\n%{summary}"
+
 # ============================================================
 # Chat widget
 # ============================================================
@@ -356,6 +375,7 @@ toast.slow_query: "Query took %{duration}s"
 chat.you: "You"
 chat.assistant: "Assistant"
 chat.system: "System"
+chat.system_reminder: "system-reminder"
 chat.messages_count: "%{count} messages"
 chat.scroll_to_bottom: "↓ Scroll to bottom"
 
@@ -410,6 +430,8 @@ palette.clear_screen: "Clear Screen"
 palette.clear_screen_desc: "Clear chat history"
 palette.interrupt: "Interrupt"
 palette.interrupt_desc: "Cancel current operation"
+palette.kill_all_agents: "Kill All Agents"
+palette.kill_all_agents_desc: "Terminate all running agents"
 palette.quit: "Quit"
 palette.quit_desc: "Exit the application"
 

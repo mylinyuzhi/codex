@@ -86,8 +86,6 @@ pub use sandbox::SandboxMode;
 pub use permission::AllowedPrompt;
 pub use permission::ApprovalDecision;
 pub use permission::ApprovalRequest;
-pub use permission::PermissionBehavior;
-pub use permission::PermissionCheckResult;
 pub use permission::PermissionDecision;
 pub use permission::PermissionMode;
 pub use permission::PermissionResult;

@@ -39,7 +39,6 @@ cocode-loop = { workspace = true }
 
 # Text processing
 unicode-width = { workspace = true }
-textwrap = { workspace = true }
 regex = { workspace = true }
 
 # Paste support
@@ -64,6 +63,7 @@ rust-i18n = { workspace = true }
 pretty_assertions = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

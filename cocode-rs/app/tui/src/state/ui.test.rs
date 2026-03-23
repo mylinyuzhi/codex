@@ -714,3 +714,74 @@ fn test_promoted_permission_re_pauses_timing() {
     assert!(ui.query_timing.is_active());
     // The total_paused should have accumulated from Permission A
 }
+
+// ========== Kill Buffer (Ctrl+K / Ctrl+Y) ==========
+
+#[test]
+fn test_kill_to_end_of_line_removes_text() {
+    let mut input = InputState {
+        text: "hello world".to_string(),
+        cursor: 5, // after "hello"
+        ..Default::default()
+    };
+    input.kill_to_end_of_line();
+    pretty_assertions::assert_eq!(input.text, "hello");
+    pretty_assertions::assert_eq!(input.kill_buffer, Some(" world".to_string()));
+}
+
+#[test]
+fn test_kill_at_end_of_line_removes_newline() {
+    let mut input = InputState {
+        text: "hello\nworld".to_string(),
+        cursor: 5, // at the \n
+        ..Default::default()
+    };
+    input.kill_to_end_of_line();
+    pretty_assertions::assert_eq!(input.text, "helloworld");
+    pretty_assertions::assert_eq!(input.kill_buffer, Some("\n".to_string()));
+}
+
+#[test]
+fn test_kill_on_empty_is_noop() {
+    let mut input = InputState::default();
+    input.kill_to_end_of_line();
+    pretty_assertions::assert_eq!(input.text, "");
+    pretty_assertions::assert_eq!(input.kill_buffer, None);
+}
+
+#[test]
+fn test_yank_inserts_killed_text() {
+    let mut input = InputState {
+        text: "hello".to_string(),
+        cursor: 5,
+        kill_buffer: Some(" world".to_string()),
+        ..Default::default()
+    };
+    input.yank();
+    pretty_assertions::assert_eq!(input.text, "hello world");
+}
+
+#[test]
+fn test_yank_with_empty_buffer_is_noop() {
+    let mut input = InputState {
+        text: "hello".to_string(),
+        cursor: 5,
+        ..Default::default()
+    };
+    input.yank();
+    pretty_assertions::assert_eq!(input.text, "hello");
+}
+
+#[test]
+fn test_kill_buffer_persists_across_kills() {
+    let mut input = InputState {
+        text: "line1\nline2".to_string(),
+        cursor: 0,
+        ..Default::default()
+    };
+    input.kill_to_end_of_line();
+    pretty_assertions::assert_eq!(input.kill_buffer, Some("line1".to_string()));
+    // Second kill overwrites
+    input.kill_to_end_of_line();
+    pretty_assertions::assert_eq!(input.kill_buffer, Some("\n".to_string()));
+}

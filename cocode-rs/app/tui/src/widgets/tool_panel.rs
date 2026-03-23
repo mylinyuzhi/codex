@@ -94,7 +94,14 @@ impl<'a> ToolPanel<'a> {
     }
 
     /// Format a tool for display.
-    fn format_tool(tool: &ToolExecution, theme: &Theme) -> ListItem<'static> {
+    ///
+    /// If `is_parallel` is true, a parallel indicator is shown before the status icon.
+    fn format_tool(tool: &ToolExecution, theme: &Theme, is_parallel: bool) -> ListItem<'static> {
+        let parallel_prefix = if is_parallel {
+            Span::raw("‖").fg(theme.text_dim)
+        } else {
+            Span::raw(" ")
+        };
         let status_icon = match tool.status {
             ToolStatus::Running => Span::raw("⏳").fg(theme.tool_running),
             ToolStatus::Completed => Span::raw("✓").fg(theme.tool_completed),
@@ -155,7 +162,7 @@ impl<'a> ToolPanel<'a> {
                 .unwrap_or_else(|| Span::raw("")),
         };
 
-        let line = Line::from(vec![status_icon, name, progress, elapsed]);
+        let line = Line::from(vec![parallel_prefix, status_icon, name, progress, elapsed]);
         ListItem::new(line)
     }
 }
@@ -173,10 +180,25 @@ impl Widget for ToolPanel<'_> {
         // Take the most recent tools
         let display_tools: Vec<_> = self.tools.iter().rev().take(self.max_display).collect();
 
+        // Determine which batch_ids appear more than once (= parallel tools)
+        let mut batch_counts: std::collections::HashMap<&str, i32> =
+            std::collections::HashMap::new();
+        for t in &display_tools {
+            if let Some(ref bid) = t.batch_id {
+                *batch_counts.entry(bid.as_str()).or_default() += 1;
+            }
+        }
+
         let mut items: Vec<ListItem> = display_tools
             .iter()
             .rev()
-            .map(|t| Self::format_tool(t, self.theme))
+            .map(|t| {
+                let is_parallel = t
+                    .batch_id
+                    .as_deref()
+                    .is_some_and(|bid| batch_counts.get(bid).copied().unwrap_or(0) > 1);
+                Self::format_tool(t, self.theme, is_parallel)
+            })
             .collect();
 
         // Show streaming tool uses (tools being built during streaming)

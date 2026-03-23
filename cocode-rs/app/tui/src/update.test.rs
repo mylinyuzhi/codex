@@ -82,6 +82,7 @@ fn test_handle_agent_event_tool_lifecycle() {
         LoopEvent::ToolUseStarted {
             call_id: "call-1".to_string(),
             name: "bash".to_string(),
+            batch_id: None,
         },
     );
 
