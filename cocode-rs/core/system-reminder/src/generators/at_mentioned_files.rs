@@ -23,9 +23,11 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use crate::Result;
-use crate::config::AtMentionedFilesConfig;
 use crate::config::SystemReminderConfig;
+use crate::file_context_resolver::FileReadConfig;
 use crate::file_context_resolver::MentionReadDecision;
+use crate::file_context_resolver::ReadFileResult;
+use crate::file_context_resolver::read_file_with_limits;
 use crate::file_context_resolver::resolve_mentions;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
@@ -122,19 +124,43 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                 }
             }
 
-            // File is not cached or has changed - read it
-            // Format matches Claude Code's Read tool output format
+            // Handle directories before attempting file read
+            if resolved_path.is_dir() {
+                let file_path_str = resolved_path.to_string_lossy();
+                match list_directory(resolved_path) {
+                    Ok(listing) => {
+                        content.push_str(&format!(
+                            "Called the Read tool with the following input: {{\"file_path\":\"{file_path_str}\"}}\n"
+                        ));
+                        content.push_str(&format!(
+                            "Result of calling the Read tool (directory listing):\n{listing}\n\n"
+                        ));
+                    }
+                    Err(dir_err) => {
+                        content.push_str(&format!(
+                            "Error reading directory {file_path_str}: {dir_err}\n\n"
+                        ));
+                    }
+                }
+                continue;
+            }
+
             let file_path_str = resolved_path.to_string_lossy();
             let has_line_range = resolution.line_start.is_some() || resolution.line_end.is_some();
 
-            // Read file content with limits
-            match read_file_content(
+            let read_config = FileReadConfig {
+                max_file_size: file_config.max_file_size,
+                max_lines: file_config.max_lines,
+                max_line_length: file_config.max_line_length,
+            };
+
+            match read_file_with_limits(
                 resolved_path,
                 resolution.line_start,
                 resolution.line_end,
-                file_config,
+                &read_config,
             ) {
-                Ok(ReadResult::Content(file_content)) => {
+                ReadFileResult::Content(file_content) => {
                     // Get file mtime for FileTracker
                     let file_mtime = fs::metadata(resolved_path)
                         .ok()
@@ -172,8 +198,7 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                         escape_json_string(&file_content)
                     ));
                 }
-                Ok(ReadResult::TooLarge { size, max }) => {
-                    // File too large - show error message
+                ReadFileResult::TooLarge { size, max } => {
                     content.push_str(&format!(
                         "Called the Read tool with the following input: {{\"file_path\":\"{file_path_str}\"}}\n"
                     ));
@@ -181,27 +206,8 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
                         "Error: File too large ({size} bytes, max {max} bytes)\n\n"
                     ));
                 }
-                Err(e) => {
-                    // Handle directories
-                    if resolved_path.is_dir() {
-                        match list_directory(resolved_path) {
-                            Ok(listing) => {
-                                content.push_str(&format!(
-                                    "Called the Read tool with the following input: {{\"file_path\":\"{file_path_str}\"}}\n"
-                                ));
-                                content.push_str(&format!(
-                                    "Result of calling the Read tool (directory listing):\n{listing}\n\n"
-                                ));
-                            }
-                            Err(dir_err) => {
-                                content.push_str(&format!(
-                                    "Error reading directory {file_path_str}: {dir_err}\n\n"
-                                ));
-                            }
-                        }
-                    } else {
-                        content.push_str(&format!("Error reading file {file_path_str}: {e}\n\n"));
-                    }
+                ReadFileResult::Error(e) => {
+                    content.push_str(&format!("Error reading file {file_path_str}: {e}\n\n"));
                 }
             }
         }
@@ -231,102 +237,6 @@ impl AttachmentGenerator for AtMentionedFilesGenerator {
             AttachmentType::AtMentionedFiles,
             content.trim(),
         )))
-    }
-}
-
-/// Result of reading a file with limits applied.
-enum ReadResult {
-    /// File content successfully read.
-    Content(String),
-    /// File is too large.
-    TooLarge { size: i64, max: i64 },
-}
-
-/// Read file content, optionally with line range, respecting config limits.
-fn read_file_content(
-    path: &Path,
-    line_start: Option<i32>,
-    line_end: Option<i32>,
-    config: &AtMentionedFilesConfig,
-) -> std::io::Result<ReadResult> {
-    // Check file size first
-    let metadata = fs::metadata(path)?;
-    let file_size = metadata.len() as i64;
-    if file_size > config.max_file_size {
-        return Ok(ReadResult::TooLarge {
-            size: file_size,
-            max: config.max_file_size,
-        });
-    }
-
-    let content = fs::read_to_string(path)?;
-
-    match (line_start, line_end) {
-        (Some(start), Some(end)) => {
-            // Extract line range (1-indexed)
-            let lines: Vec<&str> = content.lines().collect();
-            let start_idx = (start - 1).max(0) as usize;
-            let end_idx = (end as usize).min(lines.len());
-
-            if start_idx >= lines.len() {
-                return Ok(ReadResult::Content(String::new()));
-            }
-
-            // Format with line numbers, applying line length limit
-            let mut result = String::new();
-            for (i, line) in lines[start_idx..end_idx].iter().enumerate() {
-                let line_num = start_idx + i + 1;
-                let truncated = truncate_line(line, config.max_line_length);
-                result.push_str(&format!("{line_num:>6}\t{truncated}\n"));
-            }
-            Ok(ReadResult::Content(result))
-        }
-        (Some(start), None) => {
-            // From line start to EOF (with max_lines limit)
-            let lines: Vec<&str> = content.lines().collect();
-            let start_idx = (start - 1).max(0) as usize;
-            if start_idx >= lines.len() {
-                return Ok(ReadResult::Content(String::new()));
-            }
-            let mut result = String::new();
-            for (i, line) in lines[start_idx..].iter().enumerate() {
-                if i as i32 >= config.max_lines {
-                    let remaining = lines.len() - start_idx - i;
-                    result.push_str(&format!("\n... truncated ({remaining} more lines)\n"));
-                    break;
-                }
-                let line_num = start_idx + i + 1;
-                let truncated = truncate_line(line, config.max_line_length);
-                result.push_str(&format!("{line_num:>6}\t{truncated}\n"));
-            }
-            Ok(ReadResult::Content(result))
-        }
-        _ => {
-            // Full file with line numbers, respecting max_lines
-            let mut result = String::new();
-            for (i, line) in content.lines().enumerate() {
-                if i as i32 >= config.max_lines {
-                    result.push_str(&format!(
-                        "\n... truncated ({} more lines)\n",
-                        content.lines().count() as i32 - config.max_lines
-                    ));
-                    break;
-                }
-                let line_num = i + 1;
-                let truncated = truncate_line(line, config.max_line_length);
-                result.push_str(&format!("{line_num:>6}\t{truncated}\n"));
-            }
-            Ok(ReadResult::Content(result))
-        }
-    }
-}
-
-/// Truncate a line if it exceeds the max length.
-fn truncate_line(line: &str, max_length: i32) -> String {
-    if line.len() > max_length as usize {
-        format!("{}...", &line[..max_length as usize])
-    } else {
-        line.to_string()
     }
 }
 

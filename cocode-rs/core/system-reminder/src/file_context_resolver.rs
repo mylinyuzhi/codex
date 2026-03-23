@@ -202,19 +202,15 @@ fn format_content_with_lines(
 }
 
 /// Truncate a line if it exceeds the max length.
-fn truncate_line(line: &str, max_length: i32) -> String {
+pub(crate) fn truncate_line(line: &str, max_length: i32) -> String {
     if line.len() > max_length as usize {
-        format!("{}...", &line[..max_length as usize])
+        format!(
+            "{}...",
+            &line[..line.floor_char_boundary(max_length as usize)]
+        )
     } else {
         line.to_string()
     }
-}
-
-/// Estimate token count for content.
-///
-/// Uses ~4 characters per token approximation.
-pub fn estimate_tokens(content: &str) -> usize {
-    content.len() / 4
 }
 
 /// Check if a file should be considered for already-read caching.

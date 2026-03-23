@@ -42,7 +42,7 @@ impl SystemPromptBuilder {
         ordered_sections.push((PromptSection::Identity, identity));
 
         // 2. Tool policy (if tools present) — skipped when output style has keep_coding=false
-        if ctx.has_tools() && keep_coding {
+        if !ctx.tool_names.is_empty() && keep_coding {
             let mut policy = engine::render("tool_policy", minijinja::context! {});
             let tool_lines = sections::generate_tool_policy_lines(&ctx.tool_names);
             if !tool_lines.is_empty() {
@@ -72,7 +72,7 @@ impl SystemPromptBuilder {
         }
 
         // 6. MCP instructions (if MCP servers present)
-        if ctx.has_mcp_servers() {
+        if !ctx.mcp_server_names.is_empty() {
             ordered_sections.push((
                 PromptSection::McpInstructions,
                 templates::MCP_INSTRUCTIONS.to_string(),

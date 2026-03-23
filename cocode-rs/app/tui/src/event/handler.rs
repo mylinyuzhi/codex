@@ -209,6 +209,9 @@ fn handle_overlay_key(key: KeyEvent) -> Option<TuiCommand> {
         // Backspace for filter
         KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
 
+        // Delete key (session browser delete action)
+        KeyCode::Delete => Some(TuiCommand::DeleteForward),
+
         _ => None,
     }
 }
@@ -272,6 +275,9 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
 
         // Alt+V: Windows fallback where Ctrl+V may be intercepted by terminal
         (KeyModifiers::ALT, KeyCode::Char('v')) => Some(TuiCommand::PasteFromClipboard),
+
+        // Select all (Ctrl+A)
+        (KeyModifiers::CONTROL, KeyCode::Char('a')) => Some(TuiCommand::SelectAll),
 
         // Cancel (Escape)
         (_, KeyCode::Esc) => Some(TuiCommand::Cancel),

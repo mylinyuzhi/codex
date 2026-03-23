@@ -123,9 +123,8 @@ impl AgentLoop {
                     limit,
                     read_kind,
                 } => {
-                    // Update the shared file tracker with the file read state
-                    let tracker = self.shared_tools_file_tracker.lock().await;
-                    // Convert mtime from ms if provided, otherwise get from filesystem
+                    // Convert mtime from ms if provided, otherwise get from filesystem.
+                    // Done before acquiring the lock to avoid holding it across I/O.
                     let file_mtime = if let Some(ms) = file_mtime_ms {
                         std::time::UNIX_EPOCH
                             .checked_add(std::time::Duration::from_millis(*ms as u64))
@@ -152,20 +151,11 @@ impl AgentLoop {
                             )
                         }
                         cocode_protocol::FileReadKind::MetadataOnly => {
-                            // For metadata-only, we just record that the file was touched
-                            FileReadState {
-                                content: None,
-                                timestamp: std::time::SystemTime::now(),
-                                file_mtime,
-                                content_hash: None,
-                                offset: None,
-                                limit: None,
-                                kind: cocode_protocol::FileReadKind::MetadataOnly,
-                                access_count: 1,
-                                read_turn: self.turn_number,
-                            }
+                            FileReadState::metadata_only(file_mtime, self.turn_number)
                         }
                     };
+                    // Update the shared file tracker with the file read state
+                    let tracker = self.shared_tools_file_tracker.lock().await;
                     tracker.track_read(path.clone(), state);
                     debug!(
                         path = %path.display(),

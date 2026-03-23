@@ -64,6 +64,7 @@ command.word_right: "下一个单词"
 command.delete_word_backward: "删除前一个单词"
 command.delete_word_forward: "删除后一个单词"
 command.insert_newline: "插入换行"
+command.select_all: "全选"
 
 # 审批
 command.approve: "批准"
@@ -233,6 +234,8 @@ dialog.plan_exit_keep_elevate: "是，保留上下文并提升权限"
 dialog.plan_exit_keep_default: "是，保留上下文并手动审批"
 dialog.plan_exit_keep_planning: "否，继续计划"
 dialog.plan_exit_hints: "↑/↓: 导航  Enter: 选择  Esc: 继续计划"
+dialog.plan_exit_feedback_prompt: "计划反馈（可选）："
+dialog.plan_exit_feedback_placeholder: "输入反馈，然后按 Enter..."
 
 # Question overlay (AskUserQuestion)
 dialog.question_title: "提问"
@@ -287,6 +290,65 @@ toast.mcp_failed: "MCP: %{server} 失败"
 toast.mcp_connected: "%{count} 个 MCP 服务器已连接"
 toast.mcp_error: "MCP %{name}: %{error}"
 
+# 流式传输警告
+toast.stream_stall: "流式传输停滞"
+toast.stream_watchdog: "流式传输看门狗警告"
+
+# 空闲
+toast.idle_waiting: "Claude 正在等待您的输入"
+
+# 模式切换
+toast.interrupted: "已中断"
+toast.sessions_unavailable: "会话浏览器暂不可用"
+toast.permission_mode: "权限模式：%{mode}"
+toast.thinking_level: "思考级别：%{level}"
+
+# 限制
+toast.max_turns_reached: "已达最大轮次"
+toast.tool_aborted: "工具执行已中止"
+toast.compaction_circuit_breaker: "压缩断路器已打开"
+
+# 计划编辑器
+toast.plan_saved: "计划已保存！"
+toast.plan_save_failed: "保存计划失败：%{error}"
+toast.no_plan_file: "尚无可用的计划文件。"
+toast.plan_editor_hint: "Ctrl+G：在编辑器中打开计划文件（仅计划模式）"
+
+# 输出风格
+toast.no_output_styles: "没有可用的输出风格。"
+
+# 后台任务
+toast.background_task_started: "后台任务已开始：%{task_type}"
+toast.background_task_completed: "后台任务已完成"
+toast.agents_killed: "已终止 %{count} 个代理"
+
+# API / 重试
+toast.retry: "正在重试（%{attempt}/%{max}）..."
+toast.api_error: "API 错误：%{message}"
+
+# MCP 工具调用
+toast.mcp_tool_started: "MCP：%{server}/%{tool}"
+toast.mcp_tool_failed: "MCP 工具失败：%{server}/%{tool}"
+
+# 微压缩和会话记忆
+toast.micro_compaction: "微压缩了 %{count} 个结果（%{tokens} tokens）"
+toast.session_memory_started: "正在提取会话记忆..."
+toast.session_memory_completed: "会话记忆已更新"
+toast.session_memory_failed: "会话记忆提取失败"
+toast.session_memory_compact: "会话记忆已压缩（%{saved} tokens）"
+
+# 推测执行
+toast.speculative_rolled_back: "推测已回滚：%{reason}"
+
+# 编辑器
+toast.editor_error: "编辑器错误：%{error}"
+
+# 不支持的命令
+toast.unsupported_command: "/%{name} 在 TUI 中尚不支持。"
+
+# 慢查询
+toast.slow_query: "查询耗时 %{duration} 秒"
+
 # ============================================================
 # 聊天组件
 # ============================================================
@@ -295,12 +357,14 @@ chat.you: "你"
 chat.assistant: "助手"
 chat.system: "系统"
 chat.messages_count: "%{count} 条消息"
+chat.scroll_to_bottom: "↓ 滚动到底部"
 
 # 思考显示
 chat.thinking_tokens: "思考 (%{tokens} tokens):"
 chat.thinking_collapsed: "思考 (%{tokens} tokens) [Ctrl+Shift+T 展开]"
 chat.thinking_active: "思考中 (%{duration}):"
 chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [Ctrl+Shift+T 展开]"
+chat.waiting_for_response: "等待响应..."
 
 # ============================================================
 # 输入组件
@@ -357,6 +421,7 @@ header.new_session: "新会话"
 header.turn_count: "%{count} 轮"
 header.compacting: "压缩中..."
 header.fallback: "回退: %{model}"
+header.worktrees: "工作树: %{count}"
 
 # ============================================================
 # 状态栏（附加）
@@ -396,3 +461,10 @@ subagent.completed: "已完成"
 subagent.backgrounded: "后台运行"
 subagent.step_progress: "步骤 %{current}/%{total}"
 subagent.more: "+%{count} 更多..."
+
+# ============================================================
+# 欢迎 / 空状态
+# ============================================================
+
+chat.welcome: "欢迎！在下方输入消息开始对话。"
+chat.welcome_shortcuts: "快捷键："

@@ -1489,43 +1489,6 @@ fn estimate_tokens_for_text(text: &str) -> i32 {
     cocode_protocol::estimate_text_tokens(text)
 }
 
-/// Format context restoration as a message for the conversation.
-pub fn format_restoration_message(restoration: &ContextRestoration) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(plan) = &restoration.plan {
-        parts.push(format!("<plan_context>\n{plan}\n</plan_context>"));
-    }
-
-    if let Some(todos) = &restoration.todos {
-        parts.push(format!("<todo_list>\n{todos}\n</todo_list>"));
-    }
-
-    if !restoration.skills.is_empty() {
-        parts.push(format!(
-            "<active_skills>\n{}\n</active_skills>",
-            restoration.skills.join("\n")
-        ));
-    }
-
-    for file in &restoration.files {
-        parts.push(format!(
-            "<file path=\"{}\">\n{}\n</file>",
-            file.path.display(),
-            file.content
-        ));
-    }
-
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<restored_context>\n{}\n</restored_context>",
-            parts.join("\n\n")
-        )
-    }
-}
-
 // ============================================================================
 // Summary Formatting with Transcript Reference
 // ============================================================================

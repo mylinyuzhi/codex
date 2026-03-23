@@ -40,26 +40,6 @@ fn test_approval_store_wildcard() {
 }
 
 #[test]
-fn test_matches_wildcard() {
-    // Universal
-    assert!(ApprovalStore::matches_wildcard("*", "anything"));
-
-    // Space-star prefix
-    assert!(ApprovalStore::matches_wildcard("git *", "git push"));
-    assert!(ApprovalStore::matches_wildcard("git *", "git"));
-    assert!(!ApprovalStore::matches_wildcard("git *", "gitx"));
-
-    // Trailing star (no space)
-    assert!(ApprovalStore::matches_wildcard("git*", "git"));
-    assert!(ApprovalStore::matches_wildcard("git*", "gitx"));
-    assert!(ApprovalStore::matches_wildcard("git*", "git push"));
-
-    // Exact match
-    assert!(ApprovalStore::matches_wildcard("git status", "git status"));
-    assert!(!ApprovalStore::matches_wildcard("git status", "git push"));
-}
-
-#[test]
 fn test_file_tracker() {
     let tracker = FileTracker::new();
 

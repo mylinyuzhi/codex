@@ -17,11 +17,11 @@ use cocode_symbol_search::SymbolKind;
 
 use crate::state::SymbolSuggestionItem;
 
-/// Debounce delay in milliseconds.
-const DEBOUNCE_MS: u64 = 100;
+/// Debounce delay for symbol search queries.
+const DEBOUNCE_MS: u64 = crate::constants::SYMBOL_SEARCH_DEBOUNCE.as_millis() as u64;
 
-/// Maximum number of suggestions to return.
-const MAX_SUGGESTIONS: i32 = 15;
+/// Maximum number of symbol search suggestions.
+const MAX_SUGGESTIONS: i32 = crate::constants::SYMBOL_SEARCH_MAX_SUGGESTIONS;
 
 /// Events sent from the symbol search manager to the TUI.
 #[derive(Debug, Clone)]
@@ -177,7 +177,7 @@ pub fn create_symbol_search_channel() -> (
     mpsc::Sender<SymbolSearchEvent>,
     mpsc::Receiver<SymbolSearchEvent>,
 ) {
-    mpsc::channel(16)
+    mpsc::channel(crate::constants::SYMBOL_SEARCH_CHANNEL_BUFFER as usize)
 }
 
 /// Convert a `SymbolKind` to a short display label.

@@ -256,7 +256,7 @@ pub struct SessionState {
     config: Arc<Config>,
 
     /// Pre-configured permission rules loaded from config.
-    permission_rules: Vec<cocode_tools::PermissionRule>,
+    permission_rules: Vec<cocode_policy::PermissionRule>,
 
     /// Current task list (updated by TodoWrite tool via ContextModifier).
     todos: serde_json::Value,
@@ -299,7 +299,7 @@ pub struct SessionState {
     ///
     /// Pre-declared permissions from `ExitPlanMode`'s `allowedPrompts` are
     /// injected here so they survive across `AgentLoop` instances.
-    shared_approval_store: Arc<tokio::sync::Mutex<cocode_tools::ApprovalStore>>,
+    shared_approval_store: Arc<tokio::sync::Mutex<cocode_policy::ApprovalStore>>,
 
     /// Reminder file tracker state persisted across AgentLoop runs.
     ///
@@ -647,7 +647,7 @@ impl SessionState {
 
         // Load permission rules from config snapshot
         let permission_rules = match config.permissions {
-            Some(ref perms) => cocode_tools::PermissionRuleEvaluator::rules_from_config(
+            Some(ref perms) => cocode_policy::PermissionRuleEvaluator::rules_from_config(
                 perms,
                 cocode_protocol::RuleSource::User,
             ),
@@ -752,7 +752,7 @@ impl SessionState {
             plan_mode_state: PlanModeState::new(),
             question_responder: Arc::new(cocode_tools::QuestionResponder::new()),
             shared_approval_store: Arc::new(tokio::sync::Mutex::new(
-                cocode_tools::ApprovalStore::new(),
+                cocode_policy::ApprovalStore::new(),
             )),
             reminder_file_tracker_state: Vec::new(),
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),

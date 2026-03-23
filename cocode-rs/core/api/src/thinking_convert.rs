@@ -3,8 +3,8 @@
 //! Converts the unified `ThinkingLevel` from `cocode_protocol` to
 //! provider-specific options using vercel-ai's HashMap-based `ProviderOptions`.
 
-use crate::JSONValue;
 use crate::ProviderOptions;
+use crate::request_options_merge::build_options;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderApi;
 use cocode_protocol::ThinkingLevel;
@@ -35,13 +35,6 @@ pub fn to_provider_options(
         ProviderApi::Volcengine => to_volcengine_options(level),
         ProviderApi::Zai => to_zai_options(level),
     }
-}
-
-/// Build a ProviderOptions with a single provider entry.
-fn build_options(provider_name: &str, opts: HashMap<String, JSONValue>) -> ProviderOptions {
-    let mut map = HashMap::new();
-    map.insert(provider_name.to_string(), opts);
-    ProviderOptions::from_map(map)
 }
 
 /// Anthropic: Adaptive (no budget) or Enabled (with budget) for extended thinking.
