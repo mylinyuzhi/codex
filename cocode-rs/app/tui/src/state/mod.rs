@@ -8,9 +8,12 @@
 mod session;
 mod ui;
 
+pub use session::BackgroundTask;
+pub use session::BackgroundTaskStatus;
 pub use session::ChatMessage;
 pub use session::InlineToolCall;
 pub use session::McpServerStatus;
+pub use session::McpToolCall;
 pub use session::MessageRole;
 pub use session::PlanPhase;
 pub use session::SessionState;
@@ -23,6 +26,10 @@ pub use ui::AgentSuggestionState;
 pub use ui::CommandAction;
 pub use ui::CommandItem;
 pub use ui::CommandPaletteOverlay;
+pub use ui::ElicitationField;
+pub use ui::ElicitationFieldType;
+pub use ui::ElicitationMode;
+pub use ui::ElicitationOverlay;
 pub use ui::FileSuggestionItem;
 pub use ui::FileSuggestionState;
 pub use ui::FocusTarget;
@@ -178,6 +185,25 @@ impl AppState {
     /// Check if the agent is currently streaming a response.
     pub fn is_streaming(&self) -> bool {
         self.ui.streaming.is_some()
+    }
+
+    /// Whether the spinner animation should run and trigger redraws.
+    ///
+    /// Suppresses spinner when a blocking overlay (Permission, Question,
+    /// Elicitation) is active, matching Claude Code's `showSpinner` logic.
+    pub fn should_show_spinner(&self) -> bool {
+        if !self.is_streaming() {
+            return false;
+        }
+        !matches!(
+            self.ui.overlay,
+            Some(
+                Overlay::Permission(_)
+                    | Overlay::PlanExitApproval(_)
+                    | Overlay::Question(_)
+                    | Overlay::Elicitation(_)
+            )
+        )
     }
 }
 

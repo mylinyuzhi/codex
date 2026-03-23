@@ -45,7 +45,7 @@ impl AttachmentGenerator for LspDiagnosticsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        if !ctx.has_diagnostics() {
+        if ctx.diagnostics.is_empty() {
             return Ok(None);
         }
 

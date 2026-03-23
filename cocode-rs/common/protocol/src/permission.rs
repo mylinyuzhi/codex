@@ -191,6 +191,19 @@ impl PermissionDecision {
         }
     }
 
+    /// Create a "needs approval" decision for an ask rule.
+    pub fn ask(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            result: PermissionResult::NeedsApproval {
+                request: ApprovalRequest::default(),
+            },
+            reason,
+            source: None,
+            matched_pattern: None,
+        }
+    }
+
     /// Set the rule source.
     pub fn with_source(mut self, source: RuleSource) -> Self {
         self.source = Some(source);
@@ -384,7 +397,7 @@ impl PlanExitOption {
 }
 
 /// Request for user approval of an operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     /// Unique identifier for this request.
     pub request_id: String,

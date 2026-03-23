@@ -587,7 +587,7 @@ fn test_approval_check_value_fallback_to_description() {
 
 #[test]
 fn test_approval_wildcard_matches_raw_command() {
-    use crate::context::ApprovalStore;
+    use cocode_policy::ApprovalStore;
 
     let mut store = ApprovalStore::new();
     // Simulate user approving "git *" prefix pattern

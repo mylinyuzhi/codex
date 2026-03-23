@@ -30,7 +30,7 @@ use regex::Regex;
 const INLINE_THRESHOLD_BYTES: usize = 1024;
 
 /// Maximum number of inline cache entries before LRU eviction.
-const MAX_INLINE_ENTRIES: usize = 100;
+const MAX_INLINE_ENTRIES: usize = crate::constants::MAX_PASTE_INLINE_ENTRIES as usize;
 
 /// Type of pasted content.
 #[derive(Debug, Clone)]

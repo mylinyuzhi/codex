@@ -286,8 +286,7 @@ impl MessageHistory {
         }
 
         let estimated = self.estimate_tokens();
-        let threshold =
-            (self.config.context_window as f32 * self.config.compaction_threshold) as i32;
+        let threshold = self.compaction_threshold_tokens();
 
         estimated > threshold || self.turn_count() > self.config.max_turns
     }

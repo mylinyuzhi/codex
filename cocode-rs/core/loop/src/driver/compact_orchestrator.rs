@@ -30,7 +30,7 @@ use crate::compaction::build_context_restoration_with_config;
 use crate::compaction::build_file_read_state;
 use crate::compaction::calculate_keep_start_index;
 use crate::compaction::find_session_memory_boundary;
-use crate::compaction::format_restoration_message;
+use crate::compaction::format_restoration_with_tasks;
 use crate::compaction::format_summary_with_transcript;
 use crate::compaction::is_internal_file;
 use crate::compaction::map_message_index_to_keep_turns;
@@ -829,7 +829,7 @@ impl AgentLoop {
         self.pending_compacted_large_files = restoration.compacted_large_files.clone();
 
         // Format and inject restoration message if there's content to restore
-        let restoration_message = format_restoration_message(&restoration);
+        let restoration_message = format_restoration_with_tasks(&restoration, None);
         if !restoration_message.is_empty() {
             let files_count = restoration.files.len();
             debug!(

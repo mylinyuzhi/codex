@@ -15,11 +15,11 @@ use tokio::time::Instant;
 
 use crate::state::FileSuggestionItem;
 
-/// Debounce delay in milliseconds (aligned with codex-rs pattern).
-const DEBOUNCE_MS: u64 = 100;
+/// Debounce delay for file search queries.
+const DEBOUNCE_MS: u64 = crate::constants::FILE_SEARCH_DEBOUNCE.as_millis() as u64;
 
-/// Maximum number of suggestions to return.
-const MAX_SUGGESTIONS: i32 = 15;
+/// Maximum number of file search suggestions.
+const MAX_SUGGESTIONS: i32 = crate::constants::FILE_SEARCH_MAX_SUGGESTIONS;
 
 /// Events sent from the file search manager to the TUI.
 #[derive(Debug, Clone)]
@@ -283,7 +283,7 @@ pub fn create_file_search_channel() -> (
     mpsc::Sender<FileSearchEvent>,
     mpsc::Receiver<FileSearchEvent>,
 ) {
-    mpsc::channel(16)
+    mpsc::channel(crate::constants::FILE_SEARCH_CHANNEL_BUFFER as usize)
 }
 
 #[cfg(test)]

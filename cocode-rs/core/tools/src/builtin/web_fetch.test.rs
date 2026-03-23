@@ -42,66 +42,6 @@ fn test_transform_github_url_nested_blob() {
     );
 }
 
-// ========== UTF-8 Truncation Safety Tests ==========
-
-#[test]
-fn test_truncate_utf8_safe_ascii() {
-    let s = "hello world";
-    assert_eq!(truncate_utf8_safe(s, 5), "hello");
-}
-
-#[test]
-fn test_truncate_utf8_safe_multibyte() {
-    // Chinese chars: 中 = 3 bytes each
-    let s = "中文测试"; // 12 bytes total (4 chars × 3 bytes)
-    let truncated = truncate_utf8_safe(s, 7); // Should cut at char boundary (6 bytes)
-    assert_eq!(truncated, "中文"); // 6 bytes, not 7 (avoids split)
-    assert_eq!(truncated.len(), 6);
-}
-
-#[test]
-fn test_truncate_utf8_safe_emoji() {
-    // Emoji: 👋 = 4 bytes, 🌍 = 4 bytes
-    let s = "Hello 👋🌍"; // "Hello " = 6 bytes, 👋 = 4 bytes, 🌍 = 4 bytes = 14 total
-    let truncated = truncate_utf8_safe(s, 10); // "Hello " + 👋 = 10 bytes exactly
-    assert_eq!(truncated, "Hello 👋");
-    assert_eq!(truncated.len(), 10);
-}
-
-#[test]
-fn test_truncate_utf8_safe_no_truncation() {
-    let s = "short";
-    assert_eq!(truncate_utf8_safe(s, 100), "short");
-}
-
-#[test]
-fn test_truncate_utf8_safe_boundary_in_middle_of_char() {
-    // Cut at position 8 which is in the middle of 测 (bytes 6-8)
-    let s = "中文测试"; // 中=0-2, 文=3-5, 测=6-8, 试=9-11
-    let truncated = truncate_utf8_safe(s, 8);
-    assert_eq!(truncated, "中文"); // Should back up to byte 6
-    assert_eq!(truncated.len(), 6);
-}
-
-#[test]
-fn test_truncate_utf8_safe_empty_string() {
-    assert_eq!(truncate_utf8_safe("", 10), "");
-}
-
-#[test]
-fn test_truncate_utf8_safe_zero_max() {
-    assert_eq!(truncate_utf8_safe("hello", 0), "");
-}
-
-#[test]
-fn test_truncate_utf8_safe_large() {
-    let chinese = "测".repeat(50000); // 150,000 bytes
-    let truncated = truncate_utf8_safe(&chinese, 100_000);
-    assert!(truncated.len() <= 100_000);
-    assert!(chinese.is_char_boundary(truncated.len()));
-    assert!(truncated.chars().count() > 0);
-}
-
 // ========== HTML to Text Tests ==========
 
 #[test]

@@ -10,9 +10,11 @@
 //!
 //! Files are loaded in alphabetical order and merged. Duplicate slugs/names are an error.
 
+use crate::diagnostics;
 use crate::error::ConfigError;
 use crate::error::config_error::IoSnafu;
 use crate::error::config_error::JsonParseSnafu;
+use crate::error::config_error::JsonParseWithLocationSnafu;
 use crate::error::config_error::JsoncParseSnafu;
 use crate::json_config::AppConfig;
 use crate::types::ModelsFile;
@@ -20,6 +22,7 @@ use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
 use cocode_protocol::ModelInfo;
 use jsonc_parser::ParseOptions;
+use snafu::IntoError;
 use snafu::ResultExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -256,8 +259,31 @@ impl ConfigLoader {
             }
         }
 
-        serde_json::from_value(base).context(JsonParseSnafu {
-            file: base_path.display().to_string(),
+        serde_json::from_value(base).map_err(|serde_err| {
+            // Try to produce a rich diagnostic from the raw config.json file.
+            // Re-read the file and use serde_path_to_error for precise location.
+            if let Ok(raw_contents) = std::fs::read_to_string(&base_path)
+                && let Err(diag) = diagnostics::deserialize_json_with_diagnostics::<AppConfig>(
+                    &raw_contents,
+                    &base_path,
+                )
+            {
+                let annotation = diagnostics::format_diagnostic(&diag, &raw_contents);
+                return JsonParseWithLocationSnafu {
+                    file: base_path.display().to_string(),
+                    line: diag.range.start.line,
+                    column: diag.range.start.column,
+                    message: diag.message,
+                    annotation,
+                }
+                .build();
+            }
+            // Fallback to generic serde error if re-parse succeeds (e.g., local
+            // overlay introduced the error).
+            JsonParseSnafu {
+                file: base_path.display().to_string(),
+            }
+            .into_error(serde_err)
         })
     }
 
@@ -311,8 +337,26 @@ impl ConfigLoader {
         if value.is_null() || value.as_object().is_some_and(serde_json::Map::is_empty) {
             return Ok(T::default());
         }
-        serde_json::from_value(value).context(JsonParseSnafu {
-            file: path.display().to_string(),
+        serde_json::from_value(value).map_err(|serde_err| {
+            // Try to produce a rich diagnostic from the raw file.
+            if let Ok(raw_contents) = std::fs::read_to_string(path)
+                && let Err(diag) =
+                    diagnostics::deserialize_json_with_diagnostics::<T>(&raw_contents, path)
+            {
+                let annotation = diagnostics::format_diagnostic(&diag, &raw_contents);
+                return JsonParseWithLocationSnafu {
+                    file: path.display().to_string(),
+                    line: diag.range.start.line,
+                    column: diag.range.start.column,
+                    message: diag.message,
+                    annotation,
+                }
+                .build();
+            }
+            JsonParseSnafu {
+                file: path.display().to_string(),
+            }
+            .into_error(serde_err)
         })
     }
 

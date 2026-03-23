@@ -1124,6 +1124,17 @@ async fn handle_idle_command(
                 );
             }
         }
+        UserCommand::ElicitationResponse {
+            request_id, action, ..
+        } => {
+            // Elicitation responses are forwarded to the MCP client layer.
+            // During idle, there is typically no pending elicitation, so
+            // just log and discard.
+            info!(
+                request_id,
+                action, "Elicitation response received (idle — no pending request)"
+            );
+        }
         // Turn-triggering commands (SubmitInput, ExecuteSkill) should not
         // arrive here when called from process_deferred, but handle gracefully.
         UserCommand::SubmitInput { .. } | UserCommand::ExecuteSkill { .. } => {

@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::edit_strategies::truncate_str;
+
 /// A scheduled cron job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
@@ -251,12 +253,9 @@ fn validate_cron_field(field: &str, min: u32, max: u32) -> bool {
 }
 
 /// Format cron jobs as human-readable summary.
-pub fn format_cron_summary(jobs: &BTreeMap<String, CronJob>) -> String {
-    if jobs.is_empty() {
-        return "No scheduled jobs.".to_string();
-    }
+pub fn format_cron_summary<'a>(jobs: impl Iterator<Item = &'a CronJob>) -> String {
     let mut output = String::new();
-    for job in jobs.values() {
+    for job in jobs {
         let type_marker = if job.recurring { "" } else { " (one-shot)" };
         let durable_marker = if job.durable { " [durable]" } else { "" };
         let status_marker = match job.status {
@@ -278,15 +277,10 @@ pub fn format_cron_summary(jobs: &BTreeMap<String, CronJob>) -> String {
             output.push_str(&format!("  description: {desc}\n"));
         }
     }
-    output
-}
-
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..s.floor_char_boundary(max)])
+    if output.is_empty() {
+        return "No scheduled jobs.".to_string();
     }
+    output
 }
 
 /// File name for durable cron persistence.

@@ -4,12 +4,11 @@
 //! in response to events. Following the Elm Architecture pattern, these
 //! functions take the current state and an event, and return the new state.
 
-use cocode_protocol::LoopEvent;
 use cocode_protocol::RoleSelection;
-use cocode_protocol::ToolResultContent;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
+use crate::constants;
 use crate::event::TuiCommand;
 use crate::file_search::FileSearchEvent;
 use crate::i18n::t;
@@ -20,7 +19,6 @@ use crate::state::FileSuggestionItem;
 use crate::state::FocusTarget;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
-use crate::state::PermissionOverlay;
 
 /// Handle a TUI command and update the state accordingly.
 ///
@@ -38,40 +36,52 @@ pub async fn handle_command(
         // ========== Mode Toggles ==========
         TuiCommand::TogglePlanMode => {
             state.cycle_permission_mode();
+            let mode = state.session.permission_mode;
+            state
+                .ui
+                .toast_info(t!("toast.permission_mode", mode = format!("{mode:?}")).to_string());
             let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: state.session.permission_mode,
-                })
+                .send(UserCommand::SetPermissionMode { mode })
                 .await;
         }
         TuiCommand::CycleThinkingLevel => {
             state.cycle_thinking_level();
             if let Some(ref sel) = state.session.current_selection {
+                let level = sel.effective_thinking_level();
+                state.ui.toast_info(
+                    t!(
+                        "toast.thinking_level",
+                        level = format!("{:?}", level.effort)
+                    )
+                    .to_string(),
+                );
                 let _ = command_tx
-                    .send(UserCommand::SetThinkingLevel {
-                        level: sel.effective_thinking_level(),
-                    })
+                    .send(UserCommand::SetThinkingLevel { level })
                     .await;
             }
         }
         TuiCommand::CycleModel => {
-            // Show model picker overlay
             if !available_models.is_empty() {
-                state
-                    .ui
-                    .set_overlay(Overlay::ModelPicker(ModelPickerOverlay::new(
-                        available_models.to_vec(),
-                    )));
+                let current = state
+                    .session
+                    .current_selection
+                    .as_ref()
+                    .map(|s| s.model.slug.clone());
+                state.ui.set_overlay(Overlay::ModelPicker(
+                    ModelPickerOverlay::new(available_models.to_vec()).with_current(current),
+                ));
             }
         }
         TuiCommand::ShowModelPicker => {
-            // Show model picker overlay
             if !available_models.is_empty() {
-                state
-                    .ui
-                    .set_overlay(Overlay::ModelPicker(ModelPickerOverlay::new(
-                        available_models.to_vec(),
-                    )));
+                let current = state
+                    .session
+                    .current_selection
+                    .as_ref()
+                    .map(|s| s.model.slug.clone());
+                state.ui.set_overlay(Overlay::ModelPicker(
+                    ModelPickerOverlay::new(available_models.to_vec()).with_current(current),
+                ));
             }
         }
 
@@ -136,6 +146,7 @@ pub async fn handle_command(
         }
         TuiCommand::Interrupt => {
             let _ = command_tx.send(UserCommand::Interrupt).await;
+            state.ui.toast_info(t!("toast.interrupted").to_string());
         }
         TuiCommand::ShowRewindSelector => {
             // Request checkpoint list from core, which will open the overlay on response
@@ -167,10 +178,35 @@ pub async fn handle_command(
                 if !rw.go_back() {
                     state.ui.clear_overlay();
                 }
+            } else if let Some(Overlay::Elicitation(ref elicit)) = state.ui.overlay {
+                // Cancelling elicitation must send "cancel" response so the MCP
+                // server's blocked Promise resolves — just closing the overlay
+                // would hang the server indefinitely.
+                let request_id = elicit.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ElicitationResponse {
+                        request_id,
+                        action: "cancel".to_string(),
+                        content: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
             } else if state.has_overlay() {
                 state.ui.clear_overlay();
             } else if !state.ui.input.is_empty() {
                 state.ui.input.take();
+            } else if !state.session.queued_commands.is_empty() {
+                // Pop queued commands back into input for editing
+                // (matches Claude Code's cancel Branch 3 behavior)
+                let merged: String = state
+                    .session
+                    .queued_commands
+                    .drain(..)
+                    .map(|c| c.prompt)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                state.ui.input.set_text(&merged);
+                let _ = command_tx.send(UserCommand::ClearQueues).await;
             } else if state.ui.is_double_esc() {
                 // Double-Esc detected: open rewind selector
                 state.ui.reset_esc_time();
@@ -183,36 +219,16 @@ pub async fn handle_command(
 
         // ========== Navigation ==========
         TuiCommand::ScrollUp => {
-            state.ui.scroll_offset = state.ui.scroll_offset.saturating_add(3);
-            state.ui.mark_user_scrolled();
+            state.ui.scroll_by(constants::SCROLL_LINE_STEP);
         }
         TuiCommand::ScrollDown => {
-            state.ui.scroll_offset = state.ui.scroll_offset.saturating_sub(3);
-            if state.ui.scroll_offset < 0 {
-                state.ui.scroll_offset = 0;
-            }
-            // Only mark as user scrolled if we're not at the bottom
-            if state.ui.scroll_offset > 0 {
-                state.ui.mark_user_scrolled();
-            } else {
-                // User scrolled to bottom, re-enable auto-scroll
-                state.ui.reset_user_scrolled();
-            }
+            state.ui.scroll_by(-constants::SCROLL_LINE_STEP);
         }
         TuiCommand::PageUp => {
-            state.ui.scroll_offset = state.ui.scroll_offset.saturating_add(20);
-            state.ui.mark_user_scrolled();
+            state.ui.scroll_by(constants::SCROLL_PAGE_STEP);
         }
         TuiCommand::PageDown => {
-            state.ui.scroll_offset = state.ui.scroll_offset.saturating_sub(20);
-            if state.ui.scroll_offset < 0 {
-                state.ui.scroll_offset = 0;
-            }
-            if state.ui.scroll_offset > 0 {
-                state.ui.mark_user_scrolled();
-            } else {
-                state.ui.reset_user_scrolled();
-            }
+            state.ui.scroll_by(-constants::SCROLL_PAGE_STEP);
         }
         TuiCommand::FocusNext => {
             state.ui.focus = match state.ui.focus {
@@ -259,10 +275,19 @@ pub async fn handle_command(
                 Some(Overlay::Question(q)) if q.other_input_active => {
                     q.other_text.push(c);
                 }
-                Some(Overlay::Question(q))
-                    if c == ' ' && q.current().is_some_and(|qi| qi.multi_select) =>
-                {
-                    q.toggle_selected();
+                Some(Overlay::Question(q)) => {
+                    // Space toggles multi-select; all other chars consumed by overlay
+                    if c == ' ' && q.current().is_some_and(|qi| qi.multi_select) {
+                        q.toggle_selected();
+                    }
+                }
+                Some(Overlay::Elicitation(elicit)) => {
+                    // Space toggles boolean/select/multiselect fields
+                    if c == ' ' {
+                        elicit.toggle_or_cycle();
+                    } else {
+                        elicit.insert_char(c);
+                    }
                 }
                 _ => {
                     state.ui.input.insert_char(c);
@@ -296,12 +321,21 @@ pub async fn handle_command(
             Some(Overlay::Question(q)) if q.other_input_active => {
                 q.other_text.pop();
             }
+            Some(Overlay::Elicitation(elicit)) => {
+                elicit.delete_char();
+            }
             _ => {
                 state.ui.input.delete_backward();
             }
         },
         TuiCommand::DeleteForward => {
-            state.ui.input.delete_forward();
+            if let Some(Overlay::SessionBrowser(_)) = state.ui.overlay {
+                state.ui.toast_info(
+                    t!("toast.unsupported_command", name = "delete-session").to_string(),
+                );
+            } else {
+                state.ui.input.delete_forward();
+            }
         }
         TuiCommand::CursorLeft => {
             state.ui.input.move_left();
@@ -349,6 +383,9 @@ pub async fn handle_command(
                 }
                 Some(Overlay::Question(q)) => {
                     q.move_up();
+                }
+                Some(Overlay::Elicitation(elicit)) => {
+                    elicit.move_up();
                 }
                 Some(Overlay::Help) => {
                     state.ui.help_scroll = (state.ui.help_scroll - 1).max(0);
@@ -399,6 +436,9 @@ pub async fn handle_command(
                 }
                 Some(Overlay::Question(q)) => {
                     q.move_down();
+                }
+                Some(Overlay::Elicitation(elicit)) => {
+                    elicit.move_down();
                 }
                 Some(Overlay::Help) => {
                     state.ui.help_scroll += 1;
@@ -591,6 +631,18 @@ pub async fn handle_command(
                         // Advanced to next phase (mode selection or context input)
                     }
                 }
+            } else if let Some(Overlay::Elicitation(ref elicit)) = state.ui.overlay {
+                // Submit elicitation form
+                let request_id = elicit.request_id.clone();
+                let content = elicit.collect_values();
+                let _ = command_tx
+                    .send(UserCommand::ElicitationResponse {
+                        request_id,
+                        action: "accept".to_string(),
+                        content: Some(content),
+                    })
+                    .await;
+                state.ui.clear_overlay();
             } else if let Some(Overlay::PluginManager(ref _manager)) = state.ui.overlay {
                 // TODO: Handle Enter on selected item (install/enable/disable/etc.)
                 // For now, just log the action
@@ -628,6 +680,16 @@ pub async fn handle_command(
                         decision: cocode_protocol::ApprovalDecision::Denied,
                         plan_exit_option: None,
                         feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::Elicitation(ref elicit)) = state.ui.overlay {
+                let request_id = elicit.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ElicitationResponse {
+                        request_id,
+                        action: "decline".to_string(),
+                        content: None,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -772,9 +834,12 @@ pub async fn handle_command(
         }
 
         // ========== External Editor ==========
-        TuiCommand::OpenExternalEditor => {
-            // TODO: Implement external editor support
-            tracing::info!("External editor requested (not yet implemented)");
+        // OpenExternalEditor is intercepted in app.rs before reaching here.
+        TuiCommand::OpenExternalEditor => {}
+
+        // ========== Select All ==========
+        TuiCommand::SelectAll => {
+            state.ui.input.select_all();
         }
 
         // ========== Plan File Editor (Ctrl+G) ==========
@@ -789,25 +854,27 @@ pub async fn handle_command(
                             if result.modified {
                                 // Write the edited content back to the plan file
                                 if let Err(e) = std::fs::write(&plan_path, &result.content) {
-                                    state.ui.toast_error(format!("Failed to save plan: {e}"));
+                                    state.ui.toast_error(
+                                        t!("toast.plan_save_failed", error = e).to_string(),
+                                    );
                                 } else {
-                                    state.ui.toast_success("Plan saved!".to_string());
+                                    state.ui.toast_success(t!("toast.plan_saved").to_string());
                                 }
                             }
                         }
                         Err(e) => {
-                            state.ui.toast_error(format!("Editor error: {e}"));
+                            state
+                                .ui
+                                .toast_error(t!("toast.editor_error", error = e).to_string());
                         }
                     }
                 } else {
-                    state
-                        .ui
-                        .toast_info("No plan file available yet.".to_string());
+                    state.ui.toast_info(t!("toast.no_plan_file").to_string());
                 }
             } else {
                 state
                     .ui
-                    .toast_info("Ctrl+G: Open plan file in editor (plan mode only)".to_string());
+                    .toast_info(t!("toast.plan_editor_hint").to_string());
             }
         }
 
@@ -832,19 +899,21 @@ pub async fn handle_command(
 
         // ========== Session Browser ==========
         TuiCommand::ShowSessionBrowser => {
-            // TODO: Load sessions from storage
-            let sessions = Vec::new();
-            state.ui.set_overlay(Overlay::SessionBrowser(
-                crate::state::SessionBrowserOverlay::new(sessions),
-            ));
+            // Session listing requires core SessionManager integration.
+            // For now, show an informational toast.
+            state
+                .ui
+                .toast_info(t!("toast.sessions_unavailable").to_string());
         }
         TuiCommand::LoadSession(_session_id) => {
-            // TODO: Implement session loading
-            tracing::info!("Load session requested (not yet implemented)");
+            state
+                .ui
+                .toast_info(t!("toast.sessions_unavailable").to_string());
         }
         TuiCommand::DeleteSession(_session_id) => {
-            // TODO: Implement session deletion
-            tracing::info!("Delete session requested (not yet implemented)");
+            state
+                .ui
+                .toast_info(t!("toast.sessions_unavailable").to_string());
         }
 
         // ========== Plugin Manager ==========
@@ -908,7 +977,9 @@ pub async fn handle_command(
                     .toast_info(t!("toast.tasks_backgrounded", count = count).to_string());
                 let _ = command_tx.send(UserCommand::BackgroundAllTasks).await;
             } else {
-                tracing::debug!("Ctrl+B: no backgroundable tasks");
+                state
+                    .ui
+                    .toast_info("No running tasks to background".to_string());
             }
         }
 
@@ -1057,7 +1128,7 @@ async fn handle_local_command(
         _ => {
             state
                 .ui
-                .toast_info(format!("/{} is not yet supported in TUI.", local_cmd.name));
+                .toast_info(t!("toast.unsupported_command", name = local_cmd.name).to_string());
         }
     }
 }
@@ -1098,10 +1169,9 @@ async fn execute_command_action(
             state.ui.set_overlay(Overlay::Help);
         }
         CommandAction::ShowSessionBrowser => {
-            let sessions = Vec::new();
-            state.ui.set_overlay(Overlay::SessionBrowser(
-                crate::state::SessionBrowserOverlay::new(sessions),
-            ));
+            state
+                .ui
+                .toast_info(t!("toast.sessions_unavailable").to_string());
         }
         CommandAction::ShowPluginManager => {
             let _ = command_tx.send(UserCommand::RequestPluginData).await;
@@ -1297,518 +1367,10 @@ pub fn handle_file_search_event(state: &mut AppState, event: FileSearchEvent) {
     }
 }
 
-/// Handle an event from the core agent loop.
-///
-/// This function processes events from the agent and updates the
-/// application state accordingly. It handles streaming content,
-/// tool execution updates, and other agent lifecycle events.
-pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
-    match event {
-        // ========== Turn Lifecycle ==========
-        LoopEvent::TurnStarted {
-            turn_id,
-            turn_number,
-        } => {
-            state.ui.start_streaming(turn_id);
-            // Clear previous thinking duration when starting a new turn
-            state.ui.clear_thinking_duration();
-            // Reset thinking tokens for new turn
-            state.session.reset_thinking_tokens();
-            // Track current turn number and tag the last user message
-            state.session.current_turn_number = Some(turn_number);
-            if let Some(msg) = state.session.messages.last_mut()
-                && msg.role == crate::state::MessageRole::User
-                && msg.turn_number.is_none()
-            {
-                msg.turn_number = Some(turn_number);
-            }
-            // Start query timing tracker
-            state.ui.query_timing.start();
-        }
-        LoopEvent::TurnCompleted { turn_id, usage } => {
-            // Check for slow query before stopping the timer
-            if state.ui.query_timing.is_slow_query()
-                && let Some(duration) = state.ui.query_timing.actual_duration()
-            {
-                state
-                    .ui
-                    .toast_info(format!("Query took {:.1}s", duration.as_secs_f64()));
-            }
-            state.ui.query_timing.stop();
-            // Stop thinking timer if still running
-            if state.ui.is_thinking() {
-                state.ui.stop_thinking();
-            }
-            // Finalize the streaming message
-            if let Some(streaming) = state.ui.streaming.take() {
-                let mut message = ChatMessage::assistant(&turn_id, &streaming.content);
-                if !streaming.thinking.is_empty() {
-                    message.thinking = Some(streaming.thinking);
-                }
-                message.turn_number = state.session.current_turn_number;
-                message.complete();
-                state.session.add_message(message);
-            }
-            // Track reasoning/thinking tokens
-            if let Some(reasoning_tokens) = usage.reasoning_tokens {
-                state.session.add_thinking_tokens(reasoning_tokens as i32);
-            }
-            state.session.update_tokens(usage);
-        }
-
-        // ========== Content Streaming ==========
-        LoopEvent::TextDelta { delta, .. } => {
-            // When we get the first text delta, thinking is done
-            if state.ui.is_thinking() {
-                state.ui.stop_thinking();
-            }
-            state.ui.append_streaming(&delta);
-        }
-        LoopEvent::ThinkingDelta { delta, .. } => {
-            // Start thinking timer on first thinking delta
-            state.ui.start_thinking();
-            state.ui.append_streaming_thinking(&delta);
-        }
-        LoopEvent::ToolCallDelta { call_id, delta } => {
-            // Accumulate partial tool call JSON for streaming display
-            state.ui.append_tool_call_delta(&call_id, &delta);
-        }
-
-        // ========== Tool Execution ==========
-        LoopEvent::ToolUseQueued {
-            call_id,
-            name,
-            input: _,
-        } => {
-            // Track tool use during streaming for spinner/status display
-            state.ui.add_streaming_tool_use(call_id, name);
-        }
-        LoopEvent::ToolUseStarted { call_id, name, .. } => {
-            // When tool execution begins, transition mode to ToolUse
-            state.ui.set_stream_mode_tool_use();
-            state.session.start_tool(call_id, name);
-        }
-        LoopEvent::ToolProgress { call_id, progress } => {
-            if let Some(msg) = progress.message {
-                state.session.update_tool_progress(&call_id, msg);
-            }
-        }
-        LoopEvent::ToolUseCompleted {
-            call_id,
-            output,
-            is_error,
-        } => {
-            let output_str = match output {
-                ToolResultContent::Text(s) => s,
-                ToolResultContent::Structured(v) => v.to_string(),
-            };
-            state.session.complete_tool(&call_id, output_str, is_error);
-            // Cleanup old completed tools
-            state.session.cleanup_completed_tools(10);
-        }
-
-        // ========== Permission ==========
-        LoopEvent::ApprovalRequired { request } => {
-            // Pause query timing while user reviews permission
-            state.ui.query_timing.on_permission_dialog_open();
-            if request.tool_name == cocode_protocol::ToolName::ExitPlanMode.as_str() {
-                // Use the 4-option plan exit overlay for ExitPlanMode
-                state.ui.set_overlay(Overlay::PlanExitApproval(
-                    crate::state::PlanExitOverlay::new(request),
-                ));
-            } else {
-                state
-                    .ui
-                    .set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
-            }
-        }
-
-        // ========== User Questions ==========
-        LoopEvent::QuestionAsked {
-            request_id,
-            questions,
-        } => {
-            // Pause query timing while user answers questions
-            state.ui.query_timing.on_permission_dialog_open();
-            state
-                .ui
-                .set_overlay(Overlay::Question(crate::state::QuestionOverlay::new(
-                    request_id, &questions,
-                )));
-        }
-
-        // ========== Token Usage ==========
-        LoopEvent::StreamRequestEnd { usage } => {
-            // Track reasoning/thinking tokens separately
-            if let Some(reasoning_tokens) = usage.reasoning_tokens {
-                state.session.add_thinking_tokens(reasoning_tokens as i32);
-            }
-            state.session.update_tokens(usage);
-        }
-
-        // ========== Plan Mode ==========
-        LoopEvent::PlanModeEntered { plan_file } => {
-            state.session.plan_mode = true;
-            state.session.permission_mode = cocode_protocol::PermissionMode::Plan;
-            state.session.plan_file = plan_file;
-        }
-        LoopEvent::PlanModeExited { .. } => {
-            state.session.plan_mode = false;
-            state.session.plan_file = None;
-            if state.session.permission_mode == cocode_protocol::PermissionMode::Plan {
-                state.session.permission_mode = cocode_protocol::PermissionMode::Default;
-            }
-        }
-
-        // ========== Context Cleared ==========
-        LoopEvent::ContextCleared { new_mode } => {
-            // Clear all TUI conversation state
-            state.session.messages.clear();
-            state.session.tool_executions.clear();
-            state.session.subagents.clear();
-            state.session.plan_mode = false;
-            state.session.plan_file = None;
-            state.session.permission_mode = new_mode;
-            state.ui.scroll_offset = 0;
-            state.ui.user_scrolled = false;
-            tracing::info!(?new_mode, "Context cleared after plan exit");
-        }
-
-        // ========== Permission Mode ==========
-        LoopEvent::PermissionModeChanged { mode } => {
-            state.session.permission_mode = mode;
-            state.session.plan_mode = mode == cocode_protocol::PermissionMode::Plan;
-        }
-
-        // ========== Subagent Events ==========
-        LoopEvent::SubagentSpawned {
-            agent_id,
-            agent_type,
-            description,
-            color,
-        } => {
-            state
-                .session
-                .start_subagent(agent_id, agent_type, description, color);
-        }
-        LoopEvent::SubagentProgress { agent_id, progress } => {
-            state.session.update_subagent_progress(&agent_id, progress);
-        }
-        LoopEvent::SubagentCompleted { agent_id, result } => {
-            state.session.complete_subagent(&agent_id, result);
-            // Cleanup old completed subagents
-            state.session.cleanup_completed_subagents(5);
-        }
-        LoopEvent::SubagentBackgrounded {
-            agent_id,
-            output_file,
-        } => {
-            state.session.background_subagent(&agent_id, output_file);
-        }
-
-        // ========== Errors ==========
-        LoopEvent::Error { error } => {
-            state.ui.query_timing.stop();
-            state
-                .ui
-                .set_overlay(Overlay::Error(format!("{}: {}", error.code, error.message)));
-        }
-        LoopEvent::Interrupted => {
-            // Stop streaming and timing if active
-            state.ui.stop_streaming();
-            state.ui.query_timing.stop();
-            tracing::info!("Operation interrupted");
-        }
-
-        // ========== Context/Compaction ==========
-        LoopEvent::ContextUsageWarning {
-            percent_left,
-            estimated_tokens,
-            warning_threshold,
-        } => {
-            // Format tokens with k/M suffix
-            let format_tokens = |n: i32| -> String {
-                if n >= 1_000_000 {
-                    format!("{:.1}M", n as f64 / 1_000_000.0)
-                } else if n >= 1_000 {
-                    format!("{:.0}k", n as f64 / 1_000.0)
-                } else {
-                    n.to_string()
-                }
-            };
-            // Calculate remaining tokens from threshold vs used
-            let remain = format_tokens(warning_threshold.saturating_sub(estimated_tokens));
-            let total = format_tokens(warning_threshold);
-            let percent = (percent_left * 100.0) as i32;
-            let msg = t!(
-                "toast.context_warning",
-                percent = percent,
-                remain = remain,
-                total = total
-            )
-            .to_string();
-            state.ui.toast_warning(msg);
-            tracing::debug!(percent_left, "Context usage warning");
-        }
-        LoopEvent::CompactionStarted => {
-            state.ui.toast_info(t!("toast.compacting").to_string());
-            state.session.is_compacting = true;
-            tracing::debug!("Compaction started");
-        }
-        LoopEvent::CompactionCompleted {
-            removed_messages,
-            summary_tokens,
-        } => {
-            let msg = t!(
-                "toast.compacted",
-                messages = removed_messages,
-                tokens = summary_tokens
-            )
-            .to_string();
-            state.ui.toast_success(msg);
-            state.session.is_compacting = false;
-            tracing::info!(removed_messages, summary_tokens, "Compaction completed");
-        }
-        LoopEvent::CompactionFailed { error, .. } => {
-            state
-                .ui
-                .toast_error(t!("toast.compaction_failed", error = error).to_string());
-            state.session.is_compacting = false;
-            tracing::error!(error, "Compaction failed");
-        }
-
-        // ========== Model Fallback ==========
-        LoopEvent::ModelFallbackStarted { from, to, reason } => {
-            let msg = t!("toast.model_fallback", from = from, to = to).to_string();
-            state.ui.toast_warning(msg);
-            state.session.fallback_model = Some(to.clone());
-            tracing::info!(from, to, reason, "Model fallback started");
-        }
-        LoopEvent::ModelFallbackCompleted => {
-            state.session.fallback_model = None;
-            tracing::debug!("Model fallback completed");
-        }
-
-        // ========== Queue ==========
-        LoopEvent::CommandQueued { id, preview } => {
-            tracing::debug!(id, preview, "Command queued (from core)");
-        }
-        LoopEvent::CommandDequeued { id } => {
-            // Remove from local queue if present
-            state.session.queued_commands.retain(|c| c.id != id);
-            tracing::debug!(id, "Command dequeued");
-        }
-        LoopEvent::QueueStateChanged { queued } => {
-            tracing::debug!(queued, "Queue state changed");
-        }
-
-        // ========== MCP Events ==========
-        LoopEvent::McpStartupUpdate { server, status } => {
-            use cocode_protocol::McpStartupStatus;
-            match status {
-                McpStartupStatus::Ready => {
-                    state
-                        .ui
-                        .toast_success(t!("toast.mcp_ready", server = server).to_string());
-                }
-                McpStartupStatus::Failed => {
-                    state
-                        .ui
-                        .toast_error(t!("toast.mcp_failed", server = server).to_string());
-                }
-                _ => {}
-            }
-        }
-        LoopEvent::McpStartupComplete { servers, failed } => {
-            if !servers.is_empty() {
-                let count = servers.len();
-                state
-                    .ui
-                    .toast_success(t!("toast.mcp_connected", count = count).to_string());
-            }
-            for (name, error) in failed {
-                state
-                    .ui
-                    .toast_error(t!("toast.mcp_error", name = name, error = error).to_string());
-            }
-        }
-
-        // ========== Plugin Data ==========
-        LoopEvent::PluginDataReady {
-            installed,
-            marketplaces,
-        } => {
-            use crate::state::MarketplaceSummary;
-            use crate::state::PluginSummary;
-
-            let installed_items: Vec<PluginSummary> = installed
-                .into_iter()
-                .map(|p| PluginSummary {
-                    name: p.name,
-                    description: p.description,
-                    version: p.version,
-                    enabled: p.enabled,
-                    scope: p.scope,
-                    skills_count: p.skills_count,
-                    hooks_count: p.hooks_count,
-                    agents_count: p.agents_count,
-                })
-                .collect();
-            let marketplace_items: Vec<MarketplaceSummary> = marketplaces
-                .into_iter()
-                .map(|m| MarketplaceSummary {
-                    name: m.name,
-                    source_type: m.source_type,
-                    source: m.source,
-                    auto_update: m.auto_update,
-                    plugin_count: m.plugin_count,
-                })
-                .collect();
-            state.ui.set_overlay(Overlay::PluginManager(
-                crate::state::PluginManagerOverlay::new(
-                    installed_items,
-                    marketplace_items,
-                    Vec::new(),
-                ),
-            ));
-        }
-
-        // ========== Output Styles ==========
-        LoopEvent::OutputStylesReady { styles } => {
-            use crate::state::OutputStylePickerItem;
-
-            let items: Vec<OutputStylePickerItem> = styles
-                .into_iter()
-                .map(|s| OutputStylePickerItem {
-                    name: s.name,
-                    source: s.source,
-                    description: s.description,
-                })
-                .collect();
-            if items.is_empty() {
-                state
-                    .ui
-                    .toast_info("No output styles available.".to_string());
-            } else {
-                state.ui.set_overlay(Overlay::OutputStylePicker(
-                    crate::state::OutputStylePickerOverlay::new(items),
-                ));
-            }
-        }
-
-        // ========== Rewind ==========
-        LoopEvent::RewindCompleted {
-            rewound_turn,
-            restored_files,
-            mode,
-            restored_prompt,
-            ..
-        } => {
-            use crate::i18n::t;
-            use cocode_protocol::RewindMode;
-
-            // Remove TUI chat messages if conversation was rewound
-            if mode != RewindMode::CodeOnly {
-                while let Some(msg) = state.session.messages.last() {
-                    if msg.turn_number.is_some_and(|n| n >= rewound_turn) {
-                        state.session.messages.pop();
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            // Restore the original prompt into the input field
-            if let Some(prompt) = restored_prompt
-                && !prompt.is_empty()
-            {
-                state.ui.input.set_text(&prompt);
-            }
-
-            // Close the rewind overlay if open
-            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
-                state.ui.clear_overlay();
-            }
-
-            state.ui.toast_success(t!(
-                "toast.rewind_success",
-                turn = rewound_turn,
-                files = restored_files
-            ));
-        }
-        LoopEvent::RewindFailed { error } => {
-            use crate::i18n::t;
-            // Close the rewind overlay if open
-            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
-                state.ui.clear_overlay();
-            }
-            state
-                .ui
-                .toast_error(t!("toast.rewind_failed", error = error));
-        }
-        LoopEvent::RewindCheckpointsReady { checkpoints } => {
-            use crate::i18n::t;
-            if checkpoints.is_empty() {
-                state.ui.toast_info(t!("toast.rewind_no_checkpoints"));
-            } else {
-                let mut overlay = crate::state::RewindSelectorOverlay::new(checkpoints);
-                // Mark that the initial selection needs diff stats fetched.
-                // The first navigation event (or confirm) will trigger the request.
-                overlay.needs_initial_diff_stats = true;
-                state.ui.set_overlay(Overlay::RewindSelector(overlay));
-            }
-        }
-        LoopEvent::DiffStatsReady { turn_number, stats } => {
-            // Update the matching checkpoint in the rewind selector overlay.
-            if let Some(Overlay::RewindSelector(ref mut rw)) = state.ui.overlay {
-                for cp in &mut rw.checkpoints {
-                    if cp.turn_number == turn_number {
-                        cp.diff_stats = Some(stats);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // ========== Summarize ==========
-        LoopEvent::SummarizeCompleted {
-            from_turn,
-            summary_tokens: _,
-        } => {
-            // Close the rewind overlay if open (loading state)
-            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
-                state.ui.clear_overlay();
-            }
-            state
-                .ui
-                .toast_success(t!("toast.summarize_success", turn = from_turn));
-        }
-        LoopEvent::SummarizeFailed { error } => {
-            // Close the rewind overlay if open (loading state)
-            if matches!(state.ui.overlay, Some(Overlay::RewindSelector(_))) {
-                state.ui.clear_overlay();
-            }
-            state
-                .ui
-                .toast_error(t!("toast.summarize_failed", error = error));
-        }
-
-        // ========== Hooks ==========
-        LoopEvent::HookExecuted {
-            hook_type,
-            hook_name,
-        } => {
-            tracing::debug!(
-                hook_type = %hook_type,
-                hook_name = %hook_name,
-                "Hook executed"
-            );
-        }
-
-        // Other events we don't need to handle in the TUI
-        _ => {}
-    }
-}
+// `handle_agent_event` is defined in `agent_event_handler.rs` for module
+// size management. Re-exported here for backward compatibility with
+// existing callers (e.g., `app.rs`).
+pub use crate::agent_event_handler::handle_agent_event;
 
 /// Extract images from paste pills in question answers and embed them as `_images` metadata.
 ///

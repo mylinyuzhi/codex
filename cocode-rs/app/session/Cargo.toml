@@ -8,6 +8,7 @@ description = "Session management for cocode multi-provider LLM CLI"
 [dependencies]
 # Internal - common
 cocode-protocol.workspace = true
+cocode-policy.workspace = true
 cocode-config.workspace = true
 cocode-error.workspace = true
 
