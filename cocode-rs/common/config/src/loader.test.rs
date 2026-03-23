@@ -234,6 +234,7 @@ fn test_load_invalid_json() {
     assert!(
         matches!(err, ConfigError::JsonParse { .. })
             || matches!(err, ConfigError::JsoncParse { .. })
+            || matches!(err, ConfigError::JsonParseWithLocation { .. })
     );
 }
 

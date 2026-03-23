@@ -17,6 +17,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
+use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
@@ -80,7 +81,8 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         .working_dir(state.session.working_dir.as_deref())
         .turn_count(state.session.turn_count)
         .is_compacting(state.session.is_compacting)
-        .fallback_model(state.session.fallback_model.as_deref());
+        .fallback_model(state.session.fallback_model.as_deref())
+        .active_worktrees(state.session.active_worktrees);
     frame.render_widget(header, area);
 }
 
@@ -95,24 +97,33 @@ fn render_toasts(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
 
 /// Render the main content area (chat, tools, input).
 fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    // Check if we have running tools to show
+    // Show side panel whenever tools exist (running or recently completed),
+    // including MCP tools, background tasks, and streaming tool uses.
     let has_tools = !state.session.tool_executions.is_empty()
-        && state
-            .session
-            .tool_executions
-            .iter()
-            .any(|t| t.status == crate::state::ToolStatus::Running);
+        || !state.session.mcp_tool_calls.is_empty()
+        || !state.session.background_tasks.is_empty()
+        || state
+            .ui
+            .streaming
+            .as_ref()
+            .is_some_and(|s| !s.tool_uses.is_empty());
 
     // Check if we have subagents to show
     let has_subagents = !state.session.subagents.is_empty();
 
-    // Responsive side panel: hide when terminal width < 100
-    if (has_tools || has_subagents) && area.width >= 100 {
-        // Responsive split ratio: 75/25 for wide terminals, 70/30 default
-        let (main_pct, side_pct) = if area.width >= 160 {
-            (75, 25)
+    // Responsive side panel: hide when terminal width < SIDE_PANEL_MIN_WIDTH
+    if (has_tools || has_subagents) && area.width >= constants::SIDE_PANEL_MIN_WIDTH as u16 {
+        // Responsive split ratio: wide terminals get a wider main area
+        let (main_pct, side_pct) = if area.width >= constants::WIDE_TERMINAL_WIDTH as u16 {
+            (
+                constants::WIDE_TERMINAL_MAIN_PCT as u16,
+                constants::WIDE_TERMINAL_SIDE_PCT as u16,
+            )
         } else {
-            (70, 30)
+            (
+                constants::NORMAL_TERMINAL_MAIN_PCT as u16,
+                constants::NORMAL_TERMINAL_SIDE_PCT as u16,
+            )
         };
 
         let horizontal = Layout::default()
@@ -135,7 +146,7 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
 fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     // Calculate input height based on content
     let input_lines = state.ui.input.text().lines().count().max(1);
-    let input_height = (input_lines as u16 + 2).min(10); // +2 for borders, max 10
+    let input_height = (input_lines as u16 + 2).min(constants::MAX_INPUT_HEIGHT as u16); // +2 for borders
 
     // Calculate queued list height (if any queued commands)
     let queued_list = QueuedListWidget::new(&state.session.queued_commands, theme);
@@ -165,6 +176,12 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
     // Chat widget
     let streaming_content = state.ui.streaming.as_ref().map(|s| s.content.as_str());
     let streaming_thinking = state.ui.streaming.as_ref().map(|s| s.thinking.as_str());
+    let streaming_tool_uses = state
+        .ui
+        .streaming
+        .as_ref()
+        .map(|s| s.tool_uses.as_slice())
+        .unwrap_or(&[]);
 
     let chat = ChatWidget::new(&state.session.messages, theme)
         .scroll(state.ui.scroll_offset)
@@ -175,7 +192,9 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .animation_frame(state.ui.animation_frame())
         .thinking_duration(state.ui.thinking_duration())
         .collapsed_tools(&state.ui.collapsed_tools)
-        .width(area.width);
+        .width(area.width)
+        .user_scrolled(state.ui.user_scrolled)
+        .streaming_tool_uses(streaming_tool_uses);
     frame.render_widget(chat, chunks[0]);
 
     // Queued list widget (if any queued commands)
@@ -195,7 +214,8 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .focused(state.ui.focus == FocusTarget::Input)
         .plan_mode(state.session.plan_mode)
         .queued_count(state.session.queued_count())
-        .placeholder(&placeholder);
+        .placeholder(&placeholder)
+        .is_streaming(state.is_streaming());
     frame.render_widget(input, chunks[input_chunk_index]);
 
     // Suggestion popups are mutually exclusive — only render one at a time.
@@ -236,8 +256,8 @@ fn render_side_panel(
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(50), // Tools
-                Constraint::Percentage(50), // Subagents
+                Constraint::Percentage(constants::SIDE_PANEL_TOOL_PCT as u16),
+                Constraint::Percentage(constants::SIDE_PANEL_SUBAGENT_PCT as u16),
             ])
             .split(area);
 
@@ -252,13 +272,24 @@ fn render_side_panel(
 
 /// Render the tools panel.
 fn render_tools(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let panel = ToolPanel::new(&state.session.tool_executions, theme).max_display(8);
+    let streaming_tools = state
+        .ui
+        .streaming
+        .as_ref()
+        .map(|s| s.tool_uses.as_slice())
+        .unwrap_or(&[]);
+    let panel = ToolPanel::new(&state.session.tool_executions, theme)
+        .max_display(constants::MAX_TOOL_PANEL_DISPLAY as usize)
+        .mcp_tool_calls(&state.session.mcp_tool_calls)
+        .background_tasks(&state.session.background_tasks)
+        .streaming_tools(streaming_tools);
     frame.render_widget(panel, area);
 }
 
 /// Render the subagents panel.
 fn render_subagents(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let panel = SubagentPanel::new(&state.session.subagents, theme).max_display(5);
+    let panel = SubagentPanel::new(&state.session.subagents, theme)
+        .max_display(constants::MAX_SUBAGENT_PANEL_DISPLAY);
     frame.render_widget(panel, area);
 }
 
@@ -300,7 +331,9 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     )
     .estimated_cost(state.session.estimated_cost_cents)
     .working_dir(state.session.working_dir.as_deref())
-    .output_style(state.session.output_style.as_deref());
+    .output_style(state.session.output_style.as_deref())
+    .spinner_text(state.ui.spinner_text.as_deref())
+    .animation_frame(state.ui.animation_frame());
     frame.render_widget(status_bar, area);
 }
 
@@ -314,15 +347,24 @@ fn render_overlay(
 ) {
     // Calculate centered area
     let overlay_width = match overlay {
-        Overlay::PluginManager(_) => (area.width * 80 / 100).clamp(50, 100),
-        _ => (area.width * 60 / 100).clamp(40, 80),
+        Overlay::PluginManager(_) => {
+            (area.width * constants::PLUGIN_MANAGER_OVERLAY_WIDTH_PCT as u16 / 100).clamp(50, 100)
+        }
+        _ => (area.width * constants::DEFAULT_OVERLAY_WIDTH_PCT as u16 / 100).clamp(
+            constants::DEFAULT_OVERLAY_MIN_WIDTH as u16,
+            constants::DEFAULT_OVERLAY_MAX_WIDTH as u16,
+        ),
     };
     let overlay_height = match overlay {
-        Overlay::Permission(_) => 12,
-        Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),
-        Overlay::OutputStylePicker(picker) => (picker.filtered_items().len() as u16 + 4).min(20),
-        Overlay::CommandPalette(palette) => (palette.filtered_commands().len() as u16 + 4).min(20),
-        Overlay::SessionBrowser(browser) => (browser.filtered_sessions().len() as u16 + 4).min(20),
+        Overlay::Permission(_) => constants::PERMISSION_OVERLAY_HEIGHT as u16,
+        Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4)
+            .min(constants::MODEL_PICKER_MAX_HEIGHT as u16),
+        Overlay::OutputStylePicker(picker) => (picker.filtered_items().len() as u16 + 4)
+            .min(constants::MODEL_PICKER_MAX_HEIGHT as u16),
+        Overlay::CommandPalette(palette) => (palette.filtered_commands().len() as u16 + 4)
+            .min(constants::MODEL_PICKER_MAX_HEIGHT as u16),
+        Overlay::SessionBrowser(browser) => (browser.filtered_sessions().len() as u16 + 4)
+            .min(constants::MODEL_PICKER_MAX_HEIGHT as u16),
         Overlay::RewindSelector(rw) => {
             let item_count = match rw.phase {
                 crate::state::RewindSelectorPhase::SelectCheckpoint => {
@@ -342,17 +384,27 @@ fn render_overlay(
                 crate::state::RewindSelectorPhase::InputSummarizeContext => 5, // header + input + hints
             };
             // +6 for header, spacing, warning line, and hints
-            (item_count as u16 + 7).min(22)
+            (item_count as u16 + 7).min(constants::REWIND_SELECTOR_MAX_HEIGHT as u16)
         }
-        Overlay::PlanExitApproval(_) => 17,
+        Overlay::PlanExitApproval(_) => constants::PLAN_EXIT_OVERLAY_HEIGHT as u16,
         Overlay::Question(q) => {
             // Height: title + question text + options + "Other" + hints + spacing
             let option_count = q.current().map_or(4, |qi| qi.options.len() as u16 + 1);
-            (option_count + 8).min(22)
+            (option_count + 8).min(constants::QUESTION_OVERLAY_MAX_HEIGHT as u16)
         }
-        Overlay::PluginManager(_) => (area.height * 70 / 100).clamp(20, 40),
-        Overlay::Help => 30,
-        Overlay::Error(_) => 8,
+        Overlay::Elicitation(elicit) => {
+            let field_count = match &elicit.mode {
+                crate::state::ElicitationMode::Form { fields } => fields.len() as u16,
+                crate::state::ElicitationMode::Url { .. } => 2,
+            };
+            // Title + server name + message + fields + hints + spacing
+            (field_count + 8).min(constants::QUESTION_OVERLAY_MAX_HEIGHT as u16)
+        }
+        Overlay::PluginManager(_) => {
+            (area.height * constants::PLUGIN_MANAGER_HEIGHT_PCT as u16 / 100).clamp(20, 40)
+        }
+        Overlay::Help => constants::HELP_OVERLAY_HEIGHT as u16,
+        Overlay::Error(_) => constants::ERROR_OVERLAY_HEIGHT as u16,
     };
 
     let x = (area.width.saturating_sub(overlay_width)) / 2;
@@ -388,6 +440,9 @@ fn render_overlay(
         Overlay::Question(question) => {
             render_question_overlay(frame, overlay_area, question, theme)
         }
+        Overlay::Elicitation(elicit) => {
+            render_elicitation_overlay(frame, overlay_area, elicit, theme)
+        }
         Overlay::Help => render_help_overlay(frame, overlay_area, theme, help_scroll),
         Overlay::Error(message) => render_error_overlay(frame, overlay_area, message, theme),
     }
@@ -420,18 +475,34 @@ fn render_permission_overlay(
         Span::raw(format!("{} ", t!("dialog.tool"))).bold(),
         Span::raw(&perm.request.tool_name).fg(theme.primary),
     ]));
-    lines.push(Line::from(""));
 
-    // Description
-    lines.push(Line::from(Span::raw(&perm.request.description)));
+    // Description (may contain newlines for multi-argument tools)
+    for desc_line in perm.request.description.lines() {
+        lines.push(Line::from(
+            Span::raw(format!("  {desc_line}")).fg(theme.text_dim),
+        ));
+    }
+
+    // Security risks
+    for risk in &perm.request.risks {
+        lines.push(Line::from(
+            Span::raw(format!("  ⚠ {}", risk.message)).fg(theme.warning),
+        ));
+    }
     lines.push(Line::from(""));
 
     // Options
-    let options = [
+    let mut options: Vec<String> = vec![
         t!("dialog.approve").to_string(),
         t!("dialog.deny").to_string(),
         t!("dialog.approve_all").to_string(),
     ];
+    // Show "allow similar" option with pattern when available
+    if perm.request.allow_remember
+        && let Some(ref pattern) = perm.request.proposed_prefix_pattern
+    {
+        options[2] = format!("{} ({})", t!("dialog.approve_all"), pattern);
+    }
     for (i, opt) in options.iter().enumerate() {
         let is_selected = perm.selected == i as i32;
         let line = if is_selected {
@@ -500,6 +571,35 @@ fn render_plan_exit_overlay(
             Line::from(Span::raw(format!("  {opt}")).fg(theme.text_dim))
         };
         lines.push(line);
+    }
+
+    // Feedback text input (active when "keep planning" selected + Enter pressed)
+    if plan_exit.feedback_active {
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            Span::raw(t!("dialog.plan_exit_feedback_prompt").to_string()).fg(theme.text_dim),
+        ));
+        let input_line = if plan_exit.feedback_text.is_empty() {
+            Line::from(
+                Span::raw(format!(
+                    "  > {}",
+                    t!("dialog.plan_exit_feedback_placeholder")
+                ))
+                .dim()
+                .italic(),
+            )
+        } else {
+            // Truncate from the left if text exceeds available width
+            let max_visible = (inner.width as usize).saturating_sub(6); // "  > " + "▌" + margin
+            let display = if plan_exit.feedback_text.len() > max_visible {
+                let start = plan_exit.feedback_text.len() - max_visible;
+                format!("  > …{}▌", &plan_exit.feedback_text[start..])
+            } else {
+                format!("  > {}▌", plan_exit.feedback_text)
+            };
+            Line::from(Span::raw(display))
+        };
+        lines.push(input_line);
     }
 
     lines.push(Line::from(""));
@@ -606,6 +706,119 @@ fn render_question_overlay(
     frame.render_widget(paragraph, inner);
 }
 
+/// Render the elicitation overlay for MCP server input requests.
+fn render_elicitation_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    elicit: &crate::state::ElicitationOverlay,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(
+            format!(" MCP: {} ", elicit.server_name)
+                .bold()
+                .fg(theme.primary),
+        )
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.primary));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+
+    // Message
+    lines.push(Line::from(Span::raw(&elicit.message).bold().fg(theme.text)));
+    lines.push(Line::from(""));
+
+    match &elicit.mode {
+        crate::state::ElicitationMode::Form { fields } => {
+            for (i, field) in fields.iter().enumerate() {
+                let is_selected = elicit.selected == i as i32;
+                let required_marker = if field.required { "*" } else { "" };
+                let prefix = if is_selected { " > " } else { "   " };
+
+                let label_line = format!("{prefix}{}{required_marker}:", field.label);
+                let label = if is_selected {
+                    Span::raw(label_line).bold().fg(theme.primary)
+                } else {
+                    Span::raw(label_line).fg(theme.text_dim)
+                };
+                lines.push(Line::from(label));
+
+                // Show current value
+                let value_text = match &field.field_type {
+                    crate::state::ElicitationFieldType::Text { value, .. } => {
+                        if is_selected {
+                            format!("     [{value}_]")
+                        } else {
+                            format!("     [{value}]")
+                        }
+                    }
+                    crate::state::ElicitationFieldType::Number { value, .. } => {
+                        if is_selected {
+                            format!("     [{value}_]")
+                        } else {
+                            format!("     [{value}]")
+                        }
+                    }
+                    crate::state::ElicitationFieldType::Select {
+                        options, selected, ..
+                    } => {
+                        let current = selected
+                            .and_then(|i| options.get(i as usize))
+                            .map_or("-", |s| s.as_str());
+                        format!("     [{current}]")
+                    }
+                    crate::state::ElicitationFieldType::Boolean { value, .. } => {
+                        if *value {
+                            "     [x] Yes".to_string()
+                        } else {
+                            "     [ ] No".to_string()
+                        }
+                    }
+                    crate::state::ElicitationFieldType::MultiSelect { options, checked } => {
+                        let selected: Vec<&str> = options
+                            .iter()
+                            .zip(checked.iter())
+                            .filter(|&(_, &c)| c)
+                            .map(|(opt, _)| opt.as_str())
+                            .collect();
+                        if selected.is_empty() {
+                            "     (none selected)".to_string()
+                        } else {
+                            format!("     [{}]", selected.join(", "))
+                        }
+                    }
+                };
+                let value_color = if is_selected {
+                    theme.text
+                } else {
+                    theme.text_dim
+                };
+                lines.push(Line::from(Span::raw(value_text).fg(value_color)));
+            }
+        }
+        crate::state::ElicitationMode::Url { url } => {
+            lines.push(Line::from(
+                Span::raw("Open this URL in your browser:").fg(theme.text_dim),
+            ));
+            lines.push(Line::from(Span::raw(url).fg(theme.primary).underlined()));
+        }
+    }
+
+    lines.push(Line::from(""));
+    let hints = match &elicit.mode {
+        crate::state::ElicitationMode::Url { .. } => "Enter: Continue | N: Decline | Esc: Cancel",
+        crate::state::ElicitationMode::Form { .. } => {
+            "Enter: Accept | N: Decline | Esc: Cancel | Up/Down: Navigate | Space: Toggle"
+        }
+    };
+    lines.push(Line::from(Span::raw(hints).fg(theme.text_dim)));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
 /// Render the model picker overlay.
 fn render_model_picker_overlay(
     frame: &mut Frame,
@@ -635,12 +848,47 @@ fn render_model_picker_overlay(
     let mut lines: Vec<Line> = vec![];
 
     for (i, selection) in items.iter().enumerate() {
-        let display = selection.model.to_string();
         let is_selected = picker.selected == i as i32;
+        let is_current = picker
+            .current_slug
+            .as_ref()
+            .is_some_and(|s| s == &selection.model.slug);
+
+        // Show display_name with provider prefix and thinking indicator
+        let name = &selection.model.display_name;
+        let provider = &selection.model.provider;
+        let thinking_tag = selection
+            .thinking_level
+            .as_ref()
+            .filter(|t| t.effort != cocode_protocol::ReasoningEffort::None)
+            .map(|t| format!(" [{}]", t.effort))
+            .unwrap_or_default();
+        let current_tag = if is_current { " (current)" } else { "" };
+
+        let prefix = if is_selected { "▸ " } else { "  " };
         let line = if is_selected {
-            Line::from(Span::raw(format!("▸ {display}")).bold().fg(theme.primary))
+            Line::from(vec![
+                Span::raw(prefix).bold().fg(theme.primary),
+                Span::raw(format!("{provider}/")).fg(theme.text_dim),
+                Span::raw(name).bold().fg(theme.primary),
+                Span::raw(thinking_tag).fg(theme.thinking),
+                Span::raw(current_tag).fg(theme.success),
+            ])
+        } else if is_current {
+            Line::from(vec![
+                Span::raw(prefix),
+                Span::raw(format!("{provider}/")).fg(theme.text_dim),
+                Span::raw(name).fg(theme.success),
+                Span::raw(thinking_tag).fg(theme.thinking),
+                Span::raw(current_tag).fg(theme.success),
+            ])
         } else {
-            Line::from(Span::raw(format!("  {display}")))
+            Line::from(vec![
+                Span::raw(prefix),
+                Span::raw(format!("{provider}/")).fg(theme.text_dim),
+                Span::raw(name.to_string()),
+                Span::raw(thinking_tag).fg(theme.thinking),
+            ])
         };
         lines.push(line);
     }

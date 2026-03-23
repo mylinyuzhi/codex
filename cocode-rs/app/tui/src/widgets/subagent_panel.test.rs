@@ -19,6 +19,7 @@ fn create_test_subagents() -> Vec<SubagentInstance> {
             result: None,
             output_file: None,
             color: None,
+            started_at: std::time::Instant::now(),
         },
         SubagentInstance {
             id: "agent-2".to_string(),
@@ -29,6 +30,7 @@ fn create_test_subagents() -> Vec<SubagentInstance> {
             result: Some("Plan created".to_string()),
             output_file: None,
             color: None,
+            started_at: std::time::Instant::now(),
         },
     ]
 }
@@ -87,6 +89,7 @@ fn test_max_display() {
             result: None,
             output_file: None,
             color: None,
+            started_at: std::time::Instant::now(),
         });
     }
 

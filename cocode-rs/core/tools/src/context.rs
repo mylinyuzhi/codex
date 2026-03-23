@@ -4,10 +4,10 @@
 //! needed for tool execution, including permissions, event channels,
 //! and cancellation support.
 
-use crate::permission_rules::PermissionRuleEvaluator;
 use async_trait::async_trait;
 use cocode_hooks::HookRegistry;
 use cocode_lsp::LspServerManager;
+use cocode_policy::PermissionRuleEvaluator;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::Features;
@@ -280,76 +280,7 @@ pub struct InvokedSkill {
     pub path: Option<PathBuf>,
 }
 
-/// Stored approvals for tools.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ApprovalStore {
-    /// Approved tool patterns.
-    approved_patterns: HashSet<String>,
-    /// Session-wide approvals.
-    session_approvals: HashSet<String>,
-}
-
-impl ApprovalStore {
-    /// Create a new empty approval store.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Check if a tool action is approved.
-    ///
-    /// Supports wildcard matching: a stored pattern "git *" matches
-    /// any value starting with "git " (or equal to "git").
-    pub fn is_approved(&self, tool_name: &str, pattern: &str) -> bool {
-        let key = format!("{tool_name}:{pattern}");
-        if self.approved_patterns.contains(&key) || self.session_approvals.contains(tool_name) {
-            return true;
-        }
-        // Check wildcard patterns: stored "Bash:git *" matches query "Bash:git push origin main"
-        let prefix = format!("{tool_name}:");
-        self.approved_patterns.iter().any(|stored| {
-            stored
-                .strip_prefix(&prefix)
-                .is_some_and(|pat| Self::matches_wildcard(pat, pattern))
-        })
-    }
-
-    /// Check if a wildcard pattern matches a value.
-    ///
-    /// Supported patterns:
-    /// - `"*"` matches everything
-    /// - `"git *"` matches `"git"` and `"git push origin main"`
-    /// - `"git*"` matches any string starting with `"git"`
-    /// - exact string equality otherwise
-    fn matches_wildcard(pattern: &str, value: &str) -> bool {
-        if pattern == "*" {
-            return true;
-        }
-        if let Some(pfx) = pattern.strip_suffix(" *") {
-            value == pfx || value.starts_with(&format!("{pfx} "))
-        } else if let Some(pfx) = pattern.strip_suffix('*') {
-            value.starts_with(pfx)
-        } else {
-            pattern == value
-        }
-    }
-
-    /// Add an approval for a specific pattern.
-    pub fn approve_pattern(&mut self, tool_name: &str, pattern: &str) {
-        let key = format!("{tool_name}:{pattern}");
-        self.approved_patterns.insert(key);
-    }
-
-    /// Add a session-wide approval for a tool.
-    pub fn approve_session(&mut self, tool_name: &str) {
-        self.session_approvals.insert(tool_name.to_string());
-    }
-
-    /// Clear all approvals.
-    pub fn clear(&mut self) {
-        self.approved_patterns.clear();
-        self.session_approvals.clear();
-    }
-}
+pub use cocode_policy::ApprovalStore;
 
 /// State of a file that has been read.
 ///
@@ -1816,54 +1747,10 @@ impl ToolContext {
     ///
     /// Called when the user selects "Allow always" — writes the pattern
     /// into `permissions.allow` so it's remembered across sessions.
-    #[allow(clippy::expect_used)]
     pub async fn persist_permission_rule(&self, tool_name: &str, pattern: &str) {
-        use cocode_config::default_config_dir;
-
-        let config_dir = default_config_dir();
-        let settings_path = config_dir.join("settings.local.json");
-
-        // Read existing config or start fresh
-        let mut config: serde_json::Value = if settings_path.exists() {
-            match tokio::fs::read_to_string(&settings_path).await {
-                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-                Err(_) => serde_json::Value::Object(serde_json::Map::new()),
-            }
-        } else {
-            serde_json::Value::Object(serde_json::Map::new())
-        };
-
-        // Build the rule string: "Bash(git *)" or just "Read"
-        let rule = if pattern.is_empty() {
-            tool_name.to_string()
-        } else {
-            format!("{tool_name}({pattern})")
-        };
-
-        // Ensure permissions.allow array exists and append
-        let permissions = config
-            .as_object_mut()
-            .expect("root must be object")
-            .entry("permissions")
-            .or_insert_with(|| serde_json::json!({}));
-        let allow = permissions
-            .as_object_mut()
-            .expect("permissions must be object")
-            .entry("allow")
-            .or_insert_with(|| serde_json::json!([]));
-        if let Some(arr) = allow.as_array_mut() {
-            let rule_val = serde_json::Value::String(rule.clone());
-            if !arr.contains(&rule_val) {
-                arr.push(rule_val);
-            }
-        }
-
-        // Write back
-        if let Some(parent) = settings_path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        if let Ok(content) = serde_json::to_string_pretty(&config) {
-            let _ = tokio::fs::write(&settings_path, content).await;
+        let config_dir = cocode_config::default_config_dir();
+        if let Err(e) = cocode_policy::persist_rule(&config_dir, tool_name, pattern).await {
+            tracing::warn!("Failed to persist permission rule: {e}");
         }
     }
 

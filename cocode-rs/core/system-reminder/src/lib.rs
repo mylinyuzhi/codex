@@ -78,7 +78,6 @@ pub use file_context_resolver::FileReadConfig;
 pub use file_context_resolver::MentionResolution;
 pub use file_context_resolver::ReadFileResult;
 pub use file_context_resolver::ResolvedFile;
-pub use file_context_resolver::estimate_tokens;
 pub use file_context_resolver::is_cacheable_file;
 pub use file_context_resolver::read_file_with_limits;
 pub use file_context_resolver::resolve_mentions;

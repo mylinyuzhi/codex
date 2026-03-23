@@ -58,33 +58,39 @@ pub struct Toast {
 }
 
 impl Toast {
-    /// Create a new toast notification.
+    /// Create a new toast notification with a severity-appropriate duration.
     pub fn new(id: impl Into<String>, message: impl Into<String>, severity: ToastSeverity) -> Self {
+        let duration = match severity {
+            ToastSeverity::Info => crate::constants::TOAST_DURATION_INFO,
+            ToastSeverity::Success => crate::constants::TOAST_DURATION_SUCCESS,
+            ToastSeverity::Warning => crate::constants::TOAST_DURATION_WARNING,
+            ToastSeverity::Error => crate::constants::TOAST_DURATION_ERROR,
+        };
         Self {
             id: id.into(),
             message: message.into(),
             severity,
             created_at: Instant::now(),
-            duration: Duration::from_secs(3),
+            duration,
         }
     }
 
-    /// Create an info toast.
+    /// Create an info toast (3s).
     pub fn info(id: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(id, message, ToastSeverity::Info)
     }
 
-    /// Create a success toast.
+    /// Create a success toast (3s).
     pub fn success(id: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(id, message, ToastSeverity::Success)
     }
 
-    /// Create a warning toast.
+    /// Create a warning toast (5s).
     pub fn warning(id: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(id, message, ToastSeverity::Warning)
     }
 
-    /// Create an error toast.
+    /// Create an error toast (8s).
     pub fn error(id: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(id, message, ToastSeverity::Error)
     }

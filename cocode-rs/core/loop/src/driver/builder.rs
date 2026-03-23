@@ -9,6 +9,7 @@ use cocode_context::ConversationContext;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
 use cocode_message::MessageHistory;
+use cocode_policy::ApprovalStore;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::CompactConfig;
 use cocode_protocol::LoopConfig;
@@ -19,7 +20,6 @@ use cocode_skill::SkillManager;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
-use cocode_tools::ApprovalStore;
 use cocode_tools::FileReadState;
 use cocode_tools::FileTracker;
 use cocode_tools::SpawnAgentFn;
@@ -68,7 +68,7 @@ pub struct AgentLoopBuilder {
     features: cocode_protocol::Features,
     web_search_config: cocode_protocol::WebSearchConfig,
     web_fetch_config: cocode_protocol::WebFetchConfig,
-    permission_rules: Vec<cocode_tools::PermissionRule>,
+    permission_rules: Vec<cocode_policy::PermissionRule>,
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
     lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
     task_type_restrictions: Option<Vec<String>>,
@@ -306,7 +306,7 @@ impl AgentLoopBuilder {
     }
 
     /// Set pre-configured permission rules.
-    pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
+    pub fn permission_rules(mut self, rules: Vec<cocode_policy::PermissionRule>) -> Self {
         self.permission_rules = rules;
         self
     }

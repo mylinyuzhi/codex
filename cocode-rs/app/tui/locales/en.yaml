@@ -64,6 +64,7 @@ command.word_right: "Word Right"
 command.delete_word_backward: "Delete Word Backward"
 command.delete_word_forward: "Delete Word Forward"
 command.insert_newline: "Insert Newline"
+command.select_all: "Select All"
 
 # Approval
 command.approve: "Approve"
@@ -233,6 +234,8 @@ dialog.plan_exit_keep_elevate: "Yes, keep context and elevate permissions"
 dialog.plan_exit_keep_default: "Yes, keep context and manually approve"
 dialog.plan_exit_keep_planning: "No, keep planning"
 dialog.plan_exit_hints: "↑/↓: Navigate  Enter: Select  Esc: Keep planning"
+dialog.plan_exit_feedback_prompt: "Feedback for planning (optional):"
+dialog.plan_exit_feedback_placeholder: "Type feedback, then press Enter..."
 
 # Question overlay (AskUserQuestion)
 dialog.question_title: "Question"
@@ -287,6 +290,65 @@ toast.mcp_failed: "MCP: %{server} failed"
 toast.mcp_connected: "%{count} MCP server(s) connected"
 toast.mcp_error: "MCP %{name}: %{error}"
 
+# Stream warnings
+toast.stream_stall: "Stream stall detected"
+toast.stream_watchdog: "Stream watchdog warning"
+
+# Idle
+toast.idle_waiting: "Claude is waiting for your input"
+
+# Mode changes
+toast.interrupted: "Interrupted"
+toast.sessions_unavailable: "Session browser not yet available"
+toast.permission_mode: "Permission mode: %{mode}"
+toast.thinking_level: "Thinking: %{level}"
+
+# Limits
+toast.max_turns_reached: "Maximum turns reached"
+toast.tool_aborted: "Tool execution aborted"
+toast.compaction_circuit_breaker: "Compaction circuit breaker open"
+
+# Plan editor
+toast.plan_saved: "Plan saved!"
+toast.plan_save_failed: "Failed to save plan: %{error}"
+toast.no_plan_file: "No plan file available yet."
+toast.plan_editor_hint: "Ctrl+G: Open plan file in editor (plan mode only)"
+
+# Output styles
+toast.no_output_styles: "No output styles available."
+
+# Background tasks
+toast.background_task_started: "Background task started: %{task_type}"
+toast.background_task_completed: "Background task completed"
+toast.agents_killed: "%{count} agent(s) terminated"
+
+# API / retry
+toast.retry: "Retrying (%{attempt}/%{max})..."
+toast.api_error: "API error: %{message}"
+
+# MCP tool calls
+toast.mcp_tool_started: "MCP: %{server}/%{tool}"
+toast.mcp_tool_failed: "MCP tool failed: %{server}/%{tool}"
+
+# Micro-compaction and session memory
+toast.micro_compaction: "Micro-compacted %{count} results (%{tokens} tokens)"
+toast.session_memory_started: "Extracting session memory..."
+toast.session_memory_completed: "Session memory updated"
+toast.session_memory_failed: "Session memory extraction failed"
+toast.session_memory_compact: "Session memory compacted (%{saved} tokens)"
+
+# Speculative execution
+toast.speculative_rolled_back: "Speculative rolled back: %{reason}"
+
+# Editor
+toast.editor_error: "Editor error: %{error}"
+
+# Unsupported command
+toast.unsupported_command: "/%{name} is not yet supported in TUI."
+
+# Slow query
+toast.slow_query: "Query took %{duration}s"
+
 # ============================================================
 # Chat widget
 # ============================================================
@@ -295,12 +357,14 @@ chat.you: "You"
 chat.assistant: "Assistant"
 chat.system: "System"
 chat.messages_count: "%{count} messages"
+chat.scroll_to_bottom: "↓ Scroll to bottom"
 
 # Thinking display
 chat.thinking_tokens: "Thinking (%{tokens} tokens):"
 chat.thinking_collapsed: "Thinking (%{tokens} tokens) [Ctrl+Shift+T to expand]"
 chat.thinking_active: "Thinking (%{duration}):"
 chat.thinking_active_collapsed: "Thinking (%{tokens} tokens, %{duration})... [Ctrl+Shift+T to expand]"
+chat.waiting_for_response: "Waiting for response..."
 
 # ============================================================
 # Input widget
@@ -357,6 +421,7 @@ header.new_session: "New Session"
 header.turn_count: "%{count} turns"
 header.compacting: "Compacting..."
 header.fallback: "Fallback: %{model}"
+header.worktrees: "Worktrees: %{count}"
 
 # ============================================================
 # Status bar (additional)
@@ -396,3 +461,10 @@ subagent.completed: "Completed"
 subagent.backgrounded: "Backgrounded"
 subagent.step_progress: "Step %{current}/%{total}"
 subagent.more: "+%{count} more..."
+
+# ============================================================
+# Welcome / empty state
+# ============================================================
+
+chat.welcome: "Welcome! Type a message below to get started."
+chat.welcome_shortcuts: "Shortcuts:"

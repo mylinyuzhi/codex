@@ -97,7 +97,7 @@ pub struct AgentExecutor {
     spawn_agent_fn: Option<SpawnAgentFn>,
 
     /// Pre-configured permission rules loaded from settings files.
-    permission_rules: Vec<cocode_tools::PermissionRule>,
+    permission_rules: Vec<cocode_policy::PermissionRule>,
 
     /// Optional OTel manager for metrics and traces.
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
@@ -298,7 +298,7 @@ pub struct ExecutorBuilder {
     cancel_token: CancellationToken,
     spawn_agent_fn: Option<SpawnAgentFn>,
     features: cocode_protocol::Features,
-    permission_rules: Vec<cocode_tools::PermissionRule>,
+    permission_rules: Vec<cocode_policy::PermissionRule>,
     otel_manager: Option<Arc<cocode_otel::OtelManager>>,
 }
 
@@ -405,7 +405,7 @@ impl ExecutorBuilder {
     }
 
     /// Set pre-configured permission rules.
-    pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
+    pub fn permission_rules(mut self, rules: Vec<cocode_policy::PermissionRule>) -> Self {
         self.permission_rules = rules;
         self
     }

@@ -6,6 +6,7 @@
 use crate::builtin;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use crate::constraint::validate_model_info_fields;
 use crate::env_loader::EnvLoader;
 use crate::error::ConfigError;
 use crate::error::NotFoundKind;
@@ -36,6 +37,7 @@ use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 use tracing::debug;
 use tracing::info;
+use tracing::warn;
 
 /// Type alias for the result of `build_model_cache()`: (models by role, providers).
 type ModelCacheResult = (HashMap<ModelRole, ModelInfo>, HashMap<String, ProviderInfo>);
@@ -686,6 +688,17 @@ impl ConfigManager {
 
         // Build model cache and providers
         let (resolved_models, providers) = self.build_model_cache(&models)?;
+
+        // Validate resolved model info fields (warn on constraint violations)
+        for (role, info) in &resolved_models {
+            for err in validate_model_info_fields(info) {
+                warn!(
+                    role = %role,
+                    model = %info.slug,
+                    "{err}"
+                );
+            }
+        }
 
         // Resolve cwd and instructions
         let cwd = overrides

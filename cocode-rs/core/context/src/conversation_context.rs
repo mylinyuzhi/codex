@@ -101,21 +101,6 @@ impl ConversationContext {
     pub fn builder() -> ConversationContextBuilder {
         ConversationContextBuilder::default()
     }
-
-    /// Check if any MCP servers are connected.
-    pub fn has_mcp_servers(&self) -> bool {
-        !self.mcp_server_names.is_empty()
-    }
-
-    /// Check if any tools are available.
-    pub fn has_tools(&self) -> bool {
-        !self.tool_names.is_empty()
-    }
-
-    /// Check if this is a subagent context.
-    pub fn is_subagent(&self) -> bool {
-        self.subagent_type.is_some()
-    }
 }
 
 /// Builder for [`ConversationContext`].

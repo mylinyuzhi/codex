@@ -22,6 +22,7 @@ pub struct HeaderBar<'a> {
     turn_count: i32,
     is_compacting: bool,
     fallback_model: Option<&'a str>,
+    active_worktrees: i32,
 }
 
 impl<'a> HeaderBar<'a> {
@@ -34,6 +35,7 @@ impl<'a> HeaderBar<'a> {
             turn_count: 0,
             is_compacting: false,
             fallback_model: None,
+            active_worktrees: 0,
         }
     }
 
@@ -67,32 +69,14 @@ impl<'a> HeaderBar<'a> {
         self
     }
 
-    /// Shorten a path for display (replace home dir with ~, truncate middle).
-    fn shorten_path(path: &str) -> String {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let shortened = if !home.is_empty() && path.starts_with(&home) {
-            format!("~{}", &path[home.len()..])
-        } else {
-            path.to_string()
-        };
-
-        // Truncate if too long (keep first and last segments)
-        if shortened.len() > 40 {
-            let parts: Vec<&str> = shortened.split('/').collect();
-            if parts.len() > 4 {
-                format!(
-                    "{}/.../{}/{}",
-                    parts[..2].join("/"),
-                    parts[parts.len() - 2],
-                    parts[parts.len() - 1]
-                )
-            } else {
-                shortened
-            }
-        } else {
-            shortened
-        }
+    /// Set the active worktree count.
+    pub fn active_worktrees(mut self, count: i32) -> Self {
+        self.active_worktrees = count;
+        self
     }
+
+    /// Maximum display length for working directory in the header.
+    const HEADER_PATH_MAX_LEN: i32 = 40;
 }
 
 impl Widget for HeaderBar<'_> {
@@ -126,7 +110,7 @@ impl Widget for HeaderBar<'_> {
 
         // Working directory
         if let Some(dir) = self.working_dir {
-            let short_dir = Self::shorten_path(dir);
+            let short_dir = crate::path_display::shorten_path(dir, Self::HEADER_PATH_MAX_LEN);
             left_spans.push(Span::raw(format!(" {short_dir} ")).fg(self.theme.text_dim));
             left_spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
@@ -139,6 +123,18 @@ impl Widget for HeaderBar<'_> {
                     t!("header.turn_count", count = self.turn_count)
                 ))
                 .fg(self.theme.text_dim),
+            );
+        }
+
+        // Right side: active worktrees indicator
+        if self.active_worktrees > 0 {
+            right_spans.push(Span::raw("│").fg(self.theme.text_dim));
+            right_spans.push(
+                Span::raw(format!(
+                    " {} ",
+                    t!("header.worktrees", count = self.active_worktrees)
+                ))
+                .fg(self.theme.secondary),
             );
         }
 
