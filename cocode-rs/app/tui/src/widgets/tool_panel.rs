@@ -14,6 +14,10 @@ use ratatui::widgets::ListItem;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::state::BackgroundTask;
+use crate::state::BackgroundTaskStatus;
+use crate::state::McpToolCall;
+use crate::state::StreamingToolUse;
 use crate::state::ToolExecution;
 use crate::state::ToolStatus;
 use crate::theme::Theme;
@@ -23,6 +27,9 @@ pub struct ToolPanel<'a> {
     tools: &'a [ToolExecution],
     theme: &'a Theme,
     max_display: usize,
+    mcp_tools: &'a [McpToolCall],
+    background_tasks: &'a [BackgroundTask],
+    streaming_tools: &'a [StreamingToolUse],
 }
 
 impl<'a> ToolPanel<'a> {
@@ -32,6 +39,9 @@ impl<'a> ToolPanel<'a> {
             tools,
             theme,
             max_display: 5,
+            mcp_tools: &[],
+            background_tasks: &[],
+            streaming_tools: &[],
         }
     }
 
@@ -39,6 +49,48 @@ impl<'a> ToolPanel<'a> {
     pub fn max_display(mut self, max: usize) -> Self {
         self.max_display = max;
         self
+    }
+
+    /// Set MCP tool calls to display alongside regular tools.
+    pub fn mcp_tool_calls(mut self, mcp: &'a [McpToolCall]) -> Self {
+        self.mcp_tools = mcp;
+        self
+    }
+
+    /// Set background tasks to display.
+    pub fn background_tasks(mut self, tasks: &'a [BackgroundTask]) -> Self {
+        self.background_tasks = tasks;
+        self
+    }
+
+    /// Set streaming tool uses (tools being built during streaming).
+    pub fn streaming_tools(mut self, tools: &'a [StreamingToolUse]) -> Self {
+        self.streaming_tools = tools;
+        self
+    }
+
+    /// Format an MCP tool call for display.
+    fn format_mcp_tool(tool: &McpToolCall, theme: &Theme) -> ListItem<'static> {
+        let status_icon = match tool.status {
+            ToolStatus::Running => Span::raw("⏳").fg(theme.tool_running),
+            ToolStatus::Completed => Span::raw("✓").fg(theme.tool_completed),
+            ToolStatus::Failed => Span::raw("✗").fg(theme.tool_error),
+        };
+
+        let secs = tool.started_at.elapsed().as_secs();
+        let elapsed = if secs > 0 {
+            Span::raw(format!(" {secs}s")).fg(theme.text_dim)
+        } else {
+            Span::raw("")
+        };
+
+        let line = Line::from(vec![
+            status_icon,
+            Span::raw(format!(" {}/", tool.server)).fg(theme.text_dim),
+            Span::raw(tool.tool.clone()),
+            elapsed,
+        ]);
+        ListItem::new(line)
     }
 
     /// Format a tool for display.
@@ -51,15 +103,36 @@ impl<'a> ToolPanel<'a> {
 
         let name = Span::raw(format!(" {}", tool.name));
 
-        let progress = tool
-            .progress
-            .as_ref()
-            .map(|p| Span::raw(format!(" - {p}")).fg(theme.text_dim))
-            .unwrap_or_else(|| Span::raw(""));
+        // Show progress for running tools, or output preview for completed
+        let progress = if let Some(ref p) = tool.progress {
+            Span::raw(format!(" - {p}")).fg(theme.text_dim)
+        } else if matches!(tool.status, ToolStatus::Completed | ToolStatus::Failed) {
+            // Show first line of output as preview
+            tool.output
+                .as_deref()
+                .and_then(|o| o.lines().next())
+                .filter(|line| !line.is_empty())
+                .map(|line| {
+                    if line.len() > 30 {
+                        let end = line
+                            .char_indices()
+                            .take_while(|(i, _)| *i < 30)
+                            .last()
+                            .map_or(0, |(i, c)| i + c.len_utf8());
+                        Span::raw(format!(" {}…", &line[..end])).fg(theme.text_dim)
+                    } else {
+                        Span::raw(format!(" {line}")).fg(theme.text_dim)
+                    }
+                })
+                .unwrap_or_default()
+        } else {
+            Span::raw("")
+        };
 
-        // Show elapsed time for running tools
-        let elapsed = if tool.status == ToolStatus::Running {
-            tool.started_at
+        // Show elapsed time for running and completed tools
+        let elapsed = match tool.status {
+            ToolStatus::Running => tool
+                .started_at
                 .map(|t| {
                     let secs = t.elapsed().as_secs();
                     if secs > 0 {
@@ -68,9 +141,18 @@ impl<'a> ToolPanel<'a> {
                         Span::raw("")
                     }
                 })
-                .unwrap_or_else(|| Span::raw(""))
-        } else {
-            Span::raw("")
+                .unwrap_or_else(|| Span::raw("")),
+            ToolStatus::Completed | ToolStatus::Failed => tool
+                .elapsed
+                .map(|d| {
+                    let ms = d.as_millis();
+                    if ms < 1000 {
+                        Span::raw(format!(" {ms}ms")).fg(theme.text_dim)
+                    } else {
+                        Span::raw(format!(" {:.1}s", d.as_secs_f64())).fg(theme.text_dim)
+                    }
+                })
+                .unwrap_or_else(|| Span::raw("")),
         };
 
         let line = Line::from(vec![status_icon, name, progress, elapsed]);
@@ -80,24 +162,87 @@ impl<'a> ToolPanel<'a> {
 
 impl Widget for ToolPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 2 || self.tools.is_empty() {
+        let has_any = !self.tools.is_empty()
+            || !self.mcp_tools.is_empty()
+            || !self.background_tasks.is_empty()
+            || !self.streaming_tools.is_empty();
+        if area.height < 2 || !has_any {
             return;
         }
 
         // Take the most recent tools
         let display_tools: Vec<_> = self.tools.iter().rev().take(self.max_display).collect();
 
-        let items: Vec<ListItem> = display_tools
+        let mut items: Vec<ListItem> = display_tools
             .iter()
             .rev()
             .map(|t| Self::format_tool(t, self.theme))
             .collect();
 
+        // Show streaming tool uses (tools being built during streaming)
+        for st in self.streaming_tools {
+            if !st.name.is_empty() {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw("⚡").fg(self.theme.tool_running),
+                    Span::raw(format!(" {}", st.name)).italic(),
+                    Span::raw("...").dim(),
+                ])));
+            }
+        }
+
+        // Append MCP tool calls
+        for mcp in self.mcp_tools.iter().rev().take(3) {
+            items.push(Self::format_mcp_tool(mcp, self.theme));
+        }
+
+        // Append background tasks
+        for task in self.background_tasks.iter().rev().take(3) {
+            let status_icon = match task.status {
+                BackgroundTaskStatus::Running => Span::raw("◐").fg(self.theme.secondary),
+                BackgroundTaskStatus::Completed => Span::raw("✓").fg(self.theme.tool_completed),
+                BackgroundTaskStatus::Failed => Span::raw("✗").fg(self.theme.tool_error),
+            };
+            let secs = task.started_at.elapsed().as_secs();
+            let elapsed = if secs > 0 {
+                Span::raw(format!(" {secs}s")).fg(self.theme.text_dim)
+            } else {
+                Span::raw("")
+            };
+            let progress = task
+                .progress
+                .as_ref()
+                .map(|p| Span::raw(format!(" {p}")).fg(self.theme.text_dim))
+                .unwrap_or_default();
+            let type_name = match &task.task_type {
+                cocode_protocol::TaskType::Shell => "Shell",
+                cocode_protocol::TaskType::Agent => "Agent",
+                cocode_protocol::TaskType::FileOp => "FileOp",
+                cocode_protocol::TaskType::Other(s) => s.as_str(),
+            };
+            let name = format!(" {type_name}");
+            items.push(ListItem::new(Line::from(vec![
+                status_icon,
+                Span::raw(name).italic(),
+                progress,
+                elapsed,
+            ])));
+        }
+
         let running_count = self
             .tools
             .iter()
             .filter(|t| t.status == ToolStatus::Running)
-            .count();
+            .count()
+            + self
+                .mcp_tools
+                .iter()
+                .filter(|t| t.status == ToolStatus::Running)
+                .count()
+            + self
+                .background_tasks
+                .iter()
+                .filter(|t| t.status == BackgroundTaskStatus::Running)
+                .count();
 
         let title = if running_count > 0 {
             format!(" {} ", t!("tool.title_running", count = running_count))

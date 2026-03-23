@@ -452,6 +452,25 @@ pub enum LoopEvent {
         questions: Value,
     },
 
+    /// An MCP server is requesting user input via elicitation.
+    ///
+    /// The TUI should display an elicitation overlay (form or URL mode) and
+    /// send back the user's response via `UserCommand::ElicitationResponse`.
+    ElicitationRequested {
+        /// Unique request identifier (used to correlate the response).
+        request_id: String,
+        /// Name of the MCP server requesting input.
+        server_name: String,
+        /// Human-readable message to display.
+        message: String,
+        /// Elicitation mode: "form" or "url".
+        mode: String,
+        /// JSON Schema for form mode (None for URL mode).
+        schema: Option<Value>,
+        /// URL for URL mode (None for form mode).
+        url: Option<String>,
+    },
+
     // ========== Plan Mode ==========
     /// Plan mode has been entered.
     PlanModeEntered {

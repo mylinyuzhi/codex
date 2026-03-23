@@ -49,6 +49,8 @@ pub mod builtin;
 pub mod builtin_agents;
 pub mod config;
 mod config_builder;
+pub mod constraint;
+pub mod diagnostics;
 pub mod env_loader;
 pub mod error;
 pub mod interceptors;

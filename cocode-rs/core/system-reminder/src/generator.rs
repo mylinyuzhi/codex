@@ -631,73 +631,6 @@ impl<'a> GeneratorContext<'a> {
         GeneratorContextBuilder::default()
     }
 
-    /// Check if plan mode is active.
-    pub fn in_plan_mode(&self) -> bool {
-        self.is_plan_mode
-    }
-
-    /// Check if there are any background tasks.
-    pub fn has_background_tasks(&self) -> bool {
-        !self.background_tasks.is_empty()
-    }
-
-    /// Check if there are any diagnostics.
-    pub fn has_diagnostics(&self) -> bool {
-        !self.diagnostics.is_empty()
-    }
-
-    /// Check if there are any todos (plain or structured).
-    pub fn has_todos(&self) -> bool {
-        !self.todos.is_empty() || !self.structured_tasks.is_empty()
-    }
-
-    /// Check if there are structured tasks.
-    pub fn has_structured_tasks(&self) -> bool {
-        !self.structured_tasks.is_empty()
-    }
-
-    /// Get pending todos.
-    pub fn pending_todos(&self) -> impl Iterator<Item = &TodoItem> {
-        self.todos
-            .iter()
-            .filter(|t| t.status == TodoStatus::Pending)
-    }
-
-    /// Get in-progress todos.
-    pub fn in_progress_todos(&self) -> impl Iterator<Item = &TodoItem> {
-        self.todos
-            .iter()
-            .filter(|t| t.status == TodoStatus::InProgress)
-    }
-
-    /// Check if there are any cron jobs.
-    pub fn has_cron_jobs(&self) -> bool {
-        !self.cron_jobs.is_empty()
-    }
-
-    /// Check if delegate mode is active.
-    pub fn in_delegate_mode(&self) -> bool {
-        self.is_delegate_mode
-    }
-
-    /// Check if there are pending collaboration notifications.
-    pub fn has_collab_notifications(&self) -> bool {
-        !self.collab_notifications.is_empty()
-    }
-
-    /// Check if context usage is high (> 80%).
-    pub fn is_context_usage_high(&self) -> bool {
-        self.token_usage
-            .as_ref()
-            .map(|t| t.context_usage_percent > 80.0)
-            .unwrap_or(false)
-    }
-
-    /// Check if budget is low (< 10% remaining).
-    pub fn is_budget_low(&self) -> bool {
-        self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
-    }
-
     /// Check if this generator should produce full content this turn.
     /// Falls back to `true` (full) when no flag is set (e.g., in tests).
     pub fn should_use_full_content(&self, attachment_type: AttachmentType) -> bool {
@@ -738,7 +671,6 @@ pub struct GeneratorContextBuilder<'a> {
     available_skills: Vec<SkillInfo>,
     invoked_skills: Vec<InvokedSkillInfo>,
     compacted_large_files: Vec<CompactedLargeFile>,
-    // New fields
     is_delegate_mode: bool,
     delegate_mode_exiting: bool,
     delegated_agents: Vec<DelegatedAgentInfo>,
@@ -994,7 +926,6 @@ impl<'a> GeneratorContextBuilder<'a> {
             available_skills: self.available_skills,
             invoked_skills: self.invoked_skills,
             compacted_large_files: self.compacted_large_files,
-            // New fields
             is_delegate_mode: self.is_delegate_mode,
             delegate_mode_exiting: self.delegate_mode_exiting,
             delegated_agents: self.delegated_agents,

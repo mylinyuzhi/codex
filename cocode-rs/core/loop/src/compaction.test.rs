@@ -68,14 +68,14 @@ fn test_build_context_restoration_budget_exceeded() {
 }
 
 #[test]
-fn test_format_restoration_message_empty() {
+fn test_format_restoration_with_tasks_no_tasks_empty() {
     let restoration = ContextRestoration::default();
-    let msg = format_restoration_message(&restoration);
+    let msg = format_restoration_with_tasks(&restoration, None);
     assert!(msg.is_empty());
 }
 
 #[test]
-fn test_format_restoration_message_with_content() {
+fn test_format_restoration_with_tasks_no_tasks_with_content() {
     let restoration = ContextRestoration {
         todos: Some("- Fix bug".to_string()),
         files: vec![FileRestoration {
@@ -88,7 +88,7 @@ fn test_format_restoration_message_with_content() {
         ..Default::default()
     };
 
-    let msg = format_restoration_message(&restoration);
+    let msg = format_restoration_with_tasks(&restoration, None);
     assert!(msg.contains("<restored_context>"));
     assert!(msg.contains("<todo_list>"));
     assert!(msg.contains("- Fix bug"));

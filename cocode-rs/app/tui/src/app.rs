@@ -251,6 +251,8 @@ impl App {
     async fn handle_tui_event(&mut self, event: TuiEvent) -> io::Result<()> {
         match event {
             TuiEvent::Key(key) => {
+                self.state.ui.touch_activity();
+
                 let has_overlay = self.state.has_overlay();
                 let has_file_suggestions = self.state.ui.has_file_suggestions();
                 let has_skill_suggestions = self.state.ui.has_skill_suggestions();
@@ -292,8 +294,8 @@ impl App {
                 // Tick events for animations
                 let mut needs_render = false;
 
-                // Re-render if streaming
-                if self.state.is_streaming() {
+                // Re-render if streaming and no blocking overlay is active
+                if self.state.should_show_spinner() {
                     needs_render = true;
                 }
 
@@ -305,6 +307,14 @@ impl App {
 
                 // Tick animation frame (for thinking animation, etc.)
                 self.state.ui.tick_animation();
+
+                // Check for idle notification
+                if self.state.ui.check_idle() {
+                    self.state
+                        .ui
+                        .toast_info(crate::i18n::t!("toast.idle_waiting").to_string());
+                    needs_render = true;
+                }
 
                 if needs_render {
                     self.render()?;
@@ -545,6 +555,8 @@ impl App {
 
     /// Handle a loop event from the core agent.
     fn handle_loop_event(&mut self, event: LoopEvent) {
+        self.state.ui.touch_activity();
+
         // Handle plugin agents loaded event to update TUI autocomplete
         if let LoopEvent::PluginAgentsLoaded { ref agents } = event {
             self.agent_search

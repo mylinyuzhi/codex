@@ -1,6 +1,8 @@
 use super::*;
 use crate::state::MessageRole;
+use cocode_protocol::LoopEvent;
 use cocode_protocol::TokenUsage;
+use cocode_protocol::ToolResultContent;
 
 fn create_test_state() -> AppState {
     AppState::new()

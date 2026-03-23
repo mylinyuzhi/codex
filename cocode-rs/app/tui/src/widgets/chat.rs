@@ -25,6 +25,7 @@ use ratatui::widgets::Wrap;
 use crate::i18n::t;
 use crate::state::ChatMessage;
 use crate::state::MessageRole;
+use crate::state::StreamingToolUse;
 use crate::state::ToolStatus;
 use crate::theme::Theme;
 use crate::widgets::markdown::markdown_to_lines;
@@ -48,6 +49,10 @@ pub struct ChatWidget<'a> {
     collapsed_tools: &'a HashSet<String>,
     /// Available width for markdown rendering.
     width: u16,
+    /// Whether user has manually scrolled (auto-scroll disabled).
+    user_scrolled: bool,
+    /// Streaming tool uses (partial tool JSON being built).
+    streaming_tool_uses: &'a [StreamingToolUse],
 }
 
 impl<'a> ChatWidget<'a> {
@@ -65,6 +70,8 @@ impl<'a> ChatWidget<'a> {
             theme,
             collapsed_tools: &EMPTY_SET,
             width: 80,
+            user_scrolled: false,
+            streaming_tool_uses: &[],
         }
     }
 
@@ -122,6 +129,18 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
+    /// Set whether user has manually scrolled up.
+    pub fn user_scrolled(mut self, scrolled: bool) -> Self {
+        self.user_scrolled = scrolled;
+        self
+    }
+
+    /// Set the streaming tool uses (partial tool calls being built).
+    pub fn streaming_tool_uses(mut self, tool_uses: &'a [StreamingToolUse]) -> Self {
+        self.streaming_tool_uses = tool_uses;
+        self
+    }
+
     /// Format duration for display (e.g., "2.3s").
     fn format_duration(duration: Duration) -> String {
         let secs = duration.as_secs_f64();
@@ -137,42 +156,73 @@ impl<'a> ChatWidget<'a> {
 
     /// Get the animation character for the thinking indicator.
     fn thinking_animation_char(&self) -> char {
-        const SPINNER: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
-        SPINNER[self.animation_frame as usize % SPINNER.len()]
+        let frames = &crate::constants::SPINNER_FRAMES;
+        frames[self.animation_frame as usize % frames.len()]
     }
 
     /// Render inline tool calls for a message.
     fn render_tool_calls(&self, message: &ChatMessage) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         for tool in &message.tool_calls {
+            let is_collapsed = self.collapsed_tools.contains(&tool.tool_name);
             let status_icon = match tool.status {
                 ToolStatus::Running => Span::raw(" ⏳").fg(self.theme.tool_running),
                 ToolStatus::Completed => Span::raw(" ✓").fg(self.theme.tool_completed),
                 ToolStatus::Failed => Span::raw(" ✗").fg(self.theme.tool_error),
             };
 
-            // Top border with tool name and status
-            lines.push(Line::from(vec![
-                Span::raw("  ┌ ").fg(self.theme.border),
-                Span::raw(tool.tool_name.clone())
-                    .bold()
-                    .fg(self.theme.primary),
-                Span::raw(" ─").fg(self.theme.border),
-                status_icon,
-            ]));
+            let elapsed_span = tool
+                .elapsed
+                .map(|d| {
+                    let text = Self::format_duration(d);
+                    Span::raw(format!(" ({text})")).fg(self.theme.text_dim)
+                })
+                .unwrap_or_default();
 
-            // Description line
-            if !tool.description.is_empty() {
+            if is_collapsed {
+                // Collapsed: single line with tool name, status, elapsed
+                let desc_preview = if tool.description.is_empty() {
+                    String::new()
+                } else {
+                    let max = 40;
+                    if tool.description.len() > max {
+                        format!(" — {}…", &tool.description[..max])
+                    } else {
+                        format!(" — {}", tool.description)
+                    }
+                };
                 lines.push(Line::from(vec![
-                    Span::raw("  │ ").fg(self.theme.border),
-                    Span::raw(tool.description.clone()).fg(self.theme.text_dim),
+                    Span::raw("  ▸ ").fg(self.theme.border),
+                    Span::raw(tool.tool_name.clone())
+                        .bold()
+                        .fg(self.theme.primary),
+                    status_icon,
+                    elapsed_span,
+                    Span::raw(desc_preview).fg(self.theme.text_dim),
                 ]));
-            }
+            } else {
+                // Expanded: full tool call box
+                lines.push(Line::from(vec![
+                    Span::raw("  ┌ ").fg(self.theme.border),
+                    Span::raw(tool.tool_name.clone())
+                        .bold()
+                        .fg(self.theme.primary),
+                    status_icon,
+                    elapsed_span,
+                ]));
 
-            // Bottom border
-            lines.push(Line::from(
-                Span::raw("  └─────────────────────────────").fg(self.theme.border),
-            ));
+                if !tool.description.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::raw("  │ ").fg(self.theme.border),
+                        Span::raw(tool.description.clone()).fg(self.theme.text_dim),
+                    ]));
+                }
+
+                let border_len = (self.width as usize).saturating_sub(4).min(40);
+                lines.push(Line::from(
+                    Span::raw(format!("  └{}", "─".repeat(border_len))).fg(self.theme.border),
+                ));
+            }
         }
         lines
     }
@@ -200,7 +250,7 @@ impl<'a> ChatWidget<'a> {
             && !thinking.is_empty()
         {
             let word_count = thinking.split_whitespace().count();
-            let tokens = (word_count as f64 * 1.3) as i32;
+            let tokens = (word_count as f64 * crate::constants::THINKING_TOKEN_MULTIPLIER) as i32;
 
             if self.show_thinking {
                 // Show expanded thinking content with styled header
@@ -260,23 +310,60 @@ impl Widget for ChatWidget<'_> {
         // Build all lines
         let mut all_lines: Vec<Line> = Vec::new();
 
-        for message in self.messages {
-            all_lines.extend(self.format_message(message));
-        }
+        let visible_messages: Vec<_> = self.messages.iter().filter(|msg| !msg.is_meta).collect();
 
-        // Add streaming content if present
         let has_streaming = self.streaming_content.is_some()
             || self
                 .streaming_thinking
                 .as_ref()
                 .is_some_and(|t| !t.is_empty());
 
+        // Show welcome hint when chat is empty and not streaming
+        if visible_messages.is_empty() && !has_streaming {
+            all_lines.push(Line::from(""));
+            all_lines.push(Line::from(
+                Span::raw(format!("  {}", t!("chat.welcome")))
+                    .fg(self.theme.text_dim)
+                    .italic(),
+            ));
+            all_lines.push(Line::from(""));
+            all_lines.push(Line::from(vec![
+                Span::raw(format!("  {} ", t!("chat.welcome_shortcuts"))).fg(self.theme.text_dim),
+                Span::raw("? ").bold(),
+                Span::raw("Help  ").fg(self.theme.text_dim),
+                Span::raw("Ctrl+M ").bold(),
+                Span::raw("Model  ").fg(self.theme.text_dim),
+                Span::raw("Ctrl+P ").bold(),
+                Span::raw("Commands  ").fg(self.theme.text_dim),
+                Span::raw("Tab ").bold(),
+                Span::raw("Plan mode").fg(self.theme.text_dim),
+            ]));
+            all_lines.push(Line::from(""));
+        }
+
+        for message in &visible_messages {
+            all_lines.extend(self.format_message(message));
+        }
+
+        // Add streaming content if present
         if has_streaming {
             all_lines.push(Line::from(
                 Span::raw(format!("◀ {}", t!("chat.assistant")))
                     .bold()
                     .fg(self.theme.assistant_message),
             ));
+
+            // Show "waiting for response" when streaming started but no content yet
+            let has_content = self.streaming_content.is_some_and(|c| !c.is_empty())
+                || self.streaming_thinking.is_some_and(|t| !t.is_empty());
+            if !has_content {
+                let spinner = self.thinking_animation_char();
+                all_lines.push(Line::from(
+                    Span::raw(format!("  {spinner} {}", t!("chat.waiting_for_response")))
+                        .dim()
+                        .italic(),
+                ));
+            }
 
             // Show thinking content (collapsed indicator or expanded)
             if let Some(thinking) = self.streaming_thinking
@@ -319,7 +406,8 @@ impl Widget for ChatWidget<'_> {
                 } else {
                     // Show collapsed indicator with word count estimate and animation
                     let word_count = thinking.split_whitespace().count();
-                    let tokens = (word_count as f64 * 1.3) as i32;
+                    let tokens =
+                        (word_count as f64 * crate::constants::THINKING_TOKEN_MULTIPLIER) as i32;
                     let indicator = if self.is_thinking {
                         let spinner = self.thinking_animation_char();
                         format!(
@@ -352,16 +440,49 @@ impl Widget for ChatWidget<'_> {
                 }
                 all_lines.push(Line::from(Span::raw("  ▌").slow_blink()));
             }
+
+            // Show streaming tool uses (partial tool JSON being built)
+            for tool in self.streaming_tool_uses {
+                let spinner = self.thinking_animation_char();
+                all_lines.push(Line::from(vec![
+                    Span::raw(format!("  {spinner} ")).fg(self.theme.tool_running),
+                    Span::raw(tool.name.clone()).bold().fg(self.theme.primary),
+                    "...".dim(),
+                ]));
+                if !tool.accumulated_input.is_empty() {
+                    let max_preview = 120;
+                    let preview = if tool.accumulated_input.len() > max_preview {
+                        format!(
+                            "    {}…",
+                            &tool.accumulated_input[..tool
+                                .accumulated_input
+                                .char_indices()
+                                .take_while(|(i, _)| *i < max_preview)
+                                .last()
+                                .map_or(0, |(i, c)| i + c.len_utf8())]
+                        )
+                    } else {
+                        format!("    {}", tool.accumulated_input)
+                    };
+                    all_lines.push(Line::from(Span::raw(preview).dim()));
+                }
+            }
         }
 
-        // Create the block
-        let block = Block::default().borders(Borders::NONE).title_bottom(
+        // Create the block (count only visible messages, excluding is_meta)
+        let visible_count = self.messages.iter().filter(|m| !m.is_meta).count();
+        let bottom_title = if self.user_scrolled {
             format!(
-                " {} ",
-                t!("chat.messages_count", count = self.messages.len())
+                " {} | {} ",
+                t!("chat.messages_count", count = visible_count),
+                t!("chat.scroll_to_bottom")
             )
-            .dim(),
-        );
+        } else {
+            format!(" {} ", t!("chat.messages_count", count = visible_count))
+        };
+        let block = Block::default()
+            .borders(Borders::NONE)
+            .title_bottom(bottom_title.dim());
 
         // Calculate scroll
         let total_lines = all_lines.len();

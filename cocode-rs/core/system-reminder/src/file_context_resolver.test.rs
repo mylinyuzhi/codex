@@ -24,13 +24,6 @@ fn test_resolved_file_with_line_range() {
 }
 
 #[test]
-fn test_estimate_tokens() {
-    // ~100 chars = ~25 tokens
-    let content = "a".repeat(100);
-    assert_eq!(estimate_tokens(&content), 25);
-}
-
-#[test]
 fn test_file_read_config_default() {
     let config = FileReadConfig::default();
     assert_eq!(config.max_file_size, 10 * 1024 * 1024);

@@ -13,7 +13,6 @@ pub use compaction::FileRestoration;
 pub use compaction::InvokedSkillRestoration;
 pub use compaction::SessionMemorySummary;
 pub use compaction::build_context_restoration;
-pub use compaction::format_restoration_message;
 pub use compaction::try_session_memory_compact;
 
 // Micro-compact execution and threshold status

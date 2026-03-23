@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cocode-protocol.workspace = true
+cocode-policy.workspace = true
 cocode-api.workspace = true
 cocode-tools.workspace = true
 cocode-shell.workspace = true

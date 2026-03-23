@@ -3,6 +3,7 @@ members = [
     "common/error",
     "common/protocol",
     "common/config",
+    "common/policy",
     "common/otel",
     "common/stack-trace-macro",
     "core/api",
@@ -85,6 +86,7 @@ license = "Apache-2.0"
 cocode-error = { path = "common/error" }
 cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
+cocode-policy = { path = "common/policy" }
 cocode-otel = { path = "common/otel" }
 cocode-stack-trace-macro = { path = "common/stack-trace-macro" }
 
@@ -215,6 +217,7 @@ rustls = { version = "0.23", features = ["ring"] }
 schemars = "0.8.22"
 serde = "1"
 serde_json = "1"
+serde_path_to_error = "0.1"
 shlex = "1"
 serde_yml = "0.0.12"
 similar = "2"

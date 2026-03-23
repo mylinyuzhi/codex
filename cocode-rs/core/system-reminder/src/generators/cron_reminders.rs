@@ -43,7 +43,7 @@ impl AttachmentGenerator for CronRemindersGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        if !ctx.has_cron_jobs() {
+        if ctx.cron_jobs.is_empty() {
             return Ok(None);
         }
 

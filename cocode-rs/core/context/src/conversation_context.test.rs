@@ -17,9 +17,9 @@ fn test_builder_minimal() {
         .build()
         .unwrap();
 
-    assert!(!ctx.has_tools());
-    assert!(!ctx.has_mcp_servers());
-    assert!(!ctx.is_subagent());
+    assert!(ctx.tool_names.is_empty());
+    assert!(ctx.mcp_server_names.is_empty());
+    assert!(ctx.subagent_type.is_none());
     assert_eq!(ctx.permission_mode, PermissionMode::Default);
 }
 
@@ -42,9 +42,9 @@ fn test_builder_full() {
         .build()
         .unwrap();
 
-    assert!(ctx.has_tools());
-    assert!(ctx.has_mcp_servers());
-    assert!(ctx.is_subagent());
+    assert!(!ctx.tool_names.is_empty());
+    assert!(!ctx.mcp_server_names.is_empty());
+    assert!(ctx.subagent_type.is_some());
     assert_eq!(ctx.subagent_type, Some(SubagentType::Explore));
     assert_eq!(ctx.permission_mode, PermissionMode::AcceptEdits);
     assert_eq!(ctx.memory_files.len(), 1);

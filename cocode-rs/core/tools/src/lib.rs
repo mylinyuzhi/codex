@@ -100,14 +100,18 @@ pub mod context;
 pub mod error;
 pub mod executor;
 pub mod mcp_tool;
-pub mod permission_rules;
 pub mod registry;
 pub mod result_persistence;
 pub mod sensitive_files;
 pub mod tool;
 
+// Re-export from cocode-policy (permission types moved there)
+pub use cocode_policy::ApprovalStore;
+pub use cocode_policy::PermissionRule;
+pub use cocode_policy::PermissionRuleEvaluator;
+pub use cocode_policy::RuleAction;
+
 // Re-export main types at crate root
-pub use context::ApprovalStore;
 pub use context::FileReadState;
 pub use context::FileTracker;
 pub use context::InvokedSkill;
@@ -127,9 +131,6 @@ pub use executor::ExecutorConfig;
 pub use executor::StreamingToolExecutor;
 pub use executor::ToolExecutionResult;
 pub use mcp_tool::McpToolWrapper;
-pub use permission_rules::PermissionRule;
-pub use permission_rules::PermissionRuleEvaluator;
-pub use permission_rules::RuleAction;
 pub use registry::McpToolInfo;
 pub use registry::ToolRegistry;
 pub use tool::Tool;

@@ -90,6 +90,16 @@ pub struct UiState {
     /// Query timing tracker for slow-query notification and
     /// permission-pause exclusion.
     pub query_timing: QueryTiming,
+
+    /// Timestamp of last user/agent activity (for idle notification).
+    /// `None` until first activity (treated as "just now").
+    pub last_activity_at: Option<Instant>,
+
+    /// Whether idle notification has already been shown (reset on activity).
+    pub idle_notified: bool,
+
+    /// Dynamic status text shown alongside the spinner (e.g., tool name, "Compacting...").
+    pub spinner_text: Option<String>,
 }
 
 impl UiState {
@@ -99,7 +109,7 @@ impl UiState {
     /// another overlay is active. User-triggered overlays replace the current
     /// overlay, moving any displaced agent-driven overlay to the queue.
     /// Maximum queued overlays to prevent unbounded growth.
-    const MAX_OVERLAY_QUEUE: usize = 16;
+    const MAX_OVERLAY_QUEUE: usize = crate::constants::MAX_OVERLAY_QUEUE as usize;
 
     /// Set the active overlay, queuing or displacing existing overlays as needed.
     pub fn set_overlay(&mut self, overlay: Overlay) {
@@ -139,7 +149,12 @@ impl UiState {
         // Resume query timing if a blocking dialog was dismissed
         if matches!(
             self.overlay,
-            Some(Overlay::Permission(_) | Overlay::PlanExitApproval(_) | Overlay::Question(_))
+            Some(
+                Overlay::Permission(_)
+                    | Overlay::PlanExitApproval(_)
+                    | Overlay::Question(_)
+                    | Overlay::Elicitation(_)
+            )
         ) {
             self.query_timing.on_permission_dialog_close();
         }
@@ -161,6 +176,7 @@ impl UiState {
                         Overlay::Permission(_)
                             | Overlay::PlanExitApproval(_)
                             | Overlay::Question(_)
+                            | Overlay::Elicitation(_)
                     )
                 ) {
                     self.query_timing.on_permission_dialog_open();
@@ -216,6 +232,21 @@ impl UiState {
     pub fn add_streaming_tool_use(&mut self, call_id: String, name: String) {
         if let Some(ref mut streaming) = self.streaming {
             streaming.add_tool_use(call_id, name);
+        }
+    }
+
+    /// Track a new tool use during streaming, with the full input JSON.
+    ///
+    /// `ToolCallDelta` events may arrive before this entry is created, so
+    /// we initialize `accumulated_input` from the complete input.
+    pub fn add_streaming_tool_use_with_input(
+        &mut self,
+        call_id: String,
+        name: String,
+        input: String,
+    ) {
+        if let Some(ref mut streaming) = self.streaming {
+            streaming.add_tool_use_with_input(call_id, name, input);
         }
     }
 
@@ -323,6 +354,15 @@ impl UiState {
         }
     }
 
+    /// Adjust scroll offset by `delta` (positive = up, negative = down).
+    ///
+    /// Clamps to `>= 0` and sets `user_scrolled` when the offset is
+    /// non-zero, or resets auto-scroll when it reaches 0.
+    pub fn scroll_by(&mut self, delta: i32) {
+        self.scroll_offset = self.scroll_offset.saturating_add(delta).max(0);
+        self.user_scrolled = self.scroll_offset > 0;
+    }
+
     /// Mark that the user has manually scrolled.
     pub fn mark_user_scrolled(&mut self) {
         self.user_scrolled = true;
@@ -376,8 +416,7 @@ impl UiState {
 
     /// Add a toast notification.
     pub fn add_toast(&mut self, toast: Toast) {
-        // Limit to max 5 toasts
-        const MAX_TOASTS: usize = 5;
+        const MAX_TOASTS: usize = crate::constants::MAX_TOASTS as usize;
         if self.toasts.len() >= MAX_TOASTS {
             self.toasts.pop_front();
         }
@@ -432,7 +471,7 @@ impl UiState {
     /// Check if the last Esc was within the double-Esc window (800ms).
     pub fn is_double_esc(&self) -> bool {
         self.last_esc_time
-            .is_some_and(|t| t.elapsed() < Duration::from_millis(800))
+            .is_some_and(|t| t.elapsed() < crate::constants::DOUBLE_ESC_WINDOW)
     }
 
     /// Reset the double-Esc timer.
@@ -440,11 +479,40 @@ impl UiState {
         self.last_esc_time = None;
     }
 
+    // ========== Idle Detection ==========
+
+    /// Record activity to reset the idle timer.
+    pub fn touch_activity(&mut self) {
+        self.last_activity_at = Some(Instant::now());
+        self.idle_notified = false;
+    }
+
+    /// Check if user has been idle long enough for a notification.
+    /// Returns `true` at most once per idle period.
+    pub fn check_idle(&mut self) -> bool {
+        // Not idle if streaming or if no activity has occurred yet
+        if self.streaming.is_some() || self.last_activity_at.is_none() {
+            return false;
+        }
+        if self.idle_notified {
+            return false;
+        }
+        if self
+            .last_activity_at
+            .is_some_and(|t| t.elapsed() >= crate::constants::IDLE_NOTIFICATION_TIMEOUT)
+        {
+            self.idle_notified = true;
+            return true;
+        }
+        false
+    }
+
     // ========== Animation ==========
 
     /// Increment the animation frame.
     pub fn tick_animation(&mut self) {
-        self.animation_frame = (self.animation_frame + 1) % 8;
+        self.animation_frame =
+            (self.animation_frame + 1) % crate::constants::ANIMATION_FRAME_COUNT as u8;
     }
 
     /// Get the current animation frame (0-7).
@@ -527,13 +595,33 @@ impl HistoryEntry {
 }
 
 impl InputState {
+    /// Convert character index to byte offset in text.
+    fn char_to_byte(&self, char_idx: i32) -> usize {
+        self.text
+            .char_indices()
+            .nth(char_idx as usize)
+            .map_or(self.text.len(), |(byte_idx, _)| byte_idx)
+    }
+
+    /// Get the character count of the text.
+    fn char_count(&self) -> i32 {
+        self.text.chars().count() as i32
+    }
+
+    /// Convert byte offset to character index.
+    fn byte_to_char(&self, byte_offset: usize) -> i32 {
+        self.text[..byte_offset.min(self.text.len())]
+            .chars()
+            .count() as i32
+    }
+
     /// Insert a character at the cursor position.
     pub fn insert_char(&mut self, c: char) {
-        let cursor = self.cursor as usize;
-        if cursor >= self.text.len() {
+        let byte_pos = self.char_to_byte(self.cursor);
+        if byte_pos >= self.text.len() {
             self.text.push(c);
         } else {
-            self.text.insert(cursor, c);
+            self.text.insert(byte_pos, c);
         }
         self.cursor += 1;
     }
@@ -541,9 +629,9 @@ impl InputState {
     /// Delete the character before the cursor.
     pub fn delete_backward(&mut self) {
         if self.cursor > 0 {
-            let cursor = (self.cursor - 1) as usize;
-            if cursor < self.text.len() {
-                self.text.remove(cursor);
+            let byte_pos = self.char_to_byte(self.cursor - 1);
+            if byte_pos < self.text.len() {
+                self.text.remove(byte_pos);
             }
             self.cursor -= 1;
         }
@@ -551,9 +639,9 @@ impl InputState {
 
     /// Delete the character at the cursor.
     pub fn delete_forward(&mut self) {
-        let cursor = self.cursor as usize;
-        if cursor < self.text.len() {
-            self.text.remove(cursor);
+        let byte_pos = self.char_to_byte(self.cursor);
+        if byte_pos < self.text.len() {
+            self.text.remove(byte_pos);
         }
     }
 
@@ -566,7 +654,7 @@ impl InputState {
 
     /// Move cursor right.
     pub fn move_right(&mut self) {
-        if (self.cursor as usize) < self.text.len() {
+        if self.cursor < self.char_count() {
             self.cursor += 1;
         }
     }
@@ -578,7 +666,7 @@ impl InputState {
 
     /// Move cursor to end.
     pub fn move_end(&mut self) {
-        self.cursor = self.text.len() as i32;
+        self.cursor = self.char_count();
     }
 
     /// Move cursor to the start of the previous word.
@@ -587,8 +675,17 @@ impl InputState {
             return;
         }
 
+        let byte_pos = self.char_to_byte(self.cursor);
         let bytes = self.text.as_bytes();
-        let mut pos = (self.cursor - 1) as usize;
+        let mut pos = byte_pos.min(bytes.len());
+
+        // Move back to previous char boundary
+        if pos > 0 {
+            pos -= 1;
+            while pos > 0 && !self.text.is_char_boundary(pos) {
+                pos -= 1;
+            }
+        }
 
         // Skip any whitespace before cursor
         while pos > 0 && bytes[pos].is_ascii_whitespace() {
@@ -600,14 +697,15 @@ impl InputState {
             pos -= 1;
         }
 
-        self.cursor = pos as i32;
+        self.cursor = self.byte_to_char(pos);
     }
 
     /// Move cursor to the start of the next word.
     pub fn move_word_right(&mut self) {
+        let byte_pos = self.char_to_byte(self.cursor);
         let bytes = self.text.as_bytes();
         let len = bytes.len();
-        let mut pos = self.cursor as usize;
+        let mut pos = byte_pos;
 
         if pos >= len {
             return;
@@ -623,7 +721,7 @@ impl InputState {
             pos += 1;
         }
 
-        self.cursor = pos as i32;
+        self.cursor = self.byte_to_char(pos);
     }
 
     /// Delete the word before the cursor.
@@ -632,9 +730,9 @@ impl InputState {
             return;
         }
 
-        let original_cursor = self.cursor as usize;
+        let original_byte = self.char_to_byte(self.cursor);
         let bytes = self.text.as_bytes();
-        let mut pos = original_cursor;
+        let mut pos = original_byte;
 
         // Skip whitespace before cursor
         while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
@@ -648,21 +746,21 @@ impl InputState {
 
         // Remove the text between pos and original cursor
         let text = &self.text;
-        self.text = format!("{}{}", &text[..pos], &text[original_cursor..]);
-        self.cursor = pos as i32;
+        self.text = format!("{}{}", &text[..pos], &text[original_byte..]);
+        self.cursor = self.byte_to_char(pos);
     }
 
     /// Delete the word after the cursor.
     pub fn delete_word_forward(&mut self) {
+        let byte_pos = self.char_to_byte(self.cursor);
         let bytes = self.text.as_bytes();
         let len = bytes.len();
-        let start_pos = self.cursor as usize;
 
-        if start_pos >= len {
+        if byte_pos >= len {
             return;
         }
 
-        let mut pos = start_pos;
+        let mut pos = byte_pos;
 
         // Skip current word
         while pos < len && !bytes[pos].is_ascii_whitespace() {
@@ -674,10 +772,10 @@ impl InputState {
             pos += 1;
         }
 
-        // Remove the text between start_pos and pos
+        // Remove the text between byte_pos and pos
         let text = &self.text;
-        self.text = format!("{}{}", &text[..start_pos], &text[pos..]);
-        // Cursor stays at same position
+        self.text = format!("{}{}", &text[..byte_pos], &text[pos..]);
+        // Cursor stays at same character position
     }
 
     /// Insert a newline.
@@ -693,6 +791,14 @@ impl InputState {
         text
     }
 
+    /// Select all text in the input.
+    pub fn select_all(&mut self) {
+        if !self.text.is_empty() {
+            self.selection_start = Some(0);
+            self.cursor = self.char_count();
+        }
+    }
+
     /// Check if the input is empty.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
@@ -706,7 +812,7 @@ impl InputState {
     /// Set the text (e.g., from history or paste).
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
-        self.cursor = self.text.len() as i32;
+        self.cursor = self.char_count();
     }
 
     /// Add text to history with frecency tracking.
@@ -733,8 +839,7 @@ impl InputState {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Limit history size
-        const MAX_HISTORY: usize = 100;
+        const MAX_HISTORY: usize = crate::constants::MAX_HISTORY_ENTRIES as usize;
         if self.history.len() > MAX_HISTORY {
             self.history.truncate(MAX_HISTORY);
         }
@@ -1009,6 +1114,8 @@ pub enum Overlay {
     PlanExitApproval(PlanExitOverlay),
     /// Question overlay for AskUserQuestion tool.
     Question(QuestionOverlay),
+    /// Elicitation overlay for MCP server input.
+    Elicitation(ElicitationOverlay),
     /// Model picker.
     ModelPicker(ModelPickerOverlay),
     /// Output style picker.
@@ -1038,7 +1145,7 @@ impl Overlay {
     pub fn priority(&self) -> i32 {
         match self {
             Overlay::Permission(_) | Overlay::PlanExitApproval(_) => 0,
-            Overlay::Question(_) => 1,
+            Overlay::Question(_) | Overlay::Elicitation(_) => 1,
             Overlay::Error(_) => 2,
             Overlay::RewindSelector(_) => 3,
             Overlay::PluginManager(_) => 4,
@@ -1061,6 +1168,7 @@ impl Overlay {
             Overlay::Permission(_)
                 | Overlay::PlanExitApproval(_)
                 | Overlay::Question(_)
+                | Overlay::Elicitation(_)
                 | Overlay::Error(_)
         )
     }
@@ -1359,6 +1467,320 @@ impl QuestionOverlay {
     }
 }
 
+/// Elicitation overlay for MCP server input requests.
+///
+/// Two modes: Form (JSON Schema fields) and URL (open browser).
+/// Priority sits between Question and Error in the dialog stack,
+/// matching Claude Code's dialog priority dispatcher.
+#[derive(Debug, Clone)]
+pub struct ElicitationOverlay {
+    /// Unique request ID for correlating the response.
+    pub request_id: String,
+    /// Name of the MCP server requesting input.
+    pub server_name: String,
+    /// Human-readable message to display.
+    pub message: String,
+    /// The elicitation mode.
+    pub mode: ElicitationMode,
+    /// Currently selected field index (for form mode navigation).
+    pub selected: i32,
+}
+
+/// Elicitation mode.
+#[derive(Debug, Clone)]
+pub enum ElicitationMode {
+    /// JSON Schema form with typed fields.
+    Form {
+        /// Form fields derived from the JSON Schema.
+        fields: Vec<ElicitationField>,
+    },
+    /// URL to open in browser.
+    Url {
+        /// The URL to display.
+        url: String,
+    },
+}
+
+/// A single field in an elicitation form.
+#[derive(Debug, Clone)]
+pub struct ElicitationField {
+    /// Field name (JSON property key).
+    pub name: String,
+    /// Human-readable label (from schema description, or name).
+    pub label: String,
+    /// The field type and current value.
+    pub field_type: ElicitationFieldType,
+    /// Whether this field is required.
+    pub required: bool,
+}
+
+/// Typed field value for elicitation forms.
+#[derive(Debug, Clone)]
+pub enum ElicitationFieldType {
+    /// Free-text input.
+    Text {
+        /// Current text value.
+        value: String,
+        /// Default value from schema.
+        default: Option<String>,
+    },
+    /// Numeric input.
+    Number {
+        /// Current value as string (parsed to number on submit).
+        value: String,
+        /// Default value from schema.
+        default: Option<String>,
+    },
+    /// Select from options.
+    Select {
+        /// Available options.
+        options: Vec<String>,
+        /// Currently selected option index.
+        selected: Option<i32>,
+        /// Default value from schema.
+        default: Option<String>,
+    },
+    /// Boolean toggle.
+    Boolean {
+        /// Current toggle state.
+        value: bool,
+        /// Default value from schema.
+        default: bool,
+    },
+    /// Multi-select checkboxes.
+    MultiSelect {
+        /// Available options.
+        options: Vec<String>,
+        /// Which options are checked.
+        checked: Vec<bool>,
+    },
+}
+
+impl ElicitationOverlay {
+    /// Create a new elicitation overlay from a JSON schema request.
+    pub fn from_request(
+        request_id: String,
+        server_name: String,
+        message: String,
+        mode: &str,
+        schema: Option<&serde_json::Value>,
+        url: Option<String>,
+    ) -> Self {
+        let mode = if mode == "url" {
+            ElicitationMode::Url {
+                url: url.unwrap_or_default(),
+            }
+        } else {
+            let fields = schema
+                .and_then(|s| s["properties"].as_object())
+                .map(|props| {
+                    let required: Vec<String> = schema
+                        .and_then(|s| s["required"].as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    props
+                        .iter()
+                        .map(|(name, prop)| {
+                            let label = prop["description"].as_str().unwrap_or(name).to_string();
+                            let field_type = Self::parse_field_type(prop);
+                            ElicitationField {
+                                name: name.clone(),
+                                label,
+                                field_type,
+                                required: required.contains(name),
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            ElicitationMode::Form { fields }
+        };
+        Self {
+            request_id,
+            server_name,
+            message,
+            mode,
+            selected: 0,
+        }
+    }
+
+    fn parse_field_type(prop: &serde_json::Value) -> ElicitationFieldType {
+        let default_str = prop["default"].as_str().map(String::from);
+        match prop["type"].as_str() {
+            Some("boolean") => ElicitationFieldType::Boolean {
+                value: prop["default"].as_bool().unwrap_or(false),
+                default: prop["default"].as_bool().unwrap_or(false),
+            },
+            Some("number" | "integer") => ElicitationFieldType::Number {
+                value: default_str.clone().unwrap_or_default(),
+                default: default_str,
+            },
+            Some("array") => {
+                let options: Vec<String> = prop["items"]["enum"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let checked = vec![false; options.len()];
+                ElicitationFieldType::MultiSelect { options, checked }
+            }
+            _ => {
+                // Check for enum (select)
+                if let Some(options) = prop["enum"].as_array() {
+                    let opts: Vec<String> = options
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    ElicitationFieldType::Select {
+                        options: opts,
+                        selected: None,
+                        default: default_str,
+                    }
+                } else {
+                    ElicitationFieldType::Text {
+                        value: default_str.clone().unwrap_or_default(),
+                        default: default_str,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Move to the next field.
+    pub fn move_down(&mut self) {
+        let max = match &self.mode {
+            ElicitationMode::Form { fields } => fields.len() as i32 - 1,
+            ElicitationMode::Url { .. } => 0,
+        };
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    /// Move to the previous field.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Insert a character into the currently selected field (text/number fields only).
+    pub fn insert_char(&mut self, c: char) {
+        if let ElicitationMode::Form { fields } = &mut self.mode
+            && let Some(field) = fields.get_mut(self.selected as usize)
+        {
+            match &mut field.field_type {
+                ElicitationFieldType::Text { value, .. } => value.push(c),
+                ElicitationFieldType::Number { value, .. } => {
+                    if c.is_ascii_digit() || c == '-' || c == '.' {
+                        value.push(c);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Delete the last character from the currently selected field.
+    pub fn delete_char(&mut self) {
+        if let ElicitationMode::Form { fields } = &mut self.mode
+            && let Some(field) = fields.get_mut(self.selected as usize)
+        {
+            match &mut field.field_type {
+                ElicitationFieldType::Text { value, .. }
+                | ElicitationFieldType::Number { value, .. } => {
+                    value.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Toggle the currently selected field (boolean toggle or multi-select check).
+    /// For Select fields, cycles to the next option.
+    pub fn toggle_or_cycle(&mut self) {
+        if let ElicitationMode::Form { fields } = &mut self.mode
+            && let Some(field) = fields.get_mut(self.selected as usize)
+        {
+            match &mut field.field_type {
+                ElicitationFieldType::Boolean { value, .. } => {
+                    *value = !*value;
+                }
+                ElicitationFieldType::Select {
+                    options, selected, ..
+                } => {
+                    let next = selected.map_or(0, |i| i + 1);
+                    *selected = if next >= options.len() as i32 {
+                        Some(0)
+                    } else {
+                        Some(next)
+                    };
+                }
+                ElicitationFieldType::MultiSelect { checked, .. } => {
+                    if !checked.is_empty() {
+                        // Placeholder: a full implementation would use a sub-cursor
+                        // within the multi-select field to target individual options.
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Collect form values as a JSON object.
+    pub fn collect_values(&self) -> serde_json::Value {
+        match &self.mode {
+            ElicitationMode::Form { fields } => {
+                let mut map = serde_json::Map::new();
+                for field in fields {
+                    let value = match &field.field_type {
+                        ElicitationFieldType::Text { value, .. } => {
+                            serde_json::Value::String(value.clone())
+                        }
+                        ElicitationFieldType::Number { value, .. } => value
+                            .parse::<f64>()
+                            .map(|n| {
+                                serde_json::Value::Number(
+                                    serde_json::Number::from_f64(n)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            })
+                            .unwrap_or(serde_json::Value::String(value.clone())),
+                        ElicitationFieldType::Select {
+                            options, selected, ..
+                        } => selected
+                            .and_then(|i| options.get(i as usize))
+                            .map(|s| serde_json::Value::String(s.clone()))
+                            .unwrap_or(serde_json::Value::Null),
+                        ElicitationFieldType::Boolean { value, .. } => {
+                            serde_json::Value::Bool(*value)
+                        }
+                        ElicitationFieldType::MultiSelect { options, checked } => {
+                            let selected: Vec<serde_json::Value> = options
+                                .iter()
+                                .zip(checked.iter())
+                                .filter(|&(_, &c)| c)
+                                .map(|(opt, _)| serde_json::Value::String(opt.clone()))
+                                .collect();
+                            serde_json::Value::Array(selected)
+                        }
+                    };
+                    map.insert(field.name.clone(), value);
+                }
+                serde_json::Value::Object(map)
+            }
+            ElicitationMode::Url { .. } => serde_json::Value::Null,
+        }
+    }
+}
+
 /// Model picker overlay state.
 #[derive(Debug, Clone)]
 pub struct ModelPickerOverlay {
@@ -1368,6 +1790,8 @@ pub struct ModelPickerOverlay {
     pub selected: i32,
     /// Search filter.
     pub filter: String,
+    /// Slug of the currently active model (for visual indicator).
+    pub current_slug: Option<String>,
 }
 
 impl ModelPickerOverlay {
@@ -1377,7 +1801,14 @@ impl ModelPickerOverlay {
             items,
             selected: 0,
             filter: String::new(),
+            current_slug: None,
         }
+    }
+
+    /// Set the currently active model slug.
+    pub fn with_current(mut self, slug: Option<String>) -> Self {
+        self.current_slug = slug;
+        self
     }
 
     /// Get filtered items.
@@ -1947,7 +2378,7 @@ impl StreamingState {
     /// Get estimated thinking token count (rough estimate: words * 1.3).
     pub fn thinking_tokens(&self) -> i32 {
         let word_count = self.thinking.split_whitespace().count();
-        (word_count as f64 * 1.3) as i32
+        (word_count as f64 * crate::constants::THINKING_TOKEN_MULTIPLIER) as i32
     }
 
     /// Append a tool call delta to the matching streaming tool use.
@@ -1955,7 +2386,14 @@ impl StreamingState {
         if let Some(tool) = self.tool_uses.iter_mut().find(|t| t.call_id == call_id) {
             tool.accumulated_input.push_str(delta);
         } else {
-            tracing::debug!(call_id, "Tool call delta for unknown call_id");
+            // ToolCallDelta may arrive before ToolUseQueued — lazily create entry
+            // with placeholder name (will be updated by ToolUseQueued later).
+            self.tool_uses.push(StreamingToolUse {
+                call_id: call_id.to_string(),
+                name: String::new(),
+                accumulated_input: delta.to_string(),
+            });
+            self.mode = StreamMode::ToolInput;
         }
     }
 
@@ -1966,6 +2404,22 @@ impl StreamingState {
             name,
             accumulated_input: String::new(),
         });
+        self.mode = StreamMode::ToolInput;
+    }
+
+    /// Start tracking a new tool use with pre-populated input.
+    pub fn add_tool_use_with_input(&mut self, call_id: String, name: String, input: String) {
+        // If ToolCallDelta already created an entry, update it; otherwise create new.
+        if let Some(existing) = self.tool_uses.iter_mut().find(|t| t.call_id == call_id) {
+            // ToolCallDelta already created it — keep the accumulated deltas
+            existing.name = name;
+        } else {
+            self.tool_uses.push(StreamingToolUse {
+                call_id,
+                name,
+                accumulated_input: input,
+            });
+        }
         self.mode = StreamMode::ToolInput;
     }
 }
@@ -1990,7 +2444,7 @@ pub struct QueryTiming {
 
 impl QueryTiming {
     /// Slow query threshold — matches Claude Code's 30-second notification.
-    const SLOW_QUERY_THRESHOLD: Duration = Duration::from_secs(30);
+    const SLOW_QUERY_THRESHOLD: Duration = crate::constants::SLOW_QUERY_THRESHOLD;
 
     /// Start tracking a new query.
     pub fn start(&mut self) {

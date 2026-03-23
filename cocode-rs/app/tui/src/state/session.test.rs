@@ -66,6 +66,7 @@ fn test_cleanup_completed_tools() {
             progress: None,
             output: None,
             started_at: None,
+            elapsed: None,
         });
     }
 

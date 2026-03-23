@@ -26,6 +26,7 @@ use cocode_hooks::HookRegistry;
 use cocode_message::MessageHistory;
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
+use cocode_policy::ApprovalStore;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::CompactConfig;
@@ -55,7 +56,6 @@ use cocode_system_reminder::create_injected_messages;
 use cocode_system_reminder::generator::TeamContextData;
 use cocode_system_reminder::generator::TeamMemberInfo;
 use cocode_system_reminder::generator::UnreadMessage;
-use cocode_tools::ApprovalStore;
 use cocode_tools::ExecutorConfig;
 use cocode_tools::FileReadState;
 use cocode_tools::FileTracker;
@@ -253,7 +253,7 @@ pub struct AgentLoop {
 
     // Permission rules
     /// Pre-configured permission rules loaded from settings files.
-    permission_rules: Vec<cocode_tools::PermissionRule>,
+    permission_rules: Vec<cocode_policy::PermissionRule>,
 
     // Status broadcast
     /// Watch channel sender for broadcasting agent status.
@@ -1698,7 +1698,7 @@ impl AgentLoop {
         // Wire permission rules into executor
         if !self.permission_rules.is_empty() {
             let evaluator =
-                cocode_tools::PermissionRuleEvaluator::with_rules(self.permission_rules.clone());
+                cocode_policy::PermissionRuleEvaluator::with_rules(self.permission_rules.clone());
             executor = executor.with_permission_evaluator(evaluator);
         }
 

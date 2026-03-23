@@ -14,17 +14,18 @@ use crate::theme::Theme;
 ///
 /// Parses markdown line-by-line (not a full AST parser) and applies
 /// appropriate styling using theme colors.
-pub fn markdown_to_lines(text: &str, theme: &Theme, _width: u16) -> Vec<Line<'static>> {
+pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_block_lang = String::new();
+    let border_len = (width as usize).saturating_sub(4).min(60);
 
     for raw_line in text.lines() {
         if raw_line.starts_with("```") {
             if in_code_block {
                 // End of code block
                 lines.push(Line::from(
-                    Span::raw("  └────────────────────────────────").fg(theme.border),
+                    Span::raw(format!("  └{}", "─".repeat(border_len))).fg(theme.border),
                 ));
                 in_code_block = false;
                 code_block_lang.clear();
@@ -33,9 +34,10 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, _width: u16) -> Vec<Line<'st
                 in_code_block = true;
                 code_block_lang = raw_line.trim_start_matches('`').trim().to_string();
                 let label = if code_block_lang.is_empty() {
-                    "  ┌────────────────────────────────".to_string()
+                    format!("  ┌{}", "─".repeat(border_len))
                 } else {
-                    format!("  ┌─ {code_block_lang} ─────────────────────────")
+                    let fill = border_len.saturating_sub(code_block_lang.len() + 3);
+                    format!("  ┌─ {code_block_lang} {}", "─".repeat(fill))
                 };
                 lines.push(Line::from(Span::raw(label).fg(theme.border)));
             }
@@ -76,6 +78,18 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, _width: u16) -> Vec<Line<'st
                     .bold()
                     .underlined()
                     .fg(theme.primary),
+            ));
+            continue;
+        }
+
+        // Horizontal rule
+        if (raw_line == "---" || raw_line == "***" || raw_line == "___")
+            || (raw_line.len() >= 3
+                && raw_line.chars().all(|c| c == '-' || c == ' ')
+                && raw_line.chars().filter(|c| *c == '-').count() >= 3)
+        {
+            lines.push(Line::from(
+                Span::raw("  ────────────────────────────────").fg(theme.border),
             ));
             continue;
         }
@@ -140,7 +154,7 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, _width: u16) -> Vec<Line<'st
     // Close unclosed code block
     if in_code_block {
         lines.push(Line::from(
-            Span::raw("  └────────────────────────────────").fg(theme.border),
+            Span::raw(format!("  └{}", "─".repeat(border_len))).fg(theme.border),
         ));
     }
 
@@ -221,6 +235,59 @@ fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
             if i < len {
                 i += 1; // skip closing *
             }
+            continue;
+        }
+
+        // Strikethrough: ~~text~~
+        if c == '~' && matches!(chars.get(i + 1), Some('~')) {
+            if !current.is_empty() {
+                spans.push(Span::raw(std::mem::take(&mut current)));
+            }
+            let start = i + 2;
+            i = start;
+            while i < len {
+                if chars[i] == '~' && matches!(chars.get(i + 1), Some('~')) {
+                    break;
+                }
+                current.push(chars[i]);
+                i += 1;
+            }
+            spans.push(Span::raw(std::mem::take(&mut current)).crossed_out());
+            if i < len {
+                i += 2; // skip closing ~~
+            }
+            continue;
+        }
+
+        // Links: [text](url) — show text as clickable-styled
+        if c == '[' {
+            // Find the ] and then (url)
+            let bracket_start = i + 1;
+            let mut j = bracket_start;
+            while j < len && chars[j] != ']' {
+                j += 1;
+            }
+            if j < len && j + 1 < len && chars[j + 1] == '(' {
+                // Found [text](
+                let link_text: String = chars[bracket_start..j].iter().collect();
+                let url_start = j + 2;
+                let mut k = url_start;
+                while k < len && chars[k] != ')' {
+                    k += 1;
+                }
+                if k < len {
+                    // Complete link [text](url)
+                    if !current.is_empty() {
+                        spans.push(Span::raw(std::mem::take(&mut current)));
+                    }
+                    spans.push(Span::raw(link_text).fg(theme.primary).underlined());
+                    i = k + 1;
+                    continue;
+                }
+            }
+            // Not a valid link, treat [ as normal char
+            current.push(c);
+            i += 1;
             continue;
         }
 
