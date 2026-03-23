@@ -72,6 +72,16 @@ pub enum UserCommand {
         answers: serde_json::Value,
     },
 
+    /// Respond to an MCP elicitation request.
+    ElicitationResponse {
+        /// Request ID to correlate with the original request.
+        request_id: String,
+        /// User's action: "accept", "decline", or "cancel".
+        action: String,
+        /// Form values (only for "accept" action).
+        content: Option<serde_json::Value>,
+    },
+
     /// Execute a skill command.
     ExecuteSkill {
         /// The skill name (e.g., "commit").
@@ -208,6 +218,11 @@ impl std::fmt::Display for UserCommand {
             }
             UserCommand::QuestionResponse { request_id, .. } => {
                 write!(f, "QuestionResponse({request_id})")
+            }
+            UserCommand::ElicitationResponse {
+                request_id, action, ..
+            } => {
+                write!(f, "ElicitationResponse({request_id}, {action})")
             }
             UserCommand::ExecuteSkill { name, args } => {
                 if args.is_empty() {

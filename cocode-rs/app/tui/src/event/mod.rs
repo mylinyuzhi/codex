@@ -209,6 +209,9 @@ pub enum TuiCommand {
     /// Insert a newline in the input.
     InsertNewline,
 
+    /// Select all text in the input.
+    SelectAll,
+
     // ========== Approval ==========
     /// Approve the current permission request.
     Approve,
@@ -366,6 +369,7 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::DeleteWordBackward => write!(f, "{}", t!("command.delete_word_backward")),
             TuiCommand::DeleteWordForward => write!(f, "{}", t!("command.delete_word_forward")),
             TuiCommand::InsertNewline => write!(f, "{}", t!("command.insert_newline")),
+            TuiCommand::SelectAll => write!(f, "{}", t!("command.select_all")),
             TuiCommand::Approve => write!(f, "{}", t!("command.approve")),
             TuiCommand::Deny => write!(f, "{}", t!("command.deny")),
             TuiCommand::ApproveAll => write!(f, "{}", t!("command.approve_all")),

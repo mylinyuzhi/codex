@@ -66,6 +66,20 @@ pub enum ConfigError {
         location: Location,
     },
 
+    /// JSON parsing error with precise source location (file:line:column).
+    ///
+    /// Contains a pre-formatted gcc-style annotation with caret highlighting.
+    #[snafu(display("{annotation}"))]
+    JsonParseWithLocation {
+        file: String,
+        line: usize,
+        column: usize,
+        message: String,
+        annotation: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// JSONC parsing error (comments, trailing commas, etc.).
     #[snafu(display("JSONC parse error in {file}: {message}"))]
     JsoncParse {
@@ -114,9 +128,10 @@ impl ErrorExt for ConfigError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Io { .. } => StatusCode::IoError,
-            Self::JsonParse { .. } | Self::JsoncParse { .. } | Self::ConfigValidation { .. } => {
-                StatusCode::InvalidConfig
-            }
+            Self::JsonParse { .. }
+            | Self::JsonParseWithLocation { .. }
+            | Self::JsoncParse { .. }
+            | Self::ConfigValidation { .. } => StatusCode::InvalidConfig,
             Self::Internal { .. } => StatusCode::Internal,
             Self::NotFound { kind, .. } => match kind {
                 NotFoundKind::Provider => StatusCode::ProviderNotFound,

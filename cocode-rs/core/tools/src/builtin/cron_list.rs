@@ -59,44 +59,16 @@ impl Tool for CronListTool {
     async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
         let include_completed = super::input_helpers::bool_or(&input, "include_completed", false);
         let store = self.store.lock().await;
-        if include_completed {
-            let summary = cron_state::format_cron_summary(&store);
-            Ok(ToolOutput::text(summary))
+        let summary = if include_completed {
+            cron_state::format_cron_summary(store.values())
         } else {
-            // Filter to active jobs only — build summary directly to avoid cloning
-            if store
-                .values()
-                .all(|j| j.status != cron_state::CronJobStatus::Active)
-            {
-                return Ok(ToolOutput::text("No scheduled jobs.".to_string()));
-            }
-            let mut output = String::new();
-            for job in store.values() {
-                if job.status != cron_state::CronJobStatus::Active {
-                    continue;
-                }
-                let type_marker = if job.recurring { "" } else { " (one-shot)" };
-                let durable_marker = if job.durable { " [durable]" } else { "" };
-                output.push_str(&format!(
-                    "- {}: [{}]{}{}\n  prompt: {}\n  executions: {}\n",
-                    job.id,
-                    job.cron,
-                    type_marker,
-                    durable_marker,
-                    if job.prompt.len() <= 80 {
-                        job.prompt.clone()
-                    } else {
-                        let end = job.prompt.floor_char_boundary(80);
-                        format!("{}...", &job.prompt[..end])
-                    },
-                    job.execution_count,
-                ));
-                if let Some(desc) = &job.description {
-                    output.push_str(&format!("  description: {desc}\n"));
-                }
-            }
-            Ok(ToolOutput::text(output))
-        }
+            cron_state::format_cron_summary(
+                store
+                    .values()
+                    .filter(|j| j.status == cron_state::CronJobStatus::Active),
+            )
+        };
+        Ok(ToolOutput::text(summary))
     }
 }
 

@@ -1,0 +1,21 @@
+[package]
+name = "cocode-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-config = { path = "../config" }
+cocode-protocol = { path = "../protocol" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

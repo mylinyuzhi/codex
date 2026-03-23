@@ -58,6 +58,10 @@ pub struct StatusBar<'a> {
     working_dir: Option<&'a str>,
     /// Active output style name.
     output_style: Option<&'a str>,
+    /// Dynamic spinner text (tool name, "Compacting...", etc.).
+    spinner_text: Option<&'a str>,
+    /// Animation frame for spinner character.
+    animation_frame: u8,
 }
 
 impl<'a> StatusBar<'a> {
@@ -87,6 +91,8 @@ impl<'a> StatusBar<'a> {
             estimated_cost_cents: 0,
             working_dir: None,
             output_style: None,
+            spinner_text: None,
+            animation_frame: 0,
         }
     }
 
@@ -152,15 +158,32 @@ impl<'a> StatusBar<'a> {
         self
     }
 
+    /// Set the dynamic spinner text.
+    pub fn spinner_text(mut self, text: Option<&'a str>) -> Self {
+        self.spinner_text = text;
+        self
+    }
+
+    /// Set the animation frame for spinner.
+    pub fn animation_frame(mut self, frame: u8) -> Self {
+        self.animation_frame = frame;
+        self
+    }
+
     /// Format the model name for display.
     fn format_model(&self) -> Span<'static> {
         // Shorten long model names
-        let name = if self.model.len() > 24 {
+        let max_len = crate::constants::MODEL_NAME_MAX_LEN as usize;
+        let name = if self.model.len() > max_len {
             let parts: Vec<&str> = self.model.split('-').collect();
             if parts.len() >= 2 {
-                format!("{}-{}", parts[0], parts.last().unwrap_or(&""))
+                format!(
+                    "{}-{}",
+                    parts.first().unwrap_or(&self.model),
+                    parts.last().unwrap_or(&"")
+                )
             } else {
-                self.model[..24].to_string()
+                self.model[..max_len].to_string()
             }
         } else {
             self.model.to_string()
@@ -214,13 +237,14 @@ impl<'a> StatusBar<'a> {
         let percent = percent.clamp(0, 100);
 
         // Build gauge: [████░░] 62%
-        let filled = (percent * 6 / 100) as usize;
-        let empty = 6 - filled;
+        let bar_count = crate::constants::CONTEXT_GAUGE_BAR_COUNT as usize;
+        let filled = (percent as usize * bar_count / 100).min(bar_count);
+        let empty = bar_count - filled;
         let gauge = format!("[{}{}]{}%", "█".repeat(filled), "░".repeat(empty), percent);
 
-        let color = if percent < 60 {
+        let color = if percent < crate::constants::CONTEXT_WARNING_THRESHOLD {
             self.theme.success
-        } else if percent < 80 {
+        } else if percent < crate::constants::CONTEXT_ERROR_THRESHOLD {
             self.theme.warning
         } else {
             self.theme.error
@@ -236,10 +260,16 @@ impl<'a> StatusBar<'a> {
         let cache = self.token_usage.cache_read_tokens.unwrap_or(0);
 
         let format_count = |count: i64| -> String {
-            if count >= 1_000_000 {
-                format!("{:.1}M", count as f64 / 1_000_000.0)
-            } else if count >= 1_000 {
-                format!("{:.1}k", count as f64 / 1_000.0)
+            if count >= crate::constants::TOKEN_FORMAT_MILLIONS {
+                format!(
+                    "{:.1}M",
+                    count as f64 / crate::constants::TOKEN_FORMAT_MILLIONS as f64
+                )
+            } else if count >= crate::constants::TOKEN_FORMAT_THOUSANDS {
+                format!(
+                    "{:.1}k",
+                    count as f64 / crate::constants::TOKEN_FORMAT_THOUSANDS as f64
+                )
             } else {
                 format!("{count}")
             }
@@ -305,23 +335,8 @@ impl<'a> StatusBar<'a> {
     /// Format the working directory.
     fn format_working_dir(&self) -> Option<Span<'static>> {
         self.working_dir.map(|dir| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let shortened = if !home.is_empty() && dir.starts_with(&home) {
-                format!("~{}", &dir[home.len()..])
-            } else {
-                dir.to_string()
-            };
-            // Truncate if too long
-            let display = if shortened.len() > 25 {
-                let parts: Vec<&str> = shortened.split('/').collect();
-                if parts.len() > 3 {
-                    format!("{}/.../{}", parts[..2].join("/"), parts[parts.len() - 1])
-                } else {
-                    shortened
-                }
-            } else {
-                shortened
-            };
+            let display =
+                crate::path_display::shorten_path(dir, crate::constants::WORKING_DIR_MAX_LEN);
             Span::raw(format!(" {display} ")).fg(self.theme.text_dim)
         })
     }
@@ -411,6 +426,18 @@ impl Widget for StatusBar<'_> {
         // Context window gauge (if data available)
         if let Some(gauge_span) = self.format_context_gauge() {
             spans.push(gauge_span);
+            spans.push(Span::raw("│").fg(self.theme.text_dim));
+        }
+
+        // Dynamic spinner text (tool name, compaction status, etc.)
+        if let Some(text) = self.spinner_text {
+            let frames = &crate::constants::SPINNER_FRAMES;
+            let spinner = frames[self.animation_frame as usize % frames.len()];
+            spans.push(
+                Span::raw(format!(" {spinner} {text} "))
+                    .fg(self.theme.primary)
+                    .italic(),
+            );
             spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 
