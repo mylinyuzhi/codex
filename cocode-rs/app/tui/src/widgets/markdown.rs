@@ -18,17 +18,32 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'sta
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_block_lang = String::new();
+    let mut code_block_buffer: Vec<String> = Vec::new();
     let border_len = (width as usize).saturating_sub(4).min(60);
 
     for raw_line in text.lines() {
         if raw_line.starts_with("```") {
             if in_code_block {
-                // End of code block
+                // End of code block — render buffered content
+                if code_block_lang.eq_ignore_ascii_case("diff") {
+                    let diff_text = code_block_buffer.join("\n");
+                    lines.extend(super::diff_display::render_diff_lines(
+                        &diff_text, theme, width,
+                    ));
+                } else {
+                    for buffered_line in &code_block_buffer {
+                        lines.push(Line::from(vec![
+                            Span::raw("  │ ").fg(theme.border),
+                            Span::raw(buffered_line.clone()).fg(theme.text_dim),
+                        ]));
+                    }
+                }
                 lines.push(Line::from(
                     Span::raw(format!("  └{}", "─".repeat(border_len))).fg(theme.border),
                 ));
                 in_code_block = false;
                 code_block_lang.clear();
+                code_block_buffer.clear();
             } else {
                 // Start of code block
                 in_code_block = true;
@@ -45,11 +60,8 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'sta
         }
 
         if in_code_block {
-            // Inside code block: render with dim styling and border
-            lines.push(Line::from(vec![
-                Span::raw("  │ ").fg(theme.border),
-                Span::raw(raw_line.to_string()).fg(theme.text_dim),
-            ]));
+            // Buffer code block lines for deferred rendering
+            code_block_buffer.push(raw_line.to_string());
             continue;
         }
 
@@ -151,8 +163,21 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'sta
         }
     }
 
-    // Close unclosed code block
+    // Close unclosed code block — flush buffered content
     if in_code_block {
+        if code_block_lang.eq_ignore_ascii_case("diff") {
+            let diff_text = code_block_buffer.join("\n");
+            lines.extend(super::diff_display::render_diff_lines(
+                &diff_text, theme, width,
+            ));
+        } else {
+            for buffered_line in &code_block_buffer {
+                lines.push(Line::from(vec![
+                    Span::raw("  │ ").fg(theme.border),
+                    Span::raw(buffered_line.clone()).fg(theme.text_dim),
+                ]));
+            }
+        }
         lines.push(Line::from(
             Span::raw(format!("  └{}", "─".repeat(border_len))).fg(theme.border),
         ));

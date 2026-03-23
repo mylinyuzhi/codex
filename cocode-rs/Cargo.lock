@@ -1034,6 +1034,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-cron"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "cocode-error",
+ "cocode-file-watch",
+ "cocode-protocol",
+ "cocode-utils-string",
+ "notify 8.2.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "cocode-error"
 version = "0.0.0"
 dependencies = [
@@ -1486,6 +1507,7 @@ dependencies = [
  "cocode-auto-memory",
  "cocode-config",
  "cocode-context",
+ "cocode-cron",
  "cocode-error",
  "cocode-executor",
  "cocode-file-backup",
@@ -1682,11 +1704,11 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "chrono",
  "cocode-api",
  "cocode-apply-patch",
  "cocode-auto-memory",
  "cocode-config",
+ "cocode-cron",
  "cocode-error",
  "cocode-file-backup",
  "cocode-file-encoding",
@@ -1705,6 +1727,7 @@ dependencies = [
  "cocode-shell-parser",
  "cocode-skill",
  "cocode-team",
+ "cocode-utils-string",
  "dirs 6.0.0",
  "futures",
  "globset",
@@ -1758,7 +1781,6 @@ dependencies = [
  "serde_json",
  "sha1",
  "tempfile",
- "textwrap",
  "tokio",
  "tokio-stream",
  "tracing",

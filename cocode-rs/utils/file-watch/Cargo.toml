@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 notify = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -1,13 +1,13 @@
 //! CronCreate tool for scheduling recurring tasks.
 
-use super::cron_state::CronJob;
-use super::cron_state::CronJobStore;
-use super::cron_state::{self};
 use super::prompts;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_cron::CronJob;
+use cocode_cron::CronJobStatus;
+use cocode_cron::CronJobStore;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
@@ -80,12 +80,12 @@ impl Tool for CronCreateTool {
         let prompt = super::input_helpers::require_str(&input, "prompt")?;
 
         // Parse simple interval format (e.g., "5m", "1h", "30s") or validate cron expression
-        let schedule = cron_state::parse_schedule(cron_input)
+        let schedule = cocode_cron::parse_schedule(cron_input)
             .map_err(|msg| crate::error::tool_error::InvalidInputSnafu { message: msg }.build())?;
 
         let recurring = super::input_helpers::bool_or(&input, "recurring", true);
 
-        let job_id = cron_state::generate_cron_id();
+        let job_id = cocode_cron::generate_cron_id();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -93,7 +93,7 @@ impl Tool for CronCreateTool {
 
         // Auto-expiry for recurring jobs (3 days)
         let expires_at = if recurring {
-            Some(now + cron_state::RECURRING_EXPIRY_SECS)
+            Some(now + cocode_cron::DEFAULT_RECURRING_EXPIRY_SECS)
         } else {
             None
         };
@@ -109,7 +109,9 @@ impl Tool for CronCreateTool {
             execution_count: 0,
             last_executed_at: None,
             expires_at,
-            status: cron_state::CronJobStatus::Active,
+            status: CronJobStatus::Active,
+            consecutive_failures: 0,
+            next_fire_at: None,
         };
 
         let snapshot = {
@@ -118,23 +120,23 @@ impl Tool for CronCreateTool {
             // Enforce max job limit
             let active_count = store
                 .values()
-                .filter(|j| j.status == cron_state::CronJobStatus::Active)
+                .filter(|j| j.status == CronJobStatus::Active)
                 .count();
-            if active_count >= cron_state::MAX_CRON_JOBS {
+            if active_count >= cocode_cron::DEFAULT_MAX_JOBS as usize {
                 return Ok(ToolOutput::error(format!(
                     "Maximum of {} active cron jobs reached. Delete some jobs first.",
-                    cron_state::MAX_CRON_JOBS
+                    cocode_cron::DEFAULT_MAX_JOBS as usize
                 )));
             }
 
             store.insert(job_id.clone(), job);
-            cron_state::jobs_to_value(&store)
+            cocode_cron::jobs_to_value(&store)
         };
 
         // Persist durable jobs to disk
         if super::input_helpers::bool_or(&input, "durable", false)
             && let Some(ref home) = ctx.cocode_home
-            && let Err(e) = cron_state::save_durable_jobs(&self.store, home).await
+            && let Err(e) = cocode_cron::save_durable_jobs(&self.store, home).await
         {
             tracing::warn!(error = %e, "Failed to save durable cron jobs");
         }

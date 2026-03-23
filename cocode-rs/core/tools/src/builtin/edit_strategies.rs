@@ -442,7 +442,7 @@ pub fn find_closest_match(content: &str, old_string: &str) -> String {
         format!(
             "The first line of old_string '{}' was not found anywhere in the file. \
              The file content may have changed since last read.",
-            truncate_str(search_first_line, 80)
+            cocode_utils_string::truncate_str(search_first_line, 80)
         )
     } else {
         let line_num = candidates[0] + 1;
@@ -530,15 +530,6 @@ pub fn try_match(
         message: "no strategy matched".to_string(),
     }
     .build())
-}
-
-/// Truncate a string to a maximum length, appending "..." if truncated.
-pub fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..s.floor_char_boundary(max_len)])
-    }
 }
 
 /// Compute simple diff statistics between original and modified content.

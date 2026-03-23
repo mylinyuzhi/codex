@@ -397,8 +397,7 @@ impl SessionState {
         let auto_memory_state = cocode_auto_memory::AutoMemoryState::new_arc(resolved_auto_memory);
 
         // Load durable cron jobs from disk and merge into the shared store
-        if let Ok(durable_jobs) =
-            cocode_tools::builtin::cron_state::load_durable_jobs(&config.cocode_home).await
+        if let Ok(durable_jobs) = cocode_cron::load_durable_jobs(&config.cocode_home).await
             && !durable_jobs.is_empty()
         {
             let mut store = builtin_stores.cron_store.lock().await;

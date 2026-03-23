@@ -81,6 +81,8 @@ pub struct Theme {
     pub secondary: Color,
     /// Tertiary/highlight color.
     pub accent: Color,
+    /// Subtle background tint for user messages (terminal-adaptive, may be None).
+    pub user_message_bg: Option<Color>,
 
     // ========== Text Colors ==========
     /// Normal text color.
@@ -141,13 +143,17 @@ impl Default for Theme {
 
 impl Theme {
     /// Create the default theme.
+    ///
+    /// Follows strict color discipline: only {Reset, Cyan, Green, Red, Magenta, DarkGray}.
+    /// Avoids Blue (hard to read on dark terminals) and Yellow (invisible on light terminals).
     pub fn default_theme() -> Self {
         Self {
             name: ThemeName::Default,
             // Base
             primary: Color::Cyan,
-            secondary: Color::Blue,
+            secondary: Color::Cyan,
             accent: Color::Magenta,
+            user_message_bg: crate::terminal_palette::user_message_bg(),
             // Text
             text: Color::Reset,
             text_dim: Color::DarkGray,
@@ -160,19 +166,19 @@ impl Theme {
             user_message: Color::Green,
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
-            system_message: Color::Yellow,
+            system_message: Color::DarkGray,
             // Status
-            tool_running: Color::Yellow,
+            tool_running: Color::Magenta,
             tool_completed: Color::Green,
             tool_error: Color::Red,
-            warning: Color::Yellow,
+            warning: Color::Red,
             success: Color::Green,
             error: Color::Red,
             // UI
             border: Color::DarkGray,
             border_focused: Color::Cyan,
             scrollbar: Color::DarkGray,
-            plan_mode: Color::Blue,
+            plan_mode: Color::Magenta,
         }
     }
 
@@ -182,8 +188,9 @@ impl Theme {
             name: ThemeName::Dark,
             // Base
             primary: Color::LightCyan,
-            secondary: Color::LightBlue,
+            secondary: Color::LightCyan,
             accent: Color::LightMagenta,
+            user_message_bg: crate::terminal_palette::user_message_bg(),
             // Text
             text: Color::Gray,
             text_dim: Color::DarkGray,
@@ -196,9 +203,9 @@ impl Theme {
             user_message: Color::LightGreen,
             assistant_message: Color::LightCyan,
             thinking: Color::LightMagenta,
-            system_message: Color::LightRed,
+            system_message: Color::DarkGray,
             // Status
-            tool_running: Color::LightRed,
+            tool_running: Color::LightMagenta,
             tool_completed: Color::Green,
             tool_error: Color::LightRed,
             warning: Color::LightRed,
@@ -208,7 +215,7 @@ impl Theme {
             border: Color::DarkGray,
             border_focused: Color::LightCyan,
             scrollbar: Color::DarkGray,
-            plan_mode: Color::LightBlue,
+            plan_mode: Color::LightMagenta,
         }
     }
 
@@ -218,8 +225,9 @@ impl Theme {
             name: ThemeName::Light,
             // Base
             primary: Color::Cyan,
-            secondary: Color::Blue,
+            secondary: Color::Cyan,
             accent: Color::Magenta,
+            user_message_bg: crate::terminal_palette::user_message_bg(),
             // Text
             text: Color::Reset,
             text_dim: Color::DarkGray,
@@ -230,21 +238,21 @@ impl Theme {
             bg_selected: Color::Gray,
             // Messages
             user_message: Color::Green,
-            assistant_message: Color::Blue,
+            assistant_message: Color::Cyan,
             thinking: Color::Magenta,
-            system_message: Color::Red,
+            system_message: Color::DarkGray,
             // Status
-            tool_running: Color::LightRed,
+            tool_running: Color::Magenta,
             tool_completed: Color::Green,
             tool_error: Color::Red,
-            warning: Color::LightRed,
+            warning: Color::Red,
             success: Color::Green,
             error: Color::Red,
             // UI
             border: Color::Gray,
             border_focused: Color::Cyan,
             scrollbar: Color::DarkGray,
-            plan_mode: Color::Blue,
+            plan_mode: Color::Magenta,
         }
     }
 
@@ -256,6 +264,7 @@ impl Theme {
             primary: Color::LightCyan,
             secondary: Color::LightMagenta,
             accent: Color::Magenta,
+            user_message_bg: crate::terminal_palette::user_message_bg(),
             // Text
             text: Color::Gray,
             text_dim: Color::DarkGray,
@@ -290,8 +299,9 @@ impl Theme {
             name: ThemeName::Nord,
             // Base (Nord palette)
             primary: Color::LightCyan,
-            secondary: Color::LightBlue,
+            secondary: Color::LightCyan,
             accent: Color::LightMagenta,
+            user_message_bg: crate::terminal_palette::user_message_bg(),
             // Text
             text: Color::Gray,
             text_dim: Color::DarkGray,
@@ -304,9 +314,9 @@ impl Theme {
             user_message: Color::LightGreen,
             assistant_message: Color::LightCyan,
             thinking: Color::LightMagenta,
-            system_message: Color::LightRed,
+            system_message: Color::DarkGray,
             // Status
-            tool_running: Color::LightRed,
+            tool_running: Color::LightMagenta,
             tool_completed: Color::LightGreen,
             tool_error: Color::Red,
             warning: Color::LightRed,
@@ -316,7 +326,7 @@ impl Theme {
             border: Color::DarkGray,
             border_focused: Color::LightCyan,
             scrollbar: Color::DarkGray,
-            plan_mode: Color::LightBlue,
+            plan_mode: Color::LightMagenta,
         }
     }
 

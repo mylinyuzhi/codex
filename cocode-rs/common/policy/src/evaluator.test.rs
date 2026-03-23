@@ -10,37 +10,50 @@ use std::path::Path;
 
 #[test]
 fn test_matches_tool_exact() {
-    assert!(PermissionRuleEvaluator::matches_tool(
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
         ToolName::Edit.as_str(),
-        ToolName::Edit.as_str()
+        ToolName::Edit.as_str(),
+        None
     ));
-    assert!(!PermissionRuleEvaluator::matches_tool(
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
         ToolName::Edit.as_str(),
-        ToolName::Write.as_str()
+        ToolName::Write.as_str(),
+        None
     ));
 }
 
 #[test]
 fn test_matches_tool_wildcard() {
-    assert!(PermissionRuleEvaluator::matches_tool(
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
         "*",
-        ToolName::Edit.as_str()
+        ToolName::Edit.as_str(),
+        None
     ));
-    assert!(PermissionRuleEvaluator::matches_tool(
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
         "*",
-        ToolName::Bash.as_str()
+        ToolName::Bash.as_str(),
+        None
     ));
 }
 
 #[test]
-fn test_matches_tool_with_colon_prefix() {
-    assert!(PermissionRuleEvaluator::matches_tool(
+fn test_matches_tool_with_colon_pattern_and_input() {
+    // Pattern with command part matches when input is provided
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
         "Bash:git *",
-        ToolName::Bash.as_str()
+        ToolName::Bash.as_str(),
+        Some("git push")
     ));
-    assert!(!PermissionRuleEvaluator::matches_tool(
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
         "Bash:git *",
-        ToolName::Edit.as_str()
+        ToolName::Edit.as_str(),
+        Some("git push")
+    ));
+    // Pattern with command part does NOT match when input is absent
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+        "Bash:git *",
+        ToolName::Bash.as_str(),
+        None
     ));
 }
 
@@ -114,7 +127,9 @@ fn test_matches_file_substring_fallback() {
 // ── Rule priority ordering ───────────────────────────────────────
 
 #[test]
-fn test_deny_wins_over_allow_same_source() {
+fn test_deny_wins_over_allow_in_pipeline() {
+    // Deny and Allow from the same source: the pipeline checks deny first,
+    // so the deny stage finds a match and the allow stage is never reached.
     let evaluator = PermissionRuleEvaluator::with_rules(vec![
         PermissionRule {
             source: RuleSource::Project,
@@ -130,23 +145,26 @@ fn test_deny_wins_over_allow_same_source() {
         },
     ]);
 
+    // Pipeline stages 1+2: deny is found first
     let decision = evaluator
-        .evaluate(ToolName::Edit.as_str(), None)
-        .expect("should match");
+        .evaluate_deny_ask(ToolName::Edit.as_str(), None, None)
+        .expect("should match deny");
     assert!(decision.result.is_denied());
 }
 
 #[test]
-fn test_higher_priority_source_wins() {
+fn test_persistent_source_wins_over_session() {
+    // User (persistent, priority 0) wins over Session (runtime, priority 7)
+    // when both have the same behavior.
     let evaluator = PermissionRuleEvaluator::with_rules(vec![
         PermissionRule {
             source: RuleSource::Session,
             tool_pattern: ToolName::Edit.as_str().to_string(),
             file_pattern: None,
-            action: RuleAction::Allow,
+            action: RuleAction::Deny,
         },
         PermissionRule {
-            source: RuleSource::Policy,
+            source: RuleSource::User,
             tool_pattern: ToolName::Edit.as_str().to_string(),
             file_pattern: None,
             action: RuleAction::Deny,
@@ -154,10 +172,10 @@ fn test_higher_priority_source_wins() {
     ]);
 
     let decision = evaluator
-        .evaluate(ToolName::Edit.as_str(), None)
+        .evaluate_behavior(ToolName::Edit.as_str(), None, RuleAction::Deny, None)
         .expect("should match");
-    assert!(decision.result.is_allowed());
-    assert_eq!(decision.source, Some(RuleSource::Session));
+    // User has higher priority (checked first) than Session
+    assert_eq!(decision.source, Some(RuleSource::User));
 }
 
 #[test]
@@ -170,7 +188,7 @@ fn test_ask_action_returns_needs_approval() {
     }]);
 
     let decision = evaluator
-        .evaluate(ToolName::Bash.as_str(), None)
+        .evaluate_behavior(ToolName::Bash.as_str(), None, RuleAction::Ask, None)
         .expect("should match");
     assert!(decision.result.needs_approval());
 }
@@ -180,13 +198,22 @@ fn test_ask_action_returns_needs_approval() {
 #[test]
 fn test_empty_rules_returns_none() {
     let evaluator = PermissionRuleEvaluator::new();
-    assert!(evaluator.evaluate(ToolName::Edit.as_str(), None).is_none());
+    assert!(
+        evaluator
+            .evaluate_behavior(ToolName::Edit.as_str(), None, RuleAction::Deny, None)
+            .is_none()
+    );
+    assert!(
+        evaluator
+            .evaluate_behavior(ToolName::Edit.as_str(), None, RuleAction::Allow, None)
+            .is_none()
+    );
 }
 
-// ── Multiple rules — most restrictive wins ───────────────────────
+// ── Multiple rules — pipeline stages dominate ────────────────────
 
 #[test]
-fn test_multiple_rules_most_restrictive_wins() {
+fn test_deny_rule_blocks_even_with_allow_from_different_source() {
     let evaluator = PermissionRuleEvaluator::with_rules(vec![
         PermissionRule {
             source: RuleSource::User,
@@ -202,15 +229,35 @@ fn test_multiple_rules_most_restrictive_wins() {
         },
     ]);
 
+    // Pipeline: deny stage finds the Project deny rule for .env files
     let decision = evaluator
-        .evaluate(ToolName::Edit.as_str(), Some(Path::new("config/.env")))
-        .expect("should match");
+        .evaluate_deny_ask(
+            ToolName::Edit.as_str(),
+            Some(Path::new("config/.env")),
+            None,
+        )
+        .expect("should match deny");
     assert!(decision.result.is_denied());
     assert_eq!(decision.source, Some(RuleSource::Project));
 
+    // No deny for non-.env files, allow stage finds User allow
+    assert!(
+        evaluator
+            .evaluate_deny_ask(
+                ToolName::Edit.as_str(),
+                Some(Path::new("src/main.rs")),
+                None,
+            )
+            .is_none()
+    );
     let decision = evaluator
-        .evaluate(ToolName::Edit.as_str(), Some(Path::new("src/main.rs")))
-        .expect("should match");
+        .evaluate_behavior(
+            ToolName::Edit.as_str(),
+            Some(Path::new("src/main.rs")),
+            RuleAction::Allow,
+            None,
+        )
+        .expect("should match allow");
     assert!(decision.result.is_allowed());
     assert_eq!(decision.source, Some(RuleSource::User));
 }
@@ -224,7 +271,11 @@ fn test_non_matching_tool_skipped() {
         action: RuleAction::Deny,
     }]);
 
-    assert!(evaluator.evaluate(ToolName::Bash.as_str(), None).is_none());
+    assert!(
+        evaluator
+            .evaluate_behavior(ToolName::Bash.as_str(), None, RuleAction::Deny, None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -237,7 +288,7 @@ fn test_decision_includes_metadata() {
     }]);
 
     let decision = evaluator
-        .evaluate(ToolName::Write.as_str(), None)
+        .evaluate_behavior(ToolName::Write.as_str(), None, RuleAction::Allow, None)
         .expect("should match");
     assert_eq!(decision.source, Some(RuleSource::Local));
     assert_eq!(
@@ -258,7 +309,7 @@ fn test_deny_returns_denied_result() {
     }]);
 
     let decision = evaluator
-        .evaluate(ToolName::Bash.as_str(), None)
+        .evaluate_behavior(ToolName::Bash.as_str(), None, RuleAction::Deny, None)
         .expect("should match");
     assert!(matches!(decision.result, PermissionResult::Denied { .. }));
 }
@@ -273,7 +324,7 @@ fn test_allow_returns_allowed_result() {
     }]);
 
     let decision = evaluator
-        .evaluate(ToolName::Read.as_str(), None)
+        .evaluate_behavior(ToolName::Read.as_str(), None, RuleAction::Allow, None)
         .expect("should match");
     assert!(matches!(decision.result, PermissionResult::Allowed));
 }
@@ -334,7 +385,8 @@ fn test_evaluate_behavior_highest_priority_source_wins() {
     let decision = evaluator
         .evaluate_behavior(ToolName::Edit.as_str(), None, RuleAction::Deny, None)
         .expect("should match");
-    assert_eq!(decision.source, Some(RuleSource::Session));
+    // Policy(4) has higher priority (lower value) than Session(7)
+    assert_eq!(decision.source, Some(RuleSource::Policy));
 }
 
 // ── Command pattern matching ────────────────────────────────────
@@ -381,6 +433,22 @@ fn test_matches_tool_parenthesized_form() {
         "Bash(npm *)",
         ToolName::Bash.as_str(),
         Some("npm test")
+    ));
+}
+
+#[test]
+fn test_pattern_bearing_rule_requires_command_input() {
+    // Pattern-bearing rules like "Bash(git *)" must NOT match when
+    // command_input is None — they require input to match against.
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+        "Bash(git *)",
+        ToolName::Bash.as_str(),
+        None
+    ));
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+        "Bash:rm *",
+        ToolName::Bash.as_str(),
+        None
     ));
 }
 
@@ -516,30 +584,24 @@ fn test_matches_file_question_mark_wildcard() {
 }
 
 #[test]
-fn test_empty_command_pattern_colon() {
-    // "Bash:" with empty command pattern does not match any specific command
-    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+fn test_empty_command_pattern_treated_as_bare_tool() {
+    // "Bash:" and "Bash()" with empty command patterns are treated as
+    // bare tool matches (same as "Bash"), not pattern-bearing rules.
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
+        "Bash:", "Bash", None
+    ));
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
+        "Bash()", "Bash", None
+    ));
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
         "Bash:",
         "Bash",
         Some("git push")
     ));
-    // But matches when no command input is provided (tool-name-only check)
     assert!(PermissionRuleEvaluator::matches_tool_with_input(
-        "Bash:", "Bash", None
-    ));
-}
-
-#[test]
-fn test_empty_command_pattern_parens() {
-    // "Bash()" with empty command pattern does not match any specific command
-    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
         "Bash()",
         "Bash",
         Some("git push")
-    ));
-    // But matches when no command input is provided
-    assert!(PermissionRuleEvaluator::matches_tool_with_input(
-        "Bash()", "Bash", None
     ));
 }
 
@@ -655,18 +717,98 @@ fn test_evaluate_deny_ask_deny_wins_over_ask() {
     assert!(decision.as_ref().unwrap().result.is_denied());
 }
 
+// ── RuleSource priority ordering ─────────────────────────────────
+
 #[test]
-fn test_evaluate_does_not_normalize() {
-    // evaluate() (not evaluate_behavior) should not normalize commands
-    // because it's a general-purpose matcher, not the staged pipeline
+fn test_rule_source_priority_order() {
+    // Verify the ordering matches Claude Code: persistent sources first
+    assert!(RuleSource::User < RuleSource::Project);
+    assert!(RuleSource::Project < RuleSource::Local);
+    assert!(RuleSource::Local < RuleSource::Flag);
+    assert!(RuleSource::Flag < RuleSource::Policy);
+    assert!(RuleSource::Policy < RuleSource::Cli);
+    assert!(RuleSource::Cli < RuleSource::Command);
+    assert!(RuleSource::Command < RuleSource::Session);
+}
+
+#[test]
+fn test_bare_tool_deny_matches_all_commands() {
+    // A bare tool deny rule (no command pattern) should match all commands
+    // for that tool, regardless of command input.
     let evaluator = PermissionRuleEvaluator::with_rules(vec![PermissionRule {
         source: RuleSource::User,
         tool_pattern: "Bash".to_string(),
         file_pattern: None,
         action: RuleAction::Deny,
     }]);
-    // evaluate() matches on tool name only, no command normalization
-    let decision = evaluator.evaluate("Bash", None);
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, None);
     assert!(decision.is_some());
-    assert!(decision.as_ref().unwrap().result.is_denied());
+    let decision = evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("git push"));
+    assert!(decision.is_some());
+}
+
+// ── MCP tool wildcard matching ──────────────────────────────────
+
+#[test]
+fn test_mcp_server_wildcard_matches_all_tools() {
+    // "mcp__github__*" should match all tools from the github MCP server
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
+        "mcp__github__*",
+        "mcp__github__get_issues",
+        None
+    ));
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
+        "mcp__github__*",
+        "mcp__github__create_pr",
+        None
+    ));
+    // Should NOT match tools from other servers
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+        "mcp__github__*",
+        "mcp__slack__post_message",
+        None
+    ));
+}
+
+#[test]
+fn test_mcp_exact_tool_match() {
+    assert!(PermissionRuleEvaluator::matches_tool_with_input(
+        "mcp__github__get_issues",
+        "mcp__github__get_issues",
+        None
+    ));
+    assert!(!PermissionRuleEvaluator::matches_tool_with_input(
+        "mcp__github__get_issues",
+        "mcp__github__create_pr",
+        None
+    ));
+}
+
+#[test]
+fn test_mcp_server_wildcard_in_deny_rule() {
+    // Deny all tools from a specific MCP server
+    let evaluator = PermissionRuleEvaluator::with_rules(vec![PermissionRule {
+        source: RuleSource::Policy,
+        tool_pattern: "mcp__untrusted_server__*".to_string(),
+        file_pattern: None,
+        action: RuleAction::Deny,
+    }]);
+
+    let decision = evaluator.evaluate_behavior(
+        "mcp__untrusted_server__run_code",
+        None,
+        RuleAction::Deny,
+        None,
+    );
+    assert!(decision.is_some());
+    assert!(decision.unwrap().result.is_denied());
+
+    // Other servers should not be affected
+    let decision = evaluator.evaluate_behavior(
+        "mcp__trusted_server__run_code",
+        None,
+        RuleAction::Deny,
+        None,
+    );
+    assert!(decision.is_none());
 }

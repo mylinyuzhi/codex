@@ -103,6 +103,7 @@ overlay > skill suggestions > agent suggestions > symbol suggestions > file sugg
 | Ctrl+Shift+T | Toggle thinking display | `ToggleThinking` |
 | Ctrl+M | Model picker | `CycleModel` |
 | Ctrl+B | Background all tasks | `BackgroundAllTasks` |
+| Ctrl+F | Kill all running agents | `KillAllAgents` |
 | Ctrl+C | Interrupt | `Interrupt` |
 | Ctrl+L | Clear screen | `ClearScreen` |
 | Ctrl+E | Open external editor | `OpenExternalEditor` |

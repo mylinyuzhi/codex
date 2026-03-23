@@ -62,7 +62,9 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             if state.ui.is_thinking() {
                 state.ui.stop_thinking();
             }
-            if let Some(streaming) = state.ui.streaming.take() {
+            if let Some(mut streaming) = state.ui.streaming.take() {
+                // Reveal any remaining content before finalizing
+                streaming.reveal_all();
                 let mut message = ChatMessage::assistant(&turn_id, &streaming.content);
                 if !streaming.thinking.is_empty() {
                     message.thinking = Some(streaming.thinking);
@@ -148,10 +150,14 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                 .ui
                 .add_streaming_tool_use_with_input(call_id, name, input_str);
         }
-        LoopEvent::ToolUseStarted { call_id, name, .. } => {
+        LoopEvent::ToolUseStarted {
+            call_id,
+            name,
+            batch_id,
+        } => {
             state.ui.set_stream_mode_tool_use();
             state.ui.spinner_text = Some(name.clone());
-            state.session.start_tool(call_id, name);
+            state.session.start_tool_with_batch(call_id, name, batch_id);
         }
         LoopEvent::ToolProgress { call_id, progress } => {
             if let Some(msg) = progress.message {
@@ -826,6 +832,29 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             state
                 .ui
                 .toast_info(t!("toast.max_turns_reached").to_string());
+        }
+
+        // ========== Cron ==========
+        LoopEvent::CronJobFired { job_id, prompt, .. } => {
+            tracing::info!(job_id, prompt, "Cron job fired");
+        }
+        LoopEvent::CronJobDisabled {
+            job_id,
+            consecutive_failures,
+        } => {
+            state.ui.toast_warning(
+                t!(
+                    "toast.cron_job_disabled",
+                    job_id = job_id,
+                    failures = consecutive_failures
+                )
+                .to_string(),
+            );
+        }
+        LoopEvent::CronJobsMissed { count, summary } => {
+            state.ui.toast_info(
+                t!("toast.cron_jobs_missed", count = count, summary = summary).to_string(),
+            );
         }
     }
 }

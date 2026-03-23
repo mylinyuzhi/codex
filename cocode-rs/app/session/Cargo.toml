@@ -32,6 +32,7 @@ cocode-subagent.workspace = true
 cocode-system-reminder.workspace = true
 cocode-auto-memory.workspace = true
 cocode-team.workspace = true
+cocode-cron.workspace = true
 
 # Internal - standalone
 cocode-lsp.workspace = true

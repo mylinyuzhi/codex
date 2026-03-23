@@ -118,6 +118,9 @@ pub enum LoopEvent {
         call_id: String,
         /// Tool name.
         name: String,
+        /// Batch ID for parallel execution grouping (shared by concurrent tools).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        batch_id: Option<String>,
     },
     /// Progress update from a tool.
     ToolProgress {
@@ -687,6 +690,31 @@ pub enum LoopEvent {
     SummarizeFailed {
         /// Error message.
         error: String,
+    },
+
+    // ========== Cron ==========
+    /// A cron job has fired and its prompt should be injected into the loop.
+    CronJobFired {
+        /// Job identifier.
+        job_id: String,
+        /// Prompt to execute.
+        prompt: String,
+        /// Whether this is a one-shot job.
+        is_one_shot: bool,
+    },
+    /// A cron job was disabled by the circuit breaker after consecutive failures.
+    CronJobDisabled {
+        /// Job identifier.
+        job_id: String,
+        /// Number of consecutive failures.
+        consecutive_failures: i32,
+    },
+    /// One-shot tasks were missed during downtime.
+    CronJobsMissed {
+        /// Number of missed tasks.
+        count: i32,
+        /// Summary of missed tasks for display.
+        summary: String,
     },
 }
 

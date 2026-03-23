@@ -1,12 +1,11 @@
 //! CronDelete tool for removing scheduled tasks.
 
-use super::cron_state::CronJobStore;
-use super::cron_state::{self};
 use super::prompts;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_cron::CronJobStore;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
@@ -64,12 +63,12 @@ impl Tool for CronDeleteTool {
             if store.remove(id).is_none() {
                 return Ok(ToolOutput::error(format!("Cron job not found: {id}")));
             }
-            cron_state::jobs_to_value(&store)
+            cocode_cron::jobs_to_value(&store)
         };
 
         // Persist durable jobs to disk (removed job may have been durable)
         if let Some(ref home) = ctx.cocode_home
-            && let Err(e) = cron_state::save_durable_jobs(&self.store, home).await
+            && let Err(e) = cocode_cron::save_durable_jobs(&self.store, home).await
         {
             tracing::warn!(error = %e, "Failed to save durable cron jobs");
         }

@@ -55,3 +55,27 @@ fn normalize_markdown_hash_location_suffix_converts_ranges() {
         Some(":74:3-76:9".to_string())
     );
 }
+
+#[test]
+fn truncate_str_short_unchanged() {
+    assert_eq!(truncate_str("hello", 10), "hello");
+}
+
+#[test]
+fn truncate_str_exact_length_unchanged() {
+    assert_eq!(truncate_str("hello", 5), "hello");
+}
+
+#[test]
+fn truncate_str_long_truncated() {
+    let result = truncate_str("hello world", 5);
+    assert!(result.ends_with("..."));
+    assert!(result.len() <= 8); // 5 + "..."
+}
+
+#[test]
+fn truncate_str_multibyte_boundary() {
+    // 4 emojis = 16 bytes, truncate at 5 bytes — must not split emoji
+    let result = truncate_str("\u{1F600}\u{1F600}\u{1F600}\u{1F600}", 5);
+    assert!(result.ends_with("..."));
+}

@@ -64,7 +64,7 @@ fn test_render_with_tools() {
 
     state
         .session
-        .start_tool("call-1".to_string(), "bash".to_string());
+        .start_tool_with_batch("call-1".to_string(), "bash".to_string(), None);
 
     terminal
         .draw(|frame| {

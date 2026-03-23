@@ -51,8 +51,6 @@ mod bash;
 mod cron_create;
 mod cron_delete;
 mod cron_list;
-pub mod cron_scheduler;
-pub mod cron_state;
 mod edit;
 mod edit_strategies;
 mod enter_plan_mode;
@@ -134,7 +132,7 @@ use cocode_protocol::Features;
 /// that tools were constructed with.
 pub struct BuiltinStores {
     /// The shared cron job store used by CronCreate/CronDelete/CronList.
-    pub cron_store: cron_state::CronJobStore,
+    pub cron_store: cocode_cron::CronJobStore,
     /// The shared team store used by TeamCreate/TeamDelete/SendMessage.
     pub team_store: std::sync::Arc<cocode_team::TeamStore>,
     /// The shared mailbox used by SendMessage.
@@ -212,7 +210,7 @@ pub fn register_builtin_tools(
     registry.register(TaskListTool::new(task_store));
 
     // Cron scheduling tools (shared store)
-    let cron_store = cron_state::new_cron_store();
+    let cron_store = cocode_cron::new_cron_store();
     registry.register(CronCreateTool::new(cron_store.clone()));
     registry.register(CronDeleteTool::new(cron_store.clone()));
     registry.register(CronListTool::new(cron_store.clone()));

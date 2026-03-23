@@ -15,6 +15,7 @@
 
 mod agent_suggestion_popup;
 mod chat;
+pub(crate) mod diff_display;
 mod file_suggestion_popup;
 mod header_bar;
 mod input;
