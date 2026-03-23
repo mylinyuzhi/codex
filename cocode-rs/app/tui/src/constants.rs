@@ -50,14 +50,6 @@ pub const MAX_HISTORY_ENTRIES: i32 = 100;
 /// Maximum number of inline paste cache entries before LRU eviction.
 pub const MAX_PASTE_INLINE_ENTRIES: i32 = 100;
 
-// ========== Animation ==========
-
-/// Number of distinct animation frames (spinner cycles 0..FRAME_COUNT-1).
-pub const ANIMATION_FRAME_COUNT: i32 = 8;
-
-/// Braille spinner characters, one per animation frame.
-pub const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
-
 // ========== Scrolling ==========
 
 /// Lines to scroll per arrow-key scroll step.

@@ -22,26 +22,6 @@ fn test_permission_mode_methods() {
 }
 
 #[test]
-fn test_permission_behavior_default() {
-    assert_eq!(PermissionBehavior::default(), PermissionBehavior::Ask);
-}
-
-#[test]
-fn test_permission_behavior_methods() {
-    assert!(PermissionBehavior::Allow.is_allowed());
-    assert!(!PermissionBehavior::Ask.is_allowed());
-    assert!(!PermissionBehavior::Deny.is_allowed());
-
-    assert!(!PermissionBehavior::Allow.requires_approval());
-    assert!(PermissionBehavior::Ask.requires_approval());
-    assert!(!PermissionBehavior::Deny.requires_approval());
-
-    assert!(!PermissionBehavior::Allow.is_denied());
-    assert!(!PermissionBehavior::Ask.is_denied());
-    assert!(PermissionBehavior::Deny.is_denied());
-}
-
-#[test]
 fn test_permission_result_methods() {
     assert!(PermissionResult::Allowed.is_allowed());
     assert!(!PermissionResult::Allowed.is_denied());
@@ -108,14 +88,27 @@ fn test_permission_decision_with_source() {
 
 #[test]
 fn test_rule_source_ordering() {
-    // Session has highest priority (smallest value)
-    assert!(RuleSource::Session < RuleSource::Command);
-    assert!(RuleSource::Command < RuleSource::Cli);
-    assert!(RuleSource::Cli < RuleSource::Flag);
-    assert!(RuleSource::Flag < RuleSource::Local);
-    assert!(RuleSource::Local < RuleSource::Project);
-    assert!(RuleSource::Project < RuleSource::Policy);
-    assert!(RuleSource::Policy < RuleSource::User);
+    // Persistent sources have highest priority (smallest value, checked first).
+    // This ensures configured deny rules can't be bypassed by session approvals.
+    assert!(RuleSource::User < RuleSource::Project);
+    assert!(RuleSource::Project < RuleSource::Local);
+    assert!(RuleSource::Local < RuleSource::Flag);
+    assert!(RuleSource::Flag < RuleSource::Policy);
+    assert!(RuleSource::Policy < RuleSource::Cli);
+    assert!(RuleSource::Cli < RuleSource::Command);
+    assert!(RuleSource::Command < RuleSource::Session);
+}
+
+#[test]
+fn test_rule_source_is_persistent() {
+    assert!(RuleSource::User.is_persistent());
+    assert!(RuleSource::Project.is_persistent());
+    assert!(RuleSource::Local.is_persistent());
+    assert!(RuleSource::Policy.is_persistent());
+    assert!(!RuleSource::Flag.is_persistent());
+    assert!(!RuleSource::Cli.is_persistent());
+    assert!(!RuleSource::Command.is_persistent());
+    assert!(!RuleSource::Session.is_persistent());
 }
 
 #[test]
@@ -133,11 +126,6 @@ fn test_serde_roundtrip() {
     let json = serde_json::to_string(&mode).unwrap();
     let parsed: PermissionMode = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, mode);
-
-    let behavior = PermissionBehavior::Allow;
-    let json = serde_json::to_string(&behavior).unwrap();
-    let parsed: PermissionBehavior = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed, behavior);
 
     let risk = SecurityRisk {
         risk_type: RiskType::Destructive,

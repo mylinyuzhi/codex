@@ -12,6 +12,7 @@ use crate::command::CommandType;
 
 // Bundled skill prompt templates (embedded at compile time)
 const PLUGIN_PROMPT: &str = include_str!("bundled/plugin_prompt.md");
+const LOOP_PROMPT: &str = include_str!("bundled/loop_prompt.md");
 
 /// A skill bundled with the binary.
 ///
@@ -59,13 +60,22 @@ pub fn compute_fingerprint(content: &[u8]) -> String {
 /// Bundled skills are compiled into the binary and provide essential
 /// system commands like output-style management.
 pub fn bundled_skills() -> Vec<BundledSkill> {
-    vec![BundledSkill {
-        name: "plugin".to_string(),
-        description: "Manage plugins: install, uninstall, enable, disable, marketplace".to_string(),
-        prompt: PLUGIN_PROMPT.to_string(),
-        fingerprint: compute_fingerprint(PLUGIN_PROMPT.as_bytes()),
-        command_type: CommandType::LocalJsx,
-    }]
+    vec![
+        BundledSkill {
+            name: "loop".to_string(),
+            description: "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)".to_string(),
+            prompt: LOOP_PROMPT.to_string(),
+            fingerprint: compute_fingerprint(LOOP_PROMPT.as_bytes()),
+            command_type: CommandType::Prompt,
+        },
+        BundledSkill {
+            name: "plugin".to_string(),
+            description: "Manage plugins: install, uninstall, enable, disable, marketplace".to_string(),
+            prompt: PLUGIN_PROMPT.to_string(),
+            fingerprint: compute_fingerprint(PLUGIN_PROMPT.as_bytes()),
+            command_type: CommandType::LocalJsx,
+        },
+    ]
 }
 
 #[cfg(test)]

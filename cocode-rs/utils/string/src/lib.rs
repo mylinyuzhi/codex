@@ -111,6 +111,16 @@ fn parse_markdown_hash_location_point(point: &str) -> Option<(&str, Option<&str>
     }
 }
 
+/// Truncate a string to a maximum byte length at a char boundary,
+/// appending "..." if truncated.
+pub fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..s.floor_char_boundary(max_len)])
+    }
+}
+
 /// Encodes a byte slice as a lowercase hex string.
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;

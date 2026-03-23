@@ -10,6 +10,7 @@ fn make_tool(name: &str, status: ToolStatus) -> ToolExecution {
         output: None,
         started_at: None,
         elapsed: None,
+        batch_id: None,
     }
 }
 
@@ -52,7 +53,7 @@ fn test_tool_panel_with_tools() {
 fn test_format_tool_running() {
     let theme = Theme::default();
     let tool = make_tool("test", ToolStatus::Running);
-    let _item = ToolPanel::format_tool(&tool, &theme);
+    let _item = ToolPanel::format_tool(&tool, &theme, false);
     // Item should be created successfully
 }
 
@@ -69,4 +70,58 @@ fn test_max_display() {
     panel.render(area, &mut buf);
 
     // Should only show 3 most recent tools
+}
+
+#[test]
+fn test_parallel_tools_indicator() {
+    let theme = Theme::default();
+    let batch = Some("batch-1".to_string());
+    let tools = vec![
+        ToolExecution {
+            call_id: "call-a".to_string(),
+            name: "read".to_string(),
+            status: ToolStatus::Running,
+            progress: None,
+            output: None,
+            started_at: None,
+            elapsed: None,
+            batch_id: batch.clone(),
+        },
+        ToolExecution {
+            call_id: "call-b".to_string(),
+            name: "glob".to_string(),
+            status: ToolStatus::Running,
+            progress: None,
+            output: None,
+            started_at: None,
+            elapsed: None,
+            batch_id: batch.clone(),
+        },
+        ToolExecution {
+            call_id: "call-c".to_string(),
+            name: "grep".to_string(),
+            status: ToolStatus::Running,
+            progress: None,
+            output: None,
+            started_at: None,
+            elapsed: None,
+            batch_id: batch,
+        },
+    ];
+    let panel = ToolPanel::new(&tools, &theme);
+
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    panel.render(area, &mut buf);
+
+    let content: String = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    // All 3 tools share the same batch_id → parallel indicator should appear
+    assert!(
+        content.contains('‖'),
+        "Expected parallel indicator ‖ in: {content}"
+    );
 }

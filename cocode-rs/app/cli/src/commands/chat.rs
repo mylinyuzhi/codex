@@ -53,12 +53,15 @@ fn init_repl_logging(config: &ConfigManager, verbose: bool) -> Option<()> {
 ///
 /// * `initial_prompt` - Optional initial prompt for non-interactive mode
 /// * `title` - Optional session title
+/// * `name` - Optional session name for listing and resume-by-name
 /// * `max_turns` - Optional max turns limit
 /// * `config` - Configuration manager
 /// * `verbose` - Enable verbose logging
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     initial_prompt: Option<String>,
     title: Option<String>,
+    name: Option<String>,
     max_turns: Option<i32>,
     config: &ConfigManager,
     verbose: bool,
@@ -94,6 +97,9 @@ pub async fn run(
 
     if let Some(t) = title {
         session.set_title(t);
+    }
+    if let Some(n) = name {
+        session.name = Some(n);
     }
     if let Some(max) = max_turns {
         session.set_max_turns(Some(max));

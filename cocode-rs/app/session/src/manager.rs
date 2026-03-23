@@ -33,6 +33,8 @@ pub struct SessionSummary {
     pub id: String,
     /// Session title (if set).
     pub title: Option<String>,
+    /// Session name for resume-by-name (if set).
+    pub name: Option<String>,
     /// Model used.
     pub model: String,
     /// Provider used.
@@ -215,6 +217,7 @@ impl SessionManager {
             .map(|state| SessionSummary {
                 id: state.session.id.clone(),
                 title: state.session.title.clone(),
+                name: state.session.name.clone(),
                 model: state.session.model().unwrap_or("").to_string(),
                 provider: state.session.provider().unwrap_or("").to_string(),
                 created_at: state.session.created_at.to_rfc3339(),
@@ -245,6 +248,7 @@ impl SessionManager {
                         summaries.push(SessionSummary {
                             id: session.id,
                             title: session.title,
+                            name: session.name,
                             model,
                             provider,
                             created_at: session.created_at.to_rfc3339(),

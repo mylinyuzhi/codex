@@ -107,6 +107,15 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Whether this tool requires interactive user confirmation regardless of hooks.
+    ///
+    /// When `true`, pre-hook "allow" overrides do NOT skip the permission pipeline.
+    /// Used for security-critical tools like ExitPlanMode where human confirmation
+    /// is essential even if a hook has pre-approved the action.
+    fn requires_user_interaction(&self) -> bool {
+        false
+    }
+
     /// Maximum result size in characters before truncation.
     ///
     /// Default: 30,000 chars (matches Claude Code default).

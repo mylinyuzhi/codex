@@ -231,6 +231,9 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
         // Background all tasks (Ctrl+B)
         (KeyModifiers::CONTROL, KeyCode::Char('b')) => Some(TuiCommand::BackgroundAllTasks),
 
+        // Kill all running agents (Ctrl+F)
+        (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(TuiCommand::KillAllAgents),
+
         // Interrupt (Ctrl+C)
         (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(TuiCommand::Interrupt),
 
@@ -261,6 +264,13 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
             if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
         {
             Some(TuiCommand::ToggleToolCollapse)
+        }
+
+        // Toggle system reminders display (Ctrl+Shift+R)
+        (m, KeyCode::Char('R'))
+            if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+        {
+            Some(TuiCommand::ToggleSystemReminders)
         }
 
         // Show help (? or F1)
@@ -338,6 +348,10 @@ fn handle_input_key_with_streaming(key: KeyEvent, is_streaming: bool) -> Option<
         // Delete
         (KeyModifiers::NONE, KeyCode::Delete) => Some(TuiCommand::DeleteForward),
         (KeyModifiers::CONTROL, KeyCode::Delete) => Some(TuiCommand::DeleteWordForward),
+
+        // Emacs-style kill buffer (Ctrl+K / Ctrl+Y)
+        (KeyModifiers::CONTROL, KeyCode::Char('k')) => Some(TuiCommand::KillToEndOfLine),
+        (KeyModifiers::CONTROL, KeyCode::Char('y')) => Some(TuiCommand::Yank),
 
         // Cursor movement
         (KeyModifiers::NONE, KeyCode::Left) => Some(TuiCommand::CursorLeft),
