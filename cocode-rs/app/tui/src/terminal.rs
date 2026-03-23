@@ -25,6 +25,7 @@ use tokio::sync::broadcast;
 
 use crate::event::EventBroker;
 use crate::event::TuiEventStream;
+use crate::frame_scheduler::FrameRequester;
 use crate::state::AppState;
 
 /// Type alias for the terminal backend.
@@ -130,8 +131,11 @@ pub struct Tui {
     /// Event broker for stdin control.
     event_broker: Arc<EventBroker>,
 
-    /// Sender for draw requests.
+    /// Sender for draw requests (kept for subscribing in event stream).
     draw_tx: broadcast::Sender<()>,
+
+    /// Frame requester that coalesces and rate-limits draw requests.
+    frame_requester: FrameRequester,
 
     /// Application state.
     state: AppState,
@@ -149,11 +153,13 @@ impl Tui {
     pub fn new() -> io::Result<Self> {
         let terminal = setup_terminal()?;
         let (draw_tx, _) = broadcast::channel(16);
+        let frame_requester = FrameRequester::new(draw_tx.clone());
 
         Ok(Self {
             terminal,
             event_broker: Arc::new(EventBroker::new()),
             draw_tx,
+            frame_requester,
             state: AppState::new(),
             use_alt_screen: true,
         })
@@ -162,11 +168,13 @@ impl Tui {
     /// Create a TUI with an existing terminal (for testing).
     pub fn with_terminal(terminal: RatatuiTerminal) -> Self {
         let (draw_tx, _) = broadcast::channel(16);
+        let frame_requester = FrameRequester::new(draw_tx.clone());
 
         Self {
             terminal,
             event_broker: Arc::new(EventBroker::new()),
             draw_tx,
+            frame_requester,
             state: AppState::new(),
             use_alt_screen: true,
         }
@@ -187,9 +195,9 @@ impl Tui {
         &mut self.state
     }
 
-    /// Request a frame redraw.
+    /// Request a frame redraw via the frame scheduler.
     pub fn request_redraw(&self) {
-        let _ = self.draw_tx.send(());
+        self.frame_requester.schedule_frame();
     }
 
     /// Create an event stream for this TUI.

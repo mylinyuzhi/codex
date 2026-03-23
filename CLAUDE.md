@@ -329,7 +329,6 @@ This repo uses snapshot tests (via `insta`) to validate rendered output, especia
 ### Text Wrapping
 
 - Use `textwrap::wrap` for plain strings
-- For ratatui `Line` wrapping, use helpers in `tui/src/wrapping.rs` (e.g. `word_wrap_lines` / `word_wrap_line`)
 - For indentation, use `initial_indent` / `subsequent_indent` options rather than custom logic
 
 ## Async Conventions

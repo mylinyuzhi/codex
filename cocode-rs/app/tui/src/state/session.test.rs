@@ -38,7 +38,7 @@ fn test_chat_message_streaming() {
 fn test_tool_lifecycle() {
     let mut state = SessionState::default();
 
-    state.start_tool("call-1".to_string(), "bash".to_string());
+    state.start_tool_with_batch("call-1".to_string(), "bash".to_string(), None);
     assert_eq!(state.tool_executions.len(), 1);
     assert_eq!(state.tool_executions[0].status, ToolStatus::Running);
 
@@ -67,6 +67,7 @@ fn test_cleanup_completed_tools() {
             output: None,
             started_at: None,
             elapsed: None,
+            batch_id: None,
         });
     }
 

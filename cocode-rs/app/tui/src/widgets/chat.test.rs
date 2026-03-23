@@ -80,13 +80,11 @@ fn test_format_duration() {
 }
 
 #[test]
-fn test_thinking_animation_char() {
+fn test_spinner_frame() {
     let theme = Theme::default();
-    let widget = ChatWidget::new(&[], &theme);
-    let char0 = widget.thinking_animation_char();
-    assert!(!char0.is_ascii()); // Should be a Unicode spinner char
+    let widget = ChatWidget::new(&[], &theme).spinner_frame("⠋");
+    assert_eq!(widget.spinner(), "⠋");
 
-    let widget = ChatWidget::new(&[], &theme).animation_frame(4);
-    let char4 = widget.thinking_animation_char();
-    assert_ne!(char0, char4); // Different frames have different chars
+    let widget = ChatWidget::new(&[], &theme).spinner_frame("⠸");
+    assert_eq!(widget.spinner(), "⠸");
 }

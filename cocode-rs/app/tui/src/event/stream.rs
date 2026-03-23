@@ -27,17 +27,17 @@ use super::broker::EventBroker;
 
 /// Configuration for the event stream.
 pub struct EventStreamConfig {
-    /// Interval between tick events (for animations).
+    /// Interval between tick events (for status updates).
     pub tick_interval: Duration,
-    /// Interval between draw events (frame rate).
-    pub draw_interval: Duration,
+    /// Interval between spinner animation ticks (faster than general tick).
+    pub spinner_interval: Duration,
 }
 
 impl Default for EventStreamConfig {
     fn default() -> Self {
         Self {
             tick_interval: Duration::from_millis(250),
-            draw_interval: Duration::from_millis(16), // ~60 FPS
+            spinner_interval: Duration::from_millis(50), // Smooth spinner animation
         }
     }
 }
@@ -60,6 +60,8 @@ pub struct TuiEventStream {
     draw_rx: broadcast::Receiver<()>,
     /// Tick interval timer.
     tick_interval: Interval,
+    /// Spinner animation interval (50ms for smooth animation).
+    spinner_interval: Interval,
     /// Whether the terminal is focused.
     terminal_focused: Arc<AtomicBool>,
 }
@@ -103,6 +105,7 @@ impl TuiEventStream {
             event_stream,
             draw_rx,
             tick_interval: interval(config.tick_interval),
+            spinner_interval: interval(config.spinner_interval),
             terminal_focused,
         }
     }
@@ -157,6 +160,11 @@ impl Stream for TuiEventStream {
         // Check for draw requests first (highest priority)
         if let Ok(()) = self.draw_rx.try_recv() {
             return Poll::Ready(Some(TuiEvent::Draw));
+        }
+
+        // Check spinner tick interval (higher priority than general tick)
+        if self.spinner_interval.poll_tick(cx).is_ready() {
+            return Poll::Ready(Some(TuiEvent::SpinnerTick));
         }
 
         // Check tick interval

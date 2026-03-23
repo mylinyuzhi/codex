@@ -85,7 +85,10 @@
       "Skill(squash)",
       "Bash(GIT_EDITOR=true git rebase --continue)",
       "Bash(dpkg -l)",
-      "Bash(apt list:*)"
+      "Bash(apt list:*)",
+      "Bash(done)",
+      "Bash(/tmp/split_verification.txt:*)",
+      "Read(//tmp/**)"
     ],
     "deny": [],
     "ask": []

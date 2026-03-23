@@ -184,6 +184,7 @@ fn init_tui_logging(
 /// This sets up the TUI with channels for communicating with the agent loop.
 pub async fn run_tui(
     title: Option<String>,
+    name: Option<String>,
     config: &ConfigManager,
     verbose: bool,
     system_prompt_suffix: Option<String>,
@@ -218,6 +219,7 @@ pub async fn run_tui(
         config.clone(),
         initial_selections,
         title,
+        name,
         cwd,
         system_prompt_suffix,
         cli_agents,
@@ -261,6 +263,7 @@ async fn run_agent_driver(
     config: ConfigManager,
     initial_selections: cocode_protocol::RoleSelections,
     title: Option<String>,
+    name: Option<String>,
     working_dir: PathBuf,
     system_prompt_suffix: Option<String>,
     cli_agents: Vec<cocode_subagent::AgentDefinition>,
@@ -271,6 +274,9 @@ async fn run_agent_driver(
     let mut session = Session::with_selections(working_dir.clone(), initial_selections);
     if let Some(t) = title {
         session.set_title(t);
+    }
+    if let Some(n) = name {
+        session.name = Some(n);
     }
 
     // Create session state from config snapshot
@@ -1023,6 +1029,18 @@ async fn handle_idle_command(
         UserCommand::BackgroundAllTasks => {
             // No-op when idle: the signal was already sent by the TUI.
             info!("BackgroundAllTasks received in idle handler (no active agents)");
+        }
+        UserCommand::KillAllAgents => {
+            let mut mgr = state.subagent_manager().lock().await;
+            let killed = mgr.kill_all_running();
+            let count = killed.len();
+            info!(count, "Killed all running agents (idle)");
+            let _ = event_tx
+                .send(LoopEvent::AllAgentsKilled {
+                    count,
+                    agent_ids: killed,
+                })
+                .await;
         }
         UserCommand::SetOutputStyle { style } => {
             info!(?style, "Output style changed");

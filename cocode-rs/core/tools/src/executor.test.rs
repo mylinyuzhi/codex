@@ -863,6 +863,140 @@ fn test_plan_mode_denies_needs_approval() {
     );
 }
 
+// --- apply_permission_mode Bypass mode tests ---
+
+#[test]
+fn test_bypass_mode_respects_denied() {
+    let registry = ToolRegistry::new();
+
+    // Bypass mode should NOT override explicit Denied results (deny is absolute).
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Denied {
+            reason: "deny rule matched".to_string(),
+        },
+        PermissionMode::Bypass,
+        "any_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "Bypass mode must respect Denied results, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_bypass_mode_allows_needs_approval() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::NeedsApproval {
+            request: cocode_protocol::ApprovalRequest::default(),
+        },
+        PermissionMode::Bypass,
+        "any_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Bypass mode should allow NeedsApproval, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_bypass_mode_allows_passthrough() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Passthrough,
+        PermissionMode::Bypass,
+        "any_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Bypass mode should allow Passthrough, got: {result:?}"
+    );
+}
+
+// --- apply_permission_mode Bypass mode: Allowed stays Allowed ---
+
+#[test]
+fn test_bypass_mode_preserves_allowed() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Allowed,
+        PermissionMode::Bypass,
+        "any_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "Bypass mode should preserve Allowed, got: {result:?}"
+    );
+}
+
+// --- apply_permission_mode DontAsk mode tests ---
+
+#[test]
+fn test_dont_ask_mode_denies_needs_approval() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::NeedsApproval {
+            request: cocode_protocol::ApprovalRequest {
+                request_id: "test".to_string(),
+                tool_name: "some_tool".to_string(),
+                description: "test op".to_string(),
+                risks: vec![],
+                allow_remember: false,
+                proposed_prefix_pattern: None,
+            },
+        },
+        PermissionMode::DontAsk,
+        "some_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "DontAsk mode should convert NeedsApproval to Denied, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_dont_ask_mode_preserves_denied() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Denied {
+            reason: "already denied".to_string(),
+        },
+        PermissionMode::DontAsk,
+        "some_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Denied { .. }),
+        "DontAsk mode should preserve Denied, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_dont_ask_mode_preserves_allowed() {
+    let registry = ToolRegistry::new();
+
+    let result = apply_permission_mode(
+        cocode_protocol::PermissionResult::Allowed,
+        PermissionMode::DontAsk,
+        "some_tool",
+        &registry,
+    );
+    assert!(
+        matches!(result, cocode_protocol::PermissionResult::Allowed),
+        "DontAsk mode should preserve Allowed (pre-approved), got: {result:?}"
+    );
+}
+
 // --- is_read_only_or_plan_tool tests ---
 
 /// A read-only tool for plan mode tests.

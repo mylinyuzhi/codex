@@ -60,8 +60,8 @@ pub struct StatusBar<'a> {
     output_style: Option<&'a str>,
     /// Dynamic spinner text (tool name, "Compacting...", etc.).
     spinner_text: Option<&'a str>,
-    /// Animation frame for spinner character.
-    animation_frame: u8,
+    /// Spinner frame string (time-based).
+    spinner_frame: &'a str,
 }
 
 impl<'a> StatusBar<'a> {
@@ -92,7 +92,7 @@ impl<'a> StatusBar<'a> {
             working_dir: None,
             output_style: None,
             spinner_text: None,
-            animation_frame: 0,
+            spinner_frame: "⠋",
         }
     }
 
@@ -164,9 +164,9 @@ impl<'a> StatusBar<'a> {
         self
     }
 
-    /// Set the animation frame for spinner.
-    pub fn animation_frame(mut self, frame: u8) -> Self {
-        self.animation_frame = frame;
+    /// Set the spinner frame string.
+    pub fn spinner_frame(mut self, frame: &'a str) -> Self {
+        self.spinner_frame = frame;
         self
     }
 
@@ -403,92 +403,75 @@ impl Widget for StatusBar<'_> {
             return;
         }
 
-        // Build the status line
-        let mut spans: Vec<Span> = vec![
-            self.format_model(),
-            Span::raw("│").fg(self.theme.text_dim),
-            self.format_thinking(),
-            Span::raw("│").fg(self.theme.text_dim),
-        ];
+        let sep = || Span::raw("│").fg(self.theme.text_dim);
+        let max_width = area.width as usize;
 
-        // Plan mode (if active)
+        // Core segments (always shown): model + thinking level
+        let mut spans: Vec<Span> = vec![self.format_model(), sep(), self.format_thinking(), sep()];
+
+        // Optional segments ordered by drop priority (last dropped first).
+        // Each is (spans_to_add, display_width).
+        let mut optional: Vec<Vec<Span>> = Vec::new();
+
+        // Priority 1 (dropped last): plan mode, context gauge, spinner
         if let Some(plan_span) = self.format_plan_mode() {
-            spans.push(plan_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            optional.push(vec![plan_span, sep()]);
         }
-
-        // Output style (if active)
-        if let Some(style_span) = self.format_output_style() {
-            spans.push(style_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
-        }
-
-        // Context window gauge (if data available)
         if let Some(gauge_span) = self.format_context_gauge() {
-            spans.push(gauge_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            optional.push(vec![gauge_span, sep()]);
         }
-
-        // Dynamic spinner text (tool name, compaction status, etc.)
         if let Some(text) = self.spinner_text {
-            let frames = &crate::constants::SPINNER_FRAMES;
-            let spinner = frames[self.animation_frame as usize % frames.len()];
-            spans.push(
-                Span::raw(format!(" {spinner} {text} "))
-                    .fg(self.theme.primary)
-                    .italic(),
-            );
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            let shimmer_text = format!(" {} {text} ", self.spinner_frame);
+            let mut shimmer = crate::shimmer::shimmer_spans(&shimmer_text);
+            shimmer.push(sep());
+            optional.push(shimmer);
         }
 
-        // Thinking status (if currently thinking)
+        // Priority 2: thinking status, output style, queue
         if let Some(thinking_span) = self.format_thinking_status() {
-            spans.push(thinking_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            optional.push(vec![thinking_span, sep()]);
         }
-
-        // Thinking toggle indicator (if enabled)
-        if let Some(toggle_span) = self.format_thinking_toggle() {
-            spans.push(toggle_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+        if let Some(style_span) = self.format_output_style() {
+            optional.push(vec![style_span, sep()]);
         }
-
-        // MCP servers (if any connected)
-        if let Some(mcp_span) = self.format_mcp_status() {
-            spans.push(mcp_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
-        }
-
-        // Queue status (if items pending)
         if let Some(queue_span) = self.format_queue_status() {
-            spans.push(queue_span);
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
+            optional.push(vec![queue_span, sep()]);
         }
 
-        // Tokens (input/output breakdown)
-        spans.push(self.format_tokens());
+        // Priority 3: MCP, tokens
+        if let Some(mcp_span) = self.format_mcp_status() {
+            optional.push(vec![mcp_span, sep()]);
+        }
+        optional.push(vec![self.format_tokens()]);
 
-        // Cost estimate
+        // Priority 4 (dropped first): thinking toggle, cost, working dir
+        if let Some(toggle_span) = self.format_thinking_toggle() {
+            optional.push(vec![toggle_span, sep()]);
+        }
         if let Some(cost_span) = self.format_cost() {
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
-            spans.push(cost_span);
+            optional.push(vec![sep(), cost_span]);
         }
-
-        // Working directory
         if let Some(dir_span) = self.format_working_dir() {
-            spans.push(Span::raw("│").fg(self.theme.text_dim));
-            spans.push(dir_span);
+            optional.push(vec![sep(), dir_span]);
         }
 
-        // Calculate used width
-        let used_width: usize = spans.iter().map(ratatui::prelude::Span::width).sum();
+        // Greedy fit: add optional segments while they fit
+        let core_width: usize = spans.iter().map(ratatui::prelude::Span::width).sum();
+        let mut used = core_width;
+
+        for segment in &optional {
+            let seg_width: usize = segment.iter().map(ratatui::prelude::Span::width).sum();
+            if used + seg_width <= max_width {
+                spans.extend(segment.iter().cloned());
+                used += seg_width;
+            }
+        }
 
         // Add hints if there's room
         let hints = self.format_hints();
         let hints_width = hints.width();
-        if used_width + hints_width + 2 <= area.width as usize {
-            // Add spacer
-            let spacer_width = area.width as usize - used_width - hints_width;
+        if used + hints_width + 2 <= max_width {
+            let spacer_width = max_width - used - hints_width;
             spans.push(Span::raw(" ".repeat(spacer_width)));
             spans.push(hints);
         }
