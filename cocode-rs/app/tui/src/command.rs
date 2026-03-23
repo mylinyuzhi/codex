@@ -104,6 +104,11 @@ pub enum UserCommand {
     /// Transitions all foreground subagents to background execution.
     BackgroundAllTasks,
 
+    /// Kill all running agents (Ctrl+F).
+    ///
+    /// Cancels all running and backgrounded agents, preserving partial results.
+    KillAllAgents,
+
     /// Clear all queued commands.
     ClearQueues,
 
@@ -240,6 +245,7 @@ impl std::fmt::Display for UserCommand {
                 write!(f, "QueueCommand({preview:?})")
             }
             UserCommand::BackgroundAllTasks => write!(f, "BackgroundAllTasks"),
+            UserCommand::KillAllAgents => write!(f, "KillAllAgents"),
             UserCommand::ClearQueues => write!(f, "ClearQueues"),
             UserCommand::SetOutputStyle { style } => match style {
                 Some(s) => write!(f, "SetOutputStyle({s})"),

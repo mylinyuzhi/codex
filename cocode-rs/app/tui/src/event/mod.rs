@@ -49,8 +49,11 @@ pub enum TuiEvent {
     /// Request to draw a frame.
     Draw,
 
-    /// Periodic tick for animations and status updates.
+    /// Periodic tick for status updates (250ms).
     Tick,
+
+    /// Fast tick for spinner animation only (50ms).
+    SpinnerTick,
 
     /// Paste event (bracketed paste mode).
     Paste(String),
@@ -209,6 +212,12 @@ pub enum TuiCommand {
     /// Insert a newline in the input.
     InsertNewline,
 
+    /// Kill text from cursor to end of line (Ctrl+K).
+    KillToEndOfLine,
+
+    /// Yank (paste) the kill buffer at cursor (Ctrl+Y).
+    Yank,
+
     /// Select all text in the input.
     SelectAll,
 
@@ -276,9 +285,15 @@ pub enum TuiCommand {
     /// Background all running foreground tasks (Ctrl+B).
     BackgroundAllTasks,
 
+    /// Kill all running agents (Ctrl+F).
+    KillAllAgents,
+
     // ========== Tool Collapse ==========
     /// Toggle collapse of tool results in chat.
     ToggleToolCollapse,
+
+    /// Toggle display of system reminders in chat (Ctrl+Shift+R).
+    ToggleSystemReminders,
 
     // ========== Rewind ==========
     /// Open the rewind selector overlay.
@@ -369,6 +384,8 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::DeleteWordBackward => write!(f, "{}", t!("command.delete_word_backward")),
             TuiCommand::DeleteWordForward => write!(f, "{}", t!("command.delete_word_forward")),
             TuiCommand::InsertNewline => write!(f, "{}", t!("command.insert_newline")),
+            TuiCommand::KillToEndOfLine => write!(f, "{}", t!("command.kill_to_end_of_line")),
+            TuiCommand::Yank => write!(f, "{}", t!("command.yank")),
             TuiCommand::SelectAll => write!(f, "{}", t!("command.select_all")),
             TuiCommand::Approve => write!(f, "{}", t!("command.approve")),
             TuiCommand::Deny => write!(f, "{}", t!("command.deny")),
@@ -395,8 +412,14 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::BackgroundAllTasks => {
                 write!(f, "{}", t!("command.background_all_tasks"))
             }
+            TuiCommand::KillAllAgents => {
+                write!(f, "{}", t!("command.kill_all_agents"))
+            }
             TuiCommand::ToggleToolCollapse => {
                 write!(f, "{}", t!("command.toggle_tool_collapse"))
+            }
+            TuiCommand::ToggleSystemReminders => {
+                write!(f, "{}", t!("command.toggle_system_reminders"))
             }
             TuiCommand::ShowRewindSelector => write!(f, "{}", t!("command.show_rewind_selector")),
             TuiCommand::Rewind => write!(f, "{}", t!("command.rewind")),

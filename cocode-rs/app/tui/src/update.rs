@@ -470,6 +470,12 @@ pub async fn handle_command(
         TuiCommand::InsertNewline => {
             state.ui.input.insert_newline();
         }
+        TuiCommand::KillToEndOfLine => {
+            state.ui.input.kill_to_end_of_line();
+        }
+        TuiCommand::Yank => {
+            state.ui.input.yank();
+        }
 
         // ========== Approval ==========
         TuiCommand::Approve => {
@@ -983,6 +989,14 @@ pub async fn handle_command(
             }
         }
 
+        // ========== Kill All Agents ==========
+        TuiCommand::KillAllAgents => {
+            let _ = command_tx.send(UserCommand::KillAllAgents).await;
+            state
+                .ui
+                .toast_info(t!("toast.killing_all_agents").to_string());
+        }
+
         // ========== Tool Collapse ==========
         TuiCommand::ToggleToolCollapse => {
             // Toggle collapse state for all tool calls
@@ -1006,6 +1020,17 @@ pub async fn handle_command(
                 collapsed = state.ui.collapsed_tools.len(),
                 "Toggled tool collapse"
             );
+        }
+
+        // ========== System Reminders ==========
+        TuiCommand::ToggleSystemReminders => {
+            state.ui.toggle_system_reminders();
+            let key = if state.ui.show_system_reminders {
+                "toast.system_reminders_shown"
+            } else {
+                "toast.system_reminders_hidden"
+            };
+            state.ui.toast_info(t!(key).to_string());
         }
 
         // ========== Quit ==========
@@ -1184,6 +1209,12 @@ async fn execute_command_action(
         CommandAction::Interrupt => {
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
+        CommandAction::KillAllAgents => {
+            let _ = command_tx.send(UserCommand::KillAllAgents).await;
+            state
+                .ui
+                .toast_info(t!("toast.killing_all_agents").to_string());
+        }
         CommandAction::Quit => {
             state.quit();
         }
@@ -1243,6 +1274,12 @@ fn get_default_commands() -> Vec<crate::state::CommandItem> {
             description: t!("palette.interrupt_desc").to_string(),
             shortcut: Some("Ctrl+C".to_string()),
             action: CommandAction::Interrupt,
+        },
+        CommandItem {
+            name: t!("palette.kill_all_agents").to_string(),
+            description: t!("palette.kill_all_agents_desc").to_string(),
+            shortcut: Some("Ctrl+F".to_string()),
+            action: CommandAction::KillAllAgents,
         },
         CommandItem {
             name: t!("palette.quit").to_string(),

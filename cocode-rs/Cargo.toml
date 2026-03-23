@@ -53,6 +53,7 @@ members = [
     "features/plugin",
     "features/plan-mode",
     "features/team",
+    "features/cron",
     "features/auto-memory",
     "core/loop",
     "core/subagent",
@@ -150,6 +151,7 @@ cocode-hooks = { path = "features/hooks" }
 cocode-plugin = { path = "features/plugin" }
 cocode-plan-mode = { path = "features/plan-mode" }
 cocode-team = { path = "features/team" }
+cocode-cron = { path = "features/cron" }
 cocode-auto-memory = { path = "features/auto-memory" }
 
 # Internal - app

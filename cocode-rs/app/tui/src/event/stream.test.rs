@@ -4,7 +4,7 @@ use super::*;
 fn test_event_stream_config_default() {
     let config = EventStreamConfig::default();
     assert_eq!(config.tick_interval, Duration::from_millis(250));
-    assert_eq!(config.draw_interval, Duration::from_millis(16));
+    assert_eq!(config.spinner_interval, Duration::from_millis(50));
 }
 
 #[test]

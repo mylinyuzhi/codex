@@ -222,17 +222,17 @@ impl App {
                 // Handle agent events
                 Some(loop_event) = self.agent_rx.recv() => {
                     self.handle_loop_event(loop_event);
-                    self.render()?;
+                    self.tui.request_redraw();
                 }
                 // Handle file search results
                 Some(search_event) = self.file_search_rx.recv() => {
                     handle_file_search_event(&mut self.state, search_event);
-                    self.render()?;
+                    self.tui.request_redraw();
                 }
                 // Handle symbol search results
                 Some(symbol_event) = self.symbol_search_rx.recv() => {
                     handle_symbol_search_event(&mut self.state, symbol_event);
-                    self.render()?;
+                    self.tui.request_redraw();
                 }
             }
 
@@ -275,13 +275,13 @@ impl App {
                 self.check_at_mention();
                 self.check_slash_command();
 
-                self.render()?;
+                self.tui.request_redraw();
             }
             TuiEvent::Mouse(_mouse) => {
                 // Mouse events can be handled here if needed
             }
             TuiEvent::Resize { .. } => {
-                self.render()?;
+                self.tui.request_redraw();
             }
             TuiEvent::FocusChanged { focused } => {
                 self.state.ui.set_terminal_focused(focused);
@@ -290,23 +290,34 @@ impl App {
             TuiEvent::Draw => {
                 self.render()?;
             }
-            TuiEvent::Tick => {
-                // Tick events for animations
+            TuiEvent::SpinnerTick => {
                 let mut needs_render = false;
 
-                // Re-render if streaming and no blocking overlay is active
+                // Advance streaming display cursor (adaptive pacing)
+                if let Some(ref mut streaming) = self.state.ui.streaming
+                    && streaming.advance_display()
+                {
+                    needs_render = true;
+                }
+
+                // Redraw for time-based spinner frame
                 if self.state.should_show_spinner() {
                     needs_render = true;
                 }
+
+                if needs_render {
+                    self.tui.request_redraw();
+                }
+            }
+            TuiEvent::Tick => {
+                // 250ms tick for toast expiry, idle detection, and non-spinner updates
+                let mut needs_render = false;
 
                 // Expire old toasts
                 if self.state.ui.has_toasts() {
                     self.state.ui.expire_toasts();
                     needs_render = true;
                 }
-
-                // Tick animation frame (for thinking animation, etc.)
-                self.state.ui.tick_animation();
 
                 // Check for idle notification
                 if self.state.ui.check_idle() {
@@ -317,7 +328,7 @@ impl App {
                 }
 
                 if needs_render {
-                    self.render()?;
+                    self.tui.request_redraw();
                 }
             }
             TuiEvent::Paste(text) => {
@@ -330,15 +341,15 @@ impl App {
                 // Check for @mention or /command after paste
                 self.check_at_mention();
                 self.check_slash_command();
-                self.render()?;
+                self.tui.request_redraw();
             }
             TuiEvent::Agent(loop_event) => {
                 self.handle_loop_event(loop_event);
-                self.render()?;
+                self.tui.request_redraw();
             }
             TuiEvent::Command(cmd) => {
                 self.handle_command_internal(cmd).await;
-                self.render()?;
+                self.tui.request_redraw();
             }
         }
         Ok(())

@@ -387,9 +387,11 @@ impl Widget for InputWidget<'_> {
 
         let lines = self.get_lines();
 
-        // Create block
+        // Create block — dim border when streaming to signal queuing mode
         let border_style = if self.plan_mode {
             ratatui::style::Style::default().fg(self.theme.plan_mode)
+        } else if self.is_streaming {
+            ratatui::style::Style::default().fg(self.theme.warning)
         } else if self.focused {
             ratatui::style::Style::default().fg(self.theme.border_focused)
         } else {

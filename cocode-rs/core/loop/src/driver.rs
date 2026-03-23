@@ -1,7 +1,9 @@
 //! Agent loop driver - the core 18-step conversation loop.
 
 mod builder;
+mod compact_micro;
 mod compact_orchestrator;
+mod compact_restore;
 mod file_tracking;
 mod hooks_bridge;
 mod streaming;
@@ -1584,8 +1586,8 @@ impl AgentLoop {
                                 .chars()
                                 .take(80)
                                 .collect(),
-                            one_shot: job["one_shot"].as_bool().unwrap_or(false),
-                            execution_count: job["execution_count"].as_u64().unwrap_or(0) as u32,
+                            one_shot: !job["recurring"].as_bool().unwrap_or(true),
+                            execution_count: job["execution_count"].as_i64().unwrap_or(0) as u32,
                         })
                         .collect();
                     if !cron_infos.is_empty() {

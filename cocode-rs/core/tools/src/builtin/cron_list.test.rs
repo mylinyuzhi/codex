@@ -2,9 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn test_multibyte_prompt_truncation_no_panic() {
-    use super::cron_state::CronJob;
-    use super::cron_state::CronJobStatus;
-    use super::cron_state::new_cron_store;
+    use cocode_cron::CronJob;
+    use cocode_cron::CronJobStatus;
+    use cocode_cron::new_cron_store;
 
     let store = new_cron_store();
     {
@@ -30,6 +30,8 @@ async fn test_multibyte_prompt_truncation_no_panic() {
                 last_executed_at: None,
                 expires_at: None,
                 status: CronJobStatus::Active,
+                consecutive_failures: 0,
+                next_fire_at: None,
             },
         );
     }

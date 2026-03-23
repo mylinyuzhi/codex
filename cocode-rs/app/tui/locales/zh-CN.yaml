@@ -64,6 +64,8 @@ command.word_right: "下一个单词"
 command.delete_word_backward: "删除前一个单词"
 command.delete_word_forward: "删除后一个单词"
 command.insert_newline: "插入换行"
+command.kill_to_end_of_line: "删除到行尾"
+command.yank: "粘贴剪切内容"
 command.select_all: "全选"
 
 # 审批
@@ -102,8 +104,14 @@ command.queue_input: "排队输入"
 # 后台
 command.background_all_tasks: "后台运行所有任务"
 
+# 终止代理
+command.kill_all_agents: "终止所有代理"
+
 # 工具折叠
 command.toggle_tool_collapse: "切换工具结果折叠"
+
+# 系统提醒
+command.toggle_system_reminders: "切换系统提醒显示"
 
 # 回退
 command.show_rewind_selector: "回退 / 检查点"
@@ -255,6 +263,7 @@ help.ctrl_v: "粘贴（图片或文本）"
 help.ctrl_e: "打开外部编辑器"
 help.ctrl_l: "清屏"
 help.ctrl_b: "后台运行任务"
+help.ctrl_f: "终止所有运行中的代理"
 help.ctrl_c: "中断"
 help.ctrl_q: "退出"
 help.enter: "提交消息"
@@ -267,6 +276,7 @@ help.pgup_pgdn: "翻页"
 help.ctrl_left_right: "单词移动"
 help.ctrl_bksp: "删除前一个单词"
 help.ctrl_shift_e: "切换工具结果显示"
+help.ctrl_shift_r: "切换系统提醒显示"
 help.esc_esc: "回退 / 检查点选择器"
 
 # ============================================================
@@ -297,6 +307,10 @@ toast.stream_watchdog: "流式传输看门狗警告"
 # 空闲
 toast.idle_waiting: "Claude 正在等待您的输入"
 
+# 系统提醒
+toast.system_reminders_shown: "系统提醒已显示"
+toast.system_reminders_hidden: "系统提醒已隐藏"
+
 # 模式切换
 toast.interrupted: "已中断"
 toast.sessions_unavailable: "会话浏览器暂不可用"
@@ -321,6 +335,7 @@ toast.no_output_styles: "没有可用的输出风格。"
 toast.background_task_started: "后台任务已开始：%{task_type}"
 toast.background_task_completed: "后台任务已完成"
 toast.agents_killed: "已终止 %{count} 个代理"
+toast.killing_all_agents: "正在终止所有运行中的代理..."
 
 # API / 重试
 toast.retry: "正在重试（%{attempt}/%{max}）..."
@@ -349,6 +364,10 @@ toast.unsupported_command: "/%{name} 在 TUI 中尚不支持。"
 # 慢查询
 toast.slow_query: "查询耗时 %{duration} 秒"
 
+# 定时任务
+toast.cron_job_disabled: "定时任务 %{job_id} 在连续 %{failures} 次失败后已禁用"
+toast.cron_jobs_missed: "%{count} 个定时任务在离线期间未执行:\n%{summary}"
+
 # ============================================================
 # 聊天组件
 # ============================================================
@@ -356,6 +375,7 @@ toast.slow_query: "查询耗时 %{duration} 秒"
 chat.you: "你"
 chat.assistant: "助手"
 chat.system: "系统"
+chat.system_reminder: "系统提醒"
 chat.messages_count: "%{count} 条消息"
 chat.scroll_to_bottom: "↓ 滚动到底部"
 
@@ -410,6 +430,8 @@ palette.clear_screen: "清屏"
 palette.clear_screen_desc: "清除聊天历史"
 palette.interrupt: "中断"
 palette.interrupt_desc: "取消当前操作"
+palette.kill_all_agents: "终止所有代理"
+palette.kill_all_agents_desc: "终止所有运行中的代理"
 palette.quit: "退出"
 palette.quit_desc: "退出应用程序"
 

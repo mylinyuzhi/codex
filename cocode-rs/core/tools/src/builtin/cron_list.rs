@@ -1,12 +1,11 @@
 //! CronList tool for listing scheduled tasks.
 
-use super::cron_state::CronJobStore;
-use super::cron_state::{self};
 use super::prompts;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_cron::CronJobStore;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
@@ -60,12 +59,12 @@ impl Tool for CronListTool {
         let include_completed = super::input_helpers::bool_or(&input, "include_completed", false);
         let store = self.store.lock().await;
         let summary = if include_completed {
-            cron_state::format_cron_summary(store.values())
+            cocode_cron::format_cron_summary(store.values())
         } else {
-            cron_state::format_cron_summary(
+            cocode_cron::format_cron_summary(
                 store
                     .values()
-                    .filter(|j| j.status == cron_state::CronJobStatus::Active),
+                    .filter(|j| j.status == cocode_cron::CronJobStatus::Active),
             )
         };
         Ok(ToolOutput::text(summary))
