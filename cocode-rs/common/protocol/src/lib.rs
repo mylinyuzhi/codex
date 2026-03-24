@@ -96,11 +96,10 @@ pub use permission::RuleSource;
 pub use permission::SecurityRisk;
 
 // Loop config types
-pub use loop_config::CacheBreakpoint;
-pub use loop_config::CacheType;
+pub use loop_config::CacheScope;
 pub use loop_config::FileRestorationPriority;
 pub use loop_config::LoopConfig;
-pub use loop_config::PromptCachingConfig;
+pub use loop_config::PromptCacheConfig;
 pub use loop_config::SessionMemoryConfig;
 pub use loop_config::StallDetectionConfig;
 pub use loop_config::StallRecovery;
@@ -131,6 +130,7 @@ pub use loop_event::RetryInfo;
 pub use loop_event::RewindCheckpointItem;
 pub use loop_event::RewindDiffStats;
 pub use loop_event::RewindMode;
+pub use loop_event::SandboxAccessType;
 pub use loop_event::TaskProgress;
 pub use loop_event::TaskType;
 pub use loop_event::TokenBreakdown;

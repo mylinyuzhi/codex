@@ -31,6 +31,7 @@ pub mod usage;
 
 // Re-export main types
 pub use call_options::LanguageModelV4CallOptions;
+pub use call_options::ReasoningLevel;
 pub use call_options::ResponseFormat;
 pub use call_settings::LanguageModelV4CallSettings;
 pub use generate_result::LanguageModelV4GenerateResult;

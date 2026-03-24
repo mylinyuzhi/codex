@@ -64,6 +64,7 @@ fn init_tui_logging(
     config: &ConfigManager,
     snapshot: &Config,
     verbose: bool,
+    debug_file: Option<&Path>,
 ) -> Option<TuiLoggingState> {
     // Get logging config
     let logging_config = config.logging_config();
@@ -98,7 +99,9 @@ fn init_tui_logging(
         log_file_opts.mode(0o600);
     }
 
-    let log_path = log_dir.join("cocode-tui.log");
+    let log_path = debug_file
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| log_dir.join("cocode-tui.log"));
     let log_file = match log_file_opts.open(&log_path) {
         Ok(f) => f,
         Err(e) => {
@@ -186,9 +189,7 @@ pub async fn run_tui(
     title: Option<String>,
     name: Option<String>,
     config: &ConfigManager,
-    verbose: bool,
-    system_prompt_suffix: Option<String>,
-    cli_agents: Vec<cocode_subagent::AgentDefinition>,
+    flags: crate::CliFlags,
 ) -> anyhow::Result<()> {
     info!("Starting TUI mode");
 
@@ -199,10 +200,18 @@ pub async fn run_tui(
     let snapshot = Arc::new(config.build_config(ConfigOverrides::default().with_cwd(cwd.clone()))?);
 
     // Initialize file logging for TUI mode (needs snapshot for OTel config)
-    let _logging_state = init_tui_logging(config, &snapshot, verbose);
+    let _logging_state = init_tui_logging(
+        config,
+        &snapshot,
+        flags.verbose,
+        flags.debug_file.as_deref(),
+    );
 
     // Build initial RoleSelections for ALL configured roles
-    let initial_selections = config.build_all_selections();
+    let mut initial_selections = config.build_all_selections();
+    flags.apply_model_overrides(config, &mut initial_selections)?;
+
+    // Note: env vars are set by set_cli_env_vars() in main.rs before we get here.
 
     // Create channels for TUI-Agent communication
     let (agent_tx, agent_rx, command_tx, command_rx) = create_channels(256);
@@ -221,8 +230,7 @@ pub async fn run_tui(
         title,
         name,
         cwd,
-        system_prompt_suffix,
-        cli_agents,
+        flags,
     ));
 
     // Run the TUI (blocks until exit)
@@ -265,8 +273,7 @@ async fn run_agent_driver(
     title: Option<String>,
     name: Option<String>,
     working_dir: PathBuf,
-    system_prompt_suffix: Option<String>,
-    cli_agents: Vec<cocode_subagent::AgentDefinition>,
+    flags: crate::CliFlags,
 ) {
     info!("Agent driver started");
 
@@ -277,6 +284,12 @@ async fn run_agent_driver(
     }
     if let Some(n) = name {
         session.name = Some(n);
+    }
+    if let Some(max) = flags.max_turns {
+        session.set_max_turns(Some(max));
+    }
+    if let Some(usd) = flags.max_budget_usd {
+        session.set_max_budget_cents(Some((usd * 100.0).round() as i32));
     }
 
     // Create session state from config snapshot
@@ -298,19 +311,8 @@ async fn run_agent_driver(
         }
     };
 
-    // Set system prompt suffix if provided
-    if let Some(suffix) = system_prompt_suffix {
-        state.set_system_prompt_suffix(suffix);
-    }
-
-    // Register CLI-provided agent definitions
-    if !cli_agents.is_empty() {
-        let mut mgr = state.subagent_manager().lock().await;
-        for agent in cli_agents {
-            info!(agent_type = %agent.agent_type, "Registering CLI agent");
-            mgr.register_agent_type(agent);
-        }
-    }
+    // Apply CLI flags to session state (permission mode, agents, tool filters, etc.)
+    crate::commands::chat::apply_cli_flags_to_state(&mut state, &flags).await;
 
     // Emit plugin agent definitions to TUI for autocomplete.
     // We send all agent definitions (builtin + plugin) so the TUI has
@@ -1152,6 +1154,10 @@ async fn handle_idle_command(
                 request_id,
                 action, "Elicitation response received (idle — no pending request)"
             );
+        }
+        UserCommand::SetFastMode { active } => {
+            info!(active, "Fast mode toggled");
+            // Fast mode is handled by the TUI layer; acknowledge here.
         }
         // Turn-triggering commands (SubmitInput, ExecuteSkill) should not
         // arrive here when called from process_deferred, but handle gracefully.

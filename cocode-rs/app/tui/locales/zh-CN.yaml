@@ -113,6 +113,15 @@ command.toggle_tool_collapse: "切换工具结果折叠"
 # 系统提醒
 command.toggle_system_reminders: "切换系统提醒显示"
 
+# 快速模式
+command.toggle_fast_mode: "切换快速模式"
+
+# 权限模式
+command.cycle_permission_mode: "切换权限模式"
+
+# 转录模式
+command.toggle_transcript_mode: "切换转录模式"
+
 # 回退
 command.show_rewind_selector: "回退 / 检查点"
 command.rewind: "回退"
@@ -153,6 +162,8 @@ status.waiting: "等待中:"
 status.dialogs_waiting: "%{count} 等待中"
 
 # 思考状态
+status.fast_mode: "快速"
+
 status.thinking: "思考中..."
 status.thinking_with_duration: "思考中... %{duration}秒"
 status.thought_for: "思考了 %{duration}秒"
@@ -209,6 +220,18 @@ dialog.select_output_style: "选择输出风格"
 dialog.select_output_style_filter: "选择输出风格 [%{filter}]"
 dialog.no_styles_match: "没有匹配的风格"
 dialog.output_style_picker_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 费用警告覆盖层
+dialog.cost_warning_title: "费用警告"
+dialog.cost_current: "当前费用："
+dialog.cost_threshold: "警告阈值："
+dialog.cost_budget: "预算上限："
+dialog.cost_warning_hints: "Enter/Y: 确认  Esc: 关闭"
+
+# 沙箱权限覆盖层
+dialog.sandbox_permission_title: "需要沙箱权限"
+dialog.sandbox_access_type: "访问类型："
+dialog.sandbox_permission_hints: "Y: 批准  N: 拒绝  Ctrl+A: 全部批准  Esc: 取消"
 
 # 回退选择器
 dialog.rewind_select_checkpoint: "回退到检查点"
@@ -277,6 +300,7 @@ help.ctrl_left_right: "单词移动"
 help.ctrl_bksp: "删除前一个单词"
 help.ctrl_shift_e: "切换工具结果显示"
 help.ctrl_shift_r: "切换系统提醒显示"
+help.ctrl_shift_f: "切换快速模式"
 help.esc_esc: "回退 / 检查点选择器"
 
 # ============================================================
@@ -364,6 +388,17 @@ toast.unsupported_command: "/%{name} 在 TUI 中尚不支持。"
 # 慢查询
 toast.slow_query: "查询耗时 %{duration} 秒"
 
+# 快速模式
+toast.fast_mode_on: "快速模式已启用"
+toast.fast_mode_off: "快速模式已禁用"
+
+# 权限模式
+toast.permission_mode_changed: "权限模式"
+
+# 转录模式
+toast.transcript_mode_on: "转录模式已启用（仅显示最近 10 条消息）"
+toast.transcript_mode_off: "转录模式已禁用"
+
 # 定时任务
 toast.cron_job_disabled: "定时任务 %{job_id} 在连续 %{failures} 次失败后已禁用"
 toast.cron_jobs_missed: "%{count} 个定时任务在离线期间未执行:\n%{summary}"
@@ -385,6 +420,7 @@ chat.thinking_collapsed: "思考 (%{tokens} tokens) [Ctrl+Shift+T 展开]"
 chat.thinking_active: "思考中 (%{duration}):"
 chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [Ctrl+Shift+T 展开]"
 chat.waiting_for_response: "等待响应..."
+chat.parallel_tools: "并行（%{count} 个工具）"
 
 # ============================================================
 # 输入组件
@@ -432,6 +468,12 @@ palette.interrupt: "中断"
 palette.interrupt_desc: "取消当前操作"
 palette.kill_all_agents: "终止所有代理"
 palette.kill_all_agents_desc: "终止所有运行中的代理"
+palette.toggle_fast_mode: "切换快速模式"
+palette.toggle_fast_mode_desc: "在快速模型和普通模型之间切换"
+palette.cycle_permission_mode: "切换权限模式"
+palette.cycle_permission_mode_desc: "循环切换：默认 → 自动接受编辑 → 计划模式"
+palette.toggle_transcript_mode: "切换转录模式"
+palette.toggle_transcript_mode_desc: "在完整聊天和最近 10 条消息之间切换"
 palette.quit: "退出"
 palette.quit_desc: "退出应用程序"
 

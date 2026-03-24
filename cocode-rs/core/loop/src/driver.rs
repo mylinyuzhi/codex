@@ -55,6 +55,7 @@ use cocode_system_reminder::SkillInfo;
 use cocode_system_reminder::StructuredTaskInfo;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_system_reminder::create_injected_messages;
+use cocode_system_reminder::generator::DiagnosticInfo;
 use cocode_system_reminder::generator::TeamContextData;
 use cocode_system_reminder::generator::TeamMemberInfo;
 use cocode_system_reminder::generator::UnreadMessage;
@@ -1593,6 +1594,26 @@ impl AgentLoop {
                     if !cron_infos.is_empty() {
                         builder = builder.cron_jobs(cron_infos);
                     }
+                }
+            }
+
+            // Collect dirty LSP diagnostics for system reminder injection
+            if let Some(ref lsp) = self.lsp_manager {
+                let dirty = lsp.diagnostics().take_dirty().await;
+                if !dirty.is_empty() {
+                    let diag_infos: Vec<DiagnosticInfo> = dirty
+                        .into_iter()
+                        .map(|d| DiagnosticInfo {
+                            file_path: d.file,
+                            line: d.line,
+                            column: d.character,
+                            severity: d.severity.as_str().to_string(),
+                            message: d.message,
+                            code: d.code,
+                            source: d.source,
+                        })
+                        .collect();
+                    builder = builder.diagnostics(diag_infos);
                 }
             }
 

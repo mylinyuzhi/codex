@@ -139,7 +139,12 @@ pub use prune_messages::ToolCallsPruneModeInner;
 pub use prune_messages::prune_messages;
 
 // reasoning_output
+pub use reasoning_output::ReasoningFileOutput;
 pub use reasoning_output::ReasoningOutput;
+pub use reasoning_output::ReasoningOutputItem;
+pub use reasoning_output::convert_from_reasoning_outputs;
+pub use reasoning_output::convert_to_reasoning_outputs;
+pub use reasoning_output::reasoning_text_from_items;
 
 // response_message
 pub use response_message::ResponseMessageData;

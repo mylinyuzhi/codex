@@ -144,6 +144,16 @@ impl IgnoreService {
     pub fn config(&self) -> &IgnoreConfig {
         &self.config
     }
+
+    /// Create a `PathChecker` for checking individual paths against ignore rules.
+    ///
+    /// Unlike `create_walk_builder` which provides directory traversal, the
+    /// `PathChecker` checks specific paths against `.gitignore`, `.ignore`,
+    /// global gitignore, and custom exclude rules. Designed for filtering
+    /// a list of known paths (e.g., LSP results).
+    pub fn create_path_checker(&self, root: &Path) -> crate::PathChecker {
+        crate::PathChecker::new(root, &self.config)
+    }
 }
 
 impl Default for IgnoreService {

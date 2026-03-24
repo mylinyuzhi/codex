@@ -149,6 +149,27 @@ pub enum ResponseOutputItem {
         operation: Option<Value>,
         status: Option<String>,
     },
+    #[serde(rename = "tool_search_call")]
+    ToolSearchCall {
+        id: Option<String>,
+        execution: Option<String>,
+        call_id: Option<String>,
+        status: Option<String>,
+        arguments: Option<Value>,
+    },
+    #[serde(rename = "tool_search_output")]
+    ToolSearchOutput {
+        id: Option<String>,
+        execution: Option<String>,
+        call_id: Option<String>,
+        status: Option<String>,
+        tools: Option<Vec<Value>>,
+    },
+    #[serde(rename = "compaction")]
+    Compaction {
+        id: Option<String>,
+        encrypted_content: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -365,6 +386,7 @@ pub struct ResponseMeta {
     pub service_tier: Option<String>,
     pub output: Option<Vec<ResponseOutputItem>>,
     pub incomplete_details: Option<Value>,
+    pub error: Option<Value>,
 }
 
 #[cfg(test)]

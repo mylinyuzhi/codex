@@ -4,6 +4,35 @@ fn default_model_info() -> ModelInfo {
     ModelInfo::default()
 }
 
+// =========================================================================
+// effort_to_reasoning_level mapping
+// =========================================================================
+
+#[test]
+fn test_effort_to_reasoning_level_all_variants() {
+    assert_eq!(effort_to_reasoning_level(ReasoningEffort::None), None);
+    assert_eq!(
+        effort_to_reasoning_level(ReasoningEffort::Minimal),
+        Some(ReasoningLevel::Minimal)
+    );
+    assert_eq!(
+        effort_to_reasoning_level(ReasoningEffort::Low),
+        Some(ReasoningLevel::Low)
+    );
+    assert_eq!(
+        effort_to_reasoning_level(ReasoningEffort::Medium),
+        Some(ReasoningLevel::Medium)
+    );
+    assert_eq!(
+        effort_to_reasoning_level(ReasoningEffort::High),
+        Some(ReasoningLevel::High)
+    );
+    assert_eq!(
+        effort_to_reasoning_level(ReasoningEffort::XHigh),
+        Some(ReasoningLevel::Xhigh)
+    );
+}
+
 #[test]
 fn test_to_anthropic_options_with_budget() {
     let level = ThinkingLevel::high().set_budget(32000);

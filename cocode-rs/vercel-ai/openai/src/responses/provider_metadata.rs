@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::Value;
 use vercel_ai_provider::ProviderMetadata;
 
@@ -23,6 +24,33 @@ pub fn build_responses_provider_metadata(
         meta.0.insert("openai".into(), Value::Object(openai_obj));
         Some(meta)
     }
+}
+
+/// Compaction metadata nested under the `"openai"` key.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponsesCompactionProviderMetadata {
+    #[serde(rename = "type")]
+    pub meta_type: String,
+    pub item_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_content: Option<String>,
+}
+
+/// Build a `ProviderMetadata` for a compaction item.
+pub fn build_compaction_provider_metadata(
+    item_id: &str,
+    encrypted_content: Option<&str>,
+) -> ProviderMetadata {
+    let meta = ResponsesCompactionProviderMetadata {
+        meta_type: "compaction".into(),
+        item_id: item_id.into(),
+        encrypted_content: encrypted_content.map(String::from),
+    };
+    let value = serde_json::to_value(&meta).unwrap_or(Value::Null);
+    let mut pm = ProviderMetadata::default();
+    pm.0.insert("openai".into(), value);
+    pm
 }
 
 #[cfg(test)]

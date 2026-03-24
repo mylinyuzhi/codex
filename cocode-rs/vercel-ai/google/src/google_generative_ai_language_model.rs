@@ -23,6 +23,7 @@ use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ReasoningFilePart;
+use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider::ResponseFormat;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultPart;
@@ -38,6 +39,9 @@ use vercel_ai_provider::tool::ToolResult;
 
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::combine_headers;
+use vercel_ai_provider_utils::is_custom_reasoning;
+use vercel_ai_provider_utils::map_reasoning_to_provider_budget;
+use vercel_ai_provider_utils::map_reasoning_to_provider_effort;
 use vercel_ai_provider_utils::post_json_to_api_with_client;
 use vercel_ai_provider_utils::post_stream_to_api_with_client;
 use vercel_ai_provider_utils::without_trailing_slash;
@@ -140,6 +144,7 @@ impl GoogleGenerativeAILanguageModel {
         let convert_opts = ConvertOptions {
             supports_system_instruction: !is_gemma,
             provider_options_name: provider_options_name.clone(),
+            supports_function_response_parts: is_gemini_3_model(&self.model_id),
         };
 
         let prompt = convert_to_google_generative_ai_messages(&options.prompt, &convert_opts)
@@ -278,10 +283,26 @@ impl GoogleGenerativeAILanguageModel {
             body["safetySettings"] = val;
         }
 
-        // Thinking config
-        if let Some(ref thinking) = provider_opts.thinking_config
-            && let Ok(val) = serde_json::to_value(thinking)
-        {
+        // Thinking config: resolve from top-level reasoning, then merge provider option on top
+        let resolved_thinking =
+            resolve_thinking_config(options.reasoning, &self.model_id, &mut warnings);
+        let thinking_config = match (&provider_opts.thinking_config, &resolved_thinking) {
+            (Some(provider_tc), Some(resolved_tc)) => {
+                // Provider option takes precedence: merge resolved as base, overlay provider
+                let mut base = serde_json::to_value(resolved_tc).unwrap_or(json!({}));
+                let overlay = serde_json::to_value(provider_tc).unwrap_or(json!({}));
+                if let (Value::Object(b), Value::Object(o)) = (&mut base, &overlay) {
+                    for (k, v) in o {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+                Some(base)
+            }
+            (Some(provider_tc), None) => serde_json::to_value(provider_tc).ok(),
+            (None, Some(resolved_tc)) => serde_json::to_value(resolved_tc).ok(),
+            (None, None) => None,
+        };
+        if let Some(val) = thinking_config {
             body["generationConfig"]["thinkingConfig"] = val;
         }
 
@@ -1428,6 +1449,120 @@ fn process_stream_chunk(
     }
 
     parts
+}
+
+/// Whether the model ID corresponds to a Gemini 3 family model.
+fn is_gemini_3_model(model_id: &str) -> bool {
+    let lower = model_id.to_lowercase();
+    // Match "gemini-3" followed by a separator or end of string
+    lower.starts_with("gemini-3.") || lower.starts_with("gemini-3-") || lower == "gemini-3"
+}
+
+/// Max output tokens constant for Gemini 2.5 budget calculation.
+fn max_output_tokens_for_gemini_25() -> i64 {
+    65536
+}
+
+/// Max thinking tokens for a Gemini 2.5 model.
+fn max_thinking_tokens_for_gemini_25(model_id: &str) -> i64 {
+    let lower = model_id.to_lowercase();
+    if lower.contains("2.5-pro") || lower.contains("gemini-3-pro-image") {
+        32768
+    } else {
+        24576
+    }
+}
+
+/// Resolve top-level reasoning to a Google thinking config.
+///
+/// For Gemini 3 models (excluding gemini-3-pro-image): maps to `thinkingLevel`.
+/// For Gemini 2.5 models: maps to `thinkingBudget`.
+fn resolve_thinking_config(
+    reasoning: Option<ReasoningLevel>,
+    model_id: &str,
+    warnings: &mut Vec<Warning>,
+) -> Option<crate::google_generative_ai_options::ThinkingConfig> {
+    if !is_custom_reasoning(reasoning) {
+        return None;
+    }
+    let level = reasoning?;
+
+    if is_gemini_3_model(model_id) && !model_id.contains("gemini-3-pro-image") {
+        return resolve_gemini_3_thinking_config(level, warnings);
+    }
+
+    resolve_gemini_25_thinking_config(level, model_id, warnings)
+}
+
+fn resolve_gemini_3_thinking_config(
+    level: ReasoningLevel,
+    warnings: &mut Vec<Warning>,
+) -> Option<crate::google_generative_ai_options::ThinkingConfig> {
+    use crate::google_generative_ai_options::ThinkingConfig;
+    use crate::google_generative_ai_options::ThinkingLevel as GoogleThinkingLevel;
+
+    if level == ReasoningLevel::None {
+        // Cannot fully disable thinking on Gemini 3; use minimal.
+        return Some(ThinkingConfig {
+            thinking_budget: None,
+            include_thoughts: None,
+            thinking_level: Some(GoogleThinkingLevel::Minimal),
+        });
+    }
+
+    let effort_map = HashMap::from([
+        (ReasoningLevel::Minimal, "minimal"),
+        (ReasoningLevel::Low, "low"),
+        (ReasoningLevel::Medium, "medium"),
+        (ReasoningLevel::High, "high"),
+        (ReasoningLevel::Xhigh, "high"),
+    ]);
+
+    let thinking_level_str = map_reasoning_to_provider_effort(level, &effort_map, warnings)?;
+    let thinking_level = match thinking_level_str.as_str() {
+        "minimal" => GoogleThinkingLevel::Minimal,
+        "low" => GoogleThinkingLevel::Low,
+        "medium" => GoogleThinkingLevel::Medium,
+        "high" => GoogleThinkingLevel::High,
+        _ => return None,
+    };
+
+    Some(ThinkingConfig {
+        thinking_budget: None,
+        include_thoughts: None,
+        thinking_level: Some(thinking_level),
+    })
+}
+
+fn resolve_gemini_25_thinking_config(
+    level: ReasoningLevel,
+    model_id: &str,
+    warnings: &mut Vec<Warning>,
+) -> Option<crate::google_generative_ai_options::ThinkingConfig> {
+    use crate::google_generative_ai_options::ThinkingConfig;
+
+    if level == ReasoningLevel::None {
+        return Some(ThinkingConfig {
+            thinking_budget: Some(0),
+            include_thoughts: None,
+            thinking_level: None,
+        });
+    }
+
+    let budget = map_reasoning_to_provider_budget(
+        level,
+        max_output_tokens_for_gemini_25(),
+        max_thinking_tokens_for_gemini_25(model_id),
+        Some(0),
+        None,
+        warnings,
+    )?;
+
+    Some(ThinkingConfig {
+        thinking_budget: Some(budget as u64),
+        include_thoughts: None,
+        thinking_level: None,
+    })
 }
 
 #[cfg(test)]

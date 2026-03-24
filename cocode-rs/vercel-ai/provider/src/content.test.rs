@@ -206,3 +206,25 @@ fn test_source_type_serialization() {
     let json = serde_json::to_string(&doc_type).unwrap();
     assert_eq!(json, "\"document\"");
 }
+
+#[test]
+fn test_custom_part_creation() {
+    let part = CustomPart::new("openai-compaction");
+    assert_eq!(part.kind, "openai-compaction");
+    assert!(part.provider_options.is_none());
+    assert!(part.provider_metadata.is_none());
+}
+
+#[test]
+fn test_assistant_content_part_custom_serialization() {
+    let part = AssistantContentPart::custom("test-kind");
+    let json = serde_json::to_string(&part).unwrap();
+    assert!(json.contains("\"type\":\"custom\""));
+    assert!(json.contains("\"kind\":\"test-kind\""));
+
+    let deserialized: AssistantContentPart = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        deserialized,
+        AssistantContentPart::Custom(CustomPart { kind, .. }) if kind == "test-kind"
+    ));
+}

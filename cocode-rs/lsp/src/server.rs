@@ -14,14 +14,18 @@ use crate::error::Result;
 use crate::lifecycle::ServerHealth;
 use crate::lifecycle::ServerLifecycle;
 use crate::protocol::TimeoutConfig;
+use crate::root_watcher::RootWatcher;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -65,6 +69,12 @@ pub struct LspServerManager {
     lifecycles: Arc<Mutex<HashMap<ServerKey, Arc<ServerLifecycle>>>>,
     /// Last health check time per server key (for rate limiting)
     last_health_checks: Arc<Mutex<HashMap<ServerKey, Instant>>>,
+    /// Whether any non-disabled servers are configured (sync-safe for tool filtering).
+    has_servers: AtomicBool,
+    /// Watches parent directories to detect root directory deletion.
+    root_watcher: Option<RootWatcher>,
+    /// Background task that consumes root-deleted events.
+    root_watcher_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl LspServerManager {
@@ -75,6 +85,7 @@ impl LspServerManager {
         project_root: Option<PathBuf>,
         diagnostics: Arc<DiagnosticsStore>,
     ) -> Self {
+        let has_servers = has_enabled_servers(&config);
         Self {
             config: tokio::sync::RwLock::new(config),
             cocode_home,
@@ -83,6 +94,9 @@ impl LspServerManager {
             clients: Arc::new(Mutex::new(HashMap::new())),
             lifecycles: Arc::new(Mutex::new(HashMap::new())),
             last_health_checks: Arc::new(Mutex::new(HashMap::new())),
+            has_servers: AtomicBool::new(has_servers),
+            root_watcher: RootWatcher::new(),
+            root_watcher_handle: Mutex::new(None),
         }
     }
 
@@ -109,6 +123,8 @@ impl LspServerManager {
             LspServersConfig::load(self.cocode_home.as_deref(), self.project_root.as_deref());
         let mut config = self.config.write().await;
         *config = new_config;
+        self.has_servers
+            .store(has_enabled_servers(&config), Ordering::Relaxed);
         debug!("LSP configuration reloaded");
     }
 
@@ -120,7 +136,17 @@ impl LspServerManager {
     pub async fn merge_config(&self, other: LspServersConfig) {
         let mut config = self.config.write().await;
         config.merge(other);
+        self.has_servers
+            .store(has_enabled_servers(&config), Ordering::Relaxed);
         debug!("LSP configuration merged");
+    }
+
+    /// Whether any non-disabled LSP servers are configured (sync-safe).
+    ///
+    /// Used by tool definition filtering to hide the LSP tool when
+    /// no servers are available, avoiding wasted model turns.
+    pub fn has_configured_servers(&self) -> bool {
+        self.has_servers.load(Ordering::Relaxed)
     }
 
     /// Get or create a client for a file
@@ -176,6 +202,33 @@ impl LspServerManager {
         };
 
         if let Some(client) = cached_client {
+            // Fallback: if root directory no longer exists, clean up and error
+            if !key.1.exists() {
+                info!(
+                    "Root directory deleted, shutting down servers: {}",
+                    key.1.display()
+                );
+                let root = key.1.clone();
+                let clients_ref = Arc::clone(&self.clients);
+                let lifecycles_ref = Arc::clone(&self.lifecycles);
+                let last_health_checks_ref = Arc::clone(&self.last_health_checks);
+                tokio::spawn(async move {
+                    shutdown_servers_for_root(
+                        &root,
+                        &clients_ref,
+                        &lifecycles_ref,
+                        &last_health_checks_ref,
+                    )
+                    .await;
+                });
+                if let Some(ref watcher) = self.root_watcher {
+                    watcher.untrack_root(&key.1);
+                }
+                return Err(LspErr::FileNotFound {
+                    path: key.1.display().to_string(),
+                });
+            }
+
             // Step 2: Check if we should perform health check (rate limiting)
             let should_check = {
                 let last_checks = self.last_health_checks.lock().await;
@@ -323,8 +376,16 @@ impl LspServerManager {
                 }
 
                 // Cache client
-                let mut clients = self.clients.lock().await;
-                clients.insert(key.clone(), Arc::clone(&client));
+                {
+                    let mut clients = self.clients.lock().await;
+                    clients.insert(key.clone(), Arc::clone(&client));
+                }
+
+                // Track root directory for deletion detection
+                if let Some(ref watcher) = self.root_watcher {
+                    watcher.track_root(root_path);
+                }
+                self.ensure_root_watcher_running().await;
 
                 Ok(client)
             }
@@ -501,6 +562,12 @@ impl LspServerManager {
 
             for marker in markers {
                 if dir.join(marker).exists() {
+                    debug!(
+                        file = %file_path.display(),
+                        root = %dir.display(),
+                        marker,
+                        "Resolved project root from file path"
+                    );
                     return dir.to_path_buf();
                 }
             }
@@ -509,7 +576,13 @@ impl LspServerManager {
         }
 
         // Fallback to file's directory
-        file_path.parent().unwrap_or(file_path).to_path_buf()
+        let fallback = file_path.parent().unwrap_or(file_path).to_path_buf();
+        debug!(
+            file = %file_path.display(),
+            root = %fallback.display(),
+            "No project marker found, falling back to file directory"
+        );
+        fallback
     }
 
     /// Spawn a new LSP server process
@@ -666,8 +739,91 @@ impl LspServerManager {
         exts
     }
 
+    /// Lazily start the background task that consumes root-deleted events.
+    ///
+    /// Called after each successful server spawn. No-op if the task is
+    /// already running or no watcher is available.
+    async fn ensure_root_watcher_running(&self) {
+        let mut guard = self.root_watcher_handle.lock().await;
+        if guard.is_some() {
+            return;
+        }
+        let Some(ref watcher) = self.root_watcher else {
+            return;
+        };
+
+        let mut rx = watcher.subscribe();
+        let clients = Arc::clone(&self.clients);
+        let lifecycles = Arc::clone(&self.lifecycles);
+        let last_health_checks = Arc::clone(&self.last_health_checks);
+        let parent_to_roots = watcher.parent_to_roots();
+
+        info!("Root watcher background task started");
+
+        *guard = Some(tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        for root in event.roots {
+                            info!(
+                                root = %root.display(),
+                                "Root directory deleted (watcher), shutting down servers"
+                            );
+                            shutdown_servers_for_root(
+                                &root,
+                                &clients,
+                                &lifecycles,
+                                &last_health_checks,
+                            )
+                            .await;
+
+                            // Untrack the deleted root from the watcher's bookkeeping
+                            if let Some(parent) = root.parent() {
+                                let parent = parent.to_path_buf();
+                                let mut map = match parent_to_roots.lock() {
+                                    Ok(g) => g,
+                                    Err(e) => e.into_inner(),
+                                };
+                                if let Some(roots) = map.get_mut(&parent) {
+                                    roots.remove(&root);
+                                    if roots.is_empty() {
+                                        map.remove(&parent);
+                                        debug!(
+                                            parent = %parent.display(),
+                                            "All roots removed from watched parent"
+                                        );
+                                        // Note: unwatch is handled by RootWatcher::untrack_root
+                                        // but here we don't have the FileWatcher reference.
+                                        // The stale OS watch is harmless — classify_event
+                                        // will find no matching roots and emit nothing.
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(
+                            skipped = n,
+                            "Root watcher event receiver lagged, some deletion events may have been missed"
+                        );
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("Root watcher channel closed, stopping background task");
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
     /// Shutdown all server connections
     pub async fn shutdown_all(&self) {
+        // Stop root watcher background task
+        if let Some(handle) = self.root_watcher_handle.lock().await.take() {
+            handle.abort();
+        }
+
         let client_count = self.clients.lock().await.len();
         info!("Shutting down {} LSP server(s)", client_count);
 
@@ -705,74 +861,17 @@ impl LspServerManager {
     /// This is used for cleanup when a worktree is deleted (e.g., spawn agent completes).
     /// Only servers with matching root_path are shut down; other servers remain active.
     pub async fn shutdown_for_root(&self, root_path: &Path) {
-        let root_path = root_path.to_path_buf();
+        shutdown_servers_for_root(
+            root_path,
+            &self.clients,
+            &self.lifecycles,
+            &self.last_health_checks,
+        )
+        .await;
 
-        // Find keys to remove
-        let keys_to_remove: Vec<ServerKey> = {
-            let clients = self.clients.lock().await;
-            clients
-                .keys()
-                .filter(|(_, path)| *path == root_path)
-                .cloned()
-                .collect()
-        };
-
-        if keys_to_remove.is_empty() {
-            debug!(
-                "No LSP servers to shutdown for root: {}",
-                root_path.display()
-            );
-            return;
+        if let Some(ref watcher) = self.root_watcher {
+            watcher.untrack_root(root_path);
         }
-
-        info!(
-            "Shutting down {} LSP server(s) for root: {}",
-            keys_to_remove.len(),
-            root_path.display()
-        );
-
-        // Signal shutdown to affected lifecycle managers
-        {
-            let lifecycles = self.lifecycles.lock().await;
-            for key in &keys_to_remove {
-                if let Some(lifecycle) = lifecycles.get(key) {
-                    lifecycle.signal_shutdown();
-                }
-            }
-        }
-
-        // Shutdown affected clients
-        {
-            let mut clients = self.clients.lock().await;
-            for key in &keys_to_remove {
-                if let Some(client) = clients.remove(key) {
-                    debug!("Shutting down LSP client: {:?}", key);
-                    if let Err(e) = client.shutdown().await {
-                        warn!("Error shutting down LSP client {:?}: {}", key, e);
-                    }
-                }
-            }
-        }
-
-        // Cleanup affected lifecycle managers
-        {
-            let mut lifecycles = self.lifecycles.lock().await;
-            for key in &keys_to_remove {
-                if let Some(lifecycle) = lifecycles.remove(key) {
-                    lifecycle.abort_health_check().await;
-                }
-            }
-        }
-
-        // Cleanup health check timestamps
-        {
-            let mut last_checks = self.last_health_checks.lock().await;
-            for key in &keys_to_remove {
-                last_checks.remove(key);
-            }
-        }
-
-        info!("LSP servers shut down for root: {}", root_path.display());
     }
 
     /// Get lifecycle manager for a server (for monitoring/testing)
@@ -1107,6 +1206,87 @@ impl LspServerManager {
     }
 }
 
+/// Shutdown all LSP servers for a specific workspace root.
+///
+/// Idempotent: returns immediately if no servers match the root.
+/// Extracted as a free function so the background watcher task can call it
+/// without holding a reference to `LspServerManager`.
+async fn shutdown_servers_for_root(
+    root_path: &Path,
+    clients: &Mutex<HashMap<ServerKey, Arc<LspClient>>>,
+    lifecycles: &Mutex<HashMap<ServerKey, Arc<ServerLifecycle>>>,
+    last_health_checks: &Mutex<HashMap<ServerKey, Instant>>,
+) {
+    let root_path = root_path.to_path_buf();
+
+    // Find keys to remove
+    let keys_to_remove: Vec<ServerKey> = {
+        let clients = clients.lock().await;
+        clients
+            .keys()
+            .filter(|(_, path)| *path == root_path)
+            .cloned()
+            .collect()
+    };
+
+    if keys_to_remove.is_empty() {
+        debug!(
+            "No LSP servers to shutdown for root: {}",
+            root_path.display()
+        );
+        return;
+    }
+
+    info!(
+        "Shutting down {} LSP server(s) for root: {}",
+        keys_to_remove.len(),
+        root_path.display()
+    );
+
+    // Signal shutdown to affected lifecycle managers
+    {
+        let lifecycles = lifecycles.lock().await;
+        for key in &keys_to_remove {
+            if let Some(lifecycle) = lifecycles.get(key) {
+                lifecycle.signal_shutdown();
+            }
+        }
+    }
+
+    // Shutdown affected clients
+    {
+        let mut clients = clients.lock().await;
+        for key in &keys_to_remove {
+            if let Some(client) = clients.remove(key) {
+                debug!("Shutting down LSP client: {:?}", key);
+                if let Err(e) = client.shutdown().await {
+                    warn!("Error shutting down LSP client {:?}: {}", key, e);
+                }
+            }
+        }
+    }
+
+    // Cleanup affected lifecycle managers
+    {
+        let mut lifecycles = lifecycles.lock().await;
+        for key in &keys_to_remove {
+            if let Some(lifecycle) = lifecycles.remove(key) {
+                lifecycle.abort_health_check().await;
+            }
+        }
+    }
+
+    // Cleanup health check timestamps
+    {
+        let mut last_checks = last_health_checks.lock().await;
+        for key in &keys_to_remove {
+            last_checks.remove(key);
+        }
+    }
+
+    info!("LSP servers shut down for root: {}", root_path.display());
+}
+
 /// Status of an LSP server
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerStatus {
@@ -1161,10 +1341,16 @@ pub struct ServerConfigInfo {
     pub install_hint: String,
 }
 
+/// Check if a config has any non-disabled servers.
+fn has_enabled_servers(config: &LspServersConfig) -> bool {
+    config.servers.values().any(|s| !s.disabled)
+}
+
 impl std::fmt::Debug for LspServerManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LspServerManager")
             .field("config", &self.config)
+            .field("has_servers", &self.has_servers.load(Ordering::Relaxed))
             .finish()
     }
 }

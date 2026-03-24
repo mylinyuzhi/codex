@@ -23,6 +23,7 @@ pub use v4::LanguageModelV4Tool;
 pub use v4::LanguageModelV4ToolChoice;
 pub use v4::OutputTokens;
 pub use v4::PromptBuilder;
+pub use v4::ReasoningLevel;
 pub use v4::ResponseFormat;
 pub use v4::Source;
 pub use v4::SourceType;

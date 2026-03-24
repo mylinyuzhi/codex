@@ -26,9 +26,16 @@ fn test_validate_download_url_invalid_protocol() {
 
     let result = validate_download_url("file:///path/to/file");
     assert!(matches!(result, Err(DownloadUrlError::InvalidProtocol)));
+}
 
+#[test]
+fn test_validate_download_url_data_urls_are_valid() {
     let result = validate_download_url("data:text/plain,hello");
-    assert!(matches!(result, Err(DownloadUrlError::InvalidProtocol)));
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().scheme(), "data");
+
+    let result = validate_download_url("data:image/png;base64,abc123");
+    assert!(result.is_ok());
 }
 
 #[test]

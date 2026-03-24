@@ -37,12 +37,14 @@
 
 mod config;
 mod matcher;
+mod path_checker;
 mod patterns;
 mod service;
 
 // Primary API
 pub use config::IgnoreConfig;
 pub use matcher::PatternMatcher;
+pub use path_checker::PathChecker;
 pub use service::IgnoreService;
 
 // Standalone functions for external tool integration

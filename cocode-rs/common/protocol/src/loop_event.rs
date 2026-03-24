@@ -692,6 +692,33 @@ pub enum LoopEvent {
         error: String,
     },
 
+    // ========== Cost Warning ==========
+    /// Cost has exceeded the warning threshold.
+    CostWarningThresholdReached {
+        /// Current estimated cost in cents.
+        current_cost_cents: i32,
+        /// Warning threshold in cents.
+        threshold_cents: i32,
+        /// Budget limit in cents (if configured).
+        budget_cents: Option<i32>,
+    },
+
+    // ========== Sandbox Permission ==========
+    /// Sandbox permission approval required (e.g., network access).
+    SandboxApprovalRequired {
+        /// The approval request.
+        request: ApprovalRequest,
+        /// Type of sandbox access requested.
+        access_type: SandboxAccessType,
+    },
+
+    // ========== Fast Mode ==========
+    /// Fast mode was toggled.
+    FastModeChanged {
+        /// Whether fast mode is now active.
+        active: bool,
+    },
+
     // ========== Cron ==========
     /// A cron job has fired and its prompt should be injected into the loop.
     CronJobFired {
@@ -727,6 +754,29 @@ pub enum RewindMode {
     ConversationOnly,
     /// Rewind code only (keep conversation history).
     CodeOnly,
+}
+
+/// Type of sandbox access being requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxAccessType {
+    /// Network access (outbound HTTP, etc.)
+    Network,
+    /// File system write access outside sandbox.
+    FileSystem,
+    /// Process execution.
+    ProcessExec,
+}
+
+impl SandboxAccessType {
+    /// Get a human-readable label for this access type.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SandboxAccessType::Network => "Network Access",
+            SandboxAccessType::FileSystem => "File System Access",
+            SandboxAccessType::ProcessExec => "Process Execution",
+        }
+    }
 }
 
 /// Summary of an available checkpoint for the rewind selector overlay.

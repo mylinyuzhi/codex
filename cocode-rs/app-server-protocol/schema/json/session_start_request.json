@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SessionStartRequestParams",
+  "description": "Parameters for `session/start`.",
+  "type": "object",
+  "required": [
+    "prompt"
+  ],
+  "properties": {
+    "cwd": {
+      "description": "Working directory override.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "env": {
+      "description": "Environment variables to set.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "max_turns": {
+      "description": "Maximum turns before stopping.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "model": {
+      "description": "Model override (e.g., \"sonnet\", \"opus\").",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "description": "Permission mode override.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "prompt": {
+      "description": "Initial prompt to send.",
+      "type": "string"
+    },
+    "system_prompt_suffix": {
+      "description": "System prompt suffix (appended to built-in system prompt).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

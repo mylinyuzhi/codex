@@ -55,6 +55,7 @@ members = [
     "features/team",
     "features/cron",
     "features/auto-memory",
+    "features/keybindings",
     "core/loop",
     "core/subagent",
     "core/executor",
@@ -70,6 +71,7 @@ members = [
     "vercel-ai/google",
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
+    "app-server-protocol",
 ]
 resolver = "2"
 
@@ -153,11 +155,13 @@ cocode-plan-mode = { path = "features/plan-mode" }
 cocode-team = { path = "features/team" }
 cocode-cron = { path = "features/cron" }
 cocode-auto-memory = { path = "features/auto-memory" }
+cocode-keybindings = { path = "features/keybindings" }
 
 # Internal - app
 cocode-session = { path = "app/session" }
 cocode-cli = { path = "app/cli" }
 cocode-tui = { path = "app/tui" }
+cocode-app-server-protocol = { path = "app-server-protocol" }
 
 # Internal - LSP
 cocode-lsp = { path = "lsp" }

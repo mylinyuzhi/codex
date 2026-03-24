@@ -108,10 +108,15 @@ fn format_diagnostics(diagnostics: &[&DiagnosticInfo]) -> String {
                 .as_ref()
                 .map(|c| format!(" [{c}]"))
                 .unwrap_or_default();
+            let source_str = diag
+                .source
+                .as_ref()
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
 
             content.push_str(&format!(
-                "  - Line {}, Col {}: [{}]{} {}\n",
-                diag.line, diag.column, diag.severity, code_str, diag.message
+                "  - Line {}, Col {}: [{}]{}{} {}\n",
+                diag.line, diag.column, diag.severity, code_str, source_str, diag.message
             ));
         }
 

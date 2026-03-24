@@ -199,7 +199,8 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .width(area.width)
         .user_scrolled(state.ui.user_scrolled)
         .streaming_tool_uses(streaming_tool_uses)
-        .show_system_reminders(state.ui.show_system_reminders);
+        .show_system_reminders(state.ui.show_system_reminders)
+        .transcript_mode(state.ui.transcript_mode);
     frame.render_widget(chat, chunks[0]);
 
     // Queued list widget (if any queued commands)
@@ -338,7 +339,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     .working_dir(state.session.working_dir.as_deref())
     .output_style(state.session.output_style.as_deref())
     .spinner_text(state.ui.spinner_text.as_deref())
-    .spinner_frame(state.ui.spinner_frame());
+    .spinner_frame(state.ui.spinner_frame())
+    .fast_mode(state.session.fast_mode);
     frame.render_widget(status_bar, area);
 }
 
@@ -361,6 +363,16 @@ fn render_overlay(
         ),
     };
     let overlay_height = match overlay {
+        Overlay::CostWarning(cw) => {
+            // Title + cost + threshold + optional budget + blank + acknowledge + hints
+            let base = 7_u16;
+            if cw.budget_cents.is_some() {
+                base + 1
+            } else {
+                base
+            }
+        }
+        Overlay::SandboxPermission(_) => constants::SANDBOX_PERMISSION_OVERLAY_HEIGHT as u16,
         Overlay::Permission(_) => constants::PERMISSION_OVERLAY_HEIGHT as u16,
         Overlay::ModelPicker(picker) => (picker.filtered_items().len() as u16 + 4)
             .min(constants::MODEL_PICKER_MAX_HEIGHT as u16),
@@ -420,6 +432,10 @@ fn render_overlay(
     frame.render_widget(Clear, overlay_area);
 
     match overlay {
+        Overlay::CostWarning(cw) => render_cost_warning_overlay(frame, overlay_area, cw, theme),
+        Overlay::SandboxPermission(sp) => {
+            render_sandbox_permission_overlay(frame, overlay_area, sp, theme)
+        }
         Overlay::Permission(perm) => render_permission_overlay(frame, overlay_area, perm, theme),
         Overlay::PlanExitApproval(plan_exit) => {
             render_plan_exit_overlay(frame, overlay_area, plan_exit, theme)
@@ -1617,6 +1633,134 @@ fn render_rewind_selector_overlay(
             ));
         }
     }
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the cost warning overlay.
+fn render_cost_warning_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    cw: &crate::state::CostWarningOverlay,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(
+            format!(" {} ", t!("dialog.cost_warning_title"))
+                .bold()
+                .fg(theme.warning),
+        )
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.warning));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let format_cost = |cents: i32| -> String {
+        if cents >= 100 {
+            format!("${:.2}", cents as f64 / 100.0)
+        } else {
+            format!("{cents}c")
+        }
+    };
+
+    let mut lines: Vec<Line> = vec![];
+
+    lines.push(Line::from(vec![
+        Span::raw(format!("{} ", t!("dialog.cost_current"))).bold(),
+        Span::raw(format_cost(cw.current_cost_cents)).fg(theme.warning),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::raw(format!("{} ", t!("dialog.cost_threshold"))),
+        Span::raw(format_cost(cw.threshold_cents)).fg(theme.text_dim),
+    ]));
+
+    if let Some(budget) = cw.budget_cents {
+        lines.push(Line::from(vec![
+            Span::raw(format!("{} ", t!("dialog.cost_budget"))),
+            Span::raw(format_cost(budget)).fg(theme.error),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        Span::raw(t!("dialog.cost_warning_hints").to_string()).fg(theme.text_dim),
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the sandbox permission overlay.
+fn render_sandbox_permission_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    sp: &crate::state::SandboxPermissionOverlay,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(
+            format!(" {} ", t!("dialog.sandbox_permission_title"))
+                .bold()
+                .fg(theme.error),
+        )
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(theme.error));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![];
+
+    // Access type
+    lines.push(Line::from(vec![
+        Span::raw(format!("{} ", t!("dialog.sandbox_access_type"))).bold(),
+        Span::raw(sp.access_type.label()).fg(theme.warning),
+    ]));
+
+    // Tool name
+    lines.push(Line::from(vec![
+        Span::raw(format!("{} ", t!("dialog.tool"))).bold(),
+        Span::raw(&sp.request.tool_name).fg(theme.primary),
+    ]));
+
+    // Description
+    for desc_line in sp.request.description.lines() {
+        lines.push(Line::from(
+            Span::raw(format!("  {desc_line}")).fg(theme.text_dim),
+        ));
+    }
+
+    // Security risks
+    for risk in &sp.request.risks {
+        lines.push(Line::from(
+            Span::raw(format!("  ! {}", risk.message)).fg(theme.error),
+        ));
+    }
+    lines.push(Line::from(""));
+
+    // Options
+    let options = [
+        t!("dialog.approve").to_string(),
+        t!("dialog.deny").to_string(),
+        t!("dialog.approve_all").to_string(),
+    ];
+    for (i, opt) in options.iter().enumerate() {
+        let is_selected = sp.selected == i as i32;
+        let line = if is_selected {
+            Line::from(Span::raw(format!("▸ {opt}")).bold().fg(theme.primary))
+        } else {
+            Line::from(Span::raw(format!("  {opt}")).fg(theme.text_dim))
+        };
+        lines.push(line);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        Span::raw(t!("dialog.sandbox_permission_hints").to_string()).fg(theme.text_dim),
+    ));
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
