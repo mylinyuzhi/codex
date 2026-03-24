@@ -366,24 +366,45 @@ impl AgentLoop {
         injected_messages: &[InjectedMessage],
         model_info: &cocode_protocol::ModelInfo,
     ) -> (Vec<LanguageModelMessage>, Vec<LanguageModelTool>) {
-        // Build system prompt (use custom prompt if set, otherwise generate from builder)
-        let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
-            custom.clone()
-        } else {
-            let mut prompt = SystemPromptBuilder::build(&self.context);
-            // Append system prompt suffix (critical_reminder) for highest authority
-            if let Some(ref suffix) = self.system_prompt_suffix {
-                prompt.push_str("\n\n");
-                prompt.push_str(suffix);
+        let use_cache = self.config.prompt_caching.enabled;
+
+        // Build system prompt: split into cache-scoped blocks when caching is enabled,
+        // otherwise build as a single string.
+        let mut all_messages = if use_cache && self.custom_system_prompt.is_none() {
+            let blocks = SystemPromptBuilder::build_for_cache(&self.context);
+            let mut msgs = Vec::new();
+            for block in blocks {
+                if let Some(opts) =
+                    cocode_api::prompt_cache::build_cache_provider_options(block.cache_scope)
+                {
+                    msgs.push(LanguageModelMessage::system_with_options(&block.text, opts));
+                } else {
+                    msgs.push(LanguageModelMessage::system(&block.text));
+                }
             }
-            prompt
+            // Suffix is session-specific (critical_reminder) → must be its own
+            // uncached system message to avoid polluting the Global-scoped cache.
+            if let Some(ref suffix) = self.system_prompt_suffix {
+                msgs.push(LanguageModelMessage::system(suffix));
+            }
+            msgs
+        } else {
+            // Non-cached path: single system message
+            let system_prompt = if let Some(ref custom) = self.custom_system_prompt {
+                custom.clone()
+            } else {
+                let mut prompt = SystemPromptBuilder::build(&self.context);
+                if let Some(ref suffix) = self.system_prompt_suffix {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(suffix);
+                }
+                prompt
+            };
+            vec![LanguageModelMessage::system(&system_prompt)]
         };
 
         // Get conversation messages
         let messages = self.message_history.messages_for_api();
-
-        // Build messages with system, reminders, and conversation
-        let mut all_messages = vec![LanguageModelMessage::system(&system_prompt)];
 
         // Inject system reminders as individual messages before the conversation
         // This supports both text reminders and multi-message tool_use/tool_result pairs
@@ -403,10 +424,21 @@ impl AgentLoop {
         &self,
         model_info: &cocode_protocol::ModelInfo,
     ) -> Vec<LanguageModelTool> {
-        select_tools_for_model(
-            self.tool_registry.definitions_filtered(&self.features),
-            model_info,
-        )
+        let mut defs = self.tool_registry.definitions_filtered(&self.features);
+
+        // Hide LSP tool if no servers are configured (avoids wasted model turns)
+        if !self.is_lsp_available() {
+            defs.retain(|d| d.name != cocode_protocol::ToolName::Lsp.as_str());
+        }
+
+        select_tools_for_model(defs, model_info)
+    }
+
+    /// Whether LSP is enabled and has at least one configured server.
+    fn is_lsp_available(&self) -> bool {
+        self.lsp_manager
+            .as_ref()
+            .is_some_and(|m| m.has_configured_servers())
     }
 
     /// Convert an injected message to an API message.

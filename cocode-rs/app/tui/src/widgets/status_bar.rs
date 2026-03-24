@@ -23,6 +23,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::i18n::t;
 use crate::state::PlanPhase;
 use crate::theme::Theme;
@@ -62,6 +64,8 @@ pub struct StatusBar<'a> {
     spinner_text: Option<&'a str>,
     /// Spinner frame string (time-based).
     spinner_frame: &'a str,
+    /// Whether fast mode is active.
+    fast_mode: bool,
 }
 
 impl<'a> StatusBar<'a> {
@@ -93,6 +97,7 @@ impl<'a> StatusBar<'a> {
             output_style: None,
             spinner_text: None,
             spinner_frame: "⠋",
+            fast_mode: false,
         }
     }
 
@@ -170,11 +175,17 @@ impl<'a> StatusBar<'a> {
         self
     }
 
+    /// Set whether fast mode is active.
+    pub fn fast_mode(mut self, active: bool) -> Self {
+        self.fast_mode = active;
+        self
+    }
+
     /// Format the model name for display.
     fn format_model(&self) -> Span<'static> {
         // Shorten long model names
         let max_len = crate::constants::MODEL_NAME_MAX_LEN as usize;
-        let name = if self.model.len() > max_len {
+        let name = if UnicodeWidthStr::width(self.model) > max_len {
             let parts: Vec<&str> = self.model.split('-').collect();
             if parts.len() >= 2 {
                 format!(
@@ -395,6 +406,19 @@ impl<'a> StatusBar<'a> {
             None
         }
     }
+
+    /// Format the fast mode indicator.
+    fn format_fast_mode(&self) -> Option<Span<'static>> {
+        if self.fast_mode {
+            Some(
+                Span::raw(format!(" {} ", t!("status.fast_mode")))
+                    .fg(self.theme.warning)
+                    .bold(),
+            )
+        } else {
+            None
+        }
+    }
 }
 
 impl Widget for StatusBar<'_> {
@@ -413,7 +437,10 @@ impl Widget for StatusBar<'_> {
         // Each is (spans_to_add, display_width).
         let mut optional: Vec<Vec<Span>> = Vec::new();
 
-        // Priority 1 (dropped last): plan mode, context gauge, spinner
+        // Priority 1 (dropped last): fast mode, plan mode, context gauge, spinner
+        if let Some(fast_span) = self.format_fast_mode() {
+            optional.push(vec![fast_span, sep()]);
+        }
         if let Some(plan_span) = self.format_plan_mode() {
             optional.push(vec![plan_span, sep()]);
         }

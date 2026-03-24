@@ -11,6 +11,7 @@ use cocode_config::interceptors;
 use cocode_protocol::execution::InferenceContext;
 
 use crate::message_normalize;
+use crate::prompt_cache;
 use crate::request_options_merge;
 use crate::schema_sanitize;
 use crate::thinking_convert;
@@ -83,7 +84,7 @@ impl RequestBuilder {
     /// Pipeline (in execution order):
     ///   Step 1: message normalization (mutates prompt in place)
     ///   Step 2: provider base options (store:false, thinkingConfig, etc.)
-    ///   Step 3: thinking config → provider options
+    ///   Step 3: reasoning level + thinking config → provider options
     ///   Step 4: request_options merge (user config overlay)
     ///   Step 5: HTTP interceptors → extra headers
     ///
@@ -93,6 +94,16 @@ impl RequestBuilder {
 
         // Step 1: Per-provider message normalization (empty content, tool ID sanitization)
         message_normalize::normalize_prompt(&mut self.prompt, api);
+
+        // Step 1.5: Apply prompt cache breakpoints (Anthropic only)
+        if let Some(ref cache_config) = self.context.prompt_cache_config {
+            prompt_cache::apply_message_breakpoints(
+                &mut self.prompt,
+                cache_config,
+                api,
+                &self.context.model_spec.slug,
+            );
+        }
 
         let mut opts = LanguageModelCallOptions::new(self.prompt);
 
@@ -122,8 +133,9 @@ impl RequestBuilder {
         // Step 2: Inject provider-specific base options (store:false, thinkingConfig, etc.)
         let mut provider_options = request_options_merge::provider_base_options(api);
 
-        // Step 3: Build provider options from thinking config (overrides base)
+        // Step 3: Reasoning level + provider options from thinking config
         if let Some(thinking_level) = self.context.effective_thinking_level() {
+            opts.reasoning = thinking_convert::effort_to_reasoning_level(thinking_level.effort);
             let thinking_opts = thinking_convert::to_provider_options(
                 thinking_level,
                 &self.context.model_info,

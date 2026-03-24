@@ -9,10 +9,14 @@ use crate::error::Result;
 use crate::error::tool_error;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_file_ignore::IgnoreConfig;
+use cocode_file_ignore::IgnoreService;
+use cocode_file_ignore::PathChecker;
 use cocode_lsp::SymbolKind;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
+use std::path::Path;
 
 /// Tool for LSP operations.
 ///
@@ -110,11 +114,14 @@ impl Tool for LspTool {
         true
     }
 
+    fn max_result_size_chars(&self) -> i32 {
+        100_000
+    }
+
     fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
         Some(cocode_protocol::Feature::Lsp)
     }
 
-    #[allow(clippy::unwrap_used)]
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let manager = ctx.lsp_manager.as_ref().ok_or_else(|| {
             tool_error::ExecutionFailedSnafu {
@@ -143,6 +150,9 @@ impl Tool for LspTool {
         let line = input["line"].as_i64().map(|n| n as u32);
         let character = input["character"].as_i64().map(|n| n as u32);
 
+        // Build ignore checker for filtering cross-file results
+        let ignore_checker = build_ignore_checker(&ctx.cwd);
+
         let result = match operation {
             "goToDefinition" => {
                 let path = require_file_path(file_path)?;
@@ -170,7 +180,7 @@ impl Tool for LspTool {
                     .build());
                 };
 
-                format_locations(&locations)
+                format_locations(&filter_locations(&ignore_checker, &locations))
             }
 
             "findReferences" => {
@@ -201,7 +211,7 @@ impl Tool for LspTool {
                     .build());
                 };
 
-                format_locations(&locations)
+                format_locations(&filter_locations(&ignore_checker, &locations))
             }
 
             "hover" => {
@@ -265,7 +275,7 @@ impl Tool for LspTool {
                     .await
                     .map_err(lsp_err_to_tool_err)?;
 
-                format_workspace_symbols(&symbols)
+                format_workspace_symbols(&filter_workspace_symbols(&ignore_checker, &symbols))
             }
 
             "goToImplementation" => {
@@ -294,7 +304,7 @@ impl Tool for LspTool {
                     .build());
                 };
 
-                format_locations(&locations)
+                format_locations(&filter_locations(&ignore_checker, &locations))
             }
 
             "goToTypeDefinition" => {
@@ -323,7 +333,7 @@ impl Tool for LspTool {
                     .build());
                 };
 
-                format_locations(&locations)
+                format_locations(&filter_locations(&ignore_checker, &locations))
             }
 
             "goToDeclaration" => {
@@ -352,7 +362,7 @@ impl Tool for LspTool {
                     .build());
                 };
 
-                format_locations(&locations)
+                format_locations(&filter_locations(&ignore_checker, &locations))
             }
 
             "getCallHierarchy" => {
@@ -391,6 +401,7 @@ impl Tool for LspTool {
                                 .incoming_calls(item)
                                 .await
                                 .map_err(lsp_err_to_tool_err)?;
+                            let calls = filter_incoming_calls(&ignore_checker, &calls);
                             format_incoming_calls(&item_name, &calls)
                         }
                         "outgoing" => {
@@ -398,6 +409,7 @@ impl Tool for LspTool {
                                 .outgoing_calls(item)
                                 .await
                                 .map_err(lsp_err_to_tool_err)?;
+                            let calls = filter_outgoing_calls(&ignore_checker, &calls);
                             format_outgoing_calls(&item_name, &calls)
                         }
                         _ => {
@@ -449,13 +461,34 @@ fn require_file_path(file_path: Option<&str>) -> Result<&str> {
 }
 
 fn lsp_err_to_tool_err(err: cocode_lsp::LspErr) -> crate::error::ToolError {
-    tool_error::ExecutionFailedSnafu {
-        message: err.to_string(),
-    }
-    .build()
+    let message = match &err {
+        cocode_lsp::LspErr::NoServerForExtension { ext } => {
+            if let Some(builtin) = cocode_lsp::BuiltinServer::find_by_extension(ext) {
+                format!(
+                    "No LSP server configured for '{ext}'. \
+                     Built-in server '{id}' supports this extension.\n\
+                     Install: {hint}\n\
+                     Then add to .codex/lsp_servers.json: \
+                     {{ \"servers\": {{ \"{id}\": {{}} }} }}",
+                    id = builtin.id,
+                    hint = builtin.install_hint,
+                )
+            } else {
+                format!(
+                    "No LSP server configured for '{ext}'. \
+                     No built-in server supports this extension.\n\
+                     To add a custom server, create .codex/lsp_servers.json:\n\
+                     {{ \"servers\": {{ \"my-server\": {{ \"command\": \"my-lsp\", \
+                     \"args\": [\"--stdio\"], \"file_extensions\": [\"{ext}\"] }} }} }}"
+                )
+            }
+        }
+        _ => err.to_string(),
+    };
+    tool_error::ExecutionFailedSnafu { message }.build()
 }
 
-fn format_locations(locations: &[cocode_lsp::Location]) -> String {
+fn format_locations(locations: &[&cocode_lsp::Location]) -> String {
     if locations.is_empty() {
         return "No results found".to_string();
     }
@@ -490,7 +523,7 @@ fn format_document_symbols(symbols: &[cocode_lsp::symbols::ResolvedSymbol]) -> S
     output
 }
 
-fn format_workspace_symbols(symbols: &[cocode_lsp::SymbolInformation]) -> String {
+fn format_workspace_symbols(symbols: &[&cocode_lsp::SymbolInformation]) -> String {
     if symbols.is_empty() {
         return "No symbols found matching query".to_string();
     }
@@ -511,7 +544,7 @@ fn format_workspace_symbols(symbols: &[cocode_lsp::SymbolInformation]) -> String
     output
 }
 
-fn format_incoming_calls(target: &str, calls: &[cocode_lsp::CallHierarchyIncomingCall]) -> String {
+fn format_incoming_calls(target: &str, calls: &[&cocode_lsp::CallHierarchyIncomingCall]) -> String {
     if calls.is_empty() {
         return format!("No incoming calls to '{target}'");
     }
@@ -532,7 +565,7 @@ fn format_incoming_calls(target: &str, calls: &[cocode_lsp::CallHierarchyIncomin
     output
 }
 
-fn format_outgoing_calls(source: &str, calls: &[cocode_lsp::CallHierarchyOutgoingCall]) -> String {
+fn format_outgoing_calls(source: &str, calls: &[&cocode_lsp::CallHierarchyOutgoingCall]) -> String {
     if calls.is_empty() {
         return format!("No outgoing calls from '{source}'");
     }
@@ -577,6 +610,67 @@ fn url_to_path(url: &cocode_lsp::lsp_types_reexport::Url) -> String {
     url.to_file_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| url.to_string())
+}
+
+/// Build an ignore checker for filtering LSP results.
+///
+/// Respects `.gitignore`, `.ignore`, global gitignore, and default
+/// patterns (node_modules, .git, build dirs, etc.). Includes hidden files
+/// since LSP results from dotfiles are typically intentional.
+fn build_ignore_checker(cwd: &Path) -> PathChecker {
+    let config = IgnoreConfig::default().with_hidden(/*include=*/ true);
+    IgnoreService::new(config).create_path_checker(cwd)
+}
+
+/// Check if a URI points to an ignored file.
+fn is_uri_ignored(checker: &PathChecker, uri: &cocode_lsp::lsp_types_reexport::Url) -> bool {
+    uri.to_file_path()
+        .map(|p| checker.is_ignored(&p))
+        .unwrap_or(false) // Keep non-file URIs
+}
+
+/// Filter locations, removing those in ignored files.
+fn filter_locations<'a>(
+    checker: &PathChecker,
+    locations: &'a [cocode_lsp::Location],
+) -> Vec<&'a cocode_lsp::Location> {
+    locations
+        .iter()
+        .filter(|loc| !is_uri_ignored(checker, &loc.uri))
+        .collect()
+}
+
+/// Filter workspace symbols, removing those in ignored files.
+fn filter_workspace_symbols<'a>(
+    checker: &PathChecker,
+    symbols: &'a [cocode_lsp::SymbolInformation],
+) -> Vec<&'a cocode_lsp::SymbolInformation> {
+    symbols
+        .iter()
+        .filter(|sym| !is_uri_ignored(checker, &sym.location.uri))
+        .collect()
+}
+
+/// Filter incoming calls, removing those from ignored files.
+fn filter_incoming_calls<'a>(
+    checker: &PathChecker,
+    calls: &'a [cocode_lsp::CallHierarchyIncomingCall],
+) -> Vec<&'a cocode_lsp::CallHierarchyIncomingCall> {
+    calls
+        .iter()
+        .filter(|call| !is_uri_ignored(checker, &call.from.uri))
+        .collect()
+}
+
+/// Filter outgoing calls, removing those to ignored files.
+fn filter_outgoing_calls<'a>(
+    checker: &PathChecker,
+    calls: &'a [cocode_lsp::CallHierarchyOutgoingCall],
+) -> Vec<&'a cocode_lsp::CallHierarchyOutgoingCall> {
+    calls
+        .iter()
+        .filter(|call| !is_uri_ignored(checker, &call.to.uri))
+        .collect()
 }
 
 #[cfg(test)]

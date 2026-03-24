@@ -71,6 +71,10 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<i32>,
 
+    /// Maximum budget in cents before pausing (None = unlimited).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_budget_cents: Option<i32>,
+
     /// Session title (optional, user-provided or auto-generated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -98,6 +102,7 @@ impl Session {
             working_dir,
             selections: RoleSelections::with_main(main_selection),
             max_turns: Some(200),
+            max_budget_cents: None,
             title: None,
             name: None,
             ephemeral: false,
@@ -121,6 +126,7 @@ impl Session {
             working_dir,
             selections: RoleSelections::with_main(main_selection),
             max_turns: Some(200),
+            max_budget_cents: None,
             title: None,
             name: None,
             ephemeral: false,
@@ -141,6 +147,7 @@ impl Session {
             working_dir,
             selections,
             max_turns: Some(200),
+            max_budget_cents: None,
             title: None,
             name: None,
             ephemeral: false,
@@ -165,6 +172,11 @@ impl Session {
     /// Set the max turns limit.
     pub fn set_max_turns(&mut self, max: Option<i32>) {
         self.max_turns = max;
+    }
+
+    /// Set the max budget in cents.
+    pub fn set_max_budget_cents(&mut self, cents: Option<i32>) {
+        self.max_budget_cents = cents;
     }
 
     /// Mark the session as ephemeral (not persisted).
@@ -196,6 +208,7 @@ impl Session {
             working_dir: self.working_dir.clone(),
             selections: self.selections.clone(),
             max_turns: self.max_turns,
+            max_budget_cents: self.max_budget_cents,
             title: self.title.clone(),
             name: None, // Child sessions start without a name
             ephemeral: self.ephemeral,
@@ -273,6 +286,7 @@ pub struct SessionBuilder {
     selections: Option<RoleSelections>,
     main_selection: Option<RoleSelection>,
     max_turns: Option<i32>,
+    max_budget_cents: Option<i32>,
     title: Option<String>,
     name: Option<String>,
     ephemeral: bool,
@@ -335,6 +349,12 @@ impl SessionBuilder {
         self
     }
 
+    /// Set the maximum budget in cents.
+    pub fn max_budget_cents(mut self, cents: i32) -> Self {
+        self.max_budget_cents = Some(cents);
+        self
+    }
+
     /// Set the title.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -376,6 +396,7 @@ impl SessionBuilder {
         if let Some(max) = self.max_turns {
             session.max_turns = Some(max);
         }
+        session.max_budget_cents = self.max_budget_cents;
         session.title = self.title;
         session.name = self.name;
         session.ephemeral = self.ephemeral;

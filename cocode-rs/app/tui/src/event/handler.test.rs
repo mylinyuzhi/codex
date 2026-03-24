@@ -1,5 +1,9 @@
-use super::*;
+use super::legacy::*;
+use crate::event::TuiCommand;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
     KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Press)

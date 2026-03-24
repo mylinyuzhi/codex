@@ -37,6 +37,15 @@ pub const INIT_TIMEOUT_SECS: i32 = 45;
 /// Prevents memory exhaustion from malformed or malicious servers
 const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024;
 
+/// LSP error code for "content modified" (document changed during request)
+const CONTENT_MODIFIED_ERROR_CODE: i32 = -32801;
+
+/// Maximum retries for ContentModified errors
+const CONTENT_MODIFIED_MAX_RETRIES: u32 = 3;
+
+/// Base delay for ContentModified retry (milliseconds)
+const CONTENT_MODIFIED_BASE_DELAY_MS: u64 = 500;
+
 /// Configurable timeout settings for LSP operations
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
@@ -280,6 +289,54 @@ impl JsonRpcConnection {
         }
     }
 
+    /// Send request with automatic retry on ContentModified (-32801) errors.
+    ///
+    /// LSP servers return `-32801` when the document was modified while
+    /// processing a request. Retries with exponential backoff:
+    /// 500ms, 1000ms, 2000ms (3 retries max).
+    pub async fn request_with_retry<P: Serialize + Clone>(
+        &self,
+        method: &str,
+        params: P,
+        timeout_secs: i32,
+    ) -> Result<serde_json::Value> {
+        let mut last_err = None;
+        for attempt in 0..=CONTENT_MODIFIED_MAX_RETRIES {
+            match self
+                .request_with_timeout(method, params.clone(), timeout_secs)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(LspErr::JsonRpc {
+                    code: Some(code),
+                    ref message,
+                    ..
+                }) if code == CONTENT_MODIFIED_ERROR_CODE => {
+                    if attempt < CONTENT_MODIFIED_MAX_RETRIES {
+                        let delay = CONTENT_MODIFIED_BASE_DELAY_MS * 2u64.pow(attempt);
+                        debug!(
+                            "LSP {method} ContentModified (attempt {}/{}), retrying in {delay}ms: {message}",
+                            attempt + 1,
+                            CONTENT_MODIFIED_MAX_RETRIES
+                        );
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    last_err = Some(LspErr::JsonRpc {
+                        method: method.to_string(),
+                        code: Some(code),
+                        message: message.clone(),
+                    });
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // last_err is always Some after at least one iteration with a ContentModified error.
+        // If somehow None (should be unreachable), return a generic error.
+        Err(last_err.unwrap_or_else(|| {
+            LspErr::Internal(format!("{method}: ContentModified retries exhausted"))
+        }))
+    }
+
     /// Cancel a pending request
     ///
     /// Sends $/cancelRequest notification to the server.
@@ -310,10 +367,12 @@ impl JsonRpcConnection {
     /// This reduces boilerplate in LSP operation handlers.
     pub async fn request_optional<P, R>(&self, method: &str, params: P) -> Result<Option<R>>
     where
-        P: Serialize,
+        P: Serialize + Clone,
         R: for<'de> Deserialize<'de>,
     {
-        let value = self.request(method, params).await?;
+        let value = self
+            .request_with_retry(method, params, REQUEST_TIMEOUT_SECS)
+            .await?;
         if value.is_null() {
             Ok(None)
         } else {

@@ -2,6 +2,7 @@
 
 use super::AgentKind;
 use super::ExecutionIdentity;
+use crate::loop_config::PromptCacheConfig;
 use crate::model::ModelInfo;
 use crate::model::ModelSpec;
 use crate::thinking::ThinkingLevel;
@@ -87,6 +88,13 @@ pub struct InferenceContext {
     /// HTTP interceptor names from provider config, applied as extra headers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interceptor_names: Vec<String>,
+
+    /// Prompt cache strategy configuration.
+    ///
+    /// When set, cache breakpoints are injected into the prompt for providers
+    /// that support explicit cache markers (Anthropic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_config: Option<PromptCacheConfig>,
 }
 
 impl InferenceContext {
@@ -112,6 +120,7 @@ impl InferenceContext {
             original_identity,
             request_options: None,
             interceptor_names: Vec::new(),
+            prompt_cache_config: None,
         }
     }
 
@@ -130,6 +139,12 @@ impl InferenceContext {
     /// Set HTTP interceptor names.
     pub fn with_interceptor_names(mut self, names: Vec<String>) -> Self {
         self.interceptor_names = names;
+        self
+    }
+
+    /// Set prompt cache configuration.
+    pub fn with_prompt_cache_config(mut self, config: PromptCacheConfig) -> Self {
+        self.prompt_cache_config = Some(config);
         self
     }
 
@@ -226,6 +241,7 @@ impl InferenceContext {
             original_identity: identity,
             request_options: self.request_options.clone(),
             interceptor_names: self.interceptor_names.clone(),
+            prompt_cache_config: self.prompt_cache_config.clone(),
         }
     }
 }

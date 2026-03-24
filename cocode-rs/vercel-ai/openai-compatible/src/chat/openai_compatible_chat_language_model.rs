@@ -19,6 +19,7 @@ use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResponse;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider::ReasoningPart;
 use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::SourceType;
@@ -27,6 +28,7 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
 use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
 
@@ -106,8 +108,20 @@ impl OpenAICompatibleChatLanguageModel {
             body["max_tokens"] = json!(max);
         }
 
-        // Reasoning effort (as string, generic)
-        if let Some(ref effort) = compat_options.reasoning_effort {
+        // Reasoning effort: provider option takes precedence, then top-level reasoning
+        let resolved_reasoning_effort =
+            compat_options
+                .reasoning_effort
+                .clone()
+                .or_else(|| match options.reasoning {
+                    Some(level)
+                        if is_custom_reasoning(Some(level)) && level != ReasoningLevel::None =>
+                    {
+                        Some(level.as_str().to_string())
+                    }
+                    _ => None,
+                });
+        if let Some(ref effort) = resolved_reasoning_effort {
             body["reasoning_effort"] = Value::String(effort.clone());
         }
 

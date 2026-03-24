@@ -4,6 +4,7 @@
 //! provider-specific options using vercel-ai's HashMap-based `ProviderOptions`.
 
 use crate::ProviderOptions;
+use crate::ReasoningLevel;
 use crate::request_options_merge::build_options;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderApi;
@@ -120,6 +121,20 @@ fn to_zai_options(level: &ThinkingLevel) -> Option<ProviderOptions> {
         json!({"type": "enabled", "budgetTokens": budget}),
     );
     Some(build_options("zai", opts))
+}
+
+/// Map protocol `ReasoningEffort` to vercel-ai `ReasoningLevel`.
+///
+/// Returns `None` for `ReasoningEffort::None` (no reasoning requested).
+pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<ReasoningLevel> {
+    match effort {
+        ReasoningEffort::None => None,
+        ReasoningEffort::Minimal => Some(ReasoningLevel::Minimal),
+        ReasoningEffort::Low => Some(ReasoningLevel::Low),
+        ReasoningEffort::Medium => Some(ReasoningLevel::Medium),
+        ReasoningEffort::High => Some(ReasoningLevel::High),
+        ReasoningEffort::XHigh => Some(ReasoningLevel::Xhigh),
+    }
 }
 
 // =============================================================================

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use vercel_ai_provider::ProviderOptions;
+use vercel_ai_provider::ReasoningLevel;
 
 /// Timeout configuration for model calls.
 #[derive(Debug, Clone, Default)]
@@ -63,6 +64,8 @@ pub struct CallSettings {
     pub presence_penalty: Option<f32>,
     /// Seed for deterministic sampling.
     pub seed: Option<u64>,
+    /// Provider-agnostic reasoning effort level.
+    pub reasoning: Option<ReasoningLevel>,
     /// Headers to include in the request.
     pub headers: Option<HashMap<String, String>>,
     /// Maximum number of retries for transient failures.
@@ -124,6 +127,12 @@ impl CallSettings {
     /// Set the seed.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
+        self
+    }
+
+    /// Set the reasoning level.
+    pub fn with_reasoning(mut self, reasoning: ReasoningLevel) -> Self {
+        self.reasoning = Some(reasoning);
         self
     }
 

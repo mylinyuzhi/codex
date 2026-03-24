@@ -75,6 +75,7 @@ fn test_serde_roundtrip() {
     let config = LoopConfig {
         max_turns: Some(10),
         max_tokens: Some(100000),
+        max_budget_cents: Some(500),
         permission_mode: PermissionMode::AcceptEdits,
         enable_streaming_tools: true,
         enable_micro_compaction: true,
@@ -84,7 +85,7 @@ fn test_serde_roundtrip() {
         record_sidechain: true,
         session_memory: SessionMemoryConfig::default(),
         stall_detection: StallDetectionConfig::default(),
-        prompt_caching: PromptCachingConfig::default(),
+        prompt_caching: PromptCacheConfig::default(),
     };
 
     let json = serde_json::to_string(&config).unwrap();
@@ -92,6 +93,7 @@ fn test_serde_roundtrip() {
 
     assert_eq!(parsed.max_turns, config.max_turns);
     assert_eq!(parsed.max_tokens, config.max_tokens);
+    assert_eq!(parsed.max_budget_cents, config.max_budget_cents);
     assert_eq!(parsed.permission_mode, config.permission_mode);
     assert_eq!(parsed.enable_streaming_tools, config.enable_streaming_tools);
     assert_eq!(parsed.fallback_model, config.fallback_model);

@@ -11,6 +11,7 @@ use tracing::info;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
+use crate::CliFlags;
 use crate::output;
 use crate::repl::Repl;
 
@@ -48,28 +49,16 @@ fn init_repl_logging(config: &ConfigManager, verbose: bool) -> Option<()> {
 }
 
 /// Run the chat command in REPL mode.
-///
-/// # Arguments
-///
-/// * `initial_prompt` - Optional initial prompt for non-interactive mode
-/// * `title` - Optional session title
-/// * `name` - Optional session name for listing and resume-by-name
-/// * `max_turns` - Optional max turns limit
-/// * `config` - Configuration manager
-/// * `verbose` - Enable verbose logging
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     initial_prompt: Option<String>,
     title: Option<String>,
     name: Option<String>,
     max_turns: Option<i32>,
     config: &ConfigManager,
-    verbose: bool,
-    system_prompt_suffix: Option<String>,
-    cli_agents: Vec<cocode_subagent::AgentDefinition>,
+    flags: CliFlags,
 ) -> anyhow::Result<()> {
     // Initialize logging for REPL mode (stderr)
-    let _ = init_repl_logging(config, verbose);
+    let _ = init_repl_logging(config, flags.verbose);
 
     info!("Starting REPL mode");
 
@@ -92,7 +81,9 @@ pub async fn run(
     }
 
     // Build all role selections from config
-    let selections = config.build_all_selections();
+    let mut selections = config.build_all_selections();
+    flags.apply_model_overrides(config, &mut selections)?;
+
     let mut session = Session::with_selections(working_dir, selections);
 
     if let Some(t) = title {
@@ -104,22 +95,15 @@ pub async fn run(
     if let Some(max) = max_turns {
         session.set_max_turns(Some(max));
     }
+    if let Some(usd) = flags.max_budget_usd {
+        session.set_max_budget_cents(Some((usd * 100.0).round() as i32));
+    }
 
     // Create session state from config snapshot
     let mut state = SessionState::new(session, snapshot).await?;
 
-    // Set system prompt suffix if provided
-    if let Some(suffix) = system_prompt_suffix {
-        state.set_system_prompt_suffix(suffix);
-    }
-
-    // Register CLI-provided agent definitions
-    if !cli_agents.is_empty() {
-        let mut mgr = state.subagent_manager().lock().await;
-        for agent in cli_agents {
-            mgr.register_agent_type(agent);
-        }
-    }
+    // Apply CLI flags to session state
+    apply_cli_flags_to_state(&mut state, &flags).await;
 
     // Handle initial prompt (non-interactive mode)
     if let Some(prompt) = initial_prompt {
@@ -149,6 +133,28 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// Apply CLI flags to a `SessionState`.
+///
+/// Sets permission mode, system prompt suffix, and registers CLI agents.
+/// Note: env vars are set separately by `set_cli_env_vars()` in main.rs
+/// during single-threaded init, before any async tasks spawn.
+pub async fn apply_cli_flags_to_state(state: &mut SessionState, flags: &CliFlags) {
+    if let Some(ref suffix) = flags.system_prompt_suffix {
+        state.set_system_prompt_suffix(suffix.clone());
+    }
+
+    if let Some(mode) = flags.permission_mode {
+        state.set_permission_mode(mode);
+    }
+
+    if !flags.cli_agents.is_empty() {
+        let mut mgr = state.subagent_manager().lock().await;
+        for agent in &flags.cli_agents {
+            mgr.register_agent_type(agent.clone());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -53,6 +53,7 @@ pub mod event;
 pub mod file_search;
 pub mod frame_scheduler;
 pub mod i18n;
+pub mod keybinding_bridge;
 pub mod paste;
 pub mod path_display;
 pub mod render;

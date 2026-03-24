@@ -10,10 +10,14 @@
 //! When sandbox mode is enabled in the future, the executor will wrap commands with
 //! platform-specific sandbox enforcement (Landlock on Linux, Seatbelt on macOS).
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::PoisonError;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
@@ -42,11 +46,11 @@ const MAX_OUTPUT_BYTES: i64 = 30_000;
 /// Environment variable to disable shell snapshotting.
 const DISABLE_SNAPSHOT_ENV: &str = "COCODE_DISABLE_SHELL_SNAPSHOT";
 
-/// Marker for CWD extraction from command output (start).
-const CWD_MARKER_START: &str = "__COCODE_CWD_START__";
+/// Prefix for CWD temp files written by shell commands.
+const CWD_FILE_PREFIX: &str = "cocode-";
 
-/// Marker for CWD extraction from command output (end).
-const CWD_MARKER_END: &str = "__COCODE_CWD_END__";
+/// Suffix for CWD temp files written by shell commands.
+const CWD_FILE_SUFFIX: &str = "-cwd";
 
 /// Shell command executor.
 ///
@@ -97,10 +101,7 @@ impl std::fmt::Debug for ShellExecutor {
             .field("default_timeout_secs", &self.default_timeout_secs)
             .field(
                 "cwd",
-                &*self
-                    .cwd
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                &*self.cwd.lock().unwrap_or_else(PoisonError::into_inner),
             )
             .field("background_registry", &self.background_registry)
             .field("shell", &self.shell)
@@ -111,7 +112,7 @@ impl std::fmt::Debug for ShellExecutor {
                 &self
                     .env_overlay
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .unwrap_or_else(PoisonError::into_inner)
                     .len(),
             )
             .finish()
@@ -195,7 +196,7 @@ impl ShellExecutor {
         let mut overlay = self
             .env_overlay
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         overlay.extend(vars);
     }
 
@@ -251,16 +252,47 @@ impl ShellExecutor {
     pub fn cwd(&self) -> PathBuf {
         self.cwd
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
     /// Updates the working directory.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
-        *self
-            .cwd
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = cwd;
+        *self.cwd.lock().unwrap_or_else(PoisonError::into_inner) = cwd;
+    }
+
+    /// Resolves the CWD, falling back if the current CWD no longer exists.
+    ///
+    /// If the tracked CWD has been deleted (e.g., temp dir cleanup), falls back
+    /// to the original working directory or home dir. This matches Claude Code's
+    /// CWD recovery behavior.
+    fn resolve_cwd(&self) -> PathBuf {
+        let current = self.cwd();
+        if current.exists() {
+            return current;
+        }
+
+        // CWD deleted — try home dir as fallback
+        if let Some(home) = home_dir()
+            && home.exists()
+        {
+            tracing::warn!(
+                "CWD no longer exists: {}, recovering to home: {}",
+                current.display(),
+                home.display()
+            );
+            *self.cwd.lock().unwrap_or_else(PoisonError::into_inner) = home.clone();
+            return home;
+        }
+
+        // Last resort: use root
+        tracing::warn!(
+            "CWD no longer exists: {}, falling back to /",
+            current.display()
+        );
+        let fallback = PathBuf::from("/");
+        *self.cwd.lock().unwrap_or_else(PoisonError::into_inner) = fallback.clone();
+        fallback
     }
 
     /// Creates a shell executor for subagent use.
@@ -475,14 +507,12 @@ impl ShellExecutor {
 
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
-        let cwd = self.cwd();
+        let cwd = self.resolve_cwd();
+        let cwd_file = generate_cwd_file_path();
 
-        // Wrap the script to capture CWD after execution
-        let wrapped_script = format!(
-            "{}; __cocode_exit=$?; echo '{}' \"$(pwd)\" '{}'; exit $__cocode_exit",
-            &args[2], CWD_MARKER_START, CWD_MARKER_END
-        );
-        let shell_args = [args[0].clone(), args[1].clone(), wrapped_script];
+        // Build command chain with file-based CWD tracking
+        let script = build_command_chain(&args[2], &cwd_file, self.shell.as_ref());
+        let shell_args = [args[0].clone(), args[1].clone(), script];
 
         let mut cmd = tokio::process::Command::new(&shell_args[0]);
         cmd.args(&shell_args[1..])
@@ -495,7 +525,7 @@ impl ShellExecutor {
         for (key, value) in self
             .env_overlay
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
         {
             cmd.env(key, value);
@@ -570,6 +600,7 @@ impl ShellExecutor {
                             child,
                             Arc::clone(&stdout_buf),
                             Arc::clone(&stderr_buf),
+                            cwd_file.clone(),
                         )
                         .await;
                     return ExecuteResult::Backgrounded { task_id };
@@ -588,9 +619,9 @@ impl ShellExecutor {
                 let raw_stdout_bytes = stdout_buf.lock().await;
                 let raw_stderr_bytes = stderr_buf.lock().await;
 
-                let (raw_stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
+                let (stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
                 let (stderr, truncated_stderr) = truncate_output(&raw_stderr_bytes);
-                let (stdout, new_cwd) = extract_cwd_from_output(&raw_stdout);
+                let new_cwd = read_cwd_file(&cwd_file);
 
                 ExecuteResult::Completed(CommandResult {
                     exit_code,
@@ -617,9 +648,9 @@ impl ShellExecutor {
                 let raw_stdout_bytes = stdout_buf.lock().await;
                 let raw_stderr_bytes = stderr_buf.lock().await;
 
-                let (raw_stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
+                let (stdout, truncated_stdout) = truncate_output(&raw_stdout_bytes);
                 let (stderr, truncated_stderr) = truncate_output(&raw_stderr_bytes);
-                let (stdout, new_cwd) = extract_cwd_from_output(&raw_stdout);
+                let new_cwd = read_cwd_file(&cwd_file);
 
                 ExecuteResult::Completed(CommandResult {
                     exit_code,
@@ -662,6 +693,7 @@ impl ShellExecutor {
         mut child: tokio::process::Child,
         stdout_buf: Arc<Mutex<Vec<u8>>>,
         stderr_buf: Arc<Mutex<Vec<u8>>>,
+        cwd_file: PathBuf,
     ) -> String {
         let task_id = generate_shell_task_id();
 
@@ -744,17 +776,16 @@ impl ShellExecutor {
 
             sync_task.abort();
 
-            // Final sync of remaining data — strip CWD markers from stdout
+            // Final sync of remaining data
             {
                 let stdout_data = stdout_buf.lock().await;
                 let stderr_data = stderr_buf.lock().await;
                 let mut out = combined_output.lock().await;
                 out.clear();
-                let raw_stdout = String::from_utf8_lossy(&stdout_data);
-                let (clean_stdout, _cwd) = extract_cwd_from_output(&raw_stdout);
+                let stdout_str = String::from_utf8_lossy(&stdout_data);
                 let stderr_str = String::from_utf8_lossy(&stderr_data);
-                if !clean_stdout.is_empty() {
-                    out.push_str(&clean_stdout);
+                if !stdout_str.is_empty() {
+                    out.push_str(&stdout_str);
                 }
                 if !stderr_str.is_empty() {
                     if !out.is_empty() {
@@ -763,6 +794,9 @@ impl ShellExecutor {
                     out.push_str(&stderr_str);
                 }
             }
+
+            // Clean up CWD temp file (background tasks don't track CWD)
+            cleanup_cwd_file(&cwd_file);
 
             completed.notify_waiters();
             registry.stop(&bg_task_id).await;
@@ -796,21 +830,10 @@ impl ShellExecutor {
         if result.exit_code == 0
             && let Some(ref new_cwd) = result.new_cwd
         {
-            let current_cwd = self
-                .cwd
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            if new_cwd.exists() && *new_cwd != current_cwd {
-                tracing::debug!(
-                    "CWD changed: {} -> {}",
-                    current_cwd.display(),
-                    new_cwd.display()
-                );
-                *self
-                    .cwd
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = new_cwd.clone();
+            let mut guard = self.cwd.lock().unwrap_or_else(PoisonError::into_inner);
+            if new_cwd.exists() && *new_cwd != *guard {
+                tracing::debug!("CWD changed: {} -> {}", guard.display(), new_cwd.display());
+                *guard = new_cwd.clone();
             }
         }
     }
@@ -818,10 +841,12 @@ impl ShellExecutor {
     /// POSIX-only: rewrite login shell commands to source snapshot.
     ///
     /// For commands of the form `[shell, "-lc", "<script>"]`, when a snapshot
-    /// is available, rewrite to `[shell, "-c", ". SNAPSHOT && <script>"]`.
+    /// is available, rewrite to:
+    ///   `[shell, "-c", "if . 'SNAPSHOT' >/dev/null 2>&1; then :; fi && <script>"]`
     ///
-    /// This preserves the semantic that login shell is used for snapshot capture,
-    /// while non-login shell with snapshot sourcing is used for execution.
+    /// The snapshot is sourced best-effort (silent failure) to avoid breaking
+    /// execution if the snapshot is invalid. Login shell flag is dropped since
+    /// the snapshot already contains the user's shell environment.
     fn maybe_wrap_shell_lc_with_snapshot(&self, args: Vec<String>) -> Vec<String> {
         let Some(snapshot) = self.shell_snapshot() else {
             return args;
@@ -842,8 +867,11 @@ impl ShellExecutor {
             return args;
         }
 
-        let snapshot_path = snapshot.path.to_string_lossy();
-        let rewritten_script = format!(". \"{snapshot_path}\" && {}", args[2]);
+        let snapshot_path = shell_single_quote(&snapshot.path.to_string_lossy());
+        let rewritten_script = format!(
+            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi && {}",
+            args[2]
+        );
 
         vec![args[0].clone(), "-c".to_string(), rewritten_script]
     }
@@ -878,7 +906,7 @@ impl ShellExecutor {
         let env_overlay_snapshot: std::collections::HashMap<String, String> = self
             .env_overlay
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
 
         tokio::spawn(async move {
@@ -975,17 +1003,20 @@ impl ShellExecutor {
     }
 
     /// Internal: runs a command and captures output, tracking CWD changes.
+    ///
+    /// CWD tracking uses a file-based approach: the command chain writes
+    /// `pwd -P >| {cwd_file}` and the result is read back after execution.
+    /// This avoids polluting stdout with CWD markers and is resilient to
+    /// output truncation.
     async fn run_command(&self, command: &str) -> CommandResult {
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
-        let cwd = self.cwd();
+        let cwd = self.resolve_cwd();
+        let cwd_file = generate_cwd_file_path();
 
-        // Wrap the script to capture CWD after execution
-        let wrapped_script = format!(
-            "{}; __cocode_exit=$?; echo '{}' \"$(pwd)\" '{}'; exit $__cocode_exit",
-            &args[2], CWD_MARKER_START, CWD_MARKER_END
-        );
-        let args = [args[0].clone(), args[1].clone(), wrapped_script];
+        // Build command chain: [snapshot sourced via args] && [extglob] && eval cmd && pwd >| file
+        let script = build_command_chain(&args[2], &cwd_file, self.shell.as_ref());
+        let args = [args[0].clone(), args[1].clone(), script];
 
         let mut cmd = tokio::process::Command::new(&args[0]);
         cmd.args(&args[1..])
@@ -998,7 +1029,7 @@ impl ShellExecutor {
         for (key, value) in self
             .env_overlay
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
         {
             cmd.env(key, value);
@@ -1037,11 +1068,11 @@ impl ShellExecutor {
         };
 
         let exit_code = output.status.code().unwrap_or(-1);
-        let (raw_stdout, truncated_stdout) = truncate_output(&output.stdout);
+        let (stdout, truncated_stdout) = truncate_output(&output.stdout);
         let (stderr, truncated_stderr) = truncate_output(&output.stderr);
 
-        // Extract CWD from output and clean the stdout
-        let (stdout, new_cwd) = extract_cwd_from_output(&raw_stdout);
+        // Read CWD from file (no stdout pollution)
+        let new_cwd = read_cwd_file(&cwd_file);
 
         CommandResult {
             exit_code,
@@ -1053,6 +1084,13 @@ impl ShellExecutor {
             extracted_paths: None,
         }
     }
+}
+
+/// Returns the user's home directory via `$HOME` (Unix) or `%USERPROFILE%` (Windows).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// Checks if shell snapshotting is disabled via environment variable.
@@ -1075,46 +1113,121 @@ fn truncate_output(bytes: &[u8]) -> (String, bool) {
     }
 }
 
-/// Extracts CWD from command output that contains CWD markers.
+/// Generates a unique temporary file path for CWD tracking.
 ///
-/// Returns (cleaned_output, Option<new_cwd>).
-/// The markers are removed from the output.
-fn extract_cwd_from_output(output: &str) -> (String, Option<PathBuf>) {
-    // Look for the CWD marker line at the end of output
-    if let Some(start) = output.rfind(CWD_MARKER_START)
-        && let Some(end_offset) = output[start..].find(CWD_MARKER_END)
-    {
-        let cwd_start = start + CWD_MARKER_START.len();
-        let cwd_end = start + end_offset;
-        let cwd_str = output[cwd_start..cwd_end].trim();
+/// Each command gets its own file (`cocode-{hex}-cwd`) so concurrent
+/// commands don't collide. Uses timestamp + random component for uniqueness.
+fn generate_cwd_file_path() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let rand: u32 = rand_u32();
+    let filename = format!("{CWD_FILE_PREFIX}{nanos:x}-{rand:04x}{CWD_FILE_SUFFIX}");
+    std::env::temp_dir().join(filename)
+}
 
-        // Clean the output: remove from the marker start to end of marker
-        let marker_end = start + end_offset + CWD_MARKER_END.len();
-        let cleaned = format!(
-            "{}{}",
-            output[..start].trim_end_matches('\n'),
-            &output[marker_end..]
-        )
-        .trim_end()
-        .to_string();
+/// Simple random u32 without external dependency.
+fn rand_u32() -> u32 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::BuildHasher;
+    use std::hash::Hasher;
+    let state = RandomState::new();
+    let mut hasher = state.build_hasher();
+    hasher.write_u64(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0),
+    );
+    hasher.finish() as u32
+}
 
-        // Only return CWD if it's a valid non-empty path
-        if !cwd_str.is_empty() {
-            return (cleaned, Some(PathBuf::from(cwd_str)));
-        }
+/// Reads the CWD from a temp file written by the shell command.
+///
+/// Returns `Some(path)` if the file exists and contains a valid absolute path,
+/// then deletes the file. Resolves symlinks via `canonicalize` (matching
+/// Claude Code's `realpathSync` behavior).
+fn read_cwd_file(path: &Path) -> Option<PathBuf> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
 
-        return (cleaned, None);
+    // Clean up the temp file
+    let _ = std::fs::remove_file(path);
+
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
     }
 
-    (output.to_string(), None)
+    let cwd_path = PathBuf::from(trimmed);
+    if !cwd_path.is_absolute() {
+        return None;
+    }
+
+    // Resolve symlinks (like Claude Code's realpathSync)
+    match cwd_path.canonicalize() {
+        Ok(resolved) => Some(resolved),
+        Err(_) => Some(cwd_path), // path might not exist yet; return as-is
+    }
+}
+
+/// Cleans up a CWD temp file if it exists.
+fn cleanup_cwd_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+/// Builds the command chain for shell execution.
+///
+/// The chain: `[extglob_disable &&] user_command; exit_capture; pwd >| cwd_file; exit`
+///
+/// CWD file path is single-quoted to handle paths with spaces or special chars.
+fn build_command_chain(user_script: &str, cwd_file: &Path, shell: Option<&Shell>) -> String {
+    let cwd_file_quoted = shell_single_quote(&cwd_file.to_string_lossy());
+    let mut parts: Vec<String> = Vec::new();
+
+    // Disable extglob to prevent glob expansion interfering with commands
+    if let Some(extglob_cmd) = extglob_disable_command(shell) {
+        parts.push(extglob_cmd);
+    }
+
+    // The user command with exit code capture, then CWD write
+    parts.push(format!(
+        "{user_script}; __cocode_exit=$?; pwd -P >| '{cwd_file_quoted}'; exit $__cocode_exit"
+    ));
+
+    parts.join(" && ")
+}
+
+/// Escapes a string for use inside single quotes in shell.
+///
+/// Replaces `'` with `'"'"'` (end quote, double-quoted literal quote, re-open quote).
+/// Borrowed from codex-rs's approach.
+fn shell_single_quote(input: &str) -> String {
+    input.replace('\'', r#"'"'"'"#)
+}
+
+/// Returns the extglob disable command for the given shell type.
+///
+/// - bash: `shopt -u extglob 2>/dev/null || true`
+/// - zsh: `setopt NO_EXTENDED_GLOB 2>/dev/null || true`
+/// - others: `None`
+fn extglob_disable_command(shell: Option<&Shell>) -> Option<String> {
+    use crate::shell_types::ShellType;
+    let shell = shell?;
+    match shell.shell_type {
+        ShellType::Bash => Some("shopt -u extglob 2>/dev/null || true".to_string()),
+        ShellType::Zsh => Some("setopt NO_EXTENDED_GLOB 2>/dev/null || true".to_string()),
+        _ => None,
+    }
 }
 
 /// Generate a type-prefixed task ID for shell background tasks.
 ///
 /// Produces `b{8hex}` matching CC's task ID format.
 fn generate_shell_task_id() -> String {
-    use std::time::SystemTime;
-    use std::time::UNIX_EPOCH;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())

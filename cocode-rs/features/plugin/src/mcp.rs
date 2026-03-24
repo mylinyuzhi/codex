@@ -122,7 +122,9 @@ impl McpServerConfig {
 const MAX_VARIABLE_ITERATIONS: usize = 64;
 
 /// Resolve variable patterns in a single string.
-fn resolve_variable_string(
+///
+/// Shared by MCP and LSP config loaders.
+pub(crate) fn resolve_variable_string(
     s: &str,
     plugin_root: &str,
     user_config: Option<&HashMap<String, serde_json::Value>>,

@@ -291,6 +291,16 @@ impl UnifiedStream {
             LanguageModelStreamPart::Source(source) => Some(StreamingQueryResult::assistant(vec![
                 AssistantContentPart::Source(source.clone()),
             ])),
+            LanguageModelStreamPart::Custom {
+                kind,
+                provider_metadata,
+            } => Some(StreamingQueryResult::assistant(vec![
+                AssistantContentPart::Custom(crate::CustomPart {
+                    kind: kind.clone(),
+                    provider_options: None,
+                    provider_metadata: provider_metadata.clone(),
+                }),
+            ])),
             // P20: Propagate stream errors from providers (e.g., Anthropic overloaded mid-stream).
             // P29: Preserve structured fields (is_retryable, code) for upstream classification.
             LanguageModelStreamPart::Error { error } => {

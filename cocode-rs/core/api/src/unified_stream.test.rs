@@ -233,6 +233,62 @@ fn test_check_for_completed_content_reasoning_file() {
 }
 
 // =========================================================================
+// Custom stream part forwarding
+// =========================================================================
+
+#[test]
+fn test_check_for_completed_content_custom() {
+    let custom_part = LanguageModelStreamPart::Custom {
+        kind: "openai-compaction".to_string(),
+        provider_metadata: None,
+    };
+    let snapshot = StreamSnapshot::default();
+    let result = UnifiedStream::check_for_completed_content(&custom_part, &snapshot);
+    assert!(result.is_some());
+    let result = result.unwrap();
+    assert_eq!(result.result_type, QueryResultType::Assistant);
+    assert!(matches!(
+        &result.content[0],
+        AssistantContentPart::Custom(cp) if cp.kind == "openai-compaction"
+    ));
+}
+
+#[test]
+fn test_check_for_completed_content_custom_with_metadata() {
+    use std::collections::HashMap;
+
+    let mut inner = HashMap::new();
+    inner.insert(
+        "summary".to_string(),
+        serde_json::json!("compacted 3 messages"),
+    );
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "openai".to_string(),
+        serde_json::Value::Object(inner.into_iter().collect()),
+    );
+    let provider_metadata = vercel_ai_provider::ProviderMetadata(metadata);
+
+    let custom_part = LanguageModelStreamPart::Custom {
+        kind: "openai-compaction".to_string(),
+        provider_metadata: Some(provider_metadata),
+    };
+    let snapshot = StreamSnapshot::default();
+    let result = UnifiedStream::check_for_completed_content(&custom_part, &snapshot);
+    assert!(result.is_some());
+    let result = result.unwrap();
+    assert_eq!(result.result_type, QueryResultType::Assistant);
+    match &result.content[0] {
+        AssistantContentPart::Custom(cp) => {
+            assert_eq!(cp.kind, "openai-compaction");
+            assert!(cp.provider_options.is_none());
+            assert!(cp.provider_metadata.is_some());
+        }
+        _ => panic!("Expected Custom content part"),
+    }
+}
+
+// =========================================================================
 // P29: StreamError structured fields preservation
 // =========================================================================
 

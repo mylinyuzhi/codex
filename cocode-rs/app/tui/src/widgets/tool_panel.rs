@@ -13,6 +13,8 @@ use ratatui::widgets::List;
 use ratatui::widgets::ListItem;
 use ratatui::widgets::Widget;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::i18n::t;
 use crate::state::BackgroundTask;
 use crate::state::BackgroundTaskStatus;
@@ -120,7 +122,7 @@ impl<'a> ToolPanel<'a> {
                 .and_then(|o| o.lines().next())
                 .filter(|line| !line.is_empty())
                 .map(|line| {
-                    if line.len() > 30 {
+                    if UnicodeWidthStr::width(line) > 30 {
                         let end = line
                             .char_indices()
                             .take_while(|(i, _)| *i < 30)

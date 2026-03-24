@@ -45,6 +45,14 @@ pub fn prepare_responses_tools(
                     if let Some(strict) = ft.strict {
                         tool_obj["strict"] = Value::Bool(strict);
                     }
+                    // Read defer_loading from providerOptions.openai.deferLoading
+                    if let Some(ref opts) = ft.provider_options
+                        && let Some(openai_opts) = opts.get("openai")
+                        && let Some(defer_val) = openai_opts.get("deferLoading")
+                        && let Some(defer) = defer_val.as_bool()
+                    {
+                        tool_obj["defer_loading"] = Value::Bool(defer);
+                    }
                     openai_tools.push(tool_obj);
                 }
                 LanguageModelV4Tool::Provider(pt) => {
@@ -70,6 +78,7 @@ pub fn prepare_responses_tools(
                             | "apply_patch"
                             | "image_generation"
                             | "mcp"
+                            | "tool_search"
                     );
 
                     let api_type = if is_builtin { tool_type } else { "custom" };
@@ -146,6 +155,7 @@ pub fn prepare_responses_tools(
                 "web_search",
                 "mcp",
                 "apply_patch",
+                "tool_search",
             ];
             if provider_tool_types.contains(&tool_name.as_str()) {
                 json!({ "type": tool_name })

@@ -9,6 +9,44 @@ use super::tool_choice::LanguageModelV4ToolChoice;
 use crate::json_schema::JSONSchema;
 use crate::shared::ProviderOptions;
 
+/// Provider-agnostic reasoning effort level.
+///
+/// Controls how much reasoning effort the model should apply.
+/// Providers map this to their specific reasoning configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningLevel {
+    /// Use the provider's default reasoning behavior.
+    ProviderDefault,
+    /// Disable reasoning.
+    None,
+    /// Minimal reasoning effort.
+    Minimal,
+    /// Low reasoning effort.
+    Low,
+    /// Medium reasoning effort.
+    Medium,
+    /// High reasoning effort.
+    High,
+    /// Maximum reasoning effort.
+    Xhigh,
+}
+
+impl ReasoningLevel {
+    /// Returns the string representation matching the serde serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProviderDefault => "provider-default",
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+}
+
 /// Response format configuration.
 ///
 /// The output can either be text or JSON. Default is text.
@@ -101,6 +139,8 @@ pub struct LanguageModelV4CallOptions {
     pub presence_penalty: Option<f32>,
     /// The seed for deterministic sampling.
     pub seed: Option<u64>,
+    /// Provider-agnostic reasoning effort level.
+    pub reasoning: Option<ReasoningLevel>,
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
     /// Response format for structured output.
@@ -185,6 +225,12 @@ impl LanguageModelV4CallOptions {
     /// Set headers.
     pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.headers = Some(headers);
+        self
+    }
+
+    /// Set the reasoning level.
+    pub fn with_reasoning(mut self, reasoning: ReasoningLevel) -> Self {
+        self.reasoning = Some(reasoning);
         self
     }
 }
