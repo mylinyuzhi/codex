@@ -233,50 +233,102 @@ async fn test_maybe_wrap_shell_lc_with_snapshot_rewrites_correctly() {
 
         let rewritten = executor.maybe_wrap_shell_lc_with_snapshot(args);
 
-        // Should rewrite to non-login with snapshot source
+        // Should rewrite to non-login with snapshot source (best-effort if/fi pattern)
         assert_eq!(rewritten[1], "-c", "should change -lc to -c");
-        assert!(rewritten[2].contains(". \""), "should source snapshot file");
+        assert!(
+            rewritten[2].contains("if . '") || rewritten[2].contains(". '"),
+            "should source snapshot file with single quotes: {}",
+            rewritten[2]
+        );
         assert!(
             rewritten[2].contains("&& echo test"),
-            "should chain command"
+            "should chain command: {}",
+            rewritten[2]
         );
     }
 }
 
 #[test]
-fn test_extract_cwd_from_output_with_marker() {
-    let output = "hello world\n__COCODE_CWD_START__ /home/user/project __COCODE_CWD_END__\n";
-    let (cleaned, cwd) = extract_cwd_from_output(output);
+fn test_read_cwd_file_valid() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let cwd_file = tmp.path().join("test-cwd");
+    std::fs::write(&cwd_file, "/home/user/project\n").expect("write cwd");
 
-    assert_eq!(cleaned, "hello world");
-    assert_eq!(cwd, Some(PathBuf::from("/home/user/project")));
+    let result = read_cwd_file(&cwd_file);
+    assert_eq!(result, Some(PathBuf::from("/home/user/project")));
+    // File should be cleaned up
+    assert!(!cwd_file.exists());
 }
 
 #[test]
-fn test_extract_cwd_from_output_no_marker() {
-    let output = "just normal output\n";
-    let (cleaned, cwd) = extract_cwd_from_output(output);
-
-    assert_eq!(cleaned, "just normal output\n");
-    assert!(cwd.is_none());
+fn test_read_cwd_file_missing() {
+    let result = read_cwd_file(Path::new("/nonexistent/path/cwd"));
+    assert!(result.is_none());
 }
 
 #[test]
-fn test_extract_cwd_from_output_empty_cwd() {
-    let output = "output\n__COCODE_CWD_START__  __COCODE_CWD_END__\n";
-    let (cleaned, cwd) = extract_cwd_from_output(output);
+fn test_read_cwd_file_empty() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let cwd_file = tmp.path().join("test-cwd");
+    std::fs::write(&cwd_file, "  \n").expect("write cwd");
 
-    assert_eq!(cleaned, "output");
-    assert!(cwd.is_none());
+    let result = read_cwd_file(&cwd_file);
+    assert!(result.is_none());
 }
 
 #[test]
-fn test_extract_cwd_from_output_preserves_other_content() {
-    let output = "line1\nline2\n__COCODE_CWD_START__ /tmp __COCODE_CWD_END__";
-    let (cleaned, cwd) = extract_cwd_from_output(output);
+fn test_read_cwd_file_relative_path_rejected() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let cwd_file = tmp.path().join("test-cwd");
+    std::fs::write(&cwd_file, "relative/path\n").expect("write cwd");
 
-    assert_eq!(cleaned, "line1\nline2");
-    assert_eq!(cwd, Some(PathBuf::from("/tmp")));
+    let result = read_cwd_file(&cwd_file);
+    assert!(result.is_none(), "relative paths should be rejected");
+}
+
+#[test]
+fn test_generate_cwd_file_path_unique() {
+    let a = generate_cwd_file_path();
+    std::thread::sleep(std::time::Duration::from_millis(1));
+    let b = generate_cwd_file_path();
+    assert_ne!(a, b, "CWD file paths should be unique");
+    assert!(
+        a.file_name()
+            .expect("filename")
+            .to_string_lossy()
+            .starts_with(CWD_FILE_PREFIX),
+        "Should start with prefix"
+    );
+    assert!(
+        a.file_name()
+            .expect("filename")
+            .to_string_lossy()
+            .ends_with(CWD_FILE_SUFFIX),
+        "Should end with suffix"
+    );
+}
+
+#[test]
+fn test_build_command_chain_no_shell() {
+    let cwd_file = PathBuf::from("/tmp/test-cwd");
+    let result = build_command_chain("echo hello", &cwd_file, None);
+    assert!(
+        result.contains("echo hello"),
+        "should contain user command: {result}"
+    );
+    assert!(
+        result.contains("pwd -P >| '/tmp/test-cwd'"),
+        "should write CWD to quoted file path: {result}"
+    );
+    assert!(
+        result.contains("__cocode_exit"),
+        "should capture exit code: {result}"
+    );
+    // No extglob disable without shell info
+    assert!(
+        !result.contains("extglob"),
+        "should not disable extglob without shell: {result}"
+    );
 }
 
 #[tokio::test]
@@ -300,14 +352,15 @@ async fn test_cwd_captured_in_result() {
 }
 
 #[tokio::test]
-async fn test_cwd_marker_not_in_output() {
+async fn test_stdout_not_polluted_by_cwd_tracking() {
     let executor = ShellExecutor::new(std::env::temp_dir());
     let result = executor.execute("echo hello", 10).await;
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.stdout.trim(), "hello");
-    // CWD markers should not appear in output
-    assert!(!result.stdout.contains("__COCODE_CWD"));
+    // File-based CWD tracking should not pollute stdout
+    assert!(!result.stdout.contains("pwd"));
+    assert!(!result.stdout.contains("cocode"));
 }
 
 #[cfg(unix)]

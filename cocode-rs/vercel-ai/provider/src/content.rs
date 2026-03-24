@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::data_content::DataContent;
 use crate::json_value::JSONValue;
 use crate::shared::ProviderMetadata;
+use crate::shared::ProviderOptions;
 
 /// A text content part.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,6 +540,45 @@ impl ReasoningFilePart {
     }
 }
 
+/// A custom content part for provider-specific extensions.
+///
+/// Used in both prompts (with `provider_options`) and responses (with `provider_metadata`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomPart {
+    /// The kind of custom content.
+    pub kind: String,
+    /// Provider-specific options (prompt-side).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_options: Option<ProviderOptions>,
+    /// Provider-specific metadata (response-side).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+impl CustomPart {
+    /// Create a new custom part.
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            provider_options: None,
+            provider_metadata: None,
+        }
+    }
+
+    /// Add provider options (prompt-side).
+    pub fn with_provider_options(mut self, options: ProviderOptions) -> Self {
+        self.provider_options = Some(options);
+        self
+    }
+
+    /// Add provider metadata (response-side).
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
+        self
+    }
+}
+
 /// Assistant message content parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -551,6 +591,8 @@ pub enum AssistantContentPart {
     Reasoning(ReasoningPart),
     /// Reasoning file content (file data that is part of reasoning).
     ReasoningFile(ReasoningFilePart),
+    /// Custom content for provider-specific extensions.
+    Custom(CustomPart),
     /// Tool call.
     ToolCall(ToolCallPart),
     /// Tool result (when assistant receives tool results).
@@ -584,6 +626,11 @@ impl AssistantContentPart {
     /// Create a source part.
     pub fn source(id: impl Into<String>, source_type: SourceType) -> Self {
         Self::Source(SourcePart::new(id, source_type))
+    }
+
+    /// Create a custom content part.
+    pub fn custom(kind: impl Into<String>) -> Self {
+        Self::Custom(CustomPart::new(kind))
     }
 
     /// Create a tool approval request part.

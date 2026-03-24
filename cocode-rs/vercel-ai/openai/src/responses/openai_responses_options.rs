@@ -6,10 +6,20 @@ use crate::chat::openai_chat_options::ServiceTier;
 use crate::chat::openai_chat_options::TextVerbosity;
 use crate::openai_capabilities::SystemMessageMode;
 
+/// A context management entry for server-side compaction.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextManagementEntry {
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    pub compact_threshold: f64,
+}
+
 /// Provider-specific options for the OpenAI Responses API.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAIResponsesProviderOptions {
+    pub context_management: Option<Vec<ContextManagementEntry>>,
     pub conversation: Option<String>,
     pub include: Option<Vec<String>>,
     pub instructions: Option<String>,

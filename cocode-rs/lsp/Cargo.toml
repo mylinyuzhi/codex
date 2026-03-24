@@ -51,8 +51,9 @@ dirs = "5.0"
 chrono = "0.4"
 
 # Internal dependencies
-cocode-file-ignore = { workspace = true }
 cocode-utils-common = { workspace = true }
+cocode-file-watch = { workspace = true }
+notify = { workspace = true }
 
 # TUI dependencies (optional, for lsp-tui binary)
 ratatui = { workspace = true, optional = true }

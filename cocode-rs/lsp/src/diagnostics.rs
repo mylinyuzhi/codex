@@ -3,6 +3,10 @@
 use lsp_types::DiagnosticSeverity;
 use lsp_types::PublishDiagnosticsParams;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +19,15 @@ const DIAGNOSTIC_DEBOUNCE_MS: u64 = 150;
 
 /// Stale entry expiration time in seconds (1 hour)
 const STALE_ENTRY_EXPIRATION_SECS: u64 = 3600;
+
+/// Maximum diagnostics per file in take_dirty output
+const MAX_DIAGNOSTICS_PER_FILE: usize = 10;
+
+/// Maximum total diagnostics in take_dirty output
+const MAX_DIAGNOSTICS_TOTAL: usize = 30;
+
+/// Maximum delivered diagnostic hashes to track (LRU)
+const DELIVERED_LRU_CAPACITY: usize = 500;
 
 /// Simplified diagnostic entry for AI consumption
 #[derive(Debug, Clone)]
@@ -81,10 +94,69 @@ struct FileDiagnostics {
     last_accessed: Instant,
 }
 
+/// Compute a dedup key for a diagnostic entry.
+///
+/// Two diagnostics with the same file, line, column, severity, message,
+/// and code are considered duplicates.
+fn diagnostic_dedup_key(entry: &DiagnosticEntry) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    entry.file.hash(&mut hasher);
+    entry.line.hash(&mut hasher);
+    entry.character.hash(&mut hasher);
+    entry.severity.as_str().hash(&mut hasher);
+    entry.message.hash(&mut hasher);
+    entry.code.as_deref().hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Diagnostics storage with debouncing
 pub struct DiagnosticsStore {
     files: Arc<RwLock<HashMap<PathBuf, FileDiagnostics>>>,
     dirty: Arc<RwLock<Vec<PathBuf>>>,
+    /// LRU set of delivered diagnostic hashes to prevent re-showing
+    delivered: Arc<RwLock<DeliveredLru>>,
+}
+
+/// Simple LRU hash set for delivered diagnostic deduplication
+struct DeliveredLru {
+    entries: VecDeque<u64>,
+    set: HashSet<u64>,
+}
+
+impl DeliveredLru {
+    fn new() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            set: HashSet::new(),
+        }
+    }
+
+    /// Returns true if already delivered (duplicate)
+    fn contains(&self, hash: u64) -> bool {
+        self.set.contains(&hash)
+    }
+
+    /// Mark a hash as delivered, evicting oldest if at capacity
+    fn insert(&mut self, hash: u64) {
+        if self.set.contains(&hash) {
+            return;
+        }
+        if self.entries.len() >= DELIVERED_LRU_CAPACITY
+            && let Some(old) = self.entries.pop_front()
+        {
+            self.set.remove(&old);
+        }
+        self.entries.push_back(hash);
+        self.set.insert(hash);
+    }
+
+    /// Clear all delivered hashes for a specific file
+    fn clear_for_file(&mut self, entries_to_remove: &[u64]) {
+        for hash in entries_to_remove {
+            self.set.remove(hash);
+        }
+        self.entries.retain(|h| self.set.contains(h));
+    }
 }
 
 impl std::fmt::Debug for DiagnosticsStore {
@@ -98,6 +170,7 @@ impl DiagnosticsStore {
         Self {
             files: Arc::new(RwLock::new(HashMap::new())),
             dirty: Arc::new(RwLock::new(Vec::new())),
+            delivered: Arc::new(RwLock::new(DeliveredLru::new())),
         }
     }
 
@@ -178,8 +251,11 @@ impl DiagnosticsStore {
     }
 
     /// Take all dirty diagnostics (for system_reminder integration)
-    /// Only returns diagnostics that have been stable for DIAGNOSTIC_DEBOUNCE_MS
-    /// Also triggers periodic cleanup of stale entries.
+    ///
+    /// Only returns diagnostics that have been stable for DIAGNOSTIC_DEBOUNCE_MS.
+    /// Applies deduplication (skips already-delivered diagnostics) and volume
+    /// limiting (max 10 per file, 30 total). Also triggers periodic cleanup
+    /// of stale entries.
     pub async fn take_dirty(&self) -> Vec<DiagnosticEntry> {
         // Periodically clean up stale entries (runs on every take_dirty call)
         // This is a lightweight operation when there's nothing to clean up
@@ -196,7 +272,7 @@ impl DiagnosticsStore {
         }
 
         // Read files and check debounce status
-        let mut all_entries = Vec::new();
+        let mut candidates = Vec::new();
         let mut still_dirty = Vec::new();
 
         {
@@ -206,8 +282,7 @@ impl DiagnosticsStore {
                     if file_diags.last_update.elapsed()
                         >= Duration::from_millis(DIAGNOSTIC_DEBOUNCE_MS)
                     {
-                        // Use extend_from_slice to avoid iterator overhead
-                        all_entries.extend(file_diags.diagnostics.iter().cloned());
+                        candidates.extend(file_diags.diagnostics.iter().cloned());
                     } else {
                         // Still within debounce window, keep in dirty list
                         still_dirty.push(path);
@@ -222,7 +297,39 @@ impl DiagnosticsStore {
             dirty.extend(still_dirty);
         }
 
-        all_entries
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        // Dedup: skip diagnostics already delivered in previous turns
+        let mut delivered = self.delivered.write().await;
+        let mut per_file_counts: HashMap<&PathBuf, usize> = HashMap::new();
+        let mut total = 0usize;
+        let mut result = Vec::new();
+
+        for entry in &candidates {
+            // Volume limit: per-file cap
+            let file_count = per_file_counts.entry(&entry.file).or_insert(0);
+            if *file_count >= MAX_DIAGNOSTICS_PER_FILE {
+                continue;
+            }
+            // Volume limit: total cap
+            if total >= MAX_DIAGNOSTICS_TOTAL {
+                break;
+            }
+            // Dedup: skip if already delivered
+            let hash = diagnostic_dedup_key(entry);
+            if delivered.contains(hash) {
+                continue;
+            }
+
+            delivered.insert(hash);
+            *file_count += 1;
+            total += 1;
+            result.push(entry.clone());
+        }
+
+        result
     }
 
     /// Check if there are pending dirty diagnostics
@@ -252,12 +359,32 @@ impl DiagnosticsStore {
         removed
     }
 
+    /// Clear delivered diagnostic hashes for a file.
+    ///
+    /// Call this when a file is modified so that re-published diagnostics
+    /// for the same file are not suppressed by deduplication.
+    pub async fn clear_delivered_for_file(&self, path: &PathBuf) {
+        let files = self.files.read().await;
+        if let Some(file_diags) = files.get(path) {
+            let hashes: Vec<u64> = file_diags
+                .diagnostics
+                .iter()
+                .map(diagnostic_dedup_key)
+                .collect();
+            drop(files);
+            let mut delivered = self.delivered.write().await;
+            delivered.clear_for_file(&hashes);
+        }
+    }
+
     /// Clear all diagnostics
     pub async fn clear(&self) {
         let mut files = self.files.write().await;
         let mut dirty = self.dirty.write().await;
         files.clear();
         dirty.clear();
+        let mut delivered = self.delivered.write().await;
+        *delivered = DeliveredLru::new();
     }
 
     /// Format diagnostics for system_reminder

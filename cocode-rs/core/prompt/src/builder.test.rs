@@ -358,3 +358,89 @@ Content B
     assert!(result.contains("## Second Section"));
     assert!(result.contains("Content B"));
 }
+
+// === build_for_cache tests ===
+
+#[test]
+fn test_build_for_cache_produces_two_blocks() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .build()
+        .unwrap();
+
+    let blocks = SystemPromptBuilder::build_for_cache(&ctx);
+
+    // Should produce stable (Global) + dynamic (None)
+    assert_eq!(blocks.len(), 2, "expected 2 blocks (stable + dynamic)");
+    assert_eq!(
+        blocks[0].cache_scope,
+        Some(cocode_protocol::CacheScope::Global)
+    );
+    assert_eq!(blocks[1].cache_scope, None);
+}
+
+#[test]
+fn test_build_for_cache_stable_block_has_identity_and_security() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .build()
+        .unwrap();
+
+    let blocks = SystemPromptBuilder::build_for_cache(&ctx);
+    let stable = &blocks[0].text;
+
+    assert!(
+        stable.contains("Identity"),
+        "stable block should contain Identity"
+    );
+    assert!(
+        stable.contains("Security"),
+        "stable block should contain Security"
+    );
+}
+
+#[test]
+fn test_build_for_cache_dynamic_block_has_environment() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .build()
+        .unwrap();
+
+    let blocks = SystemPromptBuilder::build_for_cache(&ctx);
+    let dynamic = &blocks[1].text;
+
+    assert!(
+        dynamic.contains("darwin"),
+        "dynamic block should contain environment info"
+    );
+    assert!(
+        dynamic.contains("Permission Mode"),
+        "dynamic block should contain permission section"
+    );
+}
+
+#[test]
+fn test_build_for_cache_concatenation_matches_build() {
+    let ctx = ConversationContext::builder()
+        .environment(test_env())
+        .tool_names(vec![ToolName::Read.as_str().to_string()])
+        .memory_files(vec![MemoryFile {
+            path: "CLAUDE.md".to_string(),
+            content: "rules".to_string(),
+            priority: 0,
+        }])
+        .build()
+        .unwrap();
+
+    let single = SystemPromptBuilder::build(&ctx);
+    let blocks = SystemPromptBuilder::build_for_cache(&ctx);
+
+    // Concatenating all blocks with double newlines should produce same content as build()
+    let concatenated: String = blocks
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    assert_eq!(concatenated, single);
+}

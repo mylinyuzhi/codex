@@ -162,6 +162,15 @@ pub enum LanguageModelV4StreamPart {
     /// Emitted when a reasoning file is available (file data that is part of reasoning).
     #[serde(rename = "reasoning-file")]
     ReasoningFile(ReasoningFile),
+    /// Emitted for custom provider-specific content.
+    #[serde(rename = "custom")]
+    Custom {
+        /// The kind of custom content.
+        kind: String,
+        /// Provider metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<ProviderMetadata>,
+    },
     /// Emitted when a source is available.
     #[serde(rename = "source")]
     Source(Source),

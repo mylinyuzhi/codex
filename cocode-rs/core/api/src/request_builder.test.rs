@@ -328,3 +328,73 @@ fn test_top_k_none_by_default() {
 
     assert_eq!(request.top_k, None);
 }
+
+// =========================================================================
+// ReasoningLevel wiring from ThinkingLevel
+// =========================================================================
+
+#[test]
+fn test_reasoning_set_from_thinking_level() {
+    use vercel_ai_provider::ReasoningLevel;
+
+    let spec = ModelSpec::new("openai", "o1");
+    let info = ModelInfo {
+        slug: "o1".to_string(),
+        context_window: Some(128000),
+        max_output_tokens: Some(32768),
+        default_thinking_level: Some(ThinkingLevel::high()),
+        ..Default::default()
+    };
+
+    let ctx = InferenceContext::new(
+        "call-1",
+        "session-1",
+        1,
+        spec,
+        info,
+        AgentKind::Main,
+        ExecutionIdentity::main(),
+    );
+
+    let messages = vec![LanguageModelMessage::user_text("Hello")];
+    let request = RequestBuilder::new(ctx).messages(messages).build();
+
+    assert_eq!(request.reasoning, Some(ReasoningLevel::High));
+}
+
+#[test]
+fn test_reasoning_none_when_no_thinking() {
+    let ctx = sample_context(); // No thinking_level
+    let messages = vec![LanguageModelMessage::user_text("Hello")];
+
+    let request = RequestBuilder::new(ctx).messages(messages).build();
+
+    assert_eq!(request.reasoning, None);
+}
+
+#[test]
+fn test_reasoning_none_when_thinking_disabled() {
+    let spec = ModelSpec::new("anthropic", "claude-opus-4");
+    let info = ModelInfo {
+        slug: "claude-opus-4".to_string(),
+        context_window: Some(200000),
+        max_output_tokens: Some(16384),
+        default_thinking_level: Some(ThinkingLevel::none()),
+        ..Default::default()
+    };
+
+    let ctx = InferenceContext::new(
+        "call-1",
+        "session-1",
+        1,
+        spec,
+        info,
+        AgentKind::Main,
+        ExecutionIdentity::main(),
+    );
+
+    let messages = vec![LanguageModelMessage::user_text("Hello")];
+    let request = RequestBuilder::new(ctx).messages(messages).build();
+
+    assert_eq!(request.reasoning, None);
+}

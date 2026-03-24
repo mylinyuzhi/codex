@@ -162,6 +162,24 @@ pub enum AttachmentType {
     AutoMemoryPrompt,
     /// Relevant memory files from semantic search.
     RelevantMemories,
+
+    // === Worktree ===
+    /// Worktree creation/removal notifications.
+    WorktreeState,
+
+    // === Delta tracking ===
+    /// Deferred tools set has changed (new/removed tools since last turn).
+    DeferredToolsDelta,
+    /// MCP server instructions have changed.
+    McpInstructionsDelta,
+
+    // === Session info ===
+    /// Current session name (displayed to model for context).
+    SessionName,
+    /// Output token usage for current turn.
+    OutputTokenUsage,
+    /// Configuration change notification.
+    ConfigChange,
 }
 
 impl AttachmentType {
@@ -202,7 +220,13 @@ impl AttachmentType {
             | AttachmentType::TeamMailbox
             | AttachmentType::CompactionReminder
             | AttachmentType::AutoMemoryPrompt
-            | AttachmentType::RelevantMemories => XmlTag::SystemReminder,
+            | AttachmentType::RelevantMemories
+            | AttachmentType::WorktreeState
+            | AttachmentType::DeferredToolsDelta
+            | AttachmentType::McpInstructionsDelta
+            | AttachmentType::SessionName
+            | AttachmentType::OutputTokenUsage
+            | AttachmentType::ConfigChange => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -254,7 +278,13 @@ impl AttachmentType {
             | AttachmentType::CompactFileReference
             | AttachmentType::Rewind
             | AttachmentType::CompactionReminder
-            | AttachmentType::RelevantMemories => ReminderTier::MainAgentOnly,
+            | AttachmentType::RelevantMemories
+            | AttachmentType::WorktreeState
+            | AttachmentType::DeferredToolsDelta
+            | AttachmentType::McpInstructionsDelta
+            | AttachmentType::SessionName
+            | AttachmentType::OutputTokenUsage
+            | AttachmentType::ConfigChange => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
@@ -303,6 +333,12 @@ impl AttachmentType {
             AttachmentType::CompactionReminder => "compaction_reminder",
             AttachmentType::AutoMemoryPrompt => "auto_memory_prompt",
             AttachmentType::RelevantMemories => "relevant_memories",
+            AttachmentType::WorktreeState => "worktree_state",
+            AttachmentType::DeferredToolsDelta => "deferred_tools_delta",
+            AttachmentType::McpInstructionsDelta => "mcp_instructions_delta",
+            AttachmentType::SessionName => "session_name",
+            AttachmentType::OutputTokenUsage => "output_token_usage",
+            AttachmentType::ConfigChange => "config_change",
         }
     }
 }

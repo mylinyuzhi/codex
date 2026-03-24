@@ -27,6 +27,7 @@ cocode-symbol-search = { workspace = true }
 
 # Internal - features
 cocode-skill = { workspace = true }
+cocode-keybindings = { workspace = true }
 
 # Internal - core (for agent definitions)
 cocode-subagent = { workspace = true }

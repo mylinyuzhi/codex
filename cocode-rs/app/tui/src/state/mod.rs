@@ -26,6 +26,7 @@ pub use ui::AgentSuggestionState;
 pub use ui::CommandAction;
 pub use ui::CommandItem;
 pub use ui::CommandPaletteOverlay;
+pub use ui::CostWarningOverlay;
 pub use ui::ElicitationField;
 pub use ui::ElicitationFieldType;
 pub use ui::ElicitationMode;
@@ -51,6 +52,7 @@ pub use ui::QuestionOverlay;
 pub use ui::RewindAction;
 pub use ui::RewindSelectorOverlay;
 pub use ui::RewindSelectorPhase;
+pub use ui::SandboxPermissionOverlay;
 pub use ui::SessionBrowserOverlay;
 pub use ui::SessionSummary;
 pub use ui::SkillSuggestionItem;
@@ -198,7 +200,8 @@ impl AppState {
         !matches!(
             self.ui.overlay,
             Some(
-                Overlay::Permission(_)
+                Overlay::SandboxPermission(_)
+                    | Overlay::Permission(_)
                     | Overlay::PlanExitApproval(_)
                     | Overlay::Question(_)
                     | Overlay::Elicitation(_)

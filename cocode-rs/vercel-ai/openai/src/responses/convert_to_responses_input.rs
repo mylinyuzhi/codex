@@ -41,6 +41,7 @@ impl ProviderToolFlags {
             "apply_patch",
             "image_generation",
             "mcp",
+            "tool_search",
         ];
         for tool in tools {
             if let LanguageModelV4Tool::Provider(pt) = tool {

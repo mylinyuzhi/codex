@@ -342,6 +342,40 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Fork a loaded session by cloning it with a new ID.
+    ///
+    /// The original session must be loaded first via [`load_session`].
+    /// Returns the new session ID.
+    pub async fn fork_session(&mut self, original_id: &str) -> anyhow::Result<String> {
+        let original = self
+            .sessions
+            .get(original_id)
+            .ok_or_else(|| anyhow::anyhow!("Session {original_id} not loaded"))?;
+
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let mut forked_session = original.session.clone();
+        forked_session.id = new_id.clone();
+        forked_session.title = forked_session
+            .title
+            .map(|t| format!("{t} (fork)"))
+            .or_else(|| Some("(fork)".to_string()));
+
+        let config = original.config_snapshot();
+        let history = original.message_history.clone();
+
+        let mut state = SessionState::new(forked_session, config).await?;
+        state.message_history = history;
+
+        info!(
+            original_id = %original_id,
+            fork_id = %new_id,
+            "Session forked"
+        );
+
+        self.sessions.insert(new_id.clone(), state);
+        Ok(new_id)
+    }
+
     /// Delete a session from disk.
     pub async fn delete_session(&mut self, id: &str) -> anyhow::Result<()> {
         // Remove from active sessions

@@ -13,10 +13,20 @@ fn test_zsh_script_contains_marker() {
     let script = zsh_snapshot_script();
     assert!(script.contains("# Snapshot file"));
     assert!(script.contains("unalias -a"));
-    assert!(script.contains("functions"));
+    // Should use per-function capture with filtering
+    assert!(
+        script.contains("typeset +f"),
+        "should list function names for filtering"
+    );
+    assert!(
+        script.contains("grep -vE '^_[^_]'"),
+        "should filter single-underscore completion functions"
+    );
     assert!(script.contains("setopt"));
     assert!(script.contains("alias -L"));
     assert!(script.contains("export -p"));
+    // Should have size limits
+    assert!(script.contains("head -n 1000"));
 }
 
 #[test]
@@ -24,10 +34,31 @@ fn test_bash_script_contains_marker() {
     let script = bash_snapshot_script();
     assert!(script.contains("# Snapshot file"));
     assert!(script.contains("unalias -a"));
-    assert!(script.contains("declare -f"));
-    assert!(script.contains("set -o"));
-    assert!(script.contains("alias -p"));
+    // Should use base64-encoded per-function capture
+    assert!(
+        script.contains("base64"),
+        "should use base64 encoding for function capture"
+    );
+    assert!(
+        script.contains("grep -vE '^_[^_]'"),
+        "should filter single-underscore completion functions"
+    );
+    // Should capture full shell options
+    assert!(
+        script.contains("shopt -p"),
+        "should capture all shopt options"
+    );
+    assert!(
+        script.contains("shopt -s expand_aliases"),
+        "should enable alias expansion"
+    );
+    assert!(
+        script.contains("alias -- "),
+        "should use -- prefix for alias names"
+    );
     assert!(script.contains("export -p"));
+    // Should have size limits
+    assert!(script.contains("head -n 1000"));
 }
 
 #[test]

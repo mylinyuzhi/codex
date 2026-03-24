@@ -11,6 +11,7 @@
 //! All operations are sync — pure string assembly with no I/O.
 
 pub mod builder;
+pub mod cache_block;
 mod engine;
 pub mod error;
 pub mod sections;
@@ -19,6 +20,7 @@ pub mod templates;
 
 // Re-export main types at crate root
 pub use builder::SystemPromptBuilder;
+pub use cache_block::SystemPromptBlock;
 pub use error::PromptError;
 pub use error::Result;
 pub use sections::PromptSection;

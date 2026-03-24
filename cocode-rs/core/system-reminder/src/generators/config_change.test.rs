@@ -1,0 +1,48 @@
+use super::*;
+use std::path::PathBuf;
+
+fn test_config() -> SystemReminderConfig {
+    SystemReminderConfig::default()
+}
+
+#[tokio::test]
+async fn test_no_changes_returns_none() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(1)
+        .cwd(PathBuf::from("/tmp"))
+        .build();
+
+    let generator = ConfigChangeGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_with_changes_generates_content() {
+    let config = test_config();
+    let ctx = GeneratorContext::builder()
+        .config(&config)
+        .turn_number(1)
+        .cwd(PathBuf::from("/tmp"))
+        .config_changes(vec!["Model changed to opus".to_string()])
+        .build();
+
+    let generator = ConfigChangeGenerator;
+    let result = generator.generate(&ctx).await.expect("generate");
+    assert!(result.is_some());
+
+    let reminder = result.expect("reminder");
+    let content = reminder.content().expect("text content");
+    assert!(content.contains("Model changed to opus"));
+}
+
+#[tokio::test]
+async fn test_disabled_returns_none() {
+    let mut config = test_config();
+    config.attachments.config_change = false;
+
+    let generator = ConfigChangeGenerator;
+    assert!(!generator.is_enabled(&config));
+}
