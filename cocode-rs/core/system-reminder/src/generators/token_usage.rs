@@ -126,8 +126,8 @@ impl AttachmentGenerator for TokenUsageGenerator {
     }
 }
 
-/// Format token count for display.
-fn format_tokens(tokens: i64) -> String {
+/// Format token count for display (e.g., "1.2M", "3.5K", "42").
+pub(crate) fn format_tokens(tokens: i64) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {

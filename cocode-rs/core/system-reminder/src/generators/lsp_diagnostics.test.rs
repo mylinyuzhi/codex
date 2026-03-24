@@ -36,6 +36,7 @@ async fn test_with_diagnostics() {
                 severity: "error".to_string(),
                 message: "cannot find value `foo`".to_string(),
                 code: Some("E0425".to_string()),
+                source: Some("rust-analyzer".to_string()),
             },
             DiagnosticInfo {
                 file_path: PathBuf::from("/src/main.rs"),
@@ -44,6 +45,7 @@ async fn test_with_diagnostics() {
                 severity: "warning".to_string(),
                 message: "unused variable".to_string(),
                 code: None,
+                source: None,
             },
         ])
         .build();
@@ -56,6 +58,7 @@ async fn test_with_diagnostics() {
     assert!(reminder.content().unwrap().contains("main.rs"));
     assert!(reminder.content().unwrap().contains("cannot find value"));
     assert!(reminder.content().unwrap().contains("[E0425]"));
+    assert!(reminder.content().unwrap().contains("(rust-analyzer)"));
     assert!(reminder.content().unwrap().contains("unused variable"));
 }
 
@@ -76,6 +79,7 @@ async fn test_severity_filtering() {
             severity: "warning".to_string(), // Only warning, but filter is Error
             message: "unused variable".to_string(),
             code: None,
+            source: None,
         }])
         .build();
 

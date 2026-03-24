@@ -23,12 +23,16 @@ use crate::generators::ChangedFilesGenerator;
 use crate::generators::CollabNotificationsGenerator;
 use crate::generators::CompactFileReferenceGenerator;
 use crate::generators::CompactionReminderGenerator;
+use crate::generators::ConfigChangeGenerator;
 use crate::generators::CronRemindersGenerator;
+use crate::generators::DeferredToolsDeltaGenerator;
 use crate::generators::DelegateModeGenerator;
 use crate::generators::InvokedSkillsGenerator;
 use crate::generators::LspDiagnosticsGenerator;
+use crate::generators::McpInstructionsDeltaGenerator;
 use crate::generators::NestedMemoryGenerator;
 use crate::generators::OutputStyleGenerator;
+use crate::generators::OutputTokenUsageGenerator;
 use crate::generators::PlanFileReferenceGenerator;
 use crate::generators::PlanModeEnterGenerator;
 use crate::generators::PlanModeExitGenerator;
@@ -38,12 +42,14 @@ use crate::generators::QueuedCommandsGenerator;
 use crate::generators::RelevantMemoriesGenerator;
 use crate::generators::RewindReminderGenerator;
 use crate::generators::SecurityGuidelinesGenerator;
+use crate::generators::SessionNameGenerator;
 use crate::generators::SubagentPlanReminderGenerator;
 use crate::generators::TeamContextGenerator;
 use crate::generators::TeamMailboxGenerator;
 use crate::generators::TodoRemindersGenerator;
 use crate::generators::TokenUsageGenerator;
 use crate::generators::UnifiedTasksGenerator;
+use crate::generators::WorktreeStateGenerator;
 use crate::throttle::ThrottleManager;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
@@ -125,6 +131,13 @@ impl SystemReminderOrchestrator {
             Arc::new(CompactFileReferenceGenerator),
             Arc::new(CompactionReminderGenerator),
             Arc::new(RewindReminderGenerator),
+            // Delta tracking and session info generators
+            Arc::new(WorktreeStateGenerator),
+            Arc::new(DeferredToolsDeltaGenerator),
+            Arc::new(McpInstructionsDeltaGenerator),
+            Arc::new(SessionNameGenerator),
+            Arc::new(OutputTokenUsageGenerator),
+            Arc::new(ConfigChangeGenerator),
             // Auto memory generators
             Arc::new(AutoMemoryPromptGenerator),
             Arc::new(RelevantMemoriesGenerator),

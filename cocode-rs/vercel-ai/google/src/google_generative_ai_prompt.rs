@@ -97,6 +97,9 @@ pub struct FunctionCallPart {
 pub struct FunctionResponsePart {
     pub name: String,
     pub response: Value,
+    /// Multimodal inline data parts (Gemini 3+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<InlineDataPart>>,
 }
 
 /// File data reference (URL-based).

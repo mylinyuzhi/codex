@@ -256,6 +256,16 @@ pub enum ContextModifier {
         /// Qualified names of MCP tools to restore (e.g., `mcp__server__tool`).
         names: Vec<String>,
     },
+    /// A file was modified — notify LSP servers for re-analysis.
+    ///
+    /// Emitted by Write, Edit, ApplyPatch, and NotebookEdit tools.
+    /// Handled centrally in `apply_modifiers()` to sync with LSP servers.
+    FileModified {
+        /// Absolute path to the modified file.
+        path: PathBuf,
+        /// New file content after modification.
+        content: String,
+    },
 }
 
 impl ContextModifier {

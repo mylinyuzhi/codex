@@ -191,6 +191,18 @@ pub async fn handle_command(
                     })
                     .await;
                 state.ui.clear_overlay();
+            } else if let Some(Overlay::SandboxPermission(ref sp)) = state.ui.overlay {
+                // Cancelling sandbox permission sends a Denied response
+                let request_id = sp.request.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision: cocode_protocol::ApprovalDecision::Denied,
+                        plan_exit_option: None,
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
             } else if state.has_overlay() {
                 state.ui.clear_overlay();
             } else if !state.ui.input.is_empty() {
@@ -346,6 +358,9 @@ pub async fn handle_command(
         TuiCommand::CursorUp => {
             // Handle overlay navigation or history
             match &mut state.ui.overlay {
+                Some(Overlay::SandboxPermission(sp)) => {
+                    sp.move_up();
+                }
                 Some(Overlay::Permission(perm)) => {
                     perm.move_up();
                 }
@@ -399,6 +414,9 @@ pub async fn handle_command(
         TuiCommand::CursorDown => {
             // Handle overlay navigation or history
             match &mut state.ui.overlay {
+                Some(Overlay::SandboxPermission(sp)) => {
+                    sp.move_down();
+                }
                 Some(Overlay::Permission(perm)) => {
                     perm.move_down();
                 }
@@ -558,6 +576,19 @@ pub async fn handle_command(
                         .await;
                     state.ui.clear_overlay();
                 }
+            } else if let Some(Overlay::CostWarning(_)) = state.ui.overlay {
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::SandboxPermission(ref sp)) = state.ui.overlay {
+                let request_id = sp.request.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision: cocode_protocol::ApprovalDecision::Approved,
+                        plan_exit_option: None,
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
             } else if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
                 let _ = command_tx
@@ -678,6 +709,17 @@ pub async fn handle_command(
                     })
                     .await;
                 state.ui.clear_overlay();
+            } else if let Some(Overlay::SandboxPermission(ref sp)) = state.ui.overlay {
+                let request_id = sp.request.request_id.clone();
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision: cocode_protocol::ApprovalDecision::Denied,
+                        plan_exit_option: None,
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
             } else if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
                 let _ = command_tx
@@ -702,7 +744,25 @@ pub async fn handle_command(
             }
         }
         TuiCommand::ApproveAll => {
-            if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
+            if let Some(Overlay::SandboxPermission(ref sp)) = state.ui.overlay {
+                let request_id = sp.request.request_id.clone();
+                let decision = if let Some(ref prefix) = sp.request.proposed_prefix_pattern {
+                    cocode_protocol::ApprovalDecision::ApprovedWithPrefix {
+                        prefix_pattern: prefix.clone(),
+                    }
+                } else {
+                    cocode_protocol::ApprovalDecision::Approved
+                };
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id,
+                        decision,
+                        plan_exit_option: None,
+                        feedback: None,
+                    })
+                    .await;
+                state.ui.clear_overlay();
+            } else if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
                 // Use proposed prefix pattern if available, otherwise approve once
                 let decision = if let Some(ref prefix) = perm.request.proposed_prefix_pattern {
@@ -1033,11 +1093,70 @@ pub async fn handle_command(
             state.ui.toast_info(t!(key).to_string());
         }
 
+        // ========== Fast Mode ==========
+        TuiCommand::ToggleFastMode => {
+            toggle_fast_mode(state, command_tx).await;
+        }
+
+        // ========== Permission Mode Cycling ==========
+        TuiCommand::CyclePermissionMode => {
+            cycle_permission_mode(state, command_tx).await;
+        }
+
+        // ========== Transcript Mode ==========
+        TuiCommand::ToggleTranscriptMode => {
+            toggle_transcript_mode(state);
+        }
+
         // ========== Quit ==========
         TuiCommand::Quit => {
             state.quit();
         }
     }
+}
+
+/// Toggle fast mode on/off.
+async fn toggle_fast_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    let active = !state.session.fast_mode;
+    state.session.fast_mode = active;
+    let key = if active {
+        "toast.fast_mode_on"
+    } else {
+        "toast.fast_mode_off"
+    };
+    state.ui.toast_info(t!(key).to_string());
+    let _ = command_tx.send(UserCommand::SetFastMode { active }).await;
+}
+
+/// Cycle permission mode: Default → AcceptEdits → Plan → Default.
+async fn cycle_permission_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    use cocode_protocol::PermissionMode;
+    let next = match state.session.permission_mode {
+        PermissionMode::Default => PermissionMode::AcceptEdits,
+        PermissionMode::AcceptEdits => PermissionMode::Plan,
+        PermissionMode::Plan => PermissionMode::Default,
+        PermissionMode::Bypass => PermissionMode::Default,
+        PermissionMode::DontAsk => PermissionMode::Default,
+    };
+    state.session.permission_mode = next;
+    state.session.plan_mode = next == PermissionMode::Plan;
+    state
+        .ui
+        .toast_info(format!("{}: {next}", t!("toast.permission_mode_changed")));
+    let _ = command_tx
+        .send(UserCommand::SetPermissionMode { mode: next })
+        .await;
+}
+
+/// Toggle transcript mode (show last 10 messages only).
+fn toggle_transcript_mode(state: &mut AppState) {
+    state.ui.transcript_mode = !state.ui.transcript_mode;
+    let key = if state.ui.transcript_mode {
+        "toast.transcript_mode_on"
+    } else {
+        "toast.transcript_mode_off"
+    };
+    state.ui.toast_info(t!(key).to_string());
 }
 
 /// Handle a local (built-in) slash command in the TUI.
@@ -1169,10 +1288,12 @@ async fn execute_command_action(
     match action {
         CommandAction::TogglePlanMode => {
             state.cycle_permission_mode();
+            let mode = state.session.permission_mode;
+            state
+                .ui
+                .toast_info(t!("toast.permission_mode", mode = format!("{mode:?}")).to_string());
             let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: state.session.permission_mode,
-                })
+                .send(UserCommand::SetPermissionMode { mode })
                 .await;
         }
         CommandAction::CycleThinkingLevel => {
@@ -1214,6 +1335,15 @@ async fn execute_command_action(
             state
                 .ui
                 .toast_info(t!("toast.killing_all_agents").to_string());
+        }
+        CommandAction::ToggleFastMode => {
+            toggle_fast_mode(state, command_tx).await;
+        }
+        CommandAction::CyclePermissionMode => {
+            cycle_permission_mode(state, command_tx).await;
+        }
+        CommandAction::ToggleTranscriptMode => {
+            toggle_transcript_mode(state);
         }
         CommandAction::Quit => {
             state.quit();
@@ -1276,10 +1406,28 @@ fn get_default_commands() -> Vec<crate::state::CommandItem> {
             action: CommandAction::Interrupt,
         },
         CommandItem {
+            name: t!("palette.toggle_fast_mode").to_string(),
+            description: t!("palette.toggle_fast_mode_desc").to_string(),
+            shortcut: Some("Ctrl+Shift+F".to_string()),
+            action: CommandAction::ToggleFastMode,
+        },
+        CommandItem {
             name: t!("palette.kill_all_agents").to_string(),
             description: t!("palette.kill_all_agents_desc").to_string(),
             shortcut: Some("Ctrl+F".to_string()),
             action: CommandAction::KillAllAgents,
+        },
+        CommandItem {
+            name: t!("palette.cycle_permission_mode").to_string(),
+            description: t!("palette.cycle_permission_mode_desc").to_string(),
+            shortcut: Some("Shift+Tab".to_string()),
+            action: CommandAction::CyclePermissionMode,
+        },
+        CommandItem {
+            name: t!("palette.toggle_transcript_mode").to_string(),
+            description: t!("palette.toggle_transcript_mode_desc").to_string(),
+            shortcut: None,
+            action: CommandAction::ToggleTranscriptMode,
         },
         CommandItem {
             name: t!("palette.quit").to_string(),

@@ -25,6 +25,11 @@ use url::Url;
 pub fn validate_download_url(url: &str) -> Result<Url, DownloadUrlError> {
     let parsed = Url::parse(url).map_err(|_| DownloadUrlError::InvalidUrl)?;
 
+    // data: URLs are inline content, not network fetches — always valid.
+    if parsed.scheme() == "data" {
+        return Ok(parsed);
+    }
+
     // Check protocol
     match parsed.scheme() {
         "http" | "https" => {}
@@ -64,7 +69,7 @@ pub enum DownloadUrlError {
     InvalidUrl,
 
     /// The URL uses an unsupported protocol.
-    #[error("Invalid protocol: only HTTP and HTTPS are supported")]
+    #[error("Invalid protocol: only HTTP, HTTPS, and data URLs are supported")]
     InvalidProtocol,
 
     /// The URL is missing a host.

@@ -261,6 +261,43 @@ impl AgentLoop {
                         );
                     }
                 }
+                ContextModifier::FileModified { path, content } => {
+                    // Notify LSP servers of file modifications so diagnostics
+                    // and symbol caches stay in sync with the actual file content.
+                    // Sends both didChange (update_file) and didSave (notify_save)
+                    // to match Claude Code's behavior.
+                    if let Some(ref lsp) = self.lsp_manager {
+                        // Clear delivered diagnostic hashes so fresh diagnostics
+                        // for the modified file are not suppressed by dedup.
+                        lsp.diagnostics().clear_delivered_for_file(path).await;
+
+                        match lsp.get_client(path).await {
+                            Ok(client) => {
+                                if let Err(e) = client.update_file(path, content).await {
+                                    debug!(
+                                        path = %path.display(),
+                                        error = %e,
+                                        "LSP didChange failed (non-fatal)"
+                                    );
+                                }
+                                if let Err(e) = client.notify_save(path).await {
+                                    debug!(
+                                        path = %path.display(),
+                                        error = %e,
+                                        "LSP didSave failed (non-fatal)"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                debug!(
+                                    path = %path.display(),
+                                    error = %e,
+                                    "LSP client unavailable for file sync (non-fatal)"
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }

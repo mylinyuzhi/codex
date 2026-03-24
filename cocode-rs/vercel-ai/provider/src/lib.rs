@@ -94,6 +94,7 @@ pub use shared::Warning;
 
 // Content types
 pub use content::AssistantContentPart;
+pub use content::CustomPart;
 pub use content::FileIdReference;
 pub use content::FilePart;
 pub use content::ReasoningFilePart;
@@ -154,6 +155,7 @@ pub use language_model::LanguageModelV4StreamResponse;
 pub use language_model::LanguageModelV4StreamResult;
 pub use language_model::LanguageModelV4Tool;
 pub use language_model::LanguageModelV4ToolChoice;
+pub use language_model::ReasoningLevel;
 pub use language_model::ResponseFormat;
 pub use provider::ProviderV4;
 pub use provider::SimpleProvider;

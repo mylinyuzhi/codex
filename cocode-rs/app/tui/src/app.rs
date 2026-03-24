@@ -12,6 +12,9 @@ use cocode_protocol::RoleSelection;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use cocode_keybindings::manager::KeybindingResult;
+use cocode_keybindings::manager::KeybindingsManager;
+
 use crate::agent_search::AgentInfo;
 use crate::agent_search::AgentSearchManager;
 use crate::clipboard_paste;
@@ -19,7 +22,6 @@ use crate::command::UserCommand;
 use crate::editor;
 use crate::event::TuiCommand;
 use crate::event::TuiEvent;
-use crate::event::handle_key_event_full_with_symbols;
 use crate::file_search::FileSearchEvent;
 use crate::file_search::FileSearchManager;
 use crate::file_search::create_file_search_channel;
@@ -69,6 +71,8 @@ pub struct App {
     symbol_search_rx: mpsc::Receiver<SymbolSearchEvent>,
     /// Paste manager for handling large pastes.
     paste_manager: PasteManager,
+    /// Keybindings manager for customizable key resolution.
+    keybindings: KeybindingsManager,
 }
 
 impl App {
@@ -123,6 +127,11 @@ impl App {
         // Create paste manager
         let paste_manager = PasteManager::new(&config.cocode_home);
 
+        // Create keybindings manager (feature-gated)
+        let kb_enabled =
+            config.is_feature_enabled(cocode_protocol::Feature::KeybindingCustomization);
+        let keybindings = KeybindingsManager::new(config.cocode_home.clone(), kb_enabled);
+
         Ok(Self {
             tui,
             state,
@@ -136,6 +145,7 @@ impl App {
             symbol_search,
             symbol_search_rx,
             paste_manager,
+            keybindings,
         })
     }
 
@@ -169,6 +179,7 @@ impl App {
             paste_manager: PasteManager::with_cache_dir(
                 std::env::temp_dir().join("cocode-test-paste-cache"),
             ),
+            keybindings: KeybindingsManager::defaults_only(),
         }
     }
 
@@ -253,21 +264,28 @@ impl App {
             TuiEvent::Key(key) => {
                 self.state.ui.touch_activity();
 
-                let has_overlay = self.state.has_overlay();
-                let has_file_suggestions = self.state.ui.has_file_suggestions();
-                let has_skill_suggestions = self.state.ui.has_skill_suggestions();
-                let has_agent_suggestions = self.state.ui.has_agent_suggestions();
-                let has_symbol_suggestions = self.state.ui.has_symbol_suggestions();
+                let contexts = crate::keybinding_bridge::active_contexts(&self.state);
+                let result = self.keybindings.process_key(&contexts, &key);
 
-                if let Some(cmd) = handle_key_event_full_with_symbols(
-                    key,
-                    has_overlay,
-                    has_file_suggestions,
-                    has_skill_suggestions,
-                    has_agent_suggestions,
-                    has_symbol_suggestions,
-                    self.state.is_streaming(),
-                ) {
+                let cmd = match result {
+                    KeybindingResult::Action(action) => {
+                        crate::keybinding_bridge::action_to_command(&action, &self.state)
+                    }
+                    KeybindingResult::PendingChord => {
+                        // Chord in progress — show indicator, no command yet
+                        None
+                    }
+                    KeybindingResult::ChordCancelled => {
+                        // Chord cancelled — no command
+                        None
+                    }
+                    KeybindingResult::Unhandled => {
+                        // No binding matched — treat as character input
+                        crate::keybinding_bridge::unhandled_key_to_command(&key, &self.state)
+                    }
+                };
+
+                if let Some(cmd) = cmd {
                     self.handle_command_internal(cmd).await;
                 }
 
@@ -310,8 +328,20 @@ impl App {
                 }
             }
             TuiEvent::Tick => {
-                // 250ms tick for toast expiry, idle detection, and non-spinner updates
+                // 250ms tick for toast expiry, idle detection, chord timeout, etc.
                 let mut needs_render = false;
+
+                // Check chord timeout — resolve pending prefix as fallback.
+                // E.g., single Esc times out from Esc-Esc chord → fires ChatCancel.
+                let contexts = crate::keybinding_bridge::active_contexts(&self.state);
+                if let Some(action) = self.keybindings.check_chord_timeout(&contexts) {
+                    if let Some(cmd) =
+                        crate::keybinding_bridge::action_to_command(&action, &self.state)
+                    {
+                        self.handle_command_internal(cmd).await;
+                    }
+                    needs_render = true;
+                }
 
                 // Expire old toasts
                 if self.state.ui.has_toasts() {

@@ -5,7 +5,9 @@
 use cocode_context::ConversationContext;
 use cocode_context::InjectionPosition;
 use cocode_context::SubagentType;
+use cocode_protocol::CacheScope;
 
+use crate::cache_block::SystemPromptBlock;
 use crate::engine;
 use crate::sections::PromptSection;
 use crate::sections::assemble_sections;
@@ -25,13 +27,67 @@ pub struct SystemPromptBuilder;
 impl SystemPromptBuilder {
     /// Build the complete system prompt for a main agent.
     pub fn build(ctx: &ConversationContext) -> String {
-        let mut ordered_sections = Vec::new();
+        assemble_sections(&Self::build_ordered_sections(ctx))
+    }
 
+    /// Build the system prompt as cache-scoped blocks for prompt caching.
+    ///
+    /// Splits the prompt into a stable prefix (rarely changes within a session)
+    /// and a dynamic suffix (changes per session/turn). The stable prefix can
+    /// be cached with a `Global` scope for higher cache hit rates.
+    ///
+    /// This implements Claude Code's Mode 2 (boundary-based) splitting strategy,
+    /// equivalent to the `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__` mechanism.
+    ///
+    /// Returns 1-2 blocks: stable (Global scope) and dynamic (no scope).
+    pub fn build_for_cache(ctx: &ConversationContext) -> Vec<SystemPromptBlock> {
+        let all_sections = Self::build_ordered_sections(ctx);
+
+        // Split at the Environment section: everything before is stable
+        // (Identity, ToolPolicy, Security, GitWorkflow, TaskManagement,
+        // McpInstructions, Before/AfterTools injections), everything from
+        // Environment onward is dynamic (Environment, Permission, MemoryFiles,
+        // EndOfPrompt injections, OutputStyle).
+        let split_idx = all_sections
+            .iter()
+            .position(|(s, _)| *s == PromptSection::Environment)
+            .unwrap_or(all_sections.len());
+
+        let mut blocks = Vec::new();
+
+        let stable_text = assemble_sections(&all_sections[..split_idx]);
+        if !stable_text.is_empty() {
+            blocks.push(SystemPromptBlock {
+                text: stable_text,
+                cache_scope: Some(CacheScope::Global),
+            });
+        }
+
+        let dynamic_text = assemble_sections(&all_sections[split_idx..]);
+        if !dynamic_text.is_empty() {
+            blocks.push(SystemPromptBlock {
+                text: dynamic_text,
+                cache_scope: None,
+            });
+        }
+
+        blocks
+    }
+
+    /// Build all ordered sections of the system prompt.
+    ///
+    /// Shared by `build()` and `build_for_cache()` to avoid duplication.
+    /// Sections are returned in canonical order: stable sections first
+    /// (Identity through AfterTools injections), then dynamic sections
+    /// (Environment through OutputStyle).
+    fn build_ordered_sections(ctx: &ConversationContext) -> Vec<(PromptSection, String)> {
         let has_output_style = ctx.output_style.is_some();
         let keep_coding = ctx
             .output_style
             .as_ref()
             .is_none_or(|s| s.keep_coding_instructions);
+
+        let mut sections = Vec::new();
 
         // 1. Identity (strip Communication Style when output style is active)
         let identity = if has_output_style {
@@ -39,9 +95,9 @@ impl SystemPromptBuilder {
         } else {
             templates::BASE_IDENTITY.to_string()
         };
-        ordered_sections.push((PromptSection::Identity, identity));
+        sections.push((PromptSection::Identity, identity));
 
-        // 2. Tool policy (if tools present) — skipped when output style has keep_coding=false
+        // 2. Tool policy (if tools present) — skipped when keep_coding=false
         if !ctx.tool_names.is_empty() && keep_coding {
             let mut policy = engine::render("tool_policy", minijinja::context! {});
             let tool_lines = sections::generate_tool_policy_lines(&ctx.tool_names);
@@ -49,23 +105,23 @@ impl SystemPromptBuilder {
                 policy.push('\n');
                 policy.push_str(&tool_lines);
             }
-            ordered_sections.push((PromptSection::ToolPolicy, policy));
+            sections.push((PromptSection::ToolPolicy, policy));
         }
 
         // 3. Security
-        ordered_sections.push((PromptSection::Security, templates::SECURITY.to_string()));
+        sections.push((PromptSection::Security, templates::SECURITY.to_string()));
 
-        // 4. Git workflow — skipped when output style has keep_coding=false
+        // 4. Git workflow — skipped when keep_coding=false
         if keep_coding {
-            ordered_sections.push((
+            sections.push((
                 PromptSection::GitWorkflow,
                 templates::GIT_WORKFLOW.to_string(),
             ));
         }
 
-        // 5. Task management — skipped when output style has keep_coding=false
+        // 5. Task management — skipped when keep_coding=false
         if keep_coding {
-            ordered_sections.push((
+            sections.push((
                 PromptSection::TaskManagement,
                 templates::TASK_MANAGEMENT.to_string(),
             ));
@@ -73,7 +129,7 @@ impl SystemPromptBuilder {
 
         // 6. MCP instructions (if MCP servers present)
         if !ctx.mcp_server_names.is_empty() {
-            ordered_sections.push((
+            sections.push((
                 PromptSection::McpInstructions,
                 templates::MCP_INSTRUCTIONS.to_string(),
             ));
@@ -82,20 +138,22 @@ impl SystemPromptBuilder {
         // Before-tools injections
         let before_tools = render_injections(ctx, InjectionPosition::BeforeTools);
         if !before_tools.is_empty() {
-            ordered_sections.push((PromptSection::Injections, before_tools));
+            sections.push((PromptSection::Injections, before_tools));
         }
 
         // After-tools injections
         let after_tools = render_injections(ctx, InjectionPosition::AfterTools);
         if !after_tools.is_empty() {
-            ordered_sections.push((PromptSection::Injections, after_tools));
+            sections.push((PromptSection::Injections, after_tools));
         }
 
+        // --- Dynamic boundary (stable sections above, dynamic below) ---
+
         // 7. Environment
-        ordered_sections.push((PromptSection::Environment, render_environment(ctx)));
+        sections.push((PromptSection::Environment, render_environment(ctx)));
 
         // 8. Permission
-        ordered_sections.push((
+        sections.push((
             PromptSection::Permission,
             permission_section(&ctx.permission_mode).to_string(),
         ));
@@ -103,24 +161,24 @@ impl SystemPromptBuilder {
         // 9. Memory files
         let memory = render_memory_files(ctx);
         if !memory.is_empty() {
-            ordered_sections.push((PromptSection::MemoryFiles, memory));
+            sections.push((PromptSection::MemoryFiles, memory));
         }
 
         // 10. End-of-prompt injections
         let end_injections = render_injections(ctx, InjectionPosition::EndOfPrompt);
         if !end_injections.is_empty() {
-            ordered_sections.push((PromptSection::Injections, end_injections));
+            sections.push((PromptSection::Injections, end_injections));
         }
 
         // 11. Output style instructions (appended at the end)
         if let Some(ref style) = ctx.output_style {
-            ordered_sections.push((
+            sections.push((
                 PromptSection::OutputStyle,
                 format!("# Output Style: {}\n\n{}", style.name, style.content),
             ));
         }
 
-        assemble_sections(&ordered_sections)
+        sections
     }
 
     /// Build system prompt for a subagent (explore/plan).

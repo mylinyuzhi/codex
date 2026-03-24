@@ -24,9 +24,10 @@ fn excluded_exports_regex() -> String {
 ///
 /// This script:
 /// 1. Sources the user's .zshrc
-/// 2. Captures all functions
+/// 2. Captures functions individually (filtered: excludes `_`-prefixed completion
+///    functions but keeps `__`-prefixed helpers)
 /// 3. Captures shell options (setopt)
-/// 4. Captures aliases
+/// 4. Captures aliases (with size limit)
 /// 5. Captures exports (filtered for valid names and exclusions)
 pub fn zsh_snapshot_script() -> String {
     let excluded = excluded_exports_regex();
@@ -40,15 +41,21 @@ print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
 print '# Functions'
-functions
+# Force autoload all functions first
+typeset -f > /dev/null 2>&1
+# Capture functions individually, filtering out single-underscore completion
+# functions (e.g. _git, _npm) but keeping double-underscore helpers.
+typeset +f | grep -vE '^_[^_]' | while read func; do
+  typeset -f "$func"
+done
 print ''
 setopt_count=$(setopt | wc -l | tr -d ' ')
 print "# setopts $setopt_count"
-setopt | sed 's/^/setopt /'
+setopt | sed 's/^/setopt /' | head -n 1000
 print ''
 alias_count=$(alias -L | wc -l | tr -d ' ')
 print "# aliases $alias_count"
-alias -L
+alias -L | head -n 1000
 print ''
 export_lines=$(export -p | awk '
 /^(export|declare -x|typeset -x) / {
@@ -76,10 +83,16 @@ fi
 ///
 /// This script:
 /// 1. Sources the user's .bashrc
-/// 2. Captures all functions (declare -f)
-/// 3. Captures shell options (set -o)
-/// 4. Captures aliases (alias -p)
+/// 2. Captures functions individually via base64 encoding (preserves special chars)
+///    - Filters out single-underscore completion functions (`_git`, `_npm`)
+///    - Keeps double-underscore helpers (`__pyenv_init`, `__zsh_like_cd`)
+/// 3. Captures all shell options (shopt -p + set -o) and enables alias expansion
+/// 4. Captures aliases with `--` prefix (handles alias names starting with `-`)
 /// 5. Captures exports (filtered for valid names and exclusions)
+///
+/// Base64 encoding is needed because bash function bodies may contain nested quotes,
+/// ANSI-C quoting (`$'...'`), heredocs, or other special characters that break when
+/// sourced directly. The `eval "$(base64 -d)"` pattern safely restores any function.
 pub fn bash_snapshot_script() -> String {
     let excluded = excluded_exports_regex();
     let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
@@ -89,18 +102,24 @@ echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
 echo '# Functions'
-declare -f
+# Force autoload all functions first
+declare -f > /dev/null 2>&1
+# Capture functions individually with base64 encoding to handle special characters.
+# Filter out single-underscore completion functions (e.g. _git, _npm) but keep
+# double-underscore helpers (e.g. __pyenv_init, __zsh_like_cd from mise).
+declare -F | cut -d' ' -f3 | grep -vE '^_[^_]' | while read func; do
+  encoded_func=$(declare -f "$func" | base64)
+  echo "eval \"\$(echo '$encoded_func' | base64 -d)\" > /dev/null 2>&1"
+done
 echo ''
-bash_opts=$(set -o | awk '$2=="on"{print $1}')
-bash_opt_count=$(printf '%s\n' "$bash_opts" | sed '/^$/d' | wc -l | tr -d ' ')
-echo "# setopts $bash_opt_count"
-if [ -n "$bash_opts" ]; then
-  printf 'set -o %s\n' $bash_opts
-fi
+echo '# Shell Options'
+shopt -p | head -n 1000
+set -o | awk '$2=="on"{print "set -o " $1}' | head -n 1000
+echo 'shopt -s expand_aliases'
 echo ''
-alias_count=$(alias -p | wc -l | tr -d ' ')
+alias_count=$(alias | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
-alias -p
+alias | sed 's/^alias //g' | sed 's/^/alias -- /' | head -n 1000
 echo ''
 export_lines=$(export -p | awk '
 /^(export|declare -x|typeset -x) / {

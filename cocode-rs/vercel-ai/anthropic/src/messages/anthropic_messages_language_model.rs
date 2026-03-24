@@ -20,6 +20,7 @@ use vercel_ai_provider::LanguageModelV4StreamResponse;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider::ReasoningPart;
 use vercel_ai_provider::ResponseFormat;
 use vercel_ai_provider::ResponseMetadata;
@@ -45,6 +46,7 @@ use super::anthropic_messages_api::ContentBlockStopEvent;
 use super::anthropic_messages_api::MessageDeltaEvent;
 use super::anthropic_messages_api::MessageStartEvent;
 use super::anthropic_messages_api::StreamErrorEvent;
+use super::anthropic_messages_options::Effort;
 use super::anthropic_messages_options::Speed;
 use super::anthropic_messages_options::StructuredOutputMode;
 use super::anthropic_messages_options::ThinkingConfig;
@@ -62,6 +64,7 @@ type GetArgsResult = (Value, HashMap<String, String>, Vec<Warning>);
 struct ModelCapabilities {
     max_output_tokens: u64,
     supports_structured_output: bool,
+    supports_adaptive_thinking: bool,
     is_known_model: bool,
 }
 
@@ -72,6 +75,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 128_000,
             supports_structured_output: true,
+            supports_adaptive_thinking: true,
             is_known_model: true,
         };
     }
@@ -83,6 +87,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 64_000,
             supports_structured_output: true,
+            supports_adaptive_thinking: false,
             is_known_model: true,
         };
     }
@@ -91,6 +96,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 32_000,
             supports_structured_output: true,
+            supports_adaptive_thinking: false,
             is_known_model: true,
         };
     }
@@ -99,6 +105,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 64_000,
             supports_structured_output: false,
+            supports_adaptive_thinking: false,
             is_known_model: true,
         };
     }
@@ -107,6 +114,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 32_000,
             supports_structured_output: false,
+            supports_adaptive_thinking: false,
             is_known_model: true,
         };
     }
@@ -115,6 +123,7 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
         return ModelCapabilities {
             max_output_tokens: 4096,
             supports_structured_output: false,
+            supports_adaptive_thinking: false,
             is_known_model: true,
         };
     }
@@ -122,7 +131,55 @@ fn get_model_capabilities(model_id: &str) -> ModelCapabilities {
     ModelCapabilities {
         max_output_tokens: 4096,
         supports_structured_output: false,
+        supports_adaptive_thinking: false,
         is_known_model: false,
+    }
+}
+
+/// Resolve the top-level `reasoning` parameter to Anthropic thinking config.
+///
+/// Only called when provider options don't already set thinking/effort.
+fn resolve_anthropic_reasoning_config(
+    reasoning: ReasoningLevel,
+    capabilities: &ModelCapabilities,
+    warnings: &mut Vec<Warning>,
+) -> Option<(ThinkingConfig, Option<Effort>)> {
+    use std::collections::HashMap as Map;
+    use vercel_ai_provider_utils::map_reasoning_to_provider_budget;
+    use vercel_ai_provider_utils::map_reasoning_to_provider_effort;
+
+    if capabilities.supports_adaptive_thinking {
+        let effort_map = Map::from([
+            (ReasoningLevel::Minimal, "low"),
+            (ReasoningLevel::Low, "low"),
+            (ReasoningLevel::Medium, "medium"),
+            (ReasoningLevel::High, "high"),
+            (ReasoningLevel::Xhigh, "max"),
+        ]);
+        let mapped = map_reasoning_to_provider_effort(reasoning, &effort_map, warnings);
+        let effort = mapped.as_deref().and_then(|s| match s {
+            "low" => Some(Effort::Low),
+            "medium" => Some(Effort::Medium),
+            "high" => Some(Effort::High),
+            "max" => Some(Effort::Max),
+            _ => None,
+        });
+        Some((ThinkingConfig::Adaptive, effort))
+    } else {
+        let budget = map_reasoning_to_provider_budget(
+            reasoning,
+            capabilities.max_output_tokens as i64,
+            capabilities.max_output_tokens as i64,
+            Some(1024),
+            None,
+            warnings,
+        )?;
+        Some((
+            ThinkingConfig::Enabled {
+                budget_tokens: Some(budget as u64),
+            },
+            None,
+        ))
     }
 }
 
@@ -216,7 +273,7 @@ impl AnthropicMessagesLanguageModel {
         stream: bool,
     ) -> Result<GetArgsResult, AISdkError> {
         let mut warnings = Vec::new();
-        let anthropic_options =
+        let mut anthropic_options =
             extract_anthropic_options(&options.provider_options, &self.config.provider);
 
         // Unsupported standard parameters
@@ -357,6 +414,25 @@ impl AnthropicMessagesLanguageModel {
 
         // Collect cache control warnings
         warnings.extend(cache_validator.into_warnings());
+
+        // Resolve top-level reasoning to Anthropic thinking config.
+        // Provider options always take precedence.
+        if vercel_ai_provider_utils::is_custom_reasoning(options.reasoning)
+            && anthropic_options.thinking.is_none()
+            && anthropic_options.effort.is_none()
+            && let Some(reasoning) = options.reasoning
+        {
+            if reasoning == ReasoningLevel::None {
+                anthropic_options.thinking = Some(ThinkingConfig::Disabled);
+            } else if let Some((thinking, effort)) =
+                resolve_anthropic_reasoning_config(reasoning, &capabilities, &mut warnings)
+            {
+                anthropic_options.thinking = Some(thinking);
+                if effort.is_some() {
+                    anthropic_options.effort = effort;
+                }
+            }
+        }
 
         // Thinking configuration
         let thinking_type = anthropic_options.thinking.as_ref();

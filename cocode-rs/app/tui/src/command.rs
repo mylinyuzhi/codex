@@ -152,6 +152,12 @@ pub enum UserCommand {
         turn_number: i32,
     },
 
+    /// Toggle fast mode on/off.
+    SetFastMode {
+        /// Whether fast mode should be active.
+        active: bool,
+    },
+
     /// Request graceful shutdown.
     Shutdown,
 }
@@ -264,6 +270,7 @@ impl std::fmt::Display for UserCommand {
             UserCommand::RequestDiffStats { turn_number } => {
                 write!(f, "RequestDiffStats({turn_number})")
             }
+            UserCommand::SetFastMode { active } => write!(f, "SetFastMode({active})"),
             UserCommand::Shutdown => write!(f, "Shutdown"),
         }
     }

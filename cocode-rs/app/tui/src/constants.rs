@@ -131,6 +131,9 @@ pub const PLUGIN_MANAGER_OVERLAY_WIDTH_PCT: i32 = 80;
 /// Fixed height for the permission approval overlay.
 pub const PERMISSION_OVERLAY_HEIGHT: i32 = 12;
 
+/// Fixed height for the sandbox permission overlay.
+pub const SANDBOX_PERMISSION_OVERLAY_HEIGHT: i32 = 14;
+
 /// Fixed height for the plan-exit approval overlay (includes space for feedback input).
 pub const PLAN_EXIT_OVERLAY_HEIGHT: i32 = 20;
 
@@ -191,6 +194,11 @@ pub const FILE_SEARCH_CHANNEL_BUFFER: i32 = 16;
 
 /// Buffer size for the symbol search event channel.
 pub const SYMBOL_SEARCH_CHANNEL_BUFFER: i32 = 16;
+
+// ========== Transcript Mode ==========
+
+/// Maximum messages shown in transcript mode (most recent N).
+pub const TRANSCRIPT_MODE_MESSAGE_LIMIT: usize = 10;
 
 // ========== Token Estimation ==========
 

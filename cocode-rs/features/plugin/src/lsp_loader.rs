@@ -45,6 +45,38 @@ pub struct LspServerConfig {
     pub root_markers: Vec<String>,
 }
 
+impl LspServerConfig {
+    /// Resolve variable substitution patterns in the config.
+    ///
+    /// Supported patterns:
+    /// - `${COCODE_PLUGIN_ROOT}` → plugin install directory path
+    /// - `${env.VAR_NAME}` → environment variable value
+    /// - `${user_config.KEY}` → per-plugin user config value
+    pub fn resolve_variables(
+        &mut self,
+        plugin_root: &Path,
+        user_config: Option<&HashMap<String, serde_json::Value>>,
+    ) {
+        let root_str = plugin_root.to_string_lossy().to_string();
+        let resolve = |s: &str| -> String {
+            crate::mcp::resolve_variable_string(s, &root_str, user_config, &|name| {
+                std::env::var(name).ok()
+            })
+        };
+
+        self.command = resolve(&self.command);
+        for arg in self.args.iter_mut() {
+            *arg = resolve(arg);
+        }
+        let resolved_env: HashMap<String, String> = self
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), resolve(v)))
+            .collect();
+        self.env = resolved_env;
+    }
+}
+
 /// Load LSP server configurations from a directory.
 pub fn load_lsp_servers_from_dir(dir: &Path, plugin_name: &str) -> Vec<PluginContribution> {
     scan_plugin_dir(

@@ -351,6 +351,7 @@ pub fn estimate_tokens(messages: &[LanguageModelMessage]) -> i32 {
                     },
                     AssistantContentPart::Source(_) => 10,
                     AssistantContentPart::ToolApprovalRequest(_) => 10,
+                    AssistantContentPart::Custom(_) => 10,
                 })
                 .sum(),
             LanguageModelMessage::Tool { content, .. } => content

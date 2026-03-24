@@ -90,6 +90,9 @@ pub struct SessionState {
 
     /// Active MCP tool calls (tracked separately from regular tools).
     pub mcp_tool_calls: Vec<McpToolCall>,
+
+    /// Whether fast mode is active.
+    pub fast_mode: bool,
 }
 
 impl SessionState {
@@ -547,6 +550,8 @@ pub struct InlineToolCall {
     pub description: String,
     /// How long the tool took (for completed tools).
     pub elapsed: Option<std::time::Duration>,
+    /// Batch ID for parallel execution grouping.
+    pub batch_id: Option<String>,
 }
 
 impl ChatMessage {
