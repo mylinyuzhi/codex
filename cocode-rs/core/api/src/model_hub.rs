@@ -7,6 +7,7 @@ use std::sync::RwLock;
 use crate::LanguageModel;
 use crate::Provider;
 use cocode_config::Config;
+use cocode_protocol::PromptCacheConfig;
 use cocode_protocol::ProviderApi;
 use cocode_protocol::execution::AgentKind;
 use cocode_protocol::execution::ExecutionIdentity;
@@ -154,6 +155,11 @@ impl ModelHub {
             && !provider_info.interceptors.is_empty()
         {
             ctx = ctx.with_interceptor_names(provider_info.interceptors.clone());
+        }
+
+        // Enable prompt caching for Anthropic providers
+        if spec.api == ProviderApi::Anthropic {
+            ctx = ctx.with_prompt_cache_config(PromptCacheConfig::default());
         }
 
         debug!(

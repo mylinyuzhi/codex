@@ -32,6 +32,7 @@
 //! ```
 
 mod client;
+mod root_watcher;
 mod server;
 
 pub mod config;

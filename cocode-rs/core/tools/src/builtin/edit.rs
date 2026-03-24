@@ -120,6 +120,10 @@ impl EditTool {
         .await;
 
         let mut result = ToolOutput::text(format!("Created new file: {}", path.display()));
+        result.modifiers.push(ContextModifier::FileModified {
+            path: path.to_path_buf(),
+            content: normalized.clone(),
+        });
         result.modifiers.push(ContextModifier::file_read(
             path.to_path_buf(),
             normalized,
@@ -470,6 +474,10 @@ impl Tool for EditTool {
             "Successfully edited {}{stats}{strategy_note}",
             path.display()
         ));
+        result.modifiers.push(ContextModifier::FileModified {
+            path: path.clone(),
+            content: normalized_content.clone(),
+        });
         result.modifiers.push(ContextModifier::file_read(
             path,
             normalized_content,

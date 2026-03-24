@@ -11,10 +11,6 @@ mod handler;
 mod stream;
 
 pub use broker::EventBroker;
-pub use handler::handle_key_event;
-pub use handler::handle_key_event_full;
-pub use handler::handle_key_event_full_with_symbols;
-pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
 use cocode_protocol::LoopEvent;
@@ -302,6 +298,18 @@ pub enum TuiCommand {
     /// Rewind the last turn (undo file changes + message history).
     Rewind,
 
+    // ========== Fast Mode ==========
+    /// Toggle fast mode on/off.
+    ToggleFastMode,
+
+    // ========== Permission Mode ==========
+    /// Cycle permission mode: Default → AcceptEdits → Plan → Default.
+    CyclePermissionMode,
+
+    // ========== Transcript Mode ==========
+    /// Toggle between chat and transcript view modes.
+    ToggleTranscriptMode,
+
     // ========== Quit ==========
     /// Request to quit the application.
     Quit,
@@ -423,6 +431,13 @@ impl std::fmt::Display for TuiCommand {
             }
             TuiCommand::ShowRewindSelector => write!(f, "{}", t!("command.show_rewind_selector")),
             TuiCommand::Rewind => write!(f, "{}", t!("command.rewind")),
+            TuiCommand::ToggleFastMode => write!(f, "{}", t!("command.toggle_fast_mode")),
+            TuiCommand::CyclePermissionMode => {
+                write!(f, "{}", t!("command.cycle_permission_mode"))
+            }
+            TuiCommand::ToggleTranscriptMode => {
+                write!(f, "{}", t!("command.toggle_transcript_mode"))
+            }
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }

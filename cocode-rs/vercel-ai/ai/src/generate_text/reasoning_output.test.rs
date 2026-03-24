@@ -29,10 +29,16 @@ fn test_extract_reasoning_outputs() {
         }),
     ];
 
-    let outputs = extract_reasoning_outputs(&content);
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(outputs[0].text, "First thought");
-    assert_eq!(outputs[1].text, "Second thought");
+    let items = convert_to_reasoning_outputs(&content);
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0].as_text().map(|r| r.text.as_str()),
+        Some("First thought")
+    );
+    assert_eq!(
+        items[1].as_text().map(|r| r.text.as_str()),
+        Some("Second thought")
+    );
 }
 
 #[test]

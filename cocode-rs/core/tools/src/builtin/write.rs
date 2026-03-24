@@ -335,6 +335,10 @@ impl Tool for WriteTool {
             format!("Successfully created {}", path.display())
         };
         let mut result = ToolOutput::text(msg);
+        result.modifiers.push(ContextModifier::FileModified {
+            path: path.clone(),
+            content: normalized_content.clone(),
+        });
         result.modifiers.push(ContextModifier::file_read(
             path,
             normalized_content,

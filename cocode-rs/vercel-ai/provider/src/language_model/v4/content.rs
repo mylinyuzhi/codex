@@ -12,6 +12,7 @@ use super::text::LanguageModelV4Text;
 use super::tool_approval_request::LanguageModelV4ToolApprovalRequest;
 use super::tool_call::LanguageModelV4ToolCall;
 use super::tool_result::LanguageModelV4ToolResult;
+use crate::shared::ProviderMetadata;
 
 /// Content that can appear in a model response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,29 @@ pub enum LanguageModelV4Content {
     ToolApprovalRequest(LanguageModelV4ToolApprovalRequest),
     /// Source reference (for citations).
     Source(LanguageModelV4Source),
+    /// Reasoning file content (file data that is part of reasoning).
+    ///
+    /// The TS spec allows `string | Uint8Array` for `data`; in Rust this is
+    /// always a base64-encoded string (binary data is pre-encoded).
+    #[serde(rename = "reasoning-file")]
+    ReasoningFile {
+        /// The file data as a base64-encoded string.
+        data: String,
+        /// The MIME type.
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        /// Provider metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<ProviderMetadata>,
+    },
+    /// Custom content for provider-specific extensions.
+    Custom {
+        /// The kind of custom content.
+        kind: String,
+        /// Provider metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<ProviderMetadata>,
+    },
     /// Tool call.
     ToolCall(LanguageModelV4ToolCall),
     /// Tool result.

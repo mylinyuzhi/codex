@@ -113,6 +113,15 @@ command.toggle_tool_collapse: "Toggle Tool Collapse"
 # System reminders
 command.toggle_system_reminders: "Toggle System Reminders"
 
+# Fast mode
+command.toggle_fast_mode: "Toggle Fast Mode"
+
+# Permission mode
+command.cycle_permission_mode: "Cycle Permission Mode"
+
+# Transcript mode
+command.toggle_transcript_mode: "Toggle Transcript Mode"
+
 # Rewind
 command.show_rewind_selector: "Rewind / Checkpoint"
 command.rewind: "Rewind"
@@ -153,6 +162,8 @@ status.waiting: "Waiting:"
 status.dialogs_waiting: "%{count} waiting"
 
 # Thinking status
+status.fast_mode: "Fast"
+
 status.thinking: "thinking..."
 status.thinking_with_duration: "thinking... %{duration}s"
 status.thought_for: "thought for %{duration}s"
@@ -209,6 +220,18 @@ dialog.select_output_style: "Select Output Style"
 dialog.select_output_style_filter: "Select Output Style [%{filter}]"
 dialog.no_styles_match: "No styles match filter"
 dialog.output_style_picker_hints: "↑/↓: Navigate  Enter: Select  Esc: Cancel  Type to filter"
+
+# Cost warning overlay
+dialog.cost_warning_title: "Cost Warning"
+dialog.cost_current: "Current cost:"
+dialog.cost_threshold: "Warning threshold:"
+dialog.cost_budget: "Budget limit:"
+dialog.cost_warning_hints: "Enter/Y: Acknowledge  Esc: Dismiss"
+
+# Sandbox permission overlay
+dialog.sandbox_permission_title: "Sandbox Permission Required"
+dialog.sandbox_access_type: "Access type:"
+dialog.sandbox_permission_hints: "Y: Approve  N: Deny  Ctrl+A: Approve All  Esc: Cancel"
 
 # Error overlay
 # Rewind selector
@@ -277,6 +300,7 @@ help.ctrl_left_right: "Word movement"
 help.ctrl_bksp: "Delete word backward"
 help.ctrl_shift_e: "Toggle tool results"
 help.ctrl_shift_r: "Toggle system reminders"
+help.ctrl_shift_f: "Toggle fast mode"
 help.esc_esc: "Rewind / Checkpoint selector"
 
 # ============================================================
@@ -364,6 +388,17 @@ toast.unsupported_command: "/%{name} is not yet supported in TUI."
 # Slow query
 toast.slow_query: "Query took %{duration}s"
 
+# Fast mode
+toast.fast_mode_on: "Fast mode enabled"
+toast.fast_mode_off: "Fast mode disabled"
+
+# Permission mode
+toast.permission_mode_changed: "Permission mode"
+
+# Transcript mode
+toast.transcript_mode_on: "Transcript mode enabled (last 10 messages)"
+toast.transcript_mode_off: "Transcript mode disabled"
+
 # Cron
 toast.cron_job_disabled: "Cron job %{job_id} disabled after %{failures} consecutive failures"
 toast.cron_jobs_missed: "%{count} scheduled task(s) missed during downtime:\n%{summary}"
@@ -385,6 +420,7 @@ chat.thinking_collapsed: "Thinking (%{tokens} tokens) [Ctrl+Shift+T to expand]"
 chat.thinking_active: "Thinking (%{duration}):"
 chat.thinking_active_collapsed: "Thinking (%{tokens} tokens, %{duration})... [Ctrl+Shift+T to expand]"
 chat.waiting_for_response: "Waiting for response..."
+chat.parallel_tools: "Parallel (%{count} tools)"
 
 # ============================================================
 # Input widget
@@ -432,6 +468,12 @@ palette.interrupt: "Interrupt"
 palette.interrupt_desc: "Cancel current operation"
 palette.kill_all_agents: "Kill All Agents"
 palette.kill_all_agents_desc: "Terminate all running agents"
+palette.toggle_fast_mode: "Toggle Fast Mode"
+palette.toggle_fast_mode_desc: "Switch between fast and normal model"
+palette.cycle_permission_mode: "Cycle Permission Mode"
+palette.cycle_permission_mode_desc: "Cycle: Default → AcceptEdits → Plan"
+palette.toggle_transcript_mode: "Toggle Transcript Mode"
+palette.toggle_transcript_mode_desc: "Switch between full chat and last 10 messages"
 palette.quit: "Quit"
 palette.quit_desc: "Exit the application"
 

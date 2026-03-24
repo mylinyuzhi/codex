@@ -63,6 +63,11 @@ pub fn prepare_call_settings(
         call_options.seed = Some(seed);
     }
 
+    // Apply reasoning
+    if let Some(reasoning) = settings.reasoning {
+        call_options.reasoning = Some(reasoning);
+    }
+
     // Apply headers
     if let Some(ref headers) = settings.headers {
         call_options.headers = Some(headers.clone());

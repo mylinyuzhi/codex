@@ -493,6 +493,10 @@ impl Tool for NotebookEditTool {
         };
 
         let mut result = ToolOutput::text(format!("Successfully {action} {}", path.display()));
+        result.modifiers.push(ContextModifier::FileModified {
+            path: path.clone(),
+            content: new_content.clone(),
+        });
         result
             .modifiers
             .push(ContextModifier::file_read(path, new_content, new_mtime_ms));

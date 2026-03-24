@@ -151,3 +151,19 @@ fn test_file() {
     assert!(json.contains("base64data"));
     assert!(json.contains("image/png"));
 }
+
+#[test]
+fn test_custom_stream_part_serialization() {
+    let part = LanguageModelV4StreamPart::Custom {
+        kind: "openai-compaction".into(),
+        provider_metadata: None,
+    };
+    let json = serde_json::to_string(&part).unwrap();
+    assert!(json.contains(r#""type":"custom""#));
+    assert!(json.contains(r#""kind":"openai-compaction""#));
+
+    let deserialized: LanguageModelV4StreamPart = serde_json::from_str(&json).unwrap();
+    assert!(
+        matches!(deserialized, LanguageModelV4StreamPart::Custom { kind, .. } if kind == "openai-compaction")
+    );
+}

@@ -19,6 +19,7 @@ use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResponse;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider::ResponseFormat;
 use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::SourceType;
@@ -27,6 +28,7 @@ use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider::content::ToolApprovalRequestPart;
 use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::post_json_to_api_with_client;
 use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
@@ -145,24 +147,56 @@ impl OpenAIResponsesLanguageModel {
             });
         }
 
-        // Warn about reasoning model param conflicts
-        if is_reasoning_model && (options.temperature.is_some() || options.top_p.is_some()) {
-            let is_no_effort = openai_options.reasoning_effort
-                == Some(crate::chat::openai_chat_options::ReasoningEffort::None);
-            if !(is_no_effort && caps.supports_non_reasoning_params_with_no_effort) {
-                warnings.push(Warning::Unsupported {
-                    feature: "temperature/topP with reasoning model".into(),
-                    details: Some(
-                        "temperature and topP are not supported with reasoning models unless \
-                         reasoning_effort is 'none' and the model supports it"
-                            .into(),
-                    ),
-                });
+        // Resolve reasoning effort: provider option takes precedence, then top-level reasoning.
+        let reasoning_effort = openai_options.reasoning_effort.or_else(|| {
+            if is_custom_reasoning(options.reasoning) {
+                options.reasoning.and_then(|level| match level {
+                    ReasoningLevel::None => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::None)
+                    }
+                    ReasoningLevel::Minimal => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Minimal)
+                    }
+                    ReasoningLevel::Low => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Low)
+                    }
+                    ReasoningLevel::Medium => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Medium)
+                    }
+                    ReasoningLevel::High => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::High)
+                    }
+                    ReasoningLevel::Xhigh => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Xhigh)
+                    }
+                    ReasoningLevel::ProviderDefault => Option::None,
+                })
+            } else {
+                Option::None
             }
+        });
+        let is_no_effort =
+            reasoning_effort == Some(crate::chat::openai_chat_options::ReasoningEffort::None);
+        let can_use_non_reasoning_params =
+            is_no_effort && caps.supports_non_reasoning_params_with_no_effort;
+
+        // Warn about reasoning model param conflicts
+        if is_reasoning_model
+            && (options.temperature.is_some() || options.top_p.is_some())
+            && !can_use_non_reasoning_params
+        {
+            warnings.push(Warning::Unsupported {
+                feature: "temperature/topP with reasoning model".into(),
+                details: Some(
+                    "temperature and topP are not supported with reasoning models unless \
+                     reasoning_effort is 'none' and the model supports it"
+                        .into(),
+                ),
+            });
         }
 
         // Warn about reasoning effort on non-reasoning models
-        if !is_reasoning_model && openai_options.reasoning_effort.is_some() {
+        if !is_reasoning_model && reasoning_effort.is_some() {
             warnings.push(Warning::Unsupported {
                 feature: "reasoningEffort on non-reasoning model".into(),
                 details: Some(
@@ -184,13 +218,6 @@ impl OpenAIResponsesLanguageModel {
         if let Some(tc) = prepared.tool_choice {
             body["tool_choice"] = tc;
         }
-
-        // Reasoning model handling
-        let reasoning_effort = openai_options.reasoning_effort;
-        let is_no_effort =
-            reasoning_effort == Some(crate::chat::openai_chat_options::ReasoningEffort::None);
-        let can_use_non_reasoning_params =
-            is_no_effort && caps.supports_non_reasoning_params_with_no_effort;
 
         if is_reasoning_model {
             let mut reasoning = serde_json::Map::new();
@@ -300,6 +327,20 @@ impl OpenAIResponsesLanguageModel {
             body["safety_identifier"] = Value::String(safety.clone());
         }
 
+        // Context management (server-side compaction)
+        if let Some(ref cm) = openai_options.context_management {
+            let cm_values: Vec<Value> = cm
+                .iter()
+                .map(|entry| {
+                    json!({
+                        "type": entry.entry_type,
+                        "compact_threshold": entry.compact_threshold,
+                    })
+                })
+                .collect();
+            body["context_management"] = Value::Array(cm_values);
+        }
+
         // Logprobs
         const TOP_LOGPROBS_MAX: u64 = 20;
         if let Some(ref logprobs) = openai_options.logprobs {
@@ -388,6 +429,20 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
 
         let mut content: Vec<AssistantContentPart> = Vec::new();
         let mut has_function_call = false;
+
+        // Pre-collect hosted tool_search_call IDs for matching with tool_search_output
+        let mut hosted_tool_search_call_ids: std::collections::VecDeque<String> = response
+            .output
+            .iter()
+            .filter_map(|item| match item {
+                ResponseOutputItem::ToolSearchCall { id, execution, .. }
+                    if execution.as_deref() == Some("server") =>
+                {
+                    id.clone()
+                }
+                _ => None,
+            })
+            .collect();
 
         for item in &response.output {
             match item {
@@ -677,6 +732,87 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_metadata: None,
                     }));
                 }
+                ResponseOutputItem::ToolSearchCall {
+                    id,
+                    call_id,
+                    execution,
+                    arguments,
+                    ..
+                } => {
+                    has_function_call = true;
+                    let tc_id = call_id.clone().or_else(|| id.clone()).unwrap_or_default();
+                    let is_hosted = execution.as_deref() == Some("server");
+                    let input = json!({
+                        "arguments": arguments,
+                        "call_id": call_id,
+                    });
+                    let mut item_meta = HashMap::new();
+                    if let Some(item_id) = id {
+                        item_meta.insert("itemId".into(), Value::String(item_id.clone()));
+                    }
+                    let pm = if item_meta.is_empty() {
+                        None
+                    } else {
+                        let mut pm = ProviderMetadata::default();
+                        pm.0.insert(
+                            "openai".into(),
+                            Value::Object(item_meta.into_iter().collect()),
+                        );
+                        Some(pm)
+                    };
+                    content.push(AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id: tc_id,
+                        tool_name: "tool_search".into(),
+                        input,
+                        provider_executed: if is_hosted { Some(true) } else { None },
+                        provider_metadata: pm,
+                    }));
+                }
+                ResponseOutputItem::ToolSearchOutput {
+                    id, call_id, tools, ..
+                } => {
+                    let tc_id = call_id
+                        .clone()
+                        .or_else(|| hosted_tool_search_call_ids.pop_front())
+                        .or_else(|| id.clone())
+                        .unwrap_or_default();
+                    let result = json!({ "tools": tools });
+                    let mut tr = vercel_ai_provider::ToolResultPart::new(
+                        tc_id,
+                        "tool_search",
+                        vercel_ai_provider::ToolResultContent::json(result),
+                    );
+                    if let Some(item_id) = id {
+                        let mut openai_map = serde_json::Map::new();
+                        openai_map.insert("itemId".into(), Value::String(item_id.clone()));
+                        let mut pm = ProviderMetadata::default();
+                        pm.0.insert("openai".into(), Value::Object(openai_map));
+                        tr = tr.with_metadata(pm);
+                    }
+                    content.push(AssistantContentPart::ToolResult(tr));
+                }
+                ResponseOutputItem::Compaction {
+                    id,
+                    encrypted_content,
+                } => {
+                    let item_id = id.clone().unwrap_or_default();
+                    let mut openai_inner: HashMap<String, Value> = HashMap::new();
+                    openai_inner.insert("type".into(), Value::String("compaction".into()));
+                    openai_inner.insert("itemId".into(), Value::String(item_id));
+                    if let Some(ec) = encrypted_content {
+                        openai_inner.insert("encryptedContent".into(), Value::String(ec.clone()));
+                    }
+                    let mut openai_map = serde_json::Map::new();
+                    for (k, v) in &openai_inner {
+                        openai_map.insert(k.clone(), v.clone());
+                    }
+                    let mut pm = ProviderMetadata::default();
+                    pm.0.insert("openai".into(), Value::Object(openai_map));
+                    content.push(AssistantContentPart::Custom(
+                        vercel_ai_provider::CustomPart::new("openai-compaction")
+                            .with_provider_metadata(pm),
+                    ));
+                }
                 _ => {}
             }
         }
@@ -821,6 +957,7 @@ struct ResponsesStreamState {
     usage: Option<super::convert_responses_usage::OpenAIResponsesUsage>,
     status: Option<String>,
     has_function_call: bool,
+    hosted_tool_search_call_ids: std::collections::VecDeque<String>,
     finish_emitted: bool,
     done: bool,
     metadata_emitted: bool,
@@ -849,6 +986,7 @@ impl ResponsesStreamState {
             usage: None,
             status: None,
             has_function_call: false,
+            hosted_tool_search_call_ids: std::collections::VecDeque::new(),
             finish_emitted: false,
             done: false,
             metadata_emitted: false,
@@ -940,6 +1078,20 @@ impl ResponsesStreamState {
                     self.usage = resp.usage;
                     self.status = resp.status;
                 }
+            }
+
+            ResponsesStreamEvent::ResponseFailed {
+                response: Some(resp),
+            } => {
+                self.usage = resp.usage;
+                // Use incomplete_details reason if available, else "error"
+                let reason = resp
+                    .incomplete_details
+                    .as_ref()
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str())
+                    .map(String::from);
+                self.status = Some(reason.unwrap_or_else(|| "error".into()));
             }
 
             ResponsesStreamEvent::OutputItemAdded { item: Some(item) } => match &item {
@@ -1075,6 +1227,24 @@ impl ResponsesStreamState {
                             title: None,
                             provider_metadata: None,
                         });
+                }
+                ResponseOutputItem::ToolSearchCall { id, execution, .. } => {
+                    self.has_function_call = true;
+                    let item_id = id.clone().unwrap_or_default();
+                    let is_hosted = execution.as_deref() == Some("server");
+                    if is_hosted {
+                        self.hosted_tool_search_call_ids.push_back(item_id);
+                    } else {
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                                id: item_id,
+                                tool_name: "tool_search".into(),
+                                provider_executed: None,
+                                dynamic: None,
+                                title: None,
+                                provider_metadata: None,
+                            });
+                    }
                 }
                 _ => {}
             },
@@ -1515,6 +1685,74 @@ impl ResponsesStreamState {
                         let _ = rest;
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolApprovalRequest(req));
+                    }
+                    ResponseOutputItem::ToolSearchCall {
+                        id,
+                        call_id,
+                        execution,
+                        arguments,
+                        ..
+                    } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        let tc_id = call_id.clone().unwrap_or_else(|| item_id.clone());
+                        let is_hosted = execution.as_deref() == Some("server");
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                                id: item_id,
+                                provider_metadata: None,
+                            });
+                        let input = json!({
+                            "arguments": arguments,
+                            "call_id": call_id,
+                        });
+                        let mut tc =
+                            vercel_ai_provider::tool::ToolCall::new(&tc_id, "tool_search", input);
+                        if is_hosted {
+                            tc = tc.with_provider_executed(true);
+                        }
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ToolCall(tc));
+                    }
+                    ResponseOutputItem::ToolSearchOutput {
+                        id, call_id, tools, ..
+                    } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        let tc_id = call_id
+                            .clone()
+                            .or_else(|| self.hosted_tool_search_call_ids.pop_front())
+                            .unwrap_or_else(|| item_id.clone());
+                        let result = json!({ "tools": tools });
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ToolResult(
+                                vercel_ai_provider::tool::ToolResult::new(
+                                    &tc_id,
+                                    "tool_search",
+                                    result,
+                                ),
+                            ));
+                    }
+                    ResponseOutputItem::Compaction {
+                        id,
+                        encrypted_content,
+                    } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        let mut openai_inner: HashMap<String, Value> = HashMap::new();
+                        openai_inner.insert("type".into(), Value::String("compaction".into()));
+                        openai_inner.insert("itemId".into(), Value::String(item_id));
+                        if let Some(ec) = encrypted_content {
+                            openai_inner
+                                .insert("encryptedContent".into(), Value::String(ec.clone()));
+                        }
+                        let mut openai_map = serde_json::Map::new();
+                        for (k, v) in &openai_inner {
+                            openai_map.insert(k.clone(), v.clone());
+                        }
+                        let mut pm = ProviderMetadata::default();
+                        pm.0.insert("openai".into(), Value::Object(openai_map));
+                        self.pending.push_back(LanguageModelV4StreamPart::Custom {
+                            kind: "openai-compaction".into(),
+                            provider_metadata: Some(pm),
+                        });
                     }
                     _ => {}
                 }

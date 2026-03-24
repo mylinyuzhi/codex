@@ -12,9 +12,11 @@ use cocode_protocol::ToolResultContent;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ChatMessage;
+use crate::state::CostWarningOverlay;
 use crate::state::InlineToolCall;
 use crate::state::Overlay;
 use crate::state::PermissionOverlay;
+use crate::state::SandboxPermissionOverlay;
 use crate::state::ToolStatus;
 
 /// Handle an event from the core agent loop.
@@ -82,6 +84,7 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                         status: session_tool.map_or(ToolStatus::Completed, |t| t.status),
                         description: extract_tool_description(&tool_use.accumulated_input),
                         elapsed: session_tool.and_then(|t| t.elapsed),
+                        batch_id: session_tool.and_then(|t| t.batch_id.clone()),
                     });
                 }
                 // Also attach completed tools from session that aren't already listed
@@ -96,6 +99,7 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                             status: tool.status,
                             description: tool.progress.clone().unwrap_or_default(),
                             elapsed: tool.elapsed,
+                            batch_id: tool.batch_id.clone(),
                         });
                     }
                 }
@@ -834,6 +838,35 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
                 .toast_info(t!("toast.max_turns_reached").to_string());
         }
 
+        // ========== Cost Warning ==========
+        LoopEvent::CostWarningThresholdReached {
+            current_cost_cents,
+            threshold_cents,
+            budget_cents,
+        } => {
+            state
+                .ui
+                .set_overlay(Overlay::CostWarning(CostWarningOverlay::new(
+                    current_cost_cents,
+                    threshold_cents,
+                    budget_cents,
+                )));
+        }
+
+        // ========== Sandbox Permission ==========
+        LoopEvent::SandboxApprovalRequired {
+            request,
+            access_type,
+        } => {
+            state.ui.query_timing.on_permission_dialog_open();
+            state
+                .ui
+                .set_overlay(Overlay::SandboxPermission(SandboxPermissionOverlay::new(
+                    request,
+                    access_type,
+                )));
+        }
+
         // ========== Cron ==========
         LoopEvent::CronJobFired { job_id, prompt, .. } => {
             tracing::info!(job_id, prompt, "Cron job fired");
@@ -855,6 +888,11 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             state.ui.toast_info(
                 t!("toast.cron_jobs_missed", count = count, summary = summary).to_string(),
             );
+        }
+
+        // ========== Fast Mode ==========
+        LoopEvent::FastModeChanged { active } => {
+            state.session.fast_mode = active;
         }
     }
 }

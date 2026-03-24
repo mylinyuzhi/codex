@@ -5,12 +5,12 @@ use vercel_ai_provider::LanguageModelV4ProviderTool;
 
 /// Create a custom provider tool for the Responses API.
 ///
+/// The tool name is derived from the `id` field (`"openai.custom"`).
+///
 /// # Arguments
-/// - `name` - The tool name (also used as the tool type)
 /// - `description` - Optional description of the tool
 /// - `format` - Optional format config (e.g., `{ "type": "grammar", "syntax": ..., "definition": ... }` or `{ "type": "text" }`)
 pub fn openai_custom_tool(
-    name: &str,
     description: Option<&str>,
     format: Option<serde_json::Value>,
 ) -> LanguageModelV4ProviderTool {
@@ -22,8 +22,8 @@ pub fn openai_custom_tool(
         args.insert("format".into(), fmt);
     }
     LanguageModelV4ProviderTool {
-        id: format!("openai.{name}"),
-        name: name.into(),
+        id: "openai.custom".into(),
+        name: "custom".into(),
         args,
     }
 }

@@ -163,7 +163,6 @@ impl Tool for ApplyPatchTool {
         }
     }
 
-    #[allow(clippy::unwrap_used)]
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         // TODO(sandbox): Current implementation executes patches directly in-process.
         //
@@ -269,6 +268,11 @@ impl Tool for ApplyPatchTool {
                                     )
                                     .await;
 
+                                    // Notify LSP of file modification
+                                    result_modifiers.push(ContextModifier::FileModified {
+                                        path: path.clone(),
+                                        content: content.clone(),
+                                    });
                                     // Add context modifier for the updated content
                                     result_modifiers.push(ContextModifier::file_read(
                                         path.clone(),

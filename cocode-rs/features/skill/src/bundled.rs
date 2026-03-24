@@ -13,6 +13,7 @@ use crate::command::CommandType;
 // Bundled skill prompt templates (embedded at compile time)
 const PLUGIN_PROMPT: &str = include_str!("bundled/plugin_prompt.md");
 const LOOP_PROMPT: &str = include_str!("bundled/loop_prompt.md");
+const KEYBINDINGS_HELP_PROMPT: &str = include_str!("bundled/keybindings_help_prompt.md");
 
 /// A skill bundled with the binary.
 ///
@@ -74,6 +75,13 @@ pub fn bundled_skills() -> Vec<BundledSkill> {
             prompt: PLUGIN_PROMPT.to_string(),
             fingerprint: compute_fingerprint(PLUGIN_PROMPT.as_bytes()),
             command_type: CommandType::LocalJsx,
+        },
+        BundledSkill {
+            name: "keybindings-help".to_string(),
+            description: "View and customize keyboard shortcuts, rebind keys, add chord bindings".to_string(),
+            prompt: KEYBINDINGS_HELP_PROMPT.to_string(),
+            fingerprint: compute_fingerprint(KEYBINDINGS_HELP_PROMPT.as_bytes()),
+            command_type: CommandType::Prompt,
         },
     ]
 }

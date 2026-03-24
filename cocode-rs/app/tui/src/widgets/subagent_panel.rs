@@ -11,6 +11,8 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::i18n::t;
 use crate::state::SubagentInstance;
 use crate::state::SubagentStatus;
@@ -116,8 +118,9 @@ impl Widget for SubagentPanel<'_> {
             buf.set_string(icon_x, y, type_icon, Style::default().fg(type_color));
 
             // Render agent type
-            let type_x = icon_x + type_icon.len() as u16;
-            let type_width = type_str.len().min((inner.width as usize).saturating_sub(3));
+            let type_x = icon_x + UnicodeWidthStr::width(type_icon) as u16;
+            let type_width = UnicodeWidthStr::width(type_str.as_str())
+                .min((inner.width as usize).saturating_sub(3));
             buf.set_string(type_x, y, &type_str[..type_width], style.bold());
 
             // Render colon
@@ -129,16 +132,19 @@ impl Widget for SubagentPanel<'_> {
             // Render description (truncated if needed) + elapsed
             let desc_x = colon_x + 2;
             if desc_x < inner.x + inner.width - 1 {
-                let elapsed_reserve = elapsed_str.len();
+                let elapsed_reserve = UnicodeWidthStr::width(elapsed_str.as_str());
                 let available = (inner.x + inner.width - desc_x) as usize - elapsed_reserve;
-                let desc = if desc_str.len() > available {
-                    format!("{}...", &desc_str[..available.saturating_sub(3)])
+                let desc = if UnicodeWidthStr::width(desc_str.as_str()) > available {
+                    format!(
+                        "{}...",
+                        &desc_str[..desc_str.floor_char_boundary(available.saturating_sub(3))]
+                    )
                 } else {
                     desc_str.clone()
                 };
                 buf.set_string(desc_x, y, &desc, Style::default());
                 if !elapsed_str.is_empty() {
-                    let elapsed_x = desc_x + desc.len() as u16;
+                    let elapsed_x = desc_x + UnicodeWidthStr::width(desc.as_str()) as u16;
                     if elapsed_x < inner.x + inner.width {
                         buf.set_string(
                             elapsed_x,
@@ -158,15 +164,18 @@ impl Widget for SubagentPanel<'_> {
                 && let Some(ref output_file) = subagent.output_file
             {
                 let path_str = output_file.to_string_lossy();
-                let truncated = if path_str.len() > 40 {
+                let truncated = if UnicodeWidthStr::width(path_str.as_ref()) > 40 {
                     format!("...{}", &path_str[path_str.len() - 37..])
                 } else {
                     path_str.to_string()
                 };
                 let file_line = format!("  \u{2192} {truncated}");
                 let available = inner.width as usize;
-                let text = if file_line.len() > available {
-                    format!("{}...", &file_line[..available.saturating_sub(3)])
+                let text = if UnicodeWidthStr::width(file_line.as_str()) > available {
+                    format!(
+                        "{}...",
+                        &file_line[..file_line.floor_char_boundary(available.saturating_sub(3))]
+                    )
                 } else {
                     file_line
                 };
@@ -179,15 +188,19 @@ impl Widget for SubagentPanel<'_> {
                 && y < inner.y + inner.height
                 && let Some(ref result) = subagent.result
             {
-                let preview = if result.len() > 60 {
-                    format!("{}...", &result[..57])
+                let preview = if UnicodeWidthStr::width(result.as_str()) > 60 {
+                    format!("{}...", &result[..result.floor_char_boundary(57)])
                 } else {
                     result.clone()
                 };
                 let preview_line = format!("  {preview}");
                 let available = inner.width as usize;
-                let text = if preview_line.len() > available {
-                    format!("{}...", &preview_line[..available.saturating_sub(3)])
+                let text = if UnicodeWidthStr::width(preview_line.as_str()) > available {
+                    format!(
+                        "{}...",
+                        &preview_line
+                            [..preview_line.floor_char_boundary(available.saturating_sub(3))]
+                    )
                 } else {
                     preview_line
                 };
@@ -219,8 +232,12 @@ impl Widget for SubagentPanel<'_> {
 
                 if !progress_str.is_empty() {
                     let available = inner.width as usize;
-                    let text = if progress_str.len() > available {
-                        format!("{}...", &progress_str[..available.saturating_sub(3)])
+                    let text = if UnicodeWidthStr::width(progress_str.as_str()) > available {
+                        format!(
+                            "{}...",
+                            &progress_str
+                                [..progress_str.floor_char_boundary(available.saturating_sub(3))]
+                        )
                     } else {
                         progress_str
                     };

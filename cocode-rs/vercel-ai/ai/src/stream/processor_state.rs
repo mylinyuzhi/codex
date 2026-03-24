@@ -167,6 +167,7 @@ impl ProcessorState {
             LanguageModelV4StreamPart::ToolResult(_)
             | LanguageModelV4StreamPart::ToolApprovalRequest(_)
             | LanguageModelV4StreamPart::ReasoningFile(_)
+            | LanguageModelV4StreamPart::Custom { .. }
             | LanguageModelV4StreamPart::Raw { .. }
             | LanguageModelV4StreamPart::Error { .. } => false,
         }

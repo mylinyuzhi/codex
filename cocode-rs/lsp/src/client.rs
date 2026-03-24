@@ -827,6 +827,44 @@ impl LspClient {
         Ok(())
     }
 
+    /// Notify the server that a file was saved to disk.
+    ///
+    /// Sends `textDocument/didSave`. Some servers trigger analysis
+    /// only on save (not on change), so this should be called after
+    /// `update_file()` when the file has been written to disk.
+    pub async fn notify_save(&self, path: &Path) -> Result<()> {
+        let path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+
+        // Only send didSave if the file is tracked as opened
+        {
+            let tracker = self.file_tracker.read().await;
+            if !tracker.opened.contains(&path) {
+                return Ok(());
+            }
+        }
+
+        let uri = Url::from_file_path(&path)
+            .map_err(|_| LspErr::Internal(format!("invalid file path: {}", path.display())))?;
+
+        let params = lsp_types::DidSaveTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri },
+            text: None,
+        };
+        self.connection
+            .notify("textDocument/didSave", params)
+            .await?;
+
+        debug!(
+            "Notified didSave for {} in LSP {}",
+            path.display(),
+            self.server_id
+        );
+        Ok(())
+    }
+
     /// Force re-sync a file (close and reopen)
     ///
     /// Useful when you want to refresh the file content from disk.
