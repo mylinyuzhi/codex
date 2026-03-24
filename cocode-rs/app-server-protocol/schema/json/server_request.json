@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServerRequest",
+  "description": "Requests from the server to a client.\n\nThese require a response from the client (unlike notifications which are fire-and-forget). Used for permission prompts, user input requests, and MCP message routing.",
+  "oneOf": [
+    {
+      "description": "Ask the client to approve a tool execution.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "approval/askForApproval"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/AskForApprovalParams"
+        }
+      }
+    },
+    {
+      "description": "Ask the client for user input (e.g., AskUserQuestion tool).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "input/requestUserInput"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RequestUserInputParams"
+        }
+      }
+    },
+    {
+      "description": "Route an MCP message to a client-managed MCP server.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/routeMessage"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpRouteMessageParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "AskForApprovalParams": {
+      "description": "Parameters for `approval/askForApproval`.",
+      "type": "object",
+      "required": [
+        "input",
+        "request_id",
+        "tool_name"
+      ],
+      "properties": {
+        "description": {
+          "description": "Human-readable description of what the tool will do.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Tool input (JSON)."
+        },
+        "request_id": {
+          "description": "Unique request identifier (for correlation with response).",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "Tool name that needs approval.",
+          "type": "string"
+        }
+      }
+    },
+    "McpRouteMessageParams": {
+      "description": "Parameters for `mcp/routeMessage`.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id",
+        "server_name"
+      ],
+      "properties": {
+        "message": {
+          "description": "MCP message payload."
+        },
+        "request_id": {
+          "description": "Unique request identifier.",
+          "type": "string"
+        },
+        "server_name": {
+          "description": "Target MCP server name.",
+          "type": "string"
+        }
+      }
+    },
+    "RequestUserInputParams": {
+      "description": "Parameters for `input/requestUserInput`.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id"
+      ],
+      "properties": {
+        "message": {
+          "description": "Human-readable message or question.",
+          "type": "string"
+        },
+        "questions": {
+          "description": "Structured questions (JSON array of question objects)."
+        },
+        "request_id": {
+          "description": "Unique request identifier.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

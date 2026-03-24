@@ -19,6 +19,7 @@ use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResponse;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider::ResponseFormat;
 use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::SourceType;
@@ -26,6 +27,7 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::post_json_to_api_with_client;
 use vercel_ai_provider_utils::post_stream_to_api_with_client;
 
@@ -111,8 +113,22 @@ impl OpenAIChatLanguageModel {
             body["tool_choice"] = tc;
         }
 
-        // Reasoning effort
-        let reasoning_effort = openai_options.reasoning_effort;
+        // Resolve reasoning effort: provider option takes precedence, then top-level reasoning.
+        let reasoning_effort = openai_options.reasoning_effort.or_else(|| {
+            if is_custom_reasoning(options.reasoning) {
+                options.reasoning.and_then(|level| match level {
+                    ReasoningLevel::None => Some(ReasoningEffort::None),
+                    ReasoningLevel::Minimal => Some(ReasoningEffort::Minimal),
+                    ReasoningLevel::Low => Some(ReasoningEffort::Low),
+                    ReasoningLevel::Medium => Some(ReasoningEffort::Medium),
+                    ReasoningLevel::High => Some(ReasoningEffort::High),
+                    ReasoningLevel::Xhigh => Some(ReasoningEffort::Xhigh),
+                    ReasoningLevel::ProviderDefault => Option::None,
+                })
+            } else {
+                Option::None
+            }
+        });
         let is_no_effort = reasoning_effort == Some(ReasoningEffort::None);
         let can_use_non_reasoning_params =
             is_no_effort && caps.supports_non_reasoning_params_with_no_effort;

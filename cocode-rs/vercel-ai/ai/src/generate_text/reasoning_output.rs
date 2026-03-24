@@ -5,7 +5,12 @@
 //! the text, optional signature, and provider metadata.
 
 use vercel_ai_provider::AssistantContentPart;
+use vercel_ai_provider::DataContent;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::ReasoningFilePart;
+use vercel_ai_provider::ReasoningPart;
+
+use super::generated_file::GeneratedFile;
 
 /// Structured reasoning output from a model response.
 ///
@@ -44,13 +49,80 @@ impl ReasoningOutput {
     }
 }
 
-/// Extract `ReasoningOutput` items from content parts.
+/// A reasoning file output from a model response.
 ///
-/// Note: This function is also mirrored in `content_utils` for centralized access.
-/// This version is kept here for the `reasoning_output` module's self-contained API.
-#[allow(dead_code)]
-pub fn extract_reasoning_outputs(content: &[AssistantContentPart]) -> Vec<ReasoningOutput> {
-    content
+/// Contains file data (e.g., an image) that is part of reasoning,
+/// as used by Google Gemini's thought images.
+#[derive(Debug, Clone)]
+pub struct ReasoningFileOutput {
+    /// The generated file containing the reasoning data.
+    pub file: GeneratedFile,
+    /// Provider-specific metadata.
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+impl ReasoningFileOutput {
+    /// Create a new reasoning file output.
+    pub fn new(file: GeneratedFile) -> Self {
+        Self {
+            file,
+            provider_metadata: None,
+        }
+    }
+
+    /// Set the provider metadata.
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
+        self
+    }
+}
+
+/// A reasoning output item: either text-based or file-based.
+#[derive(Debug, Clone)]
+pub enum ReasoningOutputItem {
+    /// Text-based reasoning output.
+    Text(ReasoningOutput),
+    /// File-based reasoning output (e.g., thought images).
+    File(ReasoningFileOutput),
+}
+
+impl ReasoningOutputItem {
+    /// Get the text if this is a text reasoning output.
+    pub fn as_text(&self) -> Option<&ReasoningOutput> {
+        match self {
+            Self::Text(t) => Some(t),
+            Self::File(_) => None,
+        }
+    }
+}
+
+/// Convert reasoning output items back to provider-level content parts.
+pub fn convert_from_reasoning_outputs(items: &[ReasoningOutputItem]) -> Vec<AssistantContentPart> {
+    items
+        .iter()
+        .map(|item| match item {
+            ReasoningOutputItem::Text(r) => {
+                let mut part = ReasoningPart::new(&r.text);
+                if let Some(ref pm) = r.provider_metadata {
+                    part.provider_metadata = Some(pm.clone());
+                }
+                AssistantContentPart::Reasoning(part)
+            }
+            ReasoningOutputItem::File(rf) => {
+                let data = DataContent::from_base64(&rf.file.content);
+                let mut part = ReasoningFilePart::new(data, &rf.file.media_type);
+                if let Some(ref pm) = rf.provider_metadata {
+                    part.provider_metadata = Some(pm.clone());
+                }
+                AssistantContentPart::ReasoningFile(part)
+            }
+        })
+        .collect()
+}
+
+/// Convert provider-level content parts to reasoning output items.
+pub fn convert_to_reasoning_outputs(parts: &[AssistantContentPart]) -> Vec<ReasoningOutputItem> {
+    parts
         .iter()
         .filter_map(|part| match part {
             AssistantContentPart::Reasoning(r) => {
@@ -58,11 +130,42 @@ pub fn extract_reasoning_outputs(content: &[AssistantContentPart]) -> Vec<Reason
                 if let Some(ref pm) = r.provider_metadata {
                     output.provider_metadata = Some(pm.clone());
                 }
-                Some(output)
+                Some(ReasoningOutputItem::Text(output))
+            }
+            AssistantContentPart::ReasoningFile(rf) => {
+                let file = match &rf.data {
+                    DataContent::Base64(b) => {
+                        GeneratedFile::from_base64("reasoning-file", b, &rf.media_type)
+                    }
+                    DataContent::Url(u) => GeneratedFile::new("reasoning-file", u, &rf.media_type),
+                    DataContent::Bytes(bytes) => {
+                        use base64::Engine as _;
+                        use base64::engine::general_purpose::STANDARD;
+                        GeneratedFile::from_base64(
+                            "reasoning-file",
+                            STANDARD.encode(bytes),
+                            &rf.media_type,
+                        )
+                    }
+                };
+                let mut output = ReasoningFileOutput::new(file);
+                if let Some(ref pm) = rf.provider_metadata {
+                    output.provider_metadata = Some(pm.clone());
+                }
+                Some(ReasoningOutputItem::File(output))
             }
             _ => None,
         })
         .collect()
+}
+
+/// Get the combined reasoning text from reasoning output items (text items only).
+pub fn reasoning_text_from_items(items: &[ReasoningOutputItem]) -> String {
+    items
+        .iter()
+        .filter_map(|item| item.as_text().map(|r| r.text.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Get the combined reasoning text from reasoning outputs.

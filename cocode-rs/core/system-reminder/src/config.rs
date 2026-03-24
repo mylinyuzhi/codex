@@ -104,6 +104,18 @@ pub struct AttachmentSettings {
     pub rewind: bool,
     /// Enable compaction reminder (prevents "context anxiety").
     pub compaction_reminder: bool,
+    /// Enable worktree state notifications.
+    pub worktree_state: bool,
+    /// Enable deferred tools delta tracking.
+    pub deferred_tools_delta: bool,
+    /// Enable MCP instructions delta tracking.
+    pub mcp_instructions_delta: bool,
+    /// Enable session name display.
+    pub session_name: bool,
+    /// Enable output token usage reporting.
+    pub output_token_usage: bool,
+    /// Enable configuration change notifications.
+    pub config_change: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -139,6 +151,12 @@ impl Default for AttachmentSettings {
             compact_file_reference: true,
             rewind: true,
             compaction_reminder: true,
+            worktree_state: true,
+            deferred_tools_delta: true,
+            mcp_instructions_delta: true,
+            session_name: true,
+            output_token_usage: true,
+            config_change: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

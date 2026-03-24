@@ -41,8 +41,10 @@ pub fn get_capabilities(model_id: &str) -> OpenAIModelCapabilities {
     let supports_flex_processing = is_o3 || is_o4_mini || is_gpt5;
 
     let supports_priority_processing = model_id.starts_with("gpt-4")
-        || model_id.starts_with("gpt-5-mini")
-        || (is_gpt5 && !model_id.starts_with("gpt-5-nano"))
+        || (is_gpt5
+            && !model_id.starts_with("gpt-5-nano")
+            && !model_id.starts_with("gpt-5-chat")
+            && !model_id.starts_with("gpt-5.4-nano"))
         || is_o3
         || is_o4_mini;
 

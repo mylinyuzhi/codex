@@ -11,6 +11,7 @@ pub mod image_generation;
 pub mod local_shell;
 pub mod mcp;
 pub mod shell;
+pub mod tool_search;
 pub mod web_search;
 pub mod web_search_preview;
 
@@ -24,5 +25,6 @@ pub use local_shell::openai_local_shell_tool;
 pub use mcp::McpToolOptions;
 pub use mcp::openai_mcp_tool;
 pub use shell::openai_shell_tool;
+pub use tool_search::openai_tool_search_tool;
 pub use web_search::openai_web_search_tool;
 pub use web_search_preview::openai_web_search_preview_tool;

@@ -143,6 +143,8 @@ pub struct DiagnosticInfo {
     pub message: String,
     /// Diagnostic code.
     pub code: Option<String>,
+    /// Source server name (e.g. "rust-analyzer").
+    pub source: Option<String>,
 }
 
 /// Todo/task item information (plain TodoWrite items).
@@ -598,6 +600,24 @@ pub struct GeneratorContext<'a> {
     /// After reminder generation, the driver drains and syncs these records
     /// back to the tools FileTracker for proper state tracking.
     pub mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
+
+    // === Worktree state ===
+    /// Number of active worktrees in the session.
+    pub active_worktree_count: i32,
+
+    // === Delta tracking ===
+    /// Deferred tools added since last turn.
+    pub deferred_tools_added: Vec<String>,
+    /// Deferred tools removed since last turn.
+    pub deferred_tools_removed: Vec<String>,
+    /// MCP instruction changes (server → new instruction).
+    pub mcp_instructions_changes: Vec<(String, String)>,
+
+    // === Session info ===
+    /// Session name (if set).
+    pub session_name: Option<String>,
+    /// Configuration changes since last turn.
+    pub config_changes: Vec<String>,
 }
 
 /// Lightweight rewind info for system reminder generation.
@@ -685,6 +705,12 @@ pub struct GeneratorContextBuilder<'a> {
     mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
     is_auto_compact_enabled: bool,
     auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+    active_worktree_count: i32,
+    deferred_tools_added: Vec<String>,
+    deferred_tools_removed: Vec<String>,
+    mcp_instructions_changes: Vec<(String, String)>,
+    session_name: Option<String>,
+    config_changes: Vec<String>,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -891,6 +917,36 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn active_worktree_count(mut self, count: i32) -> Self {
+        self.active_worktree_count = count;
+        self
+    }
+
+    pub fn deferred_tools_added(mut self, tools: Vec<String>) -> Self {
+        self.deferred_tools_added = tools;
+        self
+    }
+
+    pub fn deferred_tools_removed(mut self, tools: Vec<String>) -> Self {
+        self.deferred_tools_removed = tools;
+        self
+    }
+
+    pub fn mcp_instructions_changes(mut self, changes: Vec<(String, String)>) -> Self {
+        self.mcp_instructions_changes = changes;
+        self
+    }
+
+    pub fn session_name(mut self, name: impl Into<String>) -> Self {
+        self.session_name = Some(name.into());
+        self
+    }
+
+    pub fn config_changes(mut self, changes: Vec<String>) -> Self {
+        self.config_changes = changes;
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -940,6 +996,12 @@ impl<'a> GeneratorContextBuilder<'a> {
             rewind_info: self.rewind_info,
             mention_read_records: self.mention_read_records,
             auto_memory_state: self.auto_memory_state,
+            active_worktree_count: self.active_worktree_count,
+            deferred_tools_added: self.deferred_tools_added,
+            deferred_tools_removed: self.deferred_tools_removed,
+            mcp_instructions_changes: self.mcp_instructions_changes,
+            session_name: self.session_name,
+            config_changes: self.config_changes,
         }
     }
 }

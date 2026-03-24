@@ -86,9 +86,10 @@
       "Bash(GIT_EDITOR=true git rebase --continue)",
       "Bash(dpkg -l)",
       "Bash(apt list:*)",
-      "Bash(done)",
-      "Bash(/tmp/split_verification.txt:*)",
-      "Read(//tmp/**)"
+      "Bash(pip3 list:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(apt-get install:*)"
     ],
     "deny": [],
     "ask": []

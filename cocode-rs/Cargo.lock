@@ -910,6 +910,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-app-server-protocol"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+]
+
+[[package]]
 name = "cocode-apply-patch"
 version = "0.0.0"
 dependencies = [
@@ -973,6 +985,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cocode-app-server-protocol",
  "cocode-arg0",
  "cocode-config",
  "cocode-error",
@@ -1189,6 +1202,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-keybindings"
+version = "0.0.0"
+dependencies = [
+ "cocode-config",
+ "cocode-file-watch",
+ "cocode-protocol",
+ "crossterm",
+ "notify 8.2.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -1235,11 +1266,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "cocode-file-ignore",
+ "cocode-file-watch",
  "cocode-utils-common",
  "crossterm",
  "dirs 5.0.1",
  "lsp-types",
+ "notify 8.2.0",
  "pretty_assertions",
  "ratatui",
  "serde",
@@ -1762,6 +1794,7 @@ dependencies = [
  "cocode-config",
  "cocode-error",
  "cocode-file-search",
+ "cocode-keybindings",
  "cocode-loop",
  "cocode-protocol",
  "cocode-shell",

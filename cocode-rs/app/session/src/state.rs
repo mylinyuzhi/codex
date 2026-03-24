@@ -641,6 +641,7 @@ impl SessionState {
         // Build loop config from session
         let loop_config = LoopConfig {
             max_turns: session.max_turns,
+            max_budget_cents: session.max_budget_cents,
             ..LoopConfig::default()
         };
 
@@ -1325,6 +1326,11 @@ impl SessionState {
     /// Returns the main model name, or an empty string if not configured.
     pub fn model(&self) -> &str {
         self.session.model().unwrap_or("")
+    }
+
+    /// Get the configuration snapshot (Arc-cloned, cheap).
+    pub fn config_snapshot(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
     }
 
     /// Get the provider name.

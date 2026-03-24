@@ -52,6 +52,7 @@ pub mod json;
 pub mod json_schema_derive;
 pub mod load_api_key;
 pub mod load_setting;
+pub mod map_reasoning_to_provider;
 pub mod media_type;
 pub mod response_handler;
 pub mod schema;
@@ -146,6 +147,10 @@ pub use strip_extension::strip_specific_extension;
 pub use without_trailing_slash::normalize_url;
 pub use without_trailing_slash::with_trailing_slash;
 pub use without_trailing_slash::without_trailing_slash;
+
+pub use map_reasoning_to_provider::is_custom_reasoning;
+pub use map_reasoning_to_provider::map_reasoning_to_provider_budget;
+pub use map_reasoning_to_provider::map_reasoning_to_provider_effort;
 
 pub use validate_download_url::DownloadUrlError;
 pub use validate_download_url::is_valid_download_url;

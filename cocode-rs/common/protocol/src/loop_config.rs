@@ -20,6 +20,9 @@ pub struct LoopConfig {
     /// Maximum tokens to use before stopping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
+    /// Maximum budget in cents before pausing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_budget_cents: Option<i32>,
     /// Permission mode for tool execution.
     #[serde(default)]
     pub permission_mode: PermissionMode,
@@ -47,9 +50,9 @@ pub struct LoopConfig {
     /// Stall detection configuration.
     #[serde(default)]
     pub stall_detection: StallDetectionConfig,
-    /// Prompt caching configuration.
+    /// Prompt cache strategy configuration.
     #[serde(default)]
-    pub prompt_caching: PromptCachingConfig,
+    pub prompt_caching: PromptCacheConfig,
 }
 
 /// Configuration for session memory management.
@@ -203,43 +206,43 @@ impl Default for WatchdogConfig {
     }
 }
 
-/// Configuration for prompt caching.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PromptCachingConfig {
+/// Prompt cache strategy configuration.
+///
+/// Controls how cache breakpoints are placed in prompts sent to providers
+/// that support explicit cache markers (currently Anthropic only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptCacheConfig {
     /// Whether prompt caching is enabled.
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
-    /// Cache breakpoints in the conversation.
+    /// Skip cache writes (for compaction agents).
+    ///
+    /// When true, the breakpoint index shifts from the last message to the
+    /// second-to-last, avoiding caching content that will be immediately replaced.
+    /// This preserves the existing cache prefix for post-compaction turns.
     #[serde(default)]
-    pub cache_breakpoints: Vec<CacheBreakpoint>,
+    pub skip_cache_write: bool,
 }
 
-/// A breakpoint for cache insertion in the conversation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CacheBreakpoint {
-    /// Position in the message list (0-indexed).
-    pub position: i32,
-    /// Type of cache to use.
-    pub cache_type: CacheType,
-}
-
-/// Type of cache for prompt caching.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
-)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum CacheType {
-    /// Ephemeral cache (short-lived).
-    #[default]
-    Ephemeral,
-}
-
-impl CacheType {
-    /// Get the cache type as a string.
-    pub fn as_str(&self) -> &'static str {
-        (*self).into()
+impl Default for PromptCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            skip_cache_write: false,
+        }
     }
+}
+
+/// Cache scope for system prompt blocks.
+///
+/// Determines the sharing level of cached content in the Anthropic API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheScope {
+    /// Shared across organization.
+    Org,
+    /// Shared globally across all users.
+    Global,
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::i18n::t;
 use crate::state::ChatMessage;
 use crate::state::MessageRole;
@@ -55,6 +57,8 @@ pub struct ChatWidget<'a> {
     streaming_tool_uses: &'a [StreamingToolUse],
     /// Whether to show system reminders (meta messages) in the chat.
     show_system_reminders: bool,
+    /// Whether transcript mode is active (only show last N messages).
+    transcript_mode: bool,
 }
 
 impl<'a> ChatWidget<'a> {
@@ -75,6 +79,7 @@ impl<'a> ChatWidget<'a> {
             user_scrolled: false,
             streaming_tool_uses: &[],
             show_system_reminders: false,
+            transcript_mode: false,
         }
     }
 
@@ -150,6 +155,12 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
+    /// Set transcript mode (only show last 10 messages).
+    pub fn transcript_mode(mut self, active: bool) -> Self {
+        self.transcript_mode = active;
+        self
+    }
+
     /// Format duration for display (e.g., "2.3s").
     fn format_duration(duration: Duration) -> String {
         let secs = duration.as_secs_f64();
@@ -168,69 +179,88 @@ impl<'a> ChatWidget<'a> {
         self.spinner_frame
     }
 
-    /// Render inline tool calls for a message.
+    /// Render a single inline tool call line (collapsed style).
+    fn render_tool_line(
+        tool: &crate::state::InlineToolCall,
+        theme: &Theme,
+        indent: &str,
+    ) -> Line<'static> {
+        let status_icon = match tool.status {
+            ToolStatus::Running => Span::raw("⏳").fg(theme.tool_running),
+            ToolStatus::Completed => Span::raw("✓").fg(theme.tool_completed),
+            ToolStatus::Failed => Span::raw("✗").fg(theme.tool_error),
+        };
+
+        let elapsed_span = tool
+            .elapsed
+            .map(|d| {
+                let text = Self::format_duration(d);
+                Span::raw(format!(" {text}")).fg(theme.text_dim)
+            })
+            .unwrap_or_default();
+
+        let desc_preview = if tool.description.is_empty() {
+            String::new()
+        } else {
+            let max = 40;
+            if UnicodeWidthStr::width(tool.description.as_str()) > max {
+                let boundary = tool.description.floor_char_boundary(max);
+                format!(" {}…", &tool.description[..boundary])
+            } else {
+                format!(" {}", tool.description)
+            }
+        };
+
+        Line::from(vec![
+            Span::raw(indent.to_string()).fg(theme.border),
+            status_icon,
+            Span::raw(format!(" {}", tool.tool_name))
+                .bold()
+                .fg(theme.primary),
+            Span::raw(desc_preview).fg(theme.text_dim),
+            elapsed_span,
+        ])
+    }
+
+    /// Render inline tool calls for a message, grouping parallel batches.
     fn render_tool_calls(&self, message: &ChatMessage) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        for tool in &message.tool_calls {
-            let is_collapsed = self.collapsed_tools.contains(&tool.tool_name);
-            let status_icon = match tool.status {
-                ToolStatus::Running => Span::raw(" ⏳").fg(self.theme.tool_running),
-                ToolStatus::Completed => Span::raw(" ✓").fg(self.theme.tool_completed),
-                ToolStatus::Failed => Span::raw(" ✗").fg(self.theme.tool_error),
-            };
+        let tools = &message.tool_calls;
+        let mut i = 0;
 
-            let elapsed_span = tool
-                .elapsed
-                .map(|d| {
-                    let text = Self::format_duration(d);
-                    Span::raw(format!(" ({text})")).fg(self.theme.text_dim)
-                })
-                .unwrap_or_default();
-
-            if is_collapsed {
-                // Collapsed: single line with tool name, status, elapsed
-                let desc_preview = if tool.description.is_empty() {
-                    String::new()
-                } else {
-                    let max = 40;
-                    if tool.description.len() > max {
-                        format!(" — {}…", &tool.description[..max])
-                    } else {
-                        format!(" — {}", tool.description)
-                    }
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("  ▸ ").fg(self.theme.border),
-                    Span::raw(tool.tool_name.clone())
-                        .bold()
-                        .fg(self.theme.primary),
-                    status_icon,
-                    elapsed_span,
-                    Span::raw(desc_preview).fg(self.theme.text_dim),
-                ]));
-            } else {
-                // Expanded: full tool call box
-                lines.push(Line::from(vec![
-                    Span::raw("  ┌ ").fg(self.theme.border),
-                    Span::raw(tool.tool_name.clone())
-                        .bold()
-                        .fg(self.theme.primary),
-                    status_icon,
-                    elapsed_span,
-                ]));
-
-                if !tool.description.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::raw("  │ ").fg(self.theme.border),
-                        Span::raw(tool.description.clone()).fg(self.theme.text_dim),
-                    ]));
+        while i < tools.len() {
+            // Check if this tool starts a parallel batch (batch_id is Some and
+            // at least one more consecutive tool shares the same batch_id).
+            if let Some(ref bid) = tools[i].batch_id {
+                let batch_start = i;
+                let mut batch_end = i + 1;
+                while batch_end < tools.len() && tools[batch_end].batch_id.as_deref() == Some(bid) {
+                    batch_end += 1;
                 }
+                let batch_size = batch_end - batch_start;
 
-                let border_len = (self.width as usize).saturating_sub(4).min(40);
-                lines.push(Line::from(
-                    Span::raw(format!("  └{}", "─".repeat(border_len))).fg(self.theme.border),
-                ));
+                if batch_size >= 2 {
+                    // Render grouped parallel batch
+                    lines.push(Line::from(vec![
+                        Span::raw("  ").fg(self.theme.border),
+                        Span::raw("‖").bold().fg(self.theme.secondary),
+                        Span::raw(format!(
+                            " {}",
+                            t!("chat.parallel_tools", count = batch_size)
+                        ))
+                        .fg(self.theme.text_dim),
+                    ]));
+                    for tool in &tools[batch_start..batch_end] {
+                        lines.push(Self::render_tool_line(tool, self.theme, "    "));
+                    }
+                    i = batch_end;
+                    continue;
+                }
             }
+
+            // Single tool (no batch or batch of 1)
+            lines.push(Self::render_tool_line(&tools[i], self.theme, "  "));
+            i += 1;
         }
         lines
     }
@@ -328,11 +358,17 @@ impl Widget for ChatWidget<'_> {
         let mut all_lines: Vec<Line> = Vec::new();
 
         let show_reminders = self.show_system_reminders;
-        let visible_messages: Vec<_> = self
+        let mut visible_messages: Vec<_> = self
             .messages
             .iter()
             .filter(|msg| !msg.is_meta || show_reminders)
             .collect();
+
+        // Transcript mode: only show last N messages
+        let limit = crate::constants::TRANSCRIPT_MODE_MESSAGE_LIMIT;
+        if self.transcript_mode && visible_messages.len() > limit {
+            visible_messages = visible_messages.split_off(visible_messages.len() - limit);
+        }
 
         let has_streaming = self.streaming_content.is_some()
             || self
@@ -367,7 +403,7 @@ impl Widget for ChatWidget<'_> {
             if message.is_meta {
                 // Render meta (system reminder) messages as collapsed dim lines
                 let flat = message.content.replace('\n', " ");
-                let (preview, suffix) = if flat.len() > 60 {
+                let (preview, suffix) = if UnicodeWidthStr::width(flat.as_str()) > 60 {
                     let boundary = flat.floor_char_boundary(60);
                     (&flat[..boundary], "...")
                 } else {
@@ -493,19 +529,20 @@ impl Widget for ChatWidget<'_> {
                 ]));
                 if !tool.accumulated_input.is_empty() {
                     let max_preview = 120;
-                    let preview = if tool.accumulated_input.len() > max_preview {
-                        format!(
-                            "    {}…",
-                            &tool.accumulated_input[..tool
-                                .accumulated_input
-                                .char_indices()
-                                .take_while(|(i, _)| *i < max_preview)
-                                .last()
-                                .map_or(0, |(i, c)| i + c.len_utf8())]
-                        )
-                    } else {
-                        format!("    {}", tool.accumulated_input)
-                    };
+                    let preview =
+                        if UnicodeWidthStr::width(tool.accumulated_input.as_str()) > max_preview {
+                            format!(
+                                "    {}…",
+                                &tool.accumulated_input[..tool
+                                    .accumulated_input
+                                    .char_indices()
+                                    .take_while(|(i, _)| *i < max_preview)
+                                    .last()
+                                    .map_or(0, |(i, c)| i + c.len_utf8())]
+                            )
+                        } else {
+                            format!("    {}", tool.accumulated_input)
+                        };
                     all_lines.push(Line::from(Span::raw(preview).dim()));
                 }
             }

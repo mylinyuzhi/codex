@@ -16,12 +16,13 @@ use super::generate_text_result::ToolCall;
 use super::generate_text_result::ToolResult;
 use super::step_result::StepResult;
 
+use vercel_ai_provider::ReasoningLevel;
+
 use crate::types::ProviderOptions;
 
 /// Model information for callback events.
 ///
-/// Combines provider name and model ID into a single struct,
-/// matching the TS SDK's model info pattern.
+/// Combines provider name and model ID into a single struct.
 #[derive(Debug, Clone)]
 pub struct CallbackModelInfo {
     /// The provider name (e.g., "anthropic", "openai").
@@ -49,7 +50,11 @@ pub struct OnStartEvent {
     // --- Identity ---
     /// Unique call ID for this generation session.
     pub call_id: String,
-    /// Model information (provider + model ID).
+    /// The provider name (e.g., "anthropic", "openai").
+    pub provider: String,
+    /// The model ID (e.g., "claude-3-sonnet").
+    pub model_id: String,
+    /// Model information (deprecated — use `provider` and `model_id` directly).
     pub model: CallbackModelInfo,
 
     // --- Prompt ---
@@ -83,6 +88,8 @@ pub struct OnStartEvent {
     pub stop_sequences: Option<Vec<String>>,
     /// Random seed.
     pub seed: Option<u64>,
+    /// Provider-agnostic reasoning effort level.
+    pub reasoning: Option<ReasoningLevel>,
 
     // --- Retry / Timeout ---
     /// Maximum retries.
@@ -113,11 +120,13 @@ impl std::fmt::Debug for OnStartEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OnStartEvent")
             .field("call_id", &self.call_id)
-            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("model_id", &self.model_id)
             .field("system", &self.system)
             .field("messages_count", &self.messages.len())
             .field("tools", &self.tools)
             .field("tool_choice", &self.tool_choice)
+            .field("reasoning", &self.reasoning)
             .field("function_id", &self.function_id)
             .finish()
     }
@@ -126,8 +135,12 @@ impl std::fmt::Debug for OnStartEvent {
 impl OnStartEvent {
     /// Create a new on_start event with minimal required fields.
     pub fn new(call_id: impl Into<String>, model: CallbackModelInfo) -> Self {
+        let provider = model.provider.clone();
+        let model_id = model.model_id.clone();
         Self {
             call_id: call_id.into(),
+            provider,
+            model_id,
             model,
             system: None,
             messages: Vec::new(),
@@ -142,6 +155,7 @@ impl OnStartEvent {
             frequency_penalty: None,
             stop_sequences: None,
             seed: None,
+            reasoning: None,
             max_retries: None,
             headers: None,
             provider_options: None,
@@ -194,6 +208,7 @@ impl OnStartEvent {
         self.frequency_penalty = settings.frequency_penalty;
         self.stop_sequences = settings.stop_sequences.clone();
         self.seed = settings.seed;
+        self.reasoning = settings.reasoning;
         self.max_retries = settings.max_retries;
         if let Some(ref h) = settings.headers {
             self.headers = Some(h.clone());
@@ -245,7 +260,11 @@ pub struct OnStepStartEvent {
     pub call_id: String,
     /// The step number (0-indexed).
     pub step_number: u32,
-    /// Model information.
+    /// The provider name.
+    pub provider: String,
+    /// The model ID.
+    pub model_id: String,
+    /// Model information (deprecated — use `provider` and `model_id` directly).
     pub model: CallbackModelInfo,
     /// System prompt (if any).
     pub system: Option<String>,
@@ -274,7 +293,8 @@ impl std::fmt::Debug for OnStepStartEvent {
         f.debug_struct("OnStepStartEvent")
             .field("call_id", &self.call_id)
             .field("step_number", &self.step_number)
-            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("model_id", &self.model_id)
             .field("messages_count", &self.messages.len())
             .field("tools", &self.tools)
             .field("steps_count", &self.steps.len())
@@ -285,9 +305,13 @@ impl std::fmt::Debug for OnStepStartEvent {
 impl OnStepStartEvent {
     /// Create a new on_step_start event.
     pub fn new(call_id: impl Into<String>, step_number: u32, model: CallbackModelInfo) -> Self {
+        let provider = model.provider.clone();
+        let model_id = model.model_id.clone();
         Self {
             call_id: call_id.into(),
             step_number,
+            provider,
+            model_id,
             model,
             system: None,
             messages: Vec::new(),
@@ -657,6 +681,16 @@ pub enum ChunkEventData {
     ToolInputDelta { tool_call_id: String, delta: String },
     /// Tool result.
     ToolResult(ToolResult),
+    /// Custom provider-specific content.
+    Custom {
+        kind: String,
+        provider_metadata: Option<vercel_ai_provider::ProviderMetadata>,
+    },
+    /// Reasoning file content.
+    ReasoningFile {
+        file: super::generated_file::GeneratedFile,
+        provider_metadata: Option<vercel_ai_provider::ProviderMetadata>,
+    },
     /// Stream lifecycle event.
     StreamLifecycle {
         event_type: String,
@@ -732,6 +766,32 @@ impl OnChunkEvent {
     pub fn source(source: vercel_ai_provider::Source) -> Self {
         Self {
             chunk: ChunkEventData::Source(source),
+        }
+    }
+
+    /// Create a custom content chunk event.
+    pub fn custom(
+        kind: impl Into<String>,
+        provider_metadata: Option<vercel_ai_provider::ProviderMetadata>,
+    ) -> Self {
+        Self {
+            chunk: ChunkEventData::Custom {
+                kind: kind.into(),
+                provider_metadata,
+            },
+        }
+    }
+
+    /// Create a reasoning file chunk event.
+    pub fn reasoning_file(
+        file: super::generated_file::GeneratedFile,
+        provider_metadata: Option<vercel_ai_provider::ProviderMetadata>,
+    ) -> Self {
+        Self {
+            chunk: ChunkEventData::ReasoningFile {
+                file,
+                provider_metadata,
+            },
         }
     }
 }

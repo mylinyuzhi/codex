@@ -45,3 +45,44 @@ fn test_call_options_builder_chain() {
     assert_eq!(options.max_output_tokens, Some(2048));
     assert_eq!(options.temperature, Some(0.5));
 }
+
+#[test]
+fn test_call_options_default_reasoning_is_none() {
+    let options = LanguageModelV4CallOptions::default();
+    assert!(options.reasoning.is_none());
+}
+
+#[test]
+fn test_call_options_with_reasoning() {
+    let options = LanguageModelV4CallOptions::new(vec![]).with_reasoning(ReasoningLevel::High);
+    assert_eq!(options.reasoning, Some(ReasoningLevel::High));
+}
+
+#[test]
+fn test_reasoning_level_serde_round_trip() {
+    for (level, expected_str) in [
+        (ReasoningLevel::ProviderDefault, "\"provider-default\""),
+        (ReasoningLevel::None, "\"none\""),
+        (ReasoningLevel::Minimal, "\"minimal\""),
+        (ReasoningLevel::Low, "\"low\""),
+        (ReasoningLevel::Medium, "\"medium\""),
+        (ReasoningLevel::High, "\"high\""),
+        (ReasoningLevel::Xhigh, "\"xhigh\""),
+    ] {
+        let serialized = serde_json::to_string(&level).unwrap();
+        assert_eq!(serialized, expected_str, "serialize {level:?}");
+        let deserialized: ReasoningLevel = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, level, "deserialize {level:?}");
+    }
+}
+
+#[test]
+fn test_reasoning_level_as_str() {
+    assert_eq!(ReasoningLevel::ProviderDefault.as_str(), "provider-default");
+    assert_eq!(ReasoningLevel::None.as_str(), "none");
+    assert_eq!(ReasoningLevel::Minimal.as_str(), "minimal");
+    assert_eq!(ReasoningLevel::Low.as_str(), "low");
+    assert_eq!(ReasoningLevel::Medium.as_str(), "medium");
+    assert_eq!(ReasoningLevel::High.as_str(), "high");
+    assert_eq!(ReasoningLevel::Xhigh.as_str(), "xhigh");
+}

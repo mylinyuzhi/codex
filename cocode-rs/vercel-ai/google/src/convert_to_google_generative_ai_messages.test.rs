@@ -185,9 +185,12 @@ fn converts_tool_result_content_with_image() {
         }]),
     ))];
     let messages = vec![LanguageModelV4Message::tool(parts)];
-    let result =
-        convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default()).unwrap();
-    // Should produce inlineData + text description
+    let opts = ConvertOptions {
+        supports_function_response_parts: false,
+        ..ConvertOptions::default()
+    };
+    let result = convert_to_google_generative_ai_messages(&messages, &opts).unwrap();
+    // Legacy mode: should produce inlineData + text description
     assert_eq!(result.contents[0].parts.len(), 2);
     match &result.contents[0].parts[0] {
         GoogleGenerativeAIContentPart::InlineData { inline_data, .. } => {

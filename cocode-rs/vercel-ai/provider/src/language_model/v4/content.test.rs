@@ -49,3 +49,37 @@ fn test_content_deserialization() {
     let content: LanguageModelV4Content = serde_json::from_str(json).unwrap();
     assert!(content.is_text());
 }
+
+#[test]
+fn test_content_custom_serialization() {
+    let content = LanguageModelV4Content::Custom {
+        kind: "openai-compaction".into(),
+        provider_metadata: None,
+    };
+    let json = serde_json::to_string(&content).unwrap();
+    assert!(json.contains(r#""type":"custom""#));
+    assert!(json.contains(r#""kind":"openai-compaction""#));
+
+    let deserialized: LanguageModelV4Content = serde_json::from_str(&json).unwrap();
+    assert!(
+        matches!(deserialized, LanguageModelV4Content::Custom { kind, .. } if kind == "openai-compaction")
+    );
+}
+
+#[test]
+fn test_content_reasoning_file_serialization() {
+    let content = LanguageModelV4Content::ReasoningFile {
+        data: "base64data".into(),
+        media_type: "image/png".into(),
+        provider_metadata: None,
+    };
+    let json = serde_json::to_string(&content).unwrap();
+    assert!(json.contains(r#""type":"reasoning-file""#));
+    assert!(json.contains(r#""data":"base64data""#));
+    assert!(json.contains(r#""mediaType":"image/png""#));
+
+    let deserialized: LanguageModelV4Content = serde_json::from_str(&json).unwrap();
+    assert!(
+        matches!(deserialized, LanguageModelV4Content::ReasoningFile { data, media_type, .. } if data == "base64data" && media_type == "image/png")
+    );
+}

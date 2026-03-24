@@ -24,6 +24,7 @@ cocode-tui.workspace = true
 cocode-loop.workspace = true
 cocode-utils-common.workspace = true
 cocode-error.workspace = true
+cocode-app-server-protocol.workspace = true
 
 # External
 clap = { workspace = true, features = ["derive"] }

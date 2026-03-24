@@ -1,0 +1,257 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClientRequest",
+  "description": "Requests from a client to the server.",
+  "oneOf": [
+    {
+      "description": "Start a new session.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/start"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionStartRequestParams"
+        }
+      }
+    },
+    {
+      "description": "Resume an existing session.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/resume"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionResumeRequestParams"
+        }
+      }
+    },
+    {
+      "description": "Start a new turn with user input.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/start"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnStartRequestParams"
+        }
+      }
+    },
+    {
+      "description": "Interrupt the current turn.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/interrupt"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnInterruptRequestParams"
+        }
+      }
+    },
+    {
+      "description": "Resolve a pending approval request.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "approval/resolve"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ApprovalResolveRequestParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "ApprovalDecision": {
+      "description": "Decision on an approval request.",
+      "oneOf": [
+        {
+          "description": "Approve the tool execution.",
+          "type": "string",
+          "enum": [
+            "approve"
+          ]
+        },
+        {
+          "description": "Approve for this session (don't ask again for this tool).",
+          "type": "string",
+          "enum": [
+            "approve_session"
+          ]
+        },
+        {
+          "description": "Deny the tool execution.",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        }
+      ]
+    },
+    "ApprovalResolveRequestParams": {
+      "description": "Parameters for `approval/resolve`.",
+      "type": "object",
+      "required": [
+        "decision",
+        "request_id"
+      ],
+      "properties": {
+        "decision": {
+          "description": "The decision.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalDecision"
+            }
+          ]
+        },
+        "request_id": {
+          "description": "The request ID of the approval being resolved.",
+          "type": "string"
+        }
+      }
+    },
+    "SessionResumeRequestParams": {
+      "description": "Parameters for `session/resume`.",
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "prompt": {
+          "description": "New prompt to send in the resumed session.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "description": "Session ID to resume.",
+          "type": "string"
+        }
+      }
+    },
+    "SessionStartRequestParams": {
+      "description": "Parameters for `session/start`.",
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "cwd": {
+          "description": "Working directory override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "description": "Environment variables to set.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "max_turns": {
+          "description": "Maximum turns before stopping.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "model": {
+          "description": "Model override (e.g., \"sonnet\", \"opus\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "Initial prompt to send.",
+          "type": "string"
+        },
+        "system_prompt_suffix": {
+          "description": "System prompt suffix (appended to built-in system prompt).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TurnInterruptRequestParams": {
+      "description": "Parameters for `turn/interrupt`.",
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "description": "Turn ID to interrupt (if not specified, interrupts current turn).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TurnStartRequestParams": {
+      "description": "Parameters for `turn/start`.",
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "description": "User input text.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -103,6 +103,9 @@ pub struct UiState {
 
     /// Dynamic status text shown alongside the spinner (e.g., tool name, "Compacting...").
     pub spinner_text: Option<String>,
+
+    /// Whether transcript mode is active (shows last N messages only).
+    pub transcript_mode: bool,
 }
 
 impl UiState {
@@ -153,10 +156,12 @@ impl UiState {
         if matches!(
             self.overlay,
             Some(
-                Overlay::Permission(_)
+                Overlay::SandboxPermission(_)
+                    | Overlay::Permission(_)
                     | Overlay::PlanExitApproval(_)
                     | Overlay::Question(_)
                     | Overlay::Elicitation(_)
+                    | Overlay::CostWarning(_)
             )
         ) {
             self.query_timing.on_permission_dialog_close();
@@ -176,10 +181,12 @@ impl UiState {
                 if matches!(
                     self.overlay,
                     Some(
-                        Overlay::Permission(_)
+                        Overlay::SandboxPermission(_)
+                            | Overlay::Permission(_)
                             | Overlay::PlanExitApproval(_)
                             | Overlay::Question(_)
                             | Overlay::Elicitation(_)
+                            | Overlay::CostWarning(_)
                     )
                 ) {
                     self.query_timing.on_permission_dialog_open();
@@ -1172,6 +1179,10 @@ pub enum Overlay {
     PluginManager(PluginManagerOverlay),
     /// Rewind selector (checkpoint browser + mode picker).
     RewindSelector(RewindSelectorOverlay),
+    /// Cost warning dialog.
+    CostWarning(CostWarningOverlay),
+    /// Sandbox permission dialog (higher priority than tool permission).
+    SandboxPermission(SandboxPermissionOverlay),
     /// Help screen.
     Help,
     /// Error message.
@@ -1188,16 +1199,18 @@ impl Overlay {
     /// - User-triggered overlays (model picker, etc.): lowest
     pub fn priority(&self) -> i32 {
         match self {
-            Overlay::Permission(_) | Overlay::PlanExitApproval(_) => 0,
-            Overlay::Question(_) | Overlay::Elicitation(_) => 1,
-            Overlay::Error(_) => 2,
-            Overlay::RewindSelector(_) => 3,
-            Overlay::PluginManager(_) => 4,
-            Overlay::ModelPicker(_) => 5,
-            Overlay::OutputStylePicker(_) => 5,
-            Overlay::CommandPalette(_) => 5,
-            Overlay::SessionBrowser(_) => 5,
-            Overlay::Help => 6,
+            Overlay::SandboxPermission(_) => 0,
+            Overlay::Permission(_) | Overlay::PlanExitApproval(_) => 1,
+            Overlay::Question(_) | Overlay::Elicitation(_) => 2,
+            Overlay::CostWarning(_) => 3,
+            Overlay::Error(_) => 4,
+            Overlay::RewindSelector(_) => 5,
+            Overlay::PluginManager(_) => 6,
+            Overlay::ModelPicker(_) => 7,
+            Overlay::OutputStylePicker(_) => 7,
+            Overlay::CommandPalette(_) => 7,
+            Overlay::SessionBrowser(_) => 7,
+            Overlay::Help => 8,
         }
     }
 
@@ -1209,10 +1222,12 @@ impl Overlay {
     pub fn is_agent_driven(&self) -> bool {
         matches!(
             self,
-            Overlay::Permission(_)
+            Overlay::SandboxPermission(_)
+                | Overlay::Permission(_)
                 | Overlay::PlanExitApproval(_)
                 | Overlay::Question(_)
                 | Overlay::Elicitation(_)
+                | Overlay::CostWarning(_)
                 | Overlay::Error(_)
         )
     }
@@ -1232,6 +1247,67 @@ impl PermissionOverlay {
     pub fn new(request: ApprovalRequest) -> Self {
         Self {
             request,
+            selected: 0,
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self) {
+        if self.selected < 2 {
+            self.selected += 1;
+        }
+    }
+}
+
+/// Cost warning overlay state.
+#[derive(Debug, Clone)]
+pub struct CostWarningOverlay {
+    /// Current estimated cost in cents.
+    pub current_cost_cents: i32,
+    /// Warning threshold in cents.
+    pub threshold_cents: i32,
+    /// Budget limit in cents (if configured).
+    pub budget_cents: Option<i32>,
+    /// Whether the user has acknowledged the warning.
+    pub acknowledged: bool,
+}
+
+impl CostWarningOverlay {
+    /// Create a new cost warning overlay.
+    pub fn new(current_cost_cents: i32, threshold_cents: i32, budget_cents: Option<i32>) -> Self {
+        Self {
+            current_cost_cents,
+            threshold_cents,
+            budget_cents,
+            acknowledged: false,
+        }
+    }
+}
+
+/// Sandbox permission overlay state.
+#[derive(Debug, Clone)]
+pub struct SandboxPermissionOverlay {
+    /// The approval request.
+    pub request: ApprovalRequest,
+    /// Type of sandbox access requested.
+    pub access_type: cocode_protocol::SandboxAccessType,
+    /// Selected option index (0 = approve, 1 = deny, 2 = approve all).
+    pub selected: i32,
+}
+
+impl SandboxPermissionOverlay {
+    /// Create a new sandbox permission overlay.
+    pub fn new(request: ApprovalRequest, access_type: cocode_protocol::SandboxAccessType) -> Self {
+        Self {
+            request,
+            access_type,
             selected: 0,
         }
     }
@@ -2070,6 +2146,12 @@ pub enum CommandAction {
     Interrupt,
     /// Kill all running agents.
     KillAllAgents,
+    /// Toggle fast mode.
+    ToggleFastMode,
+    /// Cycle permission mode.
+    CyclePermissionMode,
+    /// Toggle transcript mode.
+    ToggleTranscriptMode,
     /// Quit.
     Quit,
 }

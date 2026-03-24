@@ -101,6 +101,8 @@ pub enum Feature {
     RelevantMemories,
     /// Enable background memory extraction agent.
     MemoryExtraction,
+    /// Enable user-customizable keybindings via `keybindings.json`.
+    KeybindingCustomization,
 }
 
 impl Feature {
@@ -342,6 +344,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryExtraction,
         key: "memory_extraction",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::KeybindingCustomization,
+        key: "keybinding_customization",
         stage: Stage::Experimental,
         default_enabled: false,
     },
