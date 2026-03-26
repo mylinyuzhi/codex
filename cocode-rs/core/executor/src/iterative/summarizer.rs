@@ -239,16 +239,16 @@ pub async fn generate_commit_message(
 /// ```
 pub fn create_summarize_fn<M>(model: Arc<M>) -> SummarizeFn
 where
-    M: cocode_api::LanguageModel + Send + Sync + 'static,
+    M: cocode_inference::LanguageModel + Send + Sync + 'static,
 {
     Arc::new(move |iteration, changed_files, task| {
         let model = model.clone();
         Box::pin(async move {
             let user_prompt = prompts::format_summary_prompt(&task, &changed_files);
 
-            let request = cocode_api::LanguageModelCallOptions::new(vec![
-                cocode_api::LanguageModelMessage::system(prompts::ITERATION_SUMMARY_SYSTEM),
-                cocode_api::LanguageModelMessage::user_text(&user_prompt),
+            let request = cocode_inference::LanguageModelCallOptions::new(vec![
+                cocode_inference::LanguageModelMessage::system(prompts::ITERATION_SUMMARY_SYSTEM),
+                cocode_inference::LanguageModelMessage::user_text(&user_prompt),
             ]);
 
             let response = model.do_generate(request).await.map_err(|e| {
@@ -296,7 +296,7 @@ where
 /// ```
 pub fn create_commit_msg_fn<M>(model: Arc<M>) -> CommitMessageFn
 where
-    M: cocode_api::LanguageModel + Send + Sync + 'static,
+    M: cocode_inference::LanguageModel + Send + Sync + 'static,
 {
     Arc::new(move |iteration, task, changed_files, summary| {
         let model = model.clone();
@@ -304,9 +304,9 @@ where
             let user_prompt =
                 prompts::format_commit_msg_prompt(iteration, &task, &changed_files, &summary);
 
-            let request = cocode_api::LanguageModelCallOptions::new(vec![
-                cocode_api::LanguageModelMessage::system(prompts::COMMIT_MSG_SYSTEM),
-                cocode_api::LanguageModelMessage::user_text(&user_prompt),
+            let request = cocode_inference::LanguageModelCallOptions::new(vec![
+                cocode_inference::LanguageModelMessage::system(prompts::COMMIT_MSG_SYSTEM),
+                cocode_inference::LanguageModelMessage::user_text(&user_prompt),
             ]);
 
             let response = model.do_generate(request).await.map_err(|e| {

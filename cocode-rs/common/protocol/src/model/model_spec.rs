@@ -139,6 +139,18 @@ impl ModelSpec {
     pub fn enrich_from_model_info(&mut self, info: &super::ModelInfo) {
         self.display_name = info.display_name_or_slug().to_string();
     }
+
+    /// Parse a model string that may or may not include a provider prefix.
+    ///
+    /// If the string contains `"provider/model"`, both parts are used.
+    /// If it contains only `"model"`, the provider defaults to `"anthropic"`.
+    pub fn parse_with_default_provider(s: &str) -> Self {
+        if let Some((provider, model)) = s.split_once('/') {
+            Self::new(provider, model)
+        } else {
+            Self::new("anthropic", s)
+        }
+    }
 }
 
 impl fmt::Display for ModelSpec {

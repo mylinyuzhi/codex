@@ -596,7 +596,7 @@ fn merge_logging(base: &LoggingConfig, profile: &LoggingConfig) -> LoggingConfig
 ///   "logging": {
 ///     "level": "debug",
 ///     "timezone": "local",
-///     "modules": ["cocode_core=debug", "cocode_api=trace"],
+///     "modules": ["cocode_core=debug", "cocode_inference=trace"],
 ///     "location": true,
 ///     "target": false
 ///   }
@@ -626,7 +626,7 @@ pub struct LoggingConfig {
     #[serde(default)]
     pub timezone: Option<String>,
 
-    /// Per-module log levels (e.g., ["cocode_core=debug", "cocode_api=trace"]).
+    /// Per-module log levels (e.g., ["cocode_core=debug", "cocode_inference=trace"]).
     #[serde(default)]
     pub modules: Option<Vec<String>>,
 }

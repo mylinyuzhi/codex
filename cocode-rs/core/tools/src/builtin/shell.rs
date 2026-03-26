@@ -60,6 +60,11 @@ impl Tool for ShellTool {
                 "timeout": {
                     "type": "integer",
                     "description": "Optional timeout in seconds (max 600)"
+                },
+                "dangerouslyDisableSandbox": {
+                    "type": "boolean",
+                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+                    "default": false
                 }
             },
             "required": ["command"]
@@ -78,7 +83,7 @@ impl Tool for ShellTool {
         30_000
     }
 
-    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         let args = match input.get("command").and_then(|v| v.as_array()) {
             Some(arr) => arr,
             None => return PermissionResult::Passthrough,
@@ -94,10 +99,37 @@ impl Tool for ShellTool {
             return PermissionResult::Passthrough;
         }
 
+        // Sandbox auto-allow: when sandbox is active and auto-allow enabled,
+        // the sandbox itself becomes the security boundary.
+        let bypass_requested =
+            super::input_helpers::bool_or(input, "dangerouslyDisableSandbox", false);
+        if let Some(ref state) = ctx.sandbox_state
+            && state.auto_allow_enabled()
+            && !bypass_requested
+            && state.should_sandbox_command(&command_str, cocode_sandbox::SandboxBypass::No)
+        {
+            return PermissionResult::Allowed;
+        }
+
+        // Plan mode: only allow read-only commands.
+        if ctx.is_plan_mode {
+            if super::bash::is_plan_mode_allowed(&command_str) {
+                return PermissionResult::Allowed;
+            }
+            return PermissionResult::Denied {
+                reason: "Plan mode is active. Only read-only commands are allowed \
+                         during planning. Use Read, Glob, and Grep tools to explore \
+                         the codebase, or run read-only shell commands (e.g. ls, cat, \
+                         grep, git status)."
+                    .to_string(),
+            };
+        }
+
         // Run security analysis on the joined command string
         let (_, analysis) = cocode_shell_parser::parse_and_analyze(&command_str);
 
         if analysis.has_risks() {
+            // Deny-phase risks → auto-block
             let deny_phase_risks =
                 analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Deny);
             if !deny_phase_risks.is_empty() {
@@ -112,24 +144,43 @@ impl Tool for ShellTool {
                     ),
                 };
             }
+
+            // Ask-phase risks → NeedsApproval with risk details
+            let ask_phase_risks =
+                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Ask);
+            if !ask_phase_risks.is_empty() {
+                let risks: Vec<cocode_protocol::SecurityRisk> = ask_phase_risks
+                    .iter()
+                    .map(|r| super::map_shell_risk(r))
+                    .collect();
+
+                return PermissionResult::NeedsApproval {
+                    request: ApprovalRequest {
+                        request_id: format!("shell-security-{}", uuid::Uuid::new_v4()),
+                        tool_name: cocode_protocol::ToolName::Shell.as_str().to_string(),
+                        description: cocode_utils_string::truncate_str(&command_str, 120),
+                        risks,
+                        allow_remember: true,
+                        proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
+                    },
+                };
+            }
         }
 
-        // Non-trivial command → needs approval
+        // Non-trivial command with no detected risks → still needs approval
+        let description = cocode_utils_string::truncate_str(&command_str, 120);
+        // Annotate when sandbox bypass is active so the user knows this runs unsandboxed
+        let description = if bypass_requested && ctx.sandbox_state.is_some() {
+            format!("{description} (unsandboxed)")
+        } else {
+            description
+        };
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
-                request_id: format!(
-                    "shell-cmd-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                ),
+                request_id: format!("shell-cmd-{}", uuid::Uuid::new_v4()),
                 tool_name: cocode_protocol::ToolName::Shell.as_str().to_string(),
-                description: if command_str.len() > 120 {
-                    format!("{}...", &command_str[..120])
-                } else {
-                    command_str
-                },
+                description,
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
@@ -209,19 +260,7 @@ impl Tool for ShellTool {
             text.push_str(&stderr);
         }
 
-        if exit_code != 0 {
-            if text.is_empty() {
-                text = format!("Command failed with exit code {exit_code}");
-            } else {
-                text.push_str(&format!("\n\nExit code: {exit_code}"));
-            }
-            return Ok(ToolOutput::error(text));
-        }
-
-        if text.is_empty() {
-            text = "(no output)".to_string();
-        }
-        Ok(ToolOutput::text(text))
+        super::format_redacted_output(&text, exit_code)
     }
 }
 

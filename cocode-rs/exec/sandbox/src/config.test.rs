@@ -207,7 +207,6 @@ fn test_sandbox_settings_default_disabled() {
     assert!(settings.ignore_violations.is_empty());
     assert!(!settings.enable_weaker_nested_sandbox);
     assert!(!settings.enable_weaker_network_isolation);
-    assert!(settings.seccomp.bpf_path.is_none());
     assert!(!settings.allow_pty);
     assert_eq!(settings.mandatory_deny_search_depth, 3);
 }
@@ -470,6 +469,7 @@ fn test_filesystem_config_from_empty_json() {
 #[test]
 fn test_network_config_default() {
     let config = NetworkConfig::default();
+    assert_eq!(config.mode, NetworkMode::Full);
     assert!(config.allowed_domains.is_empty());
     assert!(config.denied_domains.is_empty());
     assert!(config.allow_unix_sockets.is_empty());
@@ -481,8 +481,47 @@ fn test_network_config_default() {
 }
 
 #[test]
+fn test_network_mode_allows_method() {
+    assert!(NetworkMode::Full.allows_method("GET"));
+    assert!(NetworkMode::Full.allows_method("POST"));
+    assert!(NetworkMode::Full.allows_method("CONNECT"));
+
+    assert!(NetworkMode::Limited.allows_method("GET"));
+    assert!(NetworkMode::Limited.allows_method("HEAD"));
+    assert!(NetworkMode::Limited.allows_method("OPTIONS"));
+    assert!(!NetworkMode::Limited.allows_method("POST"));
+    assert!(!NetworkMode::Limited.allows_method("PUT"));
+    assert!(!NetworkMode::Limited.allows_method("DELETE"));
+    assert!(!NetworkMode::Limited.allows_method("PATCH"));
+    assert!(!NetworkMode::Limited.allows_method("CONNECT"));
+}
+
+#[test]
+fn test_network_mode_serde() {
+    let json_full = r#""full""#;
+    let json_limited = r#""limited""#;
+    assert_eq!(
+        serde_json::from_str::<NetworkMode>(json_full).expect("parse full"),
+        NetworkMode::Full
+    );
+    assert_eq!(
+        serde_json::from_str::<NetworkMode>(json_limited).expect("parse limited"),
+        NetworkMode::Limited
+    );
+    assert_eq!(
+        serde_json::to_string(&NetworkMode::Full).expect("ser"),
+        json_full
+    );
+    assert_eq!(
+        serde_json::to_string(&NetworkMode::Limited).expect("ser"),
+        json_limited
+    );
+}
+
+#[test]
 fn test_network_config_serde_roundtrip() {
     let config = NetworkConfig {
+        mode: NetworkMode::Limited,
         allowed_domains: vec!["github.com".to_string()],
         denied_domains: vec!["evil.com".to_string()],
         allow_unix_sockets: vec![PathBuf::from("/var/run/docker.sock")],
@@ -494,6 +533,7 @@ fn test_network_config_serde_roundtrip() {
             socket_path: PathBuf::from("/tmp/mitm.sock"),
             domains: vec!["api.example.com".to_string()],
         }),
+        block_non_public_ips: true,
     };
     let json = serde_json::to_string(&config).expect("serialize");
     let parsed: NetworkConfig = serde_json::from_str(&json).expect("deserialize");
@@ -505,28 +545,6 @@ fn test_network_config_from_empty_json() {
     let config: NetworkConfig = serde_json::from_str("{}").expect("parse");
     assert!(config.allowed_domains.is_empty());
     assert!(config.http_proxy_port.is_none());
-}
-
-// ==========================================================================
-// SeccompConfig tests
-// ==========================================================================
-
-#[test]
-fn test_seccomp_config_default() {
-    let config = SeccompConfig::default();
-    assert!(config.bpf_path.is_none());
-    assert!(config.apply_path.is_none());
-}
-
-#[test]
-fn test_seccomp_config_serde_roundtrip() {
-    let config = SeccompConfig {
-        bpf_path: Some(PathBuf::from("/usr/share/seccomp/unix-block.bpf")),
-        apply_path: Some(PathBuf::from("/usr/bin/apply-seccomp")),
-    };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let parsed: SeccompConfig = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(parsed, config);
 }
 
 // ==========================================================================
@@ -546,9 +564,6 @@ fn test_sandbox_settings_nested_json() {
             "allowed_domains": ["github.com"],
             "allow_local_binding": true,
             "http_proxy_port": 3128
-        },
-        "seccomp": {
-            "bpf_path": "/usr/share/seccomp/filter.bpf"
         },
         "allow_pty": true,
         "mandatory_deny_search_depth": 5
@@ -571,10 +586,6 @@ fn test_sandbox_settings_nested_json() {
     );
     assert!(settings.network.allow_local_binding);
     assert_eq!(settings.network.http_proxy_port, Some(3128));
-    assert_eq!(
-        settings.seccomp.bpf_path,
-        Some(PathBuf::from("/usr/share/seccomp/filter.bpf"))
-    );
     assert!(settings.allow_pty);
     assert_eq!(settings.mandatory_deny_search_depth, 5);
 }

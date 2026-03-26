@@ -9,7 +9,7 @@ use crate::normalization::normalize_messages_for_api;
 use crate::read_tracking_policy::is_read_state_source_tool;
 use crate::tracked::TrackedMessage;
 use crate::turn::Turn;
-use cocode_api::LanguageModelMessage;
+use cocode_inference::LanguageModelMessage;
 use cocode_protocol::FileReadKind;
 use cocode_protocol::TokenUsage;
 use serde::Deserialize;

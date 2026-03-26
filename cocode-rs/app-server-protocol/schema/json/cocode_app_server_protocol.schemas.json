@@ -334,30 +334,9 @@
             "deny"
           ],
           "type": "string"
-        },
-        {
-          "description": "Approve with modified tool input.",
-          "enum": [
-            "modify"
-          ],
-          "type": "string"
         }
       ],
       "title": "ApprovalDecision"
-    },
-    "ApprovalModifyPayload": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Parameters for `approval/resolve`.\n\nWhen `decision` is `Modify`, `updated_input` must be provided with the new tool input to use instead of the original.",
-      "properties": {
-        "updated_input": {
-          "description": "Modified tool input (required when decision is `modify`)."
-        }
-      },
-      "required": [
-        "updated_input"
-      ],
-      "title": "ApprovalModifyPayload",
-      "type": "object"
     },
     "ClientRequest": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -606,13 +585,6 @@
                 "deny"
               ],
               "type": "string"
-            },
-            {
-              "description": "Approve with modified tool input.",
-              "enum": [
-                "modify"
-              ],
-              "type": "string"
             }
           ]
         },
@@ -630,13 +602,23 @@
             "request_id": {
               "description": "The request ID of the approval being resolved.",
               "type": "string"
-            },
-            "updated_input": {
-              "description": "Modified tool input (required when decision is `modify`)."
             }
           },
           "required": [
             "decision",
+            "request_id"
+          ],
+          "type": "object"
+        },
+        "CancelRequestParams": {
+          "description": "Parameters for `control/cancelRequest`.\n\nCancels a pending server-initiated request (hook callback, approval prompt). The server should treat this as if the request was denied/failed.",
+          "properties": {
+            "request_id": {
+              "description": "The request_id of the pending request to cancel.",
+              "type": "string"
+            }
+          },
+          "required": [
             "request_id"
           ],
           "type": "object"
@@ -1553,6 +1535,25 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Cancel a pending server-initiated request (hook callback, approval).",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/cancelRequest"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CancelRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ClientRequest"
@@ -2305,6 +2306,107 @@
           ],
           "type": "object"
         },
+        "ErrorInfo": {
+          "description": "Structured error classification for programmatic handling.\n\nFollows the codex-rs `CodexErrorInfo` pattern for typed error dispatch.",
+          "oneOf": [
+            {
+              "description": "Context window exceeded — compaction needed or context too large.",
+              "enum": [
+                "context_window_exceeded"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "API rate limit hit — retry after backoff.",
+              "enum": [
+                "rate_limit_exceeded"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Authentication failed or expired.",
+              "enum": [
+                "authentication_failed"
+              ],
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Server overloaded — retry with backoff.",
+              "properties": {
+                "server_overloaded": {
+                  "properties": {
+                    "retry_after_ms": {
+                      "description": "Suggested retry delay in milliseconds.",
+                      "format": "int64",
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "server_overloaded"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Tool execution failed.",
+              "properties": {
+                "tool_execution_failed": {
+                  "properties": {
+                    "tool_name": {
+                      "description": "Name of the tool that failed.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "tool_execution_failed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "HTTP connection failure.",
+              "properties": {
+                "http_connection_failed": {
+                  "properties": {
+                    "http_status_code": {
+                      "description": "HTTP status code (if available).",
+                      "format": "int32",
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "http_connection_failed"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Maximum budget exceeded.",
+              "enum": [
+                "budget_exceeded"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "ErrorNotificationParams": {
           "description": "Parameters for `error`.",
           "properties": {
@@ -2314,6 +2416,17 @@
                 "string",
                 "null"
               ]
+            },
+            "error_info": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ErrorInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Structured error info for programmatic handling."
             },
             "message": {
               "description": "Error message.",
@@ -2620,13 +2733,38 @@
         "RateLimitParams": {
           "description": "Parameters for `rateLimit`.",
           "properties": {
-            "info": {
-              "description": "Rate limit details."
+            "limit": {
+              "description": "Maximum requests allowed per window.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "provider": {
+              "description": "Provider that imposed the rate limit.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "remaining": {
+              "description": "Remaining requests in the current window.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "reset_at": {
+              "description": "Unix timestamp (seconds) when the rate limit resets.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
-          "required": [
-            "info"
-          ],
           "type": "object"
         },
         "ReasoningDeltaParams": {
@@ -2749,9 +2887,9 @@
             },
             "total_cost_cents": {
               "description": "Total cost in cents (if available).",
-              "format": "double",
+              "format": "int64",
               "type": [
-                "number",
+                "integer",
                 "null"
               ]
             },
@@ -4049,6 +4187,26 @@
             "request_id"
           ],
           "type": "object"
+        },
+        "ServerCancelRequestParams": {
+          "description": "Parameters for server-originated `control/cancelRequest`.\n\nTells the client to stop waiting for a response to the given request_id. Emitted when a hook callback times out or an approval is superseded.",
+          "properties": {
+            "reason": {
+              "description": "Reason for cancellation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "description": "The request_id being cancelled.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id"
+          ],
+          "type": "object"
         }
       },
       "description": "Requests from the server to a client.\n\nThese require a response from the client (unlike notifications which are fire-and-forget). Used for permission prompts, user input requests, and MCP message routing.",
@@ -4121,6 +4279,25 @@
             },
             "params": {
               "$ref": "#/definitions/HookCallbackParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Cancel a previously sent request (e.g., hook callback timeout).",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/cancelRequest"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ServerCancelRequestParams"
             }
           },
           "required": [
@@ -4306,9 +4483,9 @@
         },
         "total_cost_cents": {
           "description": "Total cost in cents (if available).",
-          "format": "double",
+          "format": "int64",
           "type": [
-            "number",
+            "integer",
             "null"
           ]
         },

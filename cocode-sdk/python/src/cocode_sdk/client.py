@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Callable, Awaitable
+import logging
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Awaitable
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from cocode_sdk.tools import ToolDefinition
 
 from cocode_sdk._internal.transport import Transport
 from cocode_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
@@ -29,6 +35,18 @@ from cocode_sdk.generated.protocol import (
     UpdateEnvRequest,
     UserInputResolveRequest,
 )
+
+def _safe_parse_notification(line_data: dict[str, Any]) -> ServerNotification:
+    """Parse a notification dict, falling back to raw method+params on error."""
+    try:
+        return ServerNotification.model_validate(line_data)
+    except Exception as exc:
+        logger.warning("Failed to parse notification %s: %s", line_data.get("method"), exc)
+        return ServerNotification(
+            method=line_data.get("method", "unknown"),
+            params=line_data.get("params", {}),
+        )
+
 
 # Callback type for permission decisions
 CanUseTool = Callable[[str, dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -70,6 +88,7 @@ class CocodeClient:
         max_turns: int | None = None,
         cwd: str | None = None,
         system_prompt_suffix: str | None = None,
+        system_prompt: str | None = None,
         permission_mode: str | None = None,
         env: dict[str, str] | None = None,
         binary_path: str | None = None,
@@ -78,21 +97,30 @@ class CocodeClient:
         agents: dict[str, AgentDefinitionConfig] | None = None,
         hooks: list[HookCallbackConfig] | None = None,
         mcp_servers: dict[str, McpServerConfig] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        sandbox: dict[str, Any] | None = None,
+        thinking: dict[str, Any] | None = None,
         max_budget_cents: int | None = None,
         disable_builtin_agents: bool | None = None,
+        output_format: Any | None = None,
     ):
         self._initial_prompt = prompt
         self._model = model
         self._max_turns = max_turns
         self._cwd = cwd
         self._system_prompt_suffix = system_prompt_suffix
+        self._system_prompt = system_prompt
         self._permission_mode = permission_mode
         self._env = env
         self._agents = agents
         self._hooks = hooks
         self._mcp_servers = mcp_servers
+        self._tools = tools
+        self._sandbox = sandbox
+        self._thinking = thinking
         self._max_budget_cents = max_budget_cents
         self._disable_builtin_agents = disable_builtin_agents
+        self._output_format = output_format
         self._transport = transport or SubprocessCLITransport(
             binary_path=binary_path,
             cwd=cwd,
@@ -100,7 +128,13 @@ class CocodeClient:
         )
         self._can_use_tool = can_use_tool
         self._hook_handlers: dict[str, HookHandler] = {}
+        self._tool_registry: dict[str, ToolDefinition] = {}
         self._started = False
+
+        # Build tool registry from @tool() decorated functions
+        if tools:
+            for tool_def in tools:
+                self._tool_registry[tool_def.server_name] = tool_def
 
     async def __aenter__(self) -> CocodeClient:
         await self.start()
@@ -114,6 +148,18 @@ class CocodeClient:
         await self._transport.start()
         self._started = True
 
+        # Build MCP servers dict, merging user-provided and @tool() generated
+        mcp_servers = {}
+        if self._mcp_servers:
+            mcp_servers.update({
+                k: v.model_dump(exclude_none=True)
+                for k, v in self._mcp_servers.items()
+            })
+        if self._tools:
+            for tool_def in self._tools:
+                name, config = tool_def.to_sdk_mcp_config()
+                mcp_servers[name] = config
+
         # Send session/start request
         request = SessionStartRequest(
             params=SessionStartRequest.SessionStartRequestParams(
@@ -122,20 +168,21 @@ class CocodeClient:
                 max_turns=self._max_turns,
                 cwd=self._cwd,
                 system_prompt_suffix=self._system_prompt_suffix,
+                system_prompt=self._system_prompt,
                 permission_mode=self._permission_mode,
                 env=self._env,
                 agents={
                     k: v.model_dump(exclude_none=True)
                     for k, v in self._agents.items()
                 } if self._agents else None,
-                mcp_servers={
-                    k: v.model_dump(exclude_none=True)
-                    for k, v in self._mcp_servers.items()
-                } if self._mcp_servers else None,
+                mcp_servers=mcp_servers or None,
                 hooks=[h.model_dump(exclude_none=True) for h in self._hooks]
                 if self._hooks else None,
+                sandbox=self._sandbox,
+                thinking=self._thinking,
                 max_budget_cents=self._max_budget_cents,
                 disable_builtin_agents=self._disable_builtin_agents,
+                output_format=self._output_format,
             )
         )
         await self._transport.send_line(request.model_dump_json())
@@ -162,7 +209,7 @@ class CocodeClient:
                     await self.approve(params.get("request_id", ""), decision)
                     continue
                 # No callback — yield as notification for manual handling
-                yield ServerNotification.model_validate(line_data)
+                yield _safe_parse_notification(line_data)
                 continue
 
             if method == "hook/callback":
@@ -181,21 +228,50 @@ class CocodeClient:
                             params.get("request_id", ""), error=str(exc)
                         )
                     else:
-                        await self.respond_to_hook(
-                            params.get("request_id", ""), output=output
-                        )
+                        if not isinstance(output, dict):
+                            await self.respond_to_hook(
+                                params.get("request_id", ""),
+                                error=f"Hook handler must return dict, got {type(output).__name__}",
+                            )
+                        else:
+                            await self.respond_to_hook(
+                                params.get("request_id", ""), output=output
+                            )
                     continue
                 # No handler — yield for manual handling
-                yield ServerNotification.model_validate(line_data)
+                yield _safe_parse_notification(line_data)
+                continue
+
+            if method == "mcp/routeMessage":
+                params = line_data.get("params", {})
+                server_name = params.get("server_name", "")
+                request_id = params.get("request_id", "")
+                message = params.get("message", {})
+                tool_def = self._tool_registry.get(server_name)
+                if tool_def and message.get("method") == "tools/call":
+                    mcp_params = message.get("params", {})
+                    try:
+                        result = await tool_def.invoke(mcp_params.get("arguments", {}))
+                        result_str = result if isinstance(result, str) else json.dumps(result)
+                        await self._respond_to_mcp_route(
+                            request_id, {"result": result_str}
+                        )
+                    except Exception as exc:
+                        await self._respond_to_mcp_route(
+                            request_id, None, error=str(exc)
+                        )
+                    continue
+                # No handler or unsupported method — yield as notification
+                yield _safe_parse_notification(line_data)
                 continue
 
             if method == "input/requestUserInput":
                 # Always yield for manual handling (no auto-response)
-                yield ServerNotification.model_validate(line_data)
+                yield _safe_parse_notification(line_data)
                 continue
 
             # Regular notification
-            event = ServerNotification.model_validate(line_data)
+            event = _safe_parse_notification(line_data)
             yield event
 
             # Stop after turn completion or failure
@@ -297,6 +373,24 @@ class CocodeClient:
             params=RewindFilesRequest.RewindFilesRequestParams(turn_id=turn_id)
         )
         await self._transport.send_line(request.model_dump_json())
+
+    async def _respond_to_mcp_route(
+        self,
+        request_id: str,
+        response: Any = None,
+        error: str | None = None,
+    ) -> None:
+        """Respond to an mcp/routeMessage server request."""
+        msg = {
+            "method": "mcp/routeMessageResponse",
+            "params": {
+                "request_id": request_id,
+                "response": response if response is not None else {},
+            },
+        }
+        if error is not None:
+            msg["params"]["error"] = error
+        await self._transport.send_line(json.dumps(msg))
 
     async def respond_to_hook(
         self, request_id: str, output: Any = None, error: str | None = None

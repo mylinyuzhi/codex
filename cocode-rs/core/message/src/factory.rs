@@ -5,13 +5,13 @@
 
 use crate::tracked::MessageSource;
 use crate::tracked::TrackedMessage;
-use cocode_api::AssistantContentPart;
-use cocode_api::CollectedResponse;
-use cocode_api::LanguageModelMessage;
-use cocode_api::ToolContentPart;
-use cocode_api::ToolResultContent;
-use cocode_api::ToolResultPart;
-use cocode_api::UserContentPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::CollectedResponse;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::ToolContentPart;
+use cocode_inference::ToolResultContent;
+use cocode_inference::ToolResultPart;
+use cocode_inference::UserContentPart;
 
 /// Create a user message.
 pub fn create_user_message(

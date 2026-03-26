@@ -320,6 +320,10 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Harden the process before anything else: disable ptrace, core dumps,
+    // and strip dangerous LD_*/DYLD_* environment variables.
+    cocode_process_hardening::pre_main_hardening();
+
     // Use arg0 dispatcher for single-binary deployment.
     // This handles:
     // - argv[0] dispatch: apply_patch, cocode-linux-sandbox
@@ -330,20 +334,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Parse permission mode from CLI string.
-///
-/// Accepts multiple formats for user convenience:
-/// - "default", "plan", "acceptEdits"/"accept-edits", "bypassPermissions"/"bypass"
 fn parse_permission_mode(s: &str) -> anyhow::Result<PermissionMode> {
-    match s.to_lowercase().replace('_', "-").as_str() {
-        "default" => Ok(PermissionMode::Default),
-        "plan" => Ok(PermissionMode::Plan),
-        "acceptedits" | "accept-edits" => Ok(PermissionMode::AcceptEdits),
-        "bypasspermissions" | "bypass-permissions" | "bypass" => Ok(PermissionMode::Bypass),
-        "dontask" | "dont-ask" => Ok(PermissionMode::DontAsk),
-        _ => Err(anyhow::anyhow!(
-            "Unknown permission mode: '{s}'. Valid values: default, plan, acceptEdits, bypassPermissions, dontAsk"
-        )),
-    }
+    s.parse()
+        .map_err(|e: cocode_protocol::PermissionModeParseError| anyhow::anyhow!("{e}"))
 }
 
 /// Build `CliFlags` from the parsed `Cli` struct.
