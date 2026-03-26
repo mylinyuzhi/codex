@@ -88,7 +88,7 @@ Rules:
 ┌──────────────────────────────────────────────────────────────────────┐
 │  App: cli, tui, session                                              │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Core: loop → executor → api                                        │
+│  Core: loop → executor → inference                                   │
 │            ↓        ↓                                                │
 │         tools ← context ← prompt                                    │
 │            ↓                                                         │
@@ -116,8 +116,8 @@ User input
   → SystemReminderOrchestrator.generate_all()    [system-reminder]
   → SystemPromptBuilder.build()                   [prompt]
   → ToolRegistry.definitions_for_model()          [tools]
-  → ApiClient.stream_request()                    [api → vercel-ai]
-  → StreamProcessor yields StreamEvents           [api]
+  → ApiClient.stream_request()                    [inference → vercel-ai]
+  → StreamProcessor yields StreamEvents           [inference]
   → StreamingToolExecutor:
       safe tools → execute concurrently           [tools]
       unsafe tools → queue, execute after stop    [tools]
@@ -163,7 +163,7 @@ Bash tool → ShellExecutor.execute(CommandInput)
 
 | Crate | Purpose | Key Types |
 |-------|---------|-----------|
-| `api` | Provider-agnostic LLM client with retry, fallback, stall detection | `ApiClient` (wraps `hyper-sdk::Model`), `UnifiedStream` (streaming/non-streaming abstraction), `StreamingQueryResult`, `CollectedResponse`, `RetryContext` |
+| `inference` | Provider-agnostic LLM inference with retry, fallback, stall detection | `ApiClient` (wraps `hyper-sdk::Model`), `UnifiedStream` (streaming/non-streaming abstraction), `StreamingQueryResult`, `CollectedResponse`, `RetryContext` |
 | `message` | Conversation history with turn tracking and compaction | `TrackedMessage` (uuid, turn_id, source, tombstoned), `MessageSource` (User/Assistant/System/Tool/Subagent/SystemReminder), `Turn` (user+assistant+tool_calls+usage), `MessageHistory` (turns, compaction, micro-compact) |
 | `tools` | Tool trait, 5-stage pipeline, concurrent execution | `Tool` trait (validate→check_permission→execute→post_process→cleanup), `ToolContext` (cwd, permissions, shell_executor, lsp_manager, cancel_token, spawn_agent_fn), `StreamingToolExecutor` (safe=concurrent, unsafe=queued), `ToolRegistry`, `FileTracker` |
 | `context` | Context window assembly and token budgeting | `ConversationContext` (environment, budget, tool_names, memory_files, injections), `ContextBudget` with `BudgetCategory` (SystemPrompt/Tools/Memory/Messages/Output/Reserved), `EnvironmentInfo` |

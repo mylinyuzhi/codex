@@ -96,14 +96,24 @@ pub fn generate_session_tag() -> String {
     format!("_{hex}_SBX")
 }
 
+/// Maximum command length before base64 encoding (matches Claude Code's T21).
+///
+/// Long commands are truncated to avoid oversized SBPL message strings.
+const MAX_COMMAND_TAG_INPUT: usize = 100;
+
 /// Generate a base64-encoded command tag for violation correlation.
 ///
-/// Format: `CMD64_<base64(command)>_END_<session_tag>`
+/// Format: `CMD64_<base64(command[:100])>_END<session_tag>`
 /// Embedded in the sandboxed command so log violations can be correlated
 /// back to the specific command that triggered them.
+///
+/// Command is truncated to [`MAX_COMMAND_TAG_INPUT`] chars (at a valid
+/// UTF-8 boundary) before encoding, matching Claude Code's behavior.
 pub fn generate_command_tag(command: &str, session_tag: &str) -> String {
     use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(command);
+    let truncated =
+        cocode_utils_string::take_bytes_at_char_boundary(command, MAX_COMMAND_TAG_INPUT);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(truncated);
     format!("CMD64_{encoded}_END{session_tag}")
 }
 

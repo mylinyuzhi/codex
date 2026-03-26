@@ -32,6 +32,27 @@ pub enum McpServerConfig {
         /// Server URL.
         url: String,
     },
+    /// SDK-managed MCP server (messages routed through SDK control channel).
+    ///
+    /// The server runs in-process in the SDK client (e.g., via `@tool()` decorator).
+    /// MCP messages are routed through `mcp/routeMessage` server requests.
+    Sdk {
+        /// Tool definitions hosted by this server.
+        tools: Vec<SdkMcpToolDef>,
+    },
+}
+
+/// Tool definition for an SDK-managed MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SdkMcpToolDef {
+    /// Tool name.
+    pub name: String,
+    /// Tool description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// JSON Schema for the tool's input parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
 }
 
 /// Agent definition for SDK-provided custom agents.
@@ -359,4 +380,61 @@ pub struct NotificationHookInput {
     /// Notification payload.
     #[serde(default)]
     pub payload: Value,
+}
+
+/// Input payload for `PostToolUseFailure` hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PostToolUseFailureHookInput {
+    /// Name of the tool that failed.
+    pub tool_name: String,
+    /// Tool input parameters.
+    #[serde(default)]
+    pub tool_input: Value,
+    /// Tool use identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// Error message from the failure.
+    pub error: String,
+    /// Whether the failure was caused by an interrupt.
+    #[serde(default)]
+    pub is_interrupt: bool,
+}
+
+/// Input payload for `PreCompact` hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreCompactHookInput {
+    /// What triggered the compaction ("auto" or "manual").
+    pub trigger: String,
+    /// Custom instructions for the compaction (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_instructions: Option<String>,
+}
+
+/// Input payload for `PermissionRequest` hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PermissionRequestHookInput {
+    /// Name of the tool requesting permission.
+    pub tool_name: String,
+    /// Tool input parameters.
+    #[serde(default)]
+    pub tool_input: Value,
+    /// Permission suggestions from the system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_suggestions: Option<Value>,
+}
+
+/// Input payload for `SessionStart` hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionStartHookInput {
+    /// Session identifier.
+    pub session_id: String,
+}
+
+/// Input payload for `SessionEnd` hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionEndHookInput {
+    /// Session identifier.
+    pub session_id: String,
+    /// Reason for session ending.
+    pub reason: String,
 }

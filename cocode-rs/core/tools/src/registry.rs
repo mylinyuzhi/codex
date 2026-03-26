@@ -81,6 +81,32 @@ impl ToolRegistry {
         self.aliases.insert(alias, name);
     }
 
+    /// Register a pre-built tool with a specific qualified name.
+    ///
+    /// Unlike [`Self::register`], this takes an `Arc<dyn Tool>` and a custom
+    /// key, allowing SDK-managed tools to use `mcp__server__tool` naming.
+    pub fn register_tool(&mut self, qualified_name: String, tool: Arc<dyn Tool>) {
+        self.tools.insert(qualified_name, tool);
+    }
+
+    /// Register MCP tool metadata (info only, for auto-search/definitions).
+    pub fn register_mcp_tool_info(
+        &mut self,
+        server_name: &str,
+        tool_name: &str,
+        description: Option<&str>,
+        input_schema: &serde_json::Value,
+    ) {
+        let info = McpToolInfo {
+            server: server_name.to_string(),
+            name: tool_name.to_string(),
+            description: description.map(String::from),
+            input_schema: input_schema.clone(),
+        };
+        let qualified = info.qualified_name();
+        self.mcp_tools.insert(qualified, info);
+    }
+
     /// Register an MCP server's tools (info only, not executable).
     ///
     /// This registers the tool metadata but doesn't make them executable.

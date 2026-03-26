@@ -3,6 +3,8 @@
 //! These types control how the agent requests and receives permissions
 //! for potentially dangerous operations.
 
+use std::str::FromStr;
+
 use serde::Deserialize;
 use serde::Serialize;
 use strum::Display;
@@ -65,6 +67,47 @@ impl PermissionMode {
         (*self).into()
     }
 }
+
+/// Parse a permission mode from any common string representation.
+///
+/// Accepts camelCase, kebab-case, snake_case, and lowercase forms:
+/// - `"default"` → `Default`
+/// - `"plan"` → `Plan`
+/// - `"acceptEdits"`, `"accept-edits"`, `"accept_edits"`, `"acceptedits"` → `AcceptEdits`
+/// - `"bypassPermissions"`, `"bypass-permissions"`, `"bypass"` → `Bypass`
+/// - `"dontAsk"`, `"dont-ask"`, `"dont_ask"`, `"dontask"` → `DontAsk`
+impl FromStr for PermissionMode {
+    type Err = PermissionModeParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Normalize: lowercase + strip separators
+        let normalized = s.to_lowercase().replace(['_', '-'], "");
+        match normalized.as_str() {
+            "default" => Ok(PermissionMode::Default),
+            "plan" => Ok(PermissionMode::Plan),
+            "acceptedits" => Ok(PermissionMode::AcceptEdits),
+            "bypasspermissions" | "bypass" => Ok(PermissionMode::Bypass),
+            "dontask" => Ok(PermissionMode::DontAsk),
+            _ => Err(PermissionModeParseError(s.to_string())),
+        }
+    }
+}
+
+/// Error returned when parsing a `PermissionMode` from a string fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionModeParseError(String);
+
+impl std::fmt::Display for PermissionModeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown permission mode: '{}'. Valid values: default, plan, acceptEdits, bypassPermissions, dontAsk",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for PermissionModeParseError {}
 
 /// Result of a permission check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

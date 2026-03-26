@@ -130,6 +130,14 @@ pub enum ServerNotification {
     /// Session has ended (clean termination).
     #[serde(rename = "session/ended")]
     SessionEnded(SessionEndedParams),
+
+    // ── IDE integration events ─────────────────────────────────────────
+    /// IDE selection/focus changed.
+    #[serde(rename = "ide/selectionChanged")]
+    IdeSelectionChanged(IdeSelectionChangedParams),
+    /// IDE diagnostics updated (new issues from an edit).
+    #[serde(rename = "ide/diagnosticsUpdated")]
+    IdeDiagnosticsUpdated(IdeDiagnosticsUpdatedParams),
 }
 
 // ---------------------------------------------------------------------------
@@ -374,13 +382,59 @@ pub struct ErrorNotificationParams {
     /// Whether the error is retryable.
     #[serde(default)]
     pub retryable: bool,
+    /// Structured error info for programmatic handling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_info: Option<ErrorInfo>,
+}
+
+/// Structured error classification for programmatic handling.
+///
+/// Follows the codex-rs `CodexErrorInfo` pattern for typed error dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorInfo {
+    /// Context window exceeded — compaction needed or context too large.
+    ContextWindowExceeded,
+    /// API rate limit hit — retry after backoff.
+    RateLimitExceeded,
+    /// Authentication failed or expired.
+    AuthenticationFailed,
+    /// Server overloaded — retry with backoff.
+    ServerOverloaded {
+        /// Suggested retry delay in milliseconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<i64>,
+    },
+    /// Tool execution failed.
+    ToolExecutionFailed {
+        /// Name of the tool that failed.
+        tool_name: String,
+    },
+    /// HTTP connection failure.
+    HttpConnectionFailed {
+        /// HTTP status code (if available).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status_code: Option<i32>,
+    },
+    /// Maximum budget exceeded.
+    BudgetExceeded,
 }
 
 /// Parameters for `rateLimit`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RateLimitParams {
-    /// Rate limit details.
-    pub info: Value,
+    /// Remaining requests in the current window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<i64>,
+    /// Unix timestamp (seconds) when the rate limit resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<i64>,
+    /// Maximum requests allowed per window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    /// Provider that imposed the rate limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Parameters for `keepAlive`.
@@ -444,4 +498,44 @@ pub enum SessionEndedReason {
 pub struct SessionEndedParams {
     /// Reason for session termination.
     pub reason: SessionEndedReason,
+}
+
+// ---------------------------------------------------------------------------
+// IDE integration params
+// ---------------------------------------------------------------------------
+
+/// Parameters for `ide/selectionChanged`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IdeSelectionChangedParams {
+    /// File path where the selection changed.
+    pub file_path: String,
+    /// Selected text (empty string for cursor-only position).
+    #[serde(default)]
+    pub selected_text: String,
+    /// Start line (0-indexed).
+    pub start_line: i32,
+    /// End line (0-indexed).
+    pub end_line: i32,
+}
+
+/// Parameters for `ide/diagnosticsUpdated`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IdeDiagnosticsUpdatedParams {
+    /// File path with diagnostic changes.
+    pub file_path: String,
+    /// Number of new diagnostics introduced since the baseline.
+    pub new_count: i32,
+    /// Diagnostic messages (limited to first 10 for bandwidth).
+    pub diagnostics: Vec<IdeDiagnosticInfo>,
+}
+
+/// A single diagnostic entry from the IDE.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IdeDiagnosticInfo {
+    /// Diagnostic message.
+    pub message: String,
+    /// Severity (e.g., "error", "warning", "info", "hint").
+    pub severity: String,
+    /// Line number (0-indexed).
+    pub line: i32,
 }

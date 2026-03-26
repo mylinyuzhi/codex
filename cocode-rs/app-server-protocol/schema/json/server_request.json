@@ -78,6 +78,25 @@
           "$ref": "#/definitions/HookCallbackParams"
         }
       }
+    },
+    {
+      "description": "Cancel a previously sent request (e.g., hook callback timeout).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/cancelRequest"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ServerCancelRequestParams"
+        }
+      }
     }
   ],
   "definitions": {
@@ -220,6 +239,26 @@
         },
         "request_id": {
           "description": "Unique request identifier.",
+          "type": "string"
+        }
+      }
+    },
+    "ServerCancelRequestParams": {
+      "description": "Parameters for server-originated `control/cancelRequest`.\n\nTells the client to stop waiting for a response to the given request_id. Emitted when a hook callback times out or an approval is superseded.",
+      "type": "object",
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "reason": {
+          "description": "Reason for cancellation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "description": "The request_id being cancelled.",
           "type": "string"
         }
       }

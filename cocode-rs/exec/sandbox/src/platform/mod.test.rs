@@ -22,5 +22,9 @@ fn test_create_platform_wrap_disabled_mode() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
     // Wrapping with disabled enforcement should be a no-op
-    assert!(sandbox.wrap_command(&config, &mut cmd).is_ok());
+    assert!(
+        sandbox
+            .wrap_command(&config, "echo hello", "_test_SBX", &mut cmd)
+            .is_ok()
+    );
 }

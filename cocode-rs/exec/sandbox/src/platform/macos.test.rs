@@ -64,16 +64,25 @@ fn test_generate_seatbelt_profile_includes_base_policy() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
-    // Base policy includes Chrome-inspired rules
+    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX");
+    // Version header and deny-default with command tag
     assert!(profile.contains("(version 1)"));
-    assert!(profile.contains("(deny default)"));
+    assert!(profile.contains("(deny default (with message \"CMD64_"));
+    assert!(profile.contains("_END_test_SBX"));
+    // Base policy includes Chrome-inspired rules
     assert!(profile.contains("(allow process-exec)"));
     assert!(profile.contains("(allow process-fork)"));
     assert!(profile.contains("(allow signal (target same-sandbox))"));
     assert!(profile.contains("(allow process-info* (target same-sandbox))"));
+    // PTY allowed by default config
     assert!(profile.contains("(allow pseudo-tty)"));
     assert!(profile.contains("(allow ipc-posix-sem)"));
+    // Aligned with Claude Code: mach-lookup entries
+    assert!(profile.contains("com.apple.FontObjectsServer"));
+    assert!(profile.contains("com.apple.logd"));
+    assert!(profile.contains("com.apple.SecurityServer"));
+    // POSIX shared memory
+    assert!(profile.contains("(allow ipc-posix-shm)"));
     // Granular sysctl whitelist
     assert!(profile.contains("hw.activecpu"));
     assert!(profile.contains("kern.hostname"));
@@ -89,7 +98,7 @@ fn test_generate_seatbelt_profile_readonly_no_writable_roots() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     assert!(profile.contains("(allow file-read* (subpath \"/usr\"))"));
     assert!(!profile.contains("Writable roots"));
     // Network restricted to loopback
@@ -108,7 +117,7 @@ fn test_generate_seatbelt_profile_with_writable_roots() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     assert!(profile.contains("(allow file-write* (subpath \"/home/user/project\"))"));
     // Protected subpaths denied for writes
     assert!(profile.contains("(deny file-write* (subpath \"/home/user/project/.git\"))"));
@@ -129,7 +138,7 @@ fn test_generate_seatbelt_profile_strict_no_network() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     assert!(profile.contains("(allow file-write* (subpath \"/tmp/sandbox\"))"));
     // No network policy appended
     assert!(!profile.contains("com.apple.trustd.agent"));
@@ -144,7 +153,7 @@ fn test_generate_seatbelt_profile_weaker_network_isolation() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     // Should include trustd.agent for Go TLS cert verification
     assert!(profile.contains("com.apple.trustd.agent"));
 }
@@ -158,7 +167,7 @@ fn test_generate_seatbelt_profile_no_trustd_by_default() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     // Should NOT include trustd.agent by default
     assert!(!profile.contains("com.apple.trustd.agent"));
 }
@@ -174,7 +183,7 @@ fn test_generate_seatbelt_profile_escapes_writable_root_paths() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config);
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
     // Quotes should be escaped
     assert!(profile.contains(r#"\"with quotes\""#));
     // Should not contain unescaped quotes that break SBPL
@@ -198,7 +207,7 @@ fn test_wrap_command_removes_dyld_env_vars() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("test");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -233,7 +242,7 @@ fn test_wrap_command_disabled_does_not_remove_env_vars() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("test");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -253,7 +262,7 @@ fn test_wrap_command_disabled_is_noop() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
     let inner = cmd.as_std();
     assert_eq!(inner.get_program(), "echo");
@@ -272,7 +281,7 @@ fn test_wrap_command_rewrites_to_sandbox_exec() {
     let mut cmd = tokio::process::Command::new("/bin/bash");
     cmd.arg("-c").arg("echo hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -284,4 +293,79 @@ fn test_wrap_command_rewrites_to_sandbox_exec() {
     assert_eq!(args[2], "/bin/bash");
     assert_eq!(args[3], "-c");
     assert_eq!(args[4], "echo hello");
+}
+
+// ==========================================================================
+// PTY disabled
+// ==========================================================================
+
+#[test]
+fn test_generate_seatbelt_profile_pty_disabled() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        allow_pty: false,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX");
+    assert!(
+        profile.contains("(deny pseudo-tty)"),
+        "PTY should be denied when allow_pty=false"
+    );
+    assert!(
+        !profile.contains("(allow pseudo-tty)"),
+        "PTY allow should not be present when disabled"
+    );
+    assert!(
+        !profile.contains("/dev/ptmx"),
+        "ptmx rules should not be present when PTY disabled"
+    );
+}
+
+// ==========================================================================
+// Special write paths
+// ==========================================================================
+
+#[test]
+fn test_generate_seatbelt_profile_includes_special_write_paths() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    // Device file writes (from Claude Code kx6)
+    assert!(profile.contains("(allow file-write* (literal \"/dev/stdout\"))"));
+    assert!(profile.contains("(allow file-write* (literal \"/dev/stderr\"))"));
+    // Branded temp dirs
+    assert!(profile.contains("(allow file-write* (subpath \"/tmp/cocode\"))"));
+    assert!(profile.contains("(allow file-write* (subpath \"/private/tmp/cocode\"))"));
+}
+
+// ==========================================================================
+// Command tag truncation
+// ==========================================================================
+
+#[test]
+fn test_generate_seatbelt_profile_long_command_tag_truncated() {
+    let long_command = "x".repeat(500);
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, &long_command, "_test_SBX");
+    // Tag should be present but truncated (100 chars → ~136 base64 chars)
+    assert!(profile.contains("CMD64_"));
+    // 500 chars of 'x' base64-encoded would be ~668 chars; 100 chars → ~136 chars
+    // Verify the tag is not excessively long
+    let tag_start = profile.find("CMD64_").unwrap();
+    let tag_end = profile[tag_start..].find('"').unwrap();
+    let tag = &profile[tag_start..tag_start + tag_end];
+    // Base64 of 100 bytes = ceil(100/3)*4 = 136 chars + prefix/suffix ≈ 160 chars
+    assert!(
+        tag.len() < 200,
+        "Tag should be truncated, got length {}",
+        tag.len()
+    );
 }

@@ -1,5 +1,5 @@
-use cocode_api::AssistantContentPart;
-use cocode_api::TextPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::TextPart;
 use cocode_protocol::AllowedPrompt;
 use cocode_protocol::PlanExitOption;
 use serde::Deserialize;

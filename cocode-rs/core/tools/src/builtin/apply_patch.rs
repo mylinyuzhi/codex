@@ -73,7 +73,7 @@ impl ApplyPatchTool {
         });
         let mut openai_opts = std::collections::HashMap::new();
         openai_opts.insert("custom_format".to_string(), custom_format);
-        let mut provider_options = cocode_api::ProviderOptions::default();
+        let mut provider_options = cocode_inference::ProviderOptions::default();
         provider_options.set("openai", openai_opts);
         ToolDefinition {
             name: cocode_protocol::ToolName::ApplyPatch.as_str().to_string(),
