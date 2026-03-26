@@ -8,6 +8,7 @@ license.workspace = true
 cocode-error = { path = "../error" }
 cocode-otel = { path = "../otel" }
 cocode-protocol = { path = "../protocol" }
+cocode-sandbox = { workspace = true }
 cocode-utils-common = { workspace = true }
 http = { workspace = true }
 dirs = "5"

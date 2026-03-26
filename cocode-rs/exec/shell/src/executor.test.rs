@@ -4,7 +4,7 @@ use std::path::Path;
 #[tokio::test]
 async fn test_execute_simple_command() {
     let executor = ShellExecutor::new(std::env::temp_dir());
-    let result = executor.execute("echo hello", 10).await;
+    let result = executor.execute("echo hello", 10, SandboxBypass::No).await;
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.stdout.trim(), "hello");
     assert!(result.stderr.is_empty());
@@ -15,14 +15,16 @@ async fn test_execute_simple_command() {
 #[tokio::test]
 async fn test_execute_failing_command() {
     let executor = ShellExecutor::new(std::env::temp_dir());
-    let result = executor.execute("exit 42", 10).await;
+    let result = executor.execute("exit 42", 10, SandboxBypass::No).await;
     assert_eq!(result.exit_code, 42);
 }
 
 #[tokio::test]
 async fn test_execute_with_stderr() {
     let executor = ShellExecutor::new(std::env::temp_dir());
-    let result = executor.execute("echo err >&2", 10).await;
+    let result = executor
+        .execute("echo err >&2", 10, SandboxBypass::No)
+        .await;
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.stderr.trim(), "err");
 }
@@ -30,7 +32,7 @@ async fn test_execute_with_stderr() {
 #[tokio::test]
 async fn test_execute_timeout() {
     let executor = ShellExecutor::new(std::env::temp_dir());
-    let result = executor.execute("sleep 30", 1).await;
+    let result = executor.execute("sleep 30", 1, SandboxBypass::No).await;
     assert_eq!(result.exit_code, -1);
     assert!(result.stderr.contains("timed out"));
 }
@@ -39,7 +41,7 @@ async fn test_execute_timeout() {
 async fn test_execute_uses_cwd() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let executor = ShellExecutor::new(tmp.path().to_path_buf());
-    let result = executor.execute("pwd", 10).await;
+    let result = executor.execute("pwd", 10, SandboxBypass::No).await;
     assert_eq!(result.exit_code, 0);
     // The output should contain the temp dir path
     let output_path = result.stdout.trim();
@@ -108,7 +110,7 @@ fn test_shell_task_id_format() {
 async fn test_with_default_shell() {
     let executor = ShellExecutor::with_default_shell(std::env::temp_dir());
     assert!(executor.shell.is_some());
-    let result = executor.execute("echo test", 10).await;
+    let result = executor.execute("echo test", 10, SandboxBypass::No).await;
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.stdout.trim(), "test");
 }
@@ -336,7 +338,7 @@ async fn test_cwd_captured_in_result() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let executor = ShellExecutor::new(tmp.path().to_path_buf());
 
-    let result = executor.execute("pwd", 10).await;
+    let result = executor.execute("pwd", 10, SandboxBypass::No).await;
 
     assert_eq!(result.exit_code, 0);
     // new_cwd should be captured
@@ -354,7 +356,7 @@ async fn test_cwd_captured_in_result() {
 #[tokio::test]
 async fn test_stdout_not_polluted_by_cwd_tracking() {
     let executor = ShellExecutor::new(std::env::temp_dir());
-    let result = executor.execute("echo hello", 10).await;
+    let result = executor.execute("echo hello", 10, SandboxBypass::No).await;
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.stdout.trim(), "hello");
@@ -377,7 +379,9 @@ async fn test_cwd_tracking_with_cd() {
     let initial_cwd = executor.cwd().to_path_buf();
 
     // Execute cd command with CWD tracking
-    let result = executor.execute_with_cwd_tracking("cd subdir", 10).await;
+    let result = executor
+        .execute_with_cwd_tracking("cd subdir", 10, SandboxBypass::No)
+        .await;
 
     assert_eq!(result.exit_code, 0);
 
@@ -401,7 +405,7 @@ async fn test_cwd_not_updated_on_failure() {
 
     // Try to cd to non-existent directory
     let result = executor
-        .execute_with_cwd_tracking("cd nonexistent_dir_12345", 10)
+        .execute_with_cwd_tracking("cd nonexistent_dir_12345", 10, SandboxBypass::No)
         .await;
 
     assert_ne!(result.exit_code, 0);
@@ -456,7 +460,9 @@ async fn test_fork_for_subagent_cwd_resets_between_calls() {
     let subagent_executor = main_executor.fork_for_subagent(initial_cwd.clone());
 
     // Subagent executes cd - this should NOT affect subsequent calls
-    let result1 = subagent_executor.execute("cd subdir && pwd", 10).await;
+    let result1 = subagent_executor
+        .execute("cd subdir && pwd", 10, SandboxBypass::No)
+        .await;
     assert_eq!(result1.exit_code, 0);
     // First call cd'd into subdir
     assert!(
@@ -466,7 +472,9 @@ async fn test_fork_for_subagent_cwd_resets_between_calls() {
     );
 
     // Second call - CWD should be back to initial (no tracking)
-    let result2 = subagent_executor.execute("pwd", 10).await;
+    let result2 = subagent_executor
+        .execute("pwd", 10, SandboxBypass::No)
+        .await;
     assert_eq!(result2.exit_code, 0);
     // Should be back at initial directory
     let output = result2.stdout.trim();
@@ -629,7 +637,9 @@ async fn test_execute_with_extraction_no_extractor() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let executor = ShellExecutor::new(tmp.path().to_path_buf());
 
-    let result = executor.execute_with_extraction("echo hello", 10).await;
+    let result = executor
+        .execute_with_extraction("echo hello", 10, SandboxBypass::No)
+        .await;
 
     assert_eq!(result.exit_code, 0);
     // No extractor configured, so extracted_paths should be None
@@ -653,7 +663,9 @@ async fn test_execute_with_extraction_filters_nonexistent() {
     let executor =
         ShellExecutor::new(tmp.path().to_path_buf()).with_path_extractor(Arc::new(mock_extractor));
 
-    let result = executor.execute_with_extraction("echo hello", 10).await;
+    let result = executor
+        .execute_with_extraction("echo hello", 10, SandboxBypass::No)
+        .await;
 
     assert_eq!(result.exit_code, 0);
     assert!(result.extracted_paths.is_some());
@@ -674,7 +686,9 @@ async fn test_execute_with_extraction_failed_command() {
         ShellExecutor::new(tmp.path().to_path_buf()).with_path_extractor(Arc::new(mock_extractor));
 
     // Command that fails
-    let result = executor.execute_with_extraction("exit 1", 10).await;
+    let result = executor
+        .execute_with_extraction("exit 1", 10, SandboxBypass::No)
+        .await;
 
     assert_ne!(result.exit_code, 0);
     // Should not extract paths for failed commands
@@ -698,7 +712,7 @@ async fn test_execute_with_cwd_tracking_and_extraction() {
 
     // Execute with both CWD tracking and extraction
     let result = executor
-        .execute_with_cwd_tracking_and_extraction("cd subdir && pwd", 10)
+        .execute_with_cwd_tracking_and_extraction("cd subdir && pwd", 10, SandboxBypass::No)
         .await;
 
     assert_eq!(result.exit_code, 0);

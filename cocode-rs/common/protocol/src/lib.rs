@@ -148,7 +148,9 @@ pub use tool_types::ToolOutput;
 pub use tool_types::ValidationError;
 pub use tool_types::ValidationResult;
 
-// Queue types (user input during streaming)
+// Queue types and interrupt constants (steering)
+pub use queue::INTERRUPTED_BY_USER;
+pub use queue::INTERRUPTED_FOR_TOOL_USE;
 pub use queue::UserQueuedCommand;
 
 // Tracking types

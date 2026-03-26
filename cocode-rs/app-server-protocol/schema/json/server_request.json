@@ -59,6 +59,25 @@
           "$ref": "#/definitions/McpRouteMessageParams"
         }
       }
+    },
+    {
+      "description": "Invoke an SDK-registered hook callback.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/callback"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookCallbackParams"
+        }
+      }
     }
   ],
   "definitions": {
@@ -71,6 +90,20 @@
         "tool_name"
       ],
       "properties": {
+        "blocked_path": {
+          "description": "Filesystem path that triggered a permission block (if applicable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision_reason": {
+          "description": "Reason for the permission decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "description": "Human-readable description of what the tool will do.",
           "type": [
@@ -81,12 +114,49 @@
         "input": {
           "description": "Tool input (JSON)."
         },
+        "permission_suggestions": {
+          "description": "Suggested approval behaviors the SDK client may present to the user.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PermissionSuggestion"
+          }
+        },
         "request_id": {
           "description": "Unique request identifier (for correlation with response).",
           "type": "string"
         },
         "tool_name": {
           "description": "Tool name that needs approval.",
+          "type": "string"
+        }
+      }
+    },
+    "HookCallbackParams": {
+      "description": "Parameters for `hook/callback`.",
+      "type": "object",
+      "required": [
+        "callback_id",
+        "event_type",
+        "request_id"
+      ],
+      "properties": {
+        "callback_id": {
+          "description": "Callback identifier (pre-registered at initialize time).",
+          "type": "string"
+        },
+        "event_type": {
+          "description": "Hook event type (e.g., \"PreToolUse\").",
+          "type": "string"
+        },
+        "input": {
+          "description": "Hook input payload (tool name, input, context).",
+          "default": null
+        },
+        "request_id": {
+          "description": "Unique request identifier (for correlation with response).",
           "type": "string"
         }
       }
@@ -110,6 +180,26 @@
         "server_name": {
           "description": "Target MCP server name.",
           "type": "string"
+        }
+      }
+    },
+    "PermissionSuggestion": {
+      "description": "A permission suggestion that can be presented to the user.",
+      "type": "object",
+      "required": [
+        "behavior"
+      ],
+      "properties": {
+        "behavior": {
+          "description": "Suggested behavior (e.g., \"allow\", \"deny\").",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable reason for the suggestion.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

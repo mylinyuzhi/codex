@@ -197,6 +197,9 @@ pub struct AgentLoop {
     /// Shell executor for command execution and background tasks.
     shell_executor: ShellExecutor,
 
+    /// Sandbox state for platform-level command isolation.
+    sandbox_state: Option<std::sync::Arc<cocode_sandbox::SandboxState>>,
+
     /// Optional callback for spawning subagents (used by Task tool).
     spawn_agent_fn: Option<SpawnAgentFn>,
 
@@ -297,6 +300,9 @@ pub struct AgentLoop {
     /// Path to the cocode home directory for durable cron persistence.
     cocode_home: Option<std::path::PathBuf>,
 
+    /// Optional permission requester for interactive approval flow (SDK mode).
+    permission_requester: Option<Arc<dyn cocode_tools::PermissionRequester>>,
+
     /// Shared set of agent IDs killed via TaskStop (persists across turns).
     killed_agents: cocode_tools::context::KilledAgents,
 
@@ -345,6 +351,7 @@ impl AgentLoop {
             id: uuid::Uuid::new_v4().to_string(),
             prompt: prompt.into(),
             queued_at: now,
+            target_turn: Some(self.turn_number),
         };
         self.queued_commands
             .lock()
@@ -816,6 +823,18 @@ impl AgentLoop {
         let mut output_recovery_attempts = 0;
         let collected = loop {
             if self.cancel_token.is_cancelled() {
+                // Drain any safe tools that completed during a prior streaming
+                // attempt so their results are not silently discarded.
+                let completed = executor.drain().await;
+                if !completed.is_empty() {
+                    // No tool_calls vec yet (not extracted from response), so
+                    // just record the results that did finish.
+                    let empty_calls: Vec<ToolCall> = Vec::new();
+                    self.add_tool_results_to_history(&completed, &empty_calls)
+                        .await;
+                    // Advance turn_number for the added results turn
+                    self.turn_number += 1;
+                }
                 executor
                     .abort_all(cocode_protocol::AbortReason::UserInterrupted)
                     .await;
@@ -907,6 +926,60 @@ impl AgentLoop {
             turn.update_usage(usage.clone());
         }
 
+        // ── STEP 10.5: Early cancel check before tool execution ──
+        // If cancelled during streaming, stop BEFORE executing tools from
+        // the (possibly partial) response. This prevents unexpected tool
+        // runs after the user pressed Ctrl-C.
+        if has_tool_calls && self.cancel_token.is_cancelled() {
+            // Extract tool calls so we can generate synthetic interrupt results
+            let tool_calls: Vec<_> = collected
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id,
+                        tool_name,
+                        input,
+                        ..
+                    }) => Some(ToolCall::new(tool_call_id, tool_name, input.clone())),
+                    _ => None,
+                })
+                .collect();
+
+            // Drain safe tools that may have started during streaming
+            let completed = executor.drain().await;
+            let completed_results_turn_added = !completed.is_empty();
+            if completed_results_turn_added {
+                self.add_tool_results_to_history(&completed, &tool_calls)
+                    .await;
+            }
+
+            // Synthetic interrupt results for tool calls that didn't finish.
+            // tool_use_in_progress=false: tools were requested but NOT yet
+            // executed (matches CC's first abort checkpoint: Ug({toolUse:false})).
+            let completed_ids: std::collections::HashSet<String> =
+                completed.iter().map(|r| r.call_id.clone()).collect();
+            self.add_interrupt_results_to_history(
+                &tool_calls,
+                &completed_ids,
+                /*tool_use_in_progress=*/ false,
+                completed_results_turn_added,
+            );
+
+            // Advance turn_number to account for turns added during interrupt
+            self.turn_number += if completed_results_turn_added { 2 } else { 1 };
+
+            executor
+                .abort_all(cocode_protocol::AbortReason::UserInterrupted)
+                .await;
+            self.set_status(AgentStatus::Idle);
+            return Ok(LoopResult::interrupted(
+                self.turn_number,
+                self.total_input_tokens,
+                self.total_output_tokens,
+            ));
+        }
+
         // ── STEP 11: Check for tool calls ──
         // ── STEP 12: Execute tool queue ──
         // Tool execution already started DURING streaming for safe tools.
@@ -933,8 +1006,30 @@ impl AgentLoop {
             let results = executor.drain().await;
 
             // ── STEP 13: Handle abort after tool execution ──
-            // Check if cancelled during tool execution
+            // Preserve completed tool results BEFORE cancel check (P0 fix:
+            // prevents loss of results from safe tools that finished).
+            // Then generate synthetic interrupt results for incomplete calls.
             if self.cancel_token.is_cancelled() {
+                // 1. Record completed results so the model sees what DID finish
+                let completed_results_turn_added = !results.is_empty();
+                if completed_results_turn_added {
+                    self.add_tool_results_to_history(&results, &tool_calls)
+                        .await;
+                }
+                // 2. Generate synthetic error results for tool calls that didn't
+                //    complete, matching Claude Code's createInterruptToolResults.
+                let completed_ids: std::collections::HashSet<String> =
+                    results.iter().map(|r| r.call_id.clone()).collect();
+                self.add_interrupt_results_to_history(
+                    &tool_calls,
+                    &completed_ids,
+                    /*tool_use_in_progress=*/ true,
+                    completed_results_turn_added,
+                );
+
+                // Advance turn_number to account for turns added during interrupt
+                self.turn_number += if completed_results_turn_added { 2 } else { 1 };
+
                 executor
                     .abort_all(cocode_protocol::AbortReason::UserInterrupted)
                     .await;
@@ -1307,6 +1402,20 @@ impl AgentLoop {
                 builder = builder.auto_memory_state(Arc::clone(state));
             }
 
+            // Wire sandbox violations into generator context
+            if let Some(ref state) = self.sandbox_state {
+                let store = state.violations().lock().await;
+                let recent = store.recent(20);
+                let violations: Vec<_> = recent
+                    .into_iter()
+                    .filter(|v| !v.benign)
+                    .map(|v| (v.operation.clone(), v.path.clone(), v.command_tag.clone()))
+                    .collect();
+                if !violations.is_empty() {
+                    builder = builder.sandbox_violations(violations);
+                }
+            }
+
             // Wire team context and unread messages into generator context
             if let (Some(store), Some(mbox)) = (&self.team_store, &self.team_mailbox)
                 && let Some(identity) = cocode_subagent::current_agent()
@@ -1466,7 +1575,9 @@ impl AgentLoop {
                 }
             }
 
-            // Consume queued commands for steering injection
+            // Consume queued commands for steering injection.
+            // Filter out stale commands whose target_turn doesn't match
+            // the current turn (codex-rs expected_turn_id pattern).
             {
                 let drained = std::mem::take(
                     &mut *self
@@ -1475,7 +1586,14 @@ impl AgentLoop {
                         .unwrap_or_else(std::sync::PoisonError::into_inner),
                 );
                 if !drained.is_empty() {
-                    builder = builder.queued_commands(drained);
+                    let current_turn = turn_number;
+                    let valid: Vec<_> = drained
+                        .into_iter()
+                        .filter(|cmd| cmd.target_turn.is_none_or(|t| t == current_turn))
+                        .collect();
+                    if !valid.is_empty() {
+                        builder = builder.queued_commands(valid);
+                    }
                 }
             }
 
@@ -1710,12 +1828,22 @@ impl AgentLoop {
         .with_shell_executor(self.shell_executor.clone())
         .with_otel_manager(self.otel_manager.clone());
 
+        // Wire sandbox state if active
+        if let Some(ref state) = self.sandbox_state {
+            executor = executor.with_sandbox_state(std::sync::Arc::clone(state));
+        }
+
         // Share killed agents registry (persists across turns)
         executor = executor.with_killed_agents(self.killed_agents.clone());
 
         // Wire file backup store from snapshot manager for Tier 1 rewind
         if let Some(ref sm) = self.snapshot_manager {
             executor = executor.with_file_backup_store(sm.backup_store().clone());
+        }
+
+        // Wire permission requester for interactive approval (SDK mode)
+        if let Some(ref requester) = self.permission_requester {
+            executor = executor.with_permission_requester(requester.clone());
         }
 
         // Wire permission rules into executor

@@ -64,6 +64,9 @@ pub struct CommandResult {
     /// File paths extracted from command output (when fast model configured).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extracted_paths: Option<ExtractedPaths>,
+    /// Whether the command was executed under sandbox enforcement.
+    #[serde(default)]
+    pub sandboxed: bool,
 }
 
 impl CommandResult {

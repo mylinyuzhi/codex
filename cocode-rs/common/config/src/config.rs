@@ -128,6 +128,9 @@ pub struct Config {
     /// Writable roots for sandbox (when WorkspaceWrite).
     pub writable_roots: Vec<PathBuf>,
 
+    /// Sandbox settings (enable/disable, auto-allow, excluded commands, domains).
+    pub sandbox_settings: cocode_sandbox::SandboxSettings,
+
     // ============================================================
     // 7. Tool Execution
     // ============================================================
@@ -382,6 +385,7 @@ impl Default for Config {
             ephemeral: false,
             sandbox_mode: SandboxMode::default(),
             writable_roots: Vec::new(),
+            sandbox_settings: cocode_sandbox::SandboxSettings::default(),
             tool_config: ToolConfig::default(),
             compact_config: CompactConfig::default(),
             plan_config: PlanModeConfig::default(),
@@ -425,6 +429,9 @@ pub struct ConfigOverrides {
 
     /// Writable roots for sandbox.
     pub writable_roots: Option<Vec<PathBuf>>,
+
+    /// Override sandbox settings.
+    pub sandbox_settings: Option<cocode_sandbox::SandboxSettings>,
 
     /// Override user instructions.
     pub user_instructions: Option<String>,
@@ -484,6 +491,12 @@ impl ConfigOverrides {
     /// Set writable roots.
     pub fn with_writable_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.writable_roots = Some(roots);
+        self
+    }
+
+    /// Set sandbox settings.
+    pub fn with_sandbox_settings(mut self, settings: cocode_sandbox::SandboxSettings) -> Self {
+        self.sandbox_settings = Some(settings);
         self
     }
 

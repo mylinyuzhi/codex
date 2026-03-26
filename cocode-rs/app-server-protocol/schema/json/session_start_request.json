@@ -7,10 +7,27 @@
     "prompt"
   ],
   "properties": {
+    "agents": {
+      "description": "Custom sub-agent definitions.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/definitions/AgentDefinitionConfig"
+      }
+    },
     "cwd": {
       "description": "Working directory override.",
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "disable_builtin_agents": {
+      "description": "Disable all built-in agent definitions.",
+      "type": [
+        "boolean",
         "null"
       ]
     },
@@ -24,6 +41,24 @@
         "type": "string"
       }
     },
+    "hooks": {
+      "description": "SDK hook callbacks (pre-registered at session start).",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/HookCallbackConfig"
+      }
+    },
+    "max_budget_cents": {
+      "description": "Maximum budget in cents before stopping.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
     "max_turns": {
       "description": "Maximum turns before stopping.",
       "type": [
@@ -32,11 +67,32 @@
       ],
       "format": "int32"
     },
+    "mcp_servers": {
+      "description": "MCP server configurations.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/definitions/McpServerConfig"
+      }
+    },
     "model": {
       "description": "Model override (e.g., \"sonnet\", \"opus\").",
       "type": [
         "string",
         "null"
+      ]
+    },
+    "output_format": {
+      "description": "Structured output JSON schema.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutputFormatConfig"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "permission_mode": {
@@ -46,15 +102,581 @@
         "null"
       ]
     },
+    "permission_rules": {
+      "description": "Permission rules.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": true
+    },
     "prompt": {
       "description": "Initial prompt to send.",
       "type": "string"
+    },
+    "sandbox": {
+      "description": "Sandbox configuration.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SandboxConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "system_prompt": {
+      "description": "Full system prompt override or structured config.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SystemPromptConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "system_prompt_suffix": {
       "description": "System prompt suffix (appended to built-in system prompt).",
       "type": [
         "string",
         "null"
+      ]
+    },
+    "thinking": {
+      "description": "Thinking/reasoning configuration.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThinkingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tools": {
+      "description": "Tool whitelist or preset configuration.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ToolsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "AgentDefinitionConfig": {
+      "description": "Agent definition for SDK-provided custom agents.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "Whether the agent defaults to background execution.",
+          "default": false,
+          "type": "boolean"
+        },
+        "color": {
+          "description": "Display color hint (e.g., \"cyan\", \"blue\", \"green\", \"orange\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_reminder": {
+          "description": "Critical reminder prepended to the agent's prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Short description of when to use this agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disallowed_tools": {
+          "description": "Tool blacklist.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "fork_context": {
+          "description": "Whether to fork the parent conversation context to this agent.",
+          "default": false,
+          "type": "boolean"
+        },
+        "hooks": {
+          "description": "Hook definitions scoped to this agent.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/AgentHookConfig"
+          }
+        },
+        "isolation": {
+          "description": "Isolation mode for the agent's execution environment.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentIsolationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_turns": {
+          "description": "Maximum turns.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "mcp_servers": {
+          "description": "MCP server name references required by this agent.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "memory": {
+          "description": "Memory scope for persistent agent memory.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentMemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Model override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override (e.g., \"default\", \"bypassPermissions\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "System prompt or instructions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "description": "Skill names to load for this agent.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Tool whitelist.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "use_custom_prompt": {
+          "description": "Whether `prompt` replaces the entire system prompt (true) or appends (false).",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "AgentHookConfig": {
+      "description": "A hook definition scoped to an agent.",
+      "type": "object",
+      "required": [
+        "command",
+        "event"
+      ],
+      "properties": {
+        "command": {
+          "description": "The command to execute.",
+          "type": "string"
+        },
+        "event": {
+          "description": "The event type (e.g., \"PreToolUse\", \"PostToolUse\", \"Stop\").",
+          "type": "string"
+        },
+        "matcher": {
+          "description": "Optional matcher pattern (e.g., tool name).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Optional timeout in seconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
+    },
+    "AgentIsolationMode": {
+      "description": "Isolation mode for agent execution environment.",
+      "oneOf": [
+        {
+          "description": "No isolation — agent shares parent's working directory.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Git worktree isolation — agent runs in a detached worktree.",
+          "type": "string",
+          "enum": [
+            "worktree"
+          ]
+        }
+      ]
+    },
+    "AgentMemoryScope": {
+      "description": "Memory scope for persistent agent memory.",
+      "oneOf": [
+        {
+          "description": "User-level memory.",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "description": "Project-level memory.",
+          "type": "string",
+          "enum": [
+            "project"
+          ]
+        },
+        {
+          "description": "Local (gitignored) memory.",
+          "type": "string",
+          "enum": [
+            "local"
+          ]
+        }
+      ]
+    },
+    "HookCallbackConfig": {
+      "description": "SDK hook callback configuration.\n\nPre-registered at initialize time following the Claude Agent SDK pattern. When a hook event fires, the server emits `ServerRequest::HookCallback` with the callback_id, and the SDK client responds.",
+      "type": "object",
+      "required": [
+        "callback_id",
+        "event"
+      ],
+      "properties": {
+        "callback_id": {
+          "description": "Unique callback identifier (UUID, pre-registered at init).",
+          "type": "string"
+        },
+        "event": {
+          "description": "Hook event type (e.g., \"PreToolUse\", \"PostToolUse\").",
+          "type": "string"
+        },
+        "matcher": {
+          "description": "Tool name pattern to match (glob-style, None = all tools).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Timeout in milliseconds for the callback response.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
+    },
+    "McpServerConfig": {
+      "description": "MCP server configuration for SDK clients.",
+      "oneOf": [
+        {
+          "description": "Subprocess-based MCP server (stdio transport).",
+          "type": "object",
+          "required": [
+            "command",
+            "type"
+          ],
+          "properties": {
+            "args": {
+              "description": "Command arguments.",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "command": {
+              "description": "Command to run.",
+              "type": "string"
+            },
+            "env": {
+              "description": "Environment variables.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "stdio"
+              ]
+            }
+          }
+        },
+        {
+          "description": "SSE-based MCP server.",
+          "type": "object",
+          "required": [
+            "type",
+            "url"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "sse"
+              ]
+            },
+            "url": {
+              "description": "Server URL.",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "HTTP-based MCP server.",
+          "type": "object",
+          "required": [
+            "type",
+            "url"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "http"
+              ]
+            },
+            "url": {
+              "description": "Server URL.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "OutputFormatConfig": {
+      "description": "Output format configuration for structured output.",
+      "type": "object",
+      "required": [
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "description": "JSON Schema for the expected output."
+        }
+      }
+    },
+    "SandboxConfig": {
+      "description": "Sandbox configuration.",
+      "type": "object",
+      "properties": {
+        "auto_allow_bash_if_sandboxed": {
+          "description": "Auto-allow Bash tool when sandboxed (avoids approval prompts).",
+          "default": false,
+          "type": "boolean"
+        },
+        "exclude_commands": {
+          "description": "Commands excluded from sandbox restrictions.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "description": "Sandbox mode.",
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            }
+          ]
+        },
+        "network_access": {
+          "description": "Whether to allow network access in sandbox.",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "SandboxMode": {
+      "description": "Sandbox execution mode.",
+      "oneOf": [
+        {
+          "description": "No sandboxing.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Read-only filesystem access.",
+          "type": "string",
+          "enum": [
+            "read_only"
+          ]
+        },
+        {
+          "description": "Strict sandboxing.",
+          "type": "string",
+          "enum": [
+            "strict"
+          ]
+        }
+      ]
+    },
+    "SystemPromptConfig": {
+      "description": "System prompt configuration.",
+      "anyOf": [
+        {
+          "description": "Raw system prompt string.",
+          "type": "string"
+        },
+        {
+          "description": "Structured system prompt with preset and optional append.",
+          "type": "object",
+          "required": [
+            "preset"
+          ],
+          "properties": {
+            "append": {
+              "description": "Text to append to the preset.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "preset": {
+              "description": "Base preset to use.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "ThinkingConfig": {
+      "description": "Thinking / reasoning configuration.",
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum thinking tokens (if applicable).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "mode": {
+          "description": "Thinking mode.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThinkingMode"
+            }
+          ]
+        }
+      }
+    },
+    "ThinkingMode": {
+      "description": "Thinking mode.",
+      "oneOf": [
+        {
+          "description": "Model decides when to think.",
+          "type": "string",
+          "enum": [
+            "adaptive"
+          ]
+        },
+        {
+          "description": "Always use extended thinking.",
+          "type": "string",
+          "enum": [
+            "enabled"
+          ]
+        },
+        {
+          "description": "Never use extended thinking.",
+          "type": "string",
+          "enum": [
+            "disabled"
+          ]
+        }
+      ]
+    },
+    "ToolsConfig": {
+      "description": "Tools configuration.",
+      "anyOf": [
+        {
+          "description": "Explicit list of tool names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Preset-based configuration.",
+          "type": "object",
+          "required": [
+            "preset"
+          ],
+          "properties": {
+            "preset": {
+              "description": "Preset name (e.g., \"default\").",
+              "type": "string"
+            }
+          }
+        }
       ]
     }
   }

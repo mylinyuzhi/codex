@@ -106,6 +106,11 @@ pub struct UiState {
 
     /// Whether transcript mode is active (shows last N messages only).
     pub transcript_mode: bool,
+
+    /// Deadline until which agent-driven overlays are queued instead of
+    /// shown immediately. Set when a user-triggered overlay opens to
+    /// prevent jarring permission dialog flashes during UI transitions.
+    pub overlay_transition_until: Option<Instant>,
 }
 
 impl UiState {
@@ -118,19 +123,43 @@ impl UiState {
     const MAX_OVERLAY_QUEUE: usize = crate::constants::MAX_OVERLAY_QUEUE as usize;
 
     /// Set the active overlay, queuing or displacing existing overlays as needed.
+    ///
+    /// Agent-driven overlays arriving during a transition gate are always
+    /// queued, even if no overlay is currently active. This prevents
+    /// jarring permission dialog flashes during UI transitions.
+    /// Security-critical overlays (`SandboxPermission`) bypass the gate.
     pub fn set_overlay(&mut self, overlay: Overlay) {
+        let is_agent = overlay.is_agent_driven();
+        let is_blocking = overlay.is_blocking();
+
+        // Transition gate: queue non-critical agent-driven overlays during transitions.
+        // SandboxPermission bypasses the gate (security-critical, may cause timeouts).
+        if is_agent
+            && !matches!(overlay, Overlay::SandboxPermission(_))
+            && self.is_overlay_transitioning()
+        {
+            if self.overlay_queue.len() < Self::MAX_OVERLAY_QUEUE {
+                self.overlay_queue.push_back(overlay);
+            }
+            // Do NOT pause timing — overlay is queued, not visible.
+            return;
+        }
+
         if let Some(ref current) = self.overlay {
-            if overlay.is_agent_driven() && current.priority() <= overlay.priority() {
-                // Current overlay has equal or higher priority — queue the new one
+            if is_agent && current.priority() <= overlay.priority() {
+                // Current overlay has equal or higher priority — queue the new one.
+                // Do NOT pause timing — overlay is queued, not visible.
                 if self.overlay_queue.len() < Self::MAX_OVERLAY_QUEUE {
                     self.overlay_queue.push_back(overlay);
                 }
-            } else if current.is_agent_driven() && !overlay.is_agent_driven() {
+            } else if current.is_agent_driven() && !is_agent {
                 // User-triggered overlay takes over; queue the displaced agent overlay
                 if let Some(displaced) = self.overlay.take() {
                     self.overlay_queue.push_front(displaced);
                 }
+                self.start_overlay_transition();
                 self.overlay = Some(overlay);
+                // User overlays are never blocking — no timing pause needed.
             } else {
                 // Higher-priority agent replaces current, or user-to-user replacement.
                 // Queue displaced agent-driven overlay so it resurfaces later.
@@ -140,33 +169,37 @@ impl UiState {
                 {
                     self.overlay_queue.push_back(displaced);
                 }
+                if !is_agent {
+                    self.start_overlay_transition();
+                }
                 self.overlay = Some(overlay);
+                if is_blocking {
+                    self.query_timing.on_permission_dialog_open();
+                }
             }
         } else {
+            if !is_agent {
+                self.start_overlay_transition();
+            }
             self.overlay = Some(overlay);
+            if is_blocking {
+                self.query_timing.on_permission_dialog_open();
+            }
         }
     }
 
     /// Clear the overlay and promote the next queued overlay (if any).
     ///
-    /// If the cleared overlay was a permission dialog, resumes the query
-    /// timing tracker (permission pause ends when user responds).
+    /// If the cleared overlay was a blocking dialog, resumes the query
+    /// timing tracker. Also clears the overlay transition gate.
     pub fn clear_overlay(&mut self) {
         // Resume query timing if a blocking dialog was dismissed
-        if matches!(
-            self.overlay,
-            Some(
-                Overlay::SandboxPermission(_)
-                    | Overlay::Permission(_)
-                    | Overlay::PlanExitApproval(_)
-                    | Overlay::Question(_)
-                    | Overlay::Elicitation(_)
-                    | Overlay::CostWarning(_)
-            )
-        ) {
+        if self.overlay.as_ref().is_some_and(Overlay::is_blocking) {
             self.query_timing.on_permission_dialog_close();
         }
         self.overlay = None;
+        self.overlay_transition_until = None;
+
         // Promote the highest-priority queued overlay
         if !self.overlay_queue.is_empty() {
             let best_idx = self
@@ -178,17 +211,9 @@ impl UiState {
             if let Some(idx) = best_idx {
                 self.overlay = self.overlay_queue.remove(idx);
                 // Re-pause timing if promoted overlay also blocks the user
-                if matches!(
-                    self.overlay,
-                    Some(
-                        Overlay::SandboxPermission(_)
-                            | Overlay::Permission(_)
-                            | Overlay::PlanExitApproval(_)
-                            | Overlay::Question(_)
-                            | Overlay::Elicitation(_)
-                            | Overlay::CostWarning(_)
-                    )
-                ) {
+                if self.overlay.as_ref().is_some_and(Overlay::is_blocking)
+                    && !self.query_timing.is_paused()
+                {
                     self.query_timing.on_permission_dialog_open();
                 }
             }
@@ -198,6 +223,22 @@ impl UiState {
     /// Get the number of queued overlays waiting behind the active one.
     pub fn queued_overlay_count(&self) -> i32 {
         self.overlay_queue.len() as i32
+    }
+
+    /// Start the overlay transition gate.
+    ///
+    /// While the gate is active, non-critical agent-driven overlays are
+    /// queued instead of shown immediately. This prevents jarring
+    /// permission dialog flashes during UI transitions.
+    fn start_overlay_transition(&mut self) {
+        self.overlay_transition_until =
+            Some(Instant::now() + crate::constants::OVERLAY_TRANSITION_GATE);
+    }
+
+    /// Whether the overlay transition gate is currently active.
+    fn is_overlay_transitioning(&self) -> bool {
+        self.overlay_transition_until
+            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     /// Start streaming.
@@ -1229,6 +1270,20 @@ impl Overlay {
                 | Overlay::Elicitation(_)
                 | Overlay::CostWarning(_)
                 | Overlay::Error(_)
+        )
+    }
+
+    /// Whether this overlay blocks user interaction and should pause
+    /// the query timing tracker while visible.
+    pub fn is_blocking(&self) -> bool {
+        matches!(
+            self,
+            Overlay::SandboxPermission(_)
+                | Overlay::Permission(_)
+                | Overlay::PlanExitApproval(_)
+                | Overlay::Question(_)
+                | Overlay::Elicitation(_)
+                | Overlay::CostWarning(_)
         )
     }
 }
@@ -2625,6 +2680,11 @@ impl QueryTiming {
     pub fn is_slow_query(&self) -> bool {
         self.actual_duration()
             .is_some_and(|d| d > Self::SLOW_QUERY_THRESHOLD)
+    }
+
+    /// Whether the timer is currently paused (permission dialog open).
+    pub fn is_paused(&self) -> bool {
+        self.pause_start.is_some()
     }
 
     /// Stop tracking (query completed or aborted).

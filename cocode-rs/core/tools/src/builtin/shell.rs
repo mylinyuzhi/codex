@@ -133,6 +133,7 @@ impl Tool for ShellTool {
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: Some(input.clone()),
             },
         }
     }

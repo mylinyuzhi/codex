@@ -108,6 +108,70 @@ impl SystemPromptBuilder {
             sections.push((PromptSection::ToolPolicy, policy));
         }
 
+        // 2b. Sandbox mode (Bash tool restrictions) — only if sandbox is active
+        if ctx.sandbox_active
+            && let Some(ref desc) = ctx.sandbox_enforcement_desc
+        {
+            let mode_block = if ctx.sandbox_allow_unsandboxed {
+                // Open mode: matches Claude Code's exact guidance
+                "- You should always default to running commands within the sandbox. \
+                 Do NOT attempt to set `dangerouslyDisableSandbox: true` unless:\n\
+                   - The user *explicitly* asks you to bypass sandbox\n\
+                   - A specific command just failed and you see evidence of sandbox \
+                     restrictions causing the failure. Note that commands can fail for many \
+                     reasons unrelated to the sandbox (missing files, wrong arguments, \
+                     network issues, etc.).\n\n\
+                 - Evidence of sandbox-caused failures includes:\n\
+                   - \"Operation not permitted\" errors for file/network operations\n\
+                   - Access denied to specific paths outside allowed directories\n\
+                   - Network connection failures to non-whitelisted hosts\n\
+                   - Unix socket connection errors\n\n\
+                 - When you see evidence of sandbox-caused failure:\n\
+                   - Immediately retry with `dangerouslyDisableSandbox: true` (don't ask, just do it)\n\
+                   - Briefly explain what sandbox restriction likely caused the failure. Be sure to \
+                     mention that the user can use the `/sandbox` command to manage restrictions.\n\
+                   - This will prompt the user for permission\n\n\
+                 - Treat each command you execute with `dangerouslyDisableSandbox: true` individually. \
+                   Even if you have recently run a command with this setting, you should default to \
+                   running future commands within the sandbox.\n\n\
+                 - Do not suggest adding sensitive paths like ~/.bashrc, ~/.zshrc, ~/.ssh/*, or \
+                   credential files to the sandbox allowlist."
+                    .to_string()
+            } else {
+                // Closed mode: matches Claude Code's exact guidance
+                "- All commands MUST run in sandbox mode - the `dangerouslyDisableSandbox` \
+                 parameter is disabled by policy.\n\
+                 - Commands cannot run outside the sandbox under any circumstances.\n\
+                 - If a command fails due to sandbox restrictions, work with the user to adjust \
+                   sandbox settings instead."
+                    .to_string()
+            };
+
+            // Build JSON restriction strings matching Claude Code's format
+            let restrictions = format!(
+                "Filesystem: {desc}\nNetwork: {}",
+                ctx.sandbox_network_desc
+                    .as_deref()
+                    .unwrap_or("Allowed (proxy-filtered when available)")
+            );
+
+            let mut sandbox_block = templates::SANDBOX_BASH
+                .replace("{restrictions}", &restrictions)
+                .replace("{mode_block}", &mode_block);
+
+            // MCP CLI exception: MCP tool commands route through the parent
+            // process, not actual shell execution, so they must bypass sandbox.
+            if !ctx.mcp_server_names.is_empty() {
+                sandbox_block.push_str(
+                    "\n- EXCEPTION: `mcp-cli` commands must always be called with \
+                     `dangerouslyDisableSandbox: true` because they route through \
+                     parent MCP connections, not actual shell execution.",
+                );
+            }
+
+            sections.push((PromptSection::ToolPolicy, sandbox_block));
+        }
+
         // 3. Security
         sections.push((PromptSection::Security, templates::SECURITY.to_string()));
 

@@ -81,6 +81,42 @@ pub enum ServerNotification {
     #[serde(rename = "context/usageWarning")]
     ContextUsageWarning(ContextUsageWarningParams),
 
+    // ── Background task events ─────────────────────────────────────────
+    /// A background task has started.
+    #[serde(rename = "task/started")]
+    TaskStarted(TaskStartedParams),
+    /// A background task has completed.
+    #[serde(rename = "task/completed")]
+    TaskCompleted(TaskCompletedParams),
+
+    // ── Turn lifecycle (additional) ─────────────────────────────────
+    /// The current turn was interrupted.
+    #[serde(rename = "turn/interrupted")]
+    TurnInterrupted(TurnInterruptedParams),
+    /// Maximum turns limit reached.
+    #[serde(rename = "turn/maxReached")]
+    MaxTurnsReached(MaxTurnsReachedParams),
+
+    // ── Model events ────────────────────────────────────────────────
+    /// Model fallback started (switching to a different model).
+    #[serde(rename = "model/fallbackStarted")]
+    ModelFallbackStarted(ModelFallbackStartedParams),
+
+    // ── Permission events ───────────────────────────────────────────
+    /// Permission mode has changed.
+    #[serde(rename = "permission/modeChanged")]
+    PermissionModeChanged(PermissionModeChangedParams),
+
+    // ── Session result ─────────────────────────────────────────────
+    /// Aggregated session result emitted before session/ended.
+    #[serde(rename = "session/result")]
+    SessionResult(SessionResultParams),
+
+    // ── Prompt suggestions ──────────────────────────────────────────
+    /// Follow-up prompt suggestions after a turn completes.
+    #[serde(rename = "prompt/suggestion")]
+    PromptSuggestion(PromptSuggestionParams),
+
     // ── System-level events ────────────────────────────────────────────
     /// A non-fatal error occurred.
     #[serde(rename = "error")]
@@ -88,6 +124,12 @@ pub enum ServerNotification {
     /// API rate limit information.
     #[serde(rename = "rateLimit")]
     RateLimit(RateLimitParams),
+    /// Keepalive echo from the server.
+    #[serde(rename = "keepAlive")]
+    KeepAlive(KeepAliveParams),
+    /// Session has ended (clean termination).
+    #[serde(rename = "session/ended")]
+    SessionEnded(SessionEndedParams),
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +141,29 @@ pub enum ServerNotification {
 pub struct SessionStartedParams {
     /// Session identifier.
     pub session_id: String,
+    /// Protocol version (for future version negotiation).
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version: String,
+    /// Available model identifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    /// Available slash commands / skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<CommandInfo>>,
+}
+
+fn default_protocol_version() -> String {
+    "1".to_string()
+}
+
+/// Information about an available command or skill.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CommandInfo {
+    /// Command name (e.g., "/commit").
+    pub name: String,
+    /// Short description of the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Parameters for `turn/started`.
@@ -243,6 +308,61 @@ pub struct ContextUsageWarningParams {
     pub percent_left: f64,
 }
 
+/// Parameters for `task/started`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskStartedParams {
+    /// Task identifier.
+    pub task_id: String,
+    /// Type of task (e.g., "shell", "agent").
+    pub task_type: String,
+}
+
+/// Parameters for `task/completed`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskCompletedParams {
+    /// Task identifier.
+    pub task_id: String,
+    /// Task result text.
+    pub result: String,
+    /// Whether the task failed.
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// Parameters for `turn/interrupted`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TurnInterruptedParams {
+    /// Turn identifier (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
+/// Parameters for `turn/maxReached`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MaxTurnsReachedParams {
+    /// Maximum turns limit that was reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i32>,
+}
+
+/// Parameters for `model/fallbackStarted`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModelFallbackStartedParams {
+    /// Original model.
+    pub from_model: String,
+    /// Fallback model.
+    pub to_model: String,
+    /// Reason for fallback.
+    pub reason: String,
+}
+
+/// Parameters for `permission/modeChanged`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PermissionModeChangedParams {
+    /// The new permission mode.
+    pub mode: String,
+}
+
 /// Parameters for `error`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ErrorNotificationParams {
@@ -261,4 +381,67 @@ pub struct ErrorNotificationParams {
 pub struct RateLimitParams {
     /// Rate limit details.
     pub info: Value,
+}
+
+/// Parameters for `keepAlive`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KeepAliveParams {
+    /// Timestamp (milliseconds since epoch).
+    pub timestamp: i64,
+}
+
+/// Parameters for `session/result`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionResultParams {
+    /// Session identifier.
+    pub session_id: String,
+    /// Total number of turns in the session.
+    pub total_turns: i32,
+    /// Total cost in cents (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_cents: Option<i64>,
+    /// Total session duration in milliseconds.
+    pub duration_ms: i64,
+    /// Total time spent on API calls in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_api_ms: Option<i64>,
+    /// Aggregated token usage across all turns.
+    pub usage: Usage,
+    /// Why the session ended.
+    pub stop_reason: SessionEndedReason,
+    /// Structured output (if output_format schema was provided).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<Value>,
+}
+
+/// Parameters for `prompt/suggestion`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PromptSuggestionParams {
+    /// Suggested follow-up prompts.
+    pub suggestions: Vec<String>,
+}
+
+/// Reason why a session ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndedReason {
+    /// All turns completed normally.
+    Completed,
+    /// Maximum turn limit reached.
+    MaxTurns,
+    /// Budget limit exceeded.
+    MaxBudget,
+    /// An error terminated the session.
+    Error,
+    /// User interrupted the session.
+    UserInterrupt,
+    /// stdin was closed (SDK client disconnected).
+    StdinClosed,
+}
+
+/// Parameters for `session/ended`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionEndedParams {
+    /// Reason for session termination.
+    pub reason: SessionEndedReason,
 }

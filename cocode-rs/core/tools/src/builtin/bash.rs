@@ -298,6 +298,19 @@ impl Tool for BashTool {
             None => return PermissionResult::Passthrough,
         };
 
+        // Sandbox auto-allow: when sandbox is active, auto-allow is enabled,
+        // and the command qualifies for sandboxing (not bypass-requested, not excluded),
+        // the sandbox itself becomes the security boundary — no manual approval needed.
+        let bypass_requested =
+            super::input_helpers::bool_or(input, "dangerouslyDisableSandbox", false);
+        if let Some(ref state) = _ctx.sandbox_state
+            && state.auto_allow_enabled()
+            && !bypass_requested
+            && state.should_sandbox_command(command, cocode_sandbox::SandboxBypass::No)
+        {
+            return PermissionResult::Allowed;
+        }
+
         // Plan mode: only allow read-only commands.
         if _ctx.is_plan_mode {
             if is_plan_mode_allowed(command) {
@@ -397,6 +410,7 @@ impl Tool for BashTool {
                         risks,
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }
@@ -419,24 +433,33 @@ impl Tool for BashTool {
                         risks: vec![],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }
         }
 
         // Non-read-only command with no detected risks → still needs approval
+        let description = if command.len() > 120 {
+            format!("{}...", &command[..120])
+        } else {
+            command.to_string()
+        };
+        // Annotate when sandbox bypass is active so the user knows this runs unsandboxed
+        let description = if bypass_requested && _ctx.sandbox_state.is_some() {
+            format!("{description} (unsandboxed)")
+        } else {
+            description
+        };
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
                 request_id: format!("bash-cmd-{}", uuid::Uuid::new_v4()),
                 tool_name: cocode_protocol::ToolName::Bash.as_str().to_string(),
-                description: if command.len() > 120 {
-                    format!("{}...", &command[..120])
-                } else {
-                    command.to_string()
-                },
+                description,
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: Some(input.clone()),
             },
         }
     }
@@ -454,9 +477,9 @@ impl Tool for BashTool {
             .unwrap_or(DEFAULT_TIMEOUT_SECS * 1000);
         let timeout_secs = (timeout_ms / 1000).min(MAX_TIMEOUT_SECS);
         let run_in_background = super::input_helpers::bool_or(&input, "run_in_background", false);
-        let _dangerously_disable_sandbox =
-            super::input_helpers::bool_or(&input, "dangerouslyDisableSandbox", false);
-        // TODO: Pass to shell executor when sandbox mode is implemented
+        let sandbox_bypass = cocode_sandbox::SandboxBypass::from_flag(
+            super::input_helpers::bool_or(&input, "dangerouslyDisableSandbox", false),
+        );
 
         // Emit progress
         let desc = input["description"].as_str().unwrap_or("Executing command");
@@ -481,16 +504,48 @@ impl Tool for BashTool {
         // Foreground execution — delegate to ShellExecutor with backgrounding support
         match ctx
             .shell_executor
-            .execute_backgroundable_with_cwd_tracking(command, timeout_secs, &ctx.call_id)
+            .execute_backgroundable_with_cwd_tracking(
+                command,
+                timeout_secs,
+                &ctx.call_id,
+                sandbox_bypass,
+            )
             .await
         {
-            ExecuteResult::Completed(result) => {
+            ExecuteResult::Completed(mut result) => {
                 // Sync CWD back to ctx only on success
                 if result.exit_code == 0
                     && let Some(ref new_cwd) = result.new_cwd
                 {
                     ctx.cwd = new_cwd.clone();
                 }
+
+                // Annotate sandbox violations in stderr (matches Claude Code's pattern)
+                if result.sandboxed
+                    && let Some(ref state) = ctx.sandbox_state
+                {
+                    let store = state.violations().lock().await;
+                    let recent = store.recent(10);
+                    let non_benign: Vec<_> = recent.iter().filter(|v| !v.benign).collect();
+                    if !non_benign.is_empty() {
+                        if !result.stderr.is_empty() {
+                            result.stderr.push('\n');
+                        }
+                        result
+                            .stderr
+                            .push_str("--- Sandbox Violations Detected ---\n");
+                        for v in &non_benign {
+                            if let Some(ref path) = v.path {
+                                result
+                                    .stderr
+                                    .push_str(&format!("  {} {path}\n", v.operation));
+                            } else {
+                                result.stderr.push_str(&format!("  {}\n", v.operation));
+                            }
+                        }
+                    }
+                }
+
                 format_command_result(&result)
             }
             ExecuteResult::Backgrounded { task_id } => Ok(ToolOutput::text(format!(

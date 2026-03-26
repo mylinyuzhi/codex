@@ -157,6 +157,7 @@ pub fn check_directory_permission(
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: None,
             },
         };
     }
@@ -170,6 +171,7 @@ pub fn check_directory_permission(
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: None,
             },
         };
     }

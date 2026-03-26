@@ -209,7 +209,7 @@ pub async fn handle_command(
                 state.ui.input.take();
             } else if !state.session.queued_commands.is_empty() {
                 // Pop queued commands back into input for editing
-                // (matches Claude Code's cancel Branch 3 behavior)
+                // (matches Claude Code's cancel Branch 2: pop queue)
                 let merged: String = state
                     .session
                     .queued_commands
@@ -219,6 +219,12 @@ pub async fn handle_command(
                     .join("\n");
                 state.ui.input.set_text(&merged);
                 let _ = command_tx.send(UserCommand::ClearQueues).await;
+            } else if state.is_streaming() {
+                // Soft cancel: Escape during streaming with no overlays, no
+                // input, and no queued commands → interrupt the stream.
+                // (matches Claude Code's cancel Branch 1: abort active stream)
+                let _ = command_tx.send(UserCommand::Interrupt).await;
+                state.ui.toast_info(t!("toast.interrupted").to_string());
             } else if state.ui.is_double_esc() {
                 // Double-Esc detected: open rewind selector
                 state.ui.reset_esc_time();
