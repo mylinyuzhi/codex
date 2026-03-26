@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use cocode_api::ApiClient;
-use cocode_api::ModelHub;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
 use cocode_error::boxed_err;
 use cocode_hooks::HookRegistry;
+use cocode_inference::ApiClient;
+use cocode_inference::ModelHub;
 use cocode_loop::AgentLoop;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;

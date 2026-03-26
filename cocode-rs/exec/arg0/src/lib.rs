@@ -159,8 +159,49 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         cocode_apply_patch::main();
     }
 
-    // argv[1] hijack: --cocode-run-as-apply-patch
+    // argv[1] hijack: --apply-seccomp <mode> -- <program> <args...>
+    // Used as the inner stage inside bubblewrap to apply seccomp BPF filters
+    // before exec'ing into the real command. The filter is compiled in-process.
     let argv1 = args.next().unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    if argv1 == cocode_sandbox::platform::linux::APPLY_SECCOMP_ARG1 {
+        let mode_str = args
+            .next()
+            .and_then(|s| s.to_str().map(str::to_owned))
+            .unwrap_or_default();
+        let mode = cocode_sandbox::seccomp::NetworkSeccompMode::from_str_arg(&mode_str)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "seccomp: unknown mode '{mode_str}', expected 'restricted' or 'proxy-routed'"
+                );
+                std::process::exit(1);
+            });
+
+        // Skip the "--" separator
+        let separator = args.next().unwrap_or_default();
+        if separator != "--" {
+            eprintln!(
+                "seccomp: expected '--' separator after mode, got '{}'",
+                separator.to_string_lossy()
+            );
+            std::process::exit(1);
+        }
+
+        let program = args.next().unwrap_or_else(|| {
+            eprintln!("seccomp: missing program after '--'");
+            std::process::exit(1);
+        });
+        let remaining: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
+
+        cocode_sandbox::seccomp::apply_seccomp_and_exec(
+            mode,
+            &program.to_string_lossy(),
+            &remaining,
+        );
+        // apply_seccomp_and_exec never returns
+    }
+
+    // argv[1] hijack: --cocode-run-as-apply-patch
     if argv1 == COCODE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {

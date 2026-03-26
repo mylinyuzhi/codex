@@ -5,8 +5,6 @@
 
 use std::path::PathBuf;
 
-use crate::config::SeccompConfig;
-
 /// Result of checking a single dependency.
 #[derive(Debug, Clone)]
 pub struct DependencyCheck {
@@ -22,17 +20,9 @@ pub struct DependencyCheck {
 
 /// Check all required sandbox dependencies for the current platform.
 ///
-/// Returns a list of checks. All `required` dependencies must be available
-/// for sandbox to function correctly.
+/// Seccomp is handled in-process via `seccompiler` — no external binary
+/// dependency needed.
 pub fn check_dependencies() -> Vec<DependencyCheck> {
-    check_dependencies_with_seccomp(&SeccompConfig::default())
-}
-
-/// Check all dependencies, including optional seccomp checks when configured.
-///
-/// When `seccomp.bpf_path` is set, adds optional checks for the BPF filter file
-/// and the seccomp-apply binary.
-pub fn check_dependencies_with_seccomp(seccomp: &SeccompConfig) -> Vec<DependencyCheck> {
     let mut checks = Vec::new();
 
     if cfg!(target_os = "macos") {
@@ -54,12 +44,6 @@ pub fn check_dependencies_with_seccomp(seccomp: &SeccompConfig) -> Vec<Dependenc
             &["/usr/bin/socat", "/usr/local/bin/socat"],
             /*required=*/ false, // Optional: needed for network bridge
         ));
-
-        // Seccomp dependencies: optional, only checked when configured
-        if seccomp.bpf_path.is_some() {
-            checks.push(check_seccomp_bpf(seccomp));
-            checks.push(check_seccomp_apply(seccomp));
-        }
     }
 
     checks
@@ -89,36 +73,6 @@ fn check_binary(name: &'static str, paths: &[&str], required: bool) -> Dependenc
         available: found.is_some(),
         path: found,
         required,
-    }
-}
-
-/// Check if the configured seccomp BPF filter file exists.
-fn check_seccomp_bpf(seccomp: &SeccompConfig) -> DependencyCheck {
-    let path = seccomp.bpf_path.clone();
-    let available = path.as_ref().is_some_and(|p| p.exists());
-    DependencyCheck {
-        name: "seccomp-bpf",
-        available,
-        path,
-        required: false, // Optional: sandbox works without seccomp
-    }
-}
-
-/// Check if the seccomp-apply binary is available.
-fn check_seccomp_apply(seccomp: &SeccompConfig) -> DependencyCheck {
-    // Check explicit path first, then search well-known locations
-    let default_paths: &[&str] = &["/usr/bin/seccomp-apply", "/usr/local/bin/seccomp-apply"];
-    let found = seccomp
-        .apply_path
-        .as_ref()
-        .filter(|p| p.exists())
-        .cloned()
-        .or_else(|| default_paths.iter().map(PathBuf::from).find(|p| p.exists()));
-    DependencyCheck {
-        name: "seccomp-apply",
-        available: found.is_some(),
-        path: found,
-        required: false, // Optional: sandbox works without seccomp
     }
 }
 

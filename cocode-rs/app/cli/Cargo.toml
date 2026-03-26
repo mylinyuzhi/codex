@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 # Internal
 cocode-arg0.workspace = true
+cocode-process-hardening.workspace = true
 cocode-session = { workspace = true, features = [] }
 cocode-subagent.workspace = true
 cocode-config.workspace = true
@@ -25,8 +26,11 @@ cocode-loop.workspace = true
 cocode-utils-common.workspace = true
 cocode-error.workspace = true
 cocode-app-server-protocol.workspace = true
+cocode-app-server.workspace = true
 cocode-hooks.workspace = true
 cocode-tools.workspace = true
+cocode-rmcp-client.workspace = true
+cocode-mcp-types.workspace = true
 
 # External
 async-trait.workspace = true
@@ -39,6 +43,7 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 dirs.workspace = true
+futures.workspace = true
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

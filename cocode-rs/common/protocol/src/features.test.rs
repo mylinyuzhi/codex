@@ -140,20 +140,39 @@ fn test_all_features_contains_all_variants() {
 }
 
 #[test]
-fn test_stage_beta_methods() {
-    let beta_stage = Stage::Beta {
+fn test_stage_experimental_methods() {
+    let experimental = Stage::Experimental {
         name: "Test Feature",
         menu_description: "Test description",
         announcement: "Test announcement",
     };
 
-    assert_eq!(beta_stage.beta_menu_name(), Some("Test Feature"));
-    assert_eq!(beta_stage.beta_menu_description(), Some("Test description"));
-    assert_eq!(beta_stage.beta_announcement(), Some("Test announcement"));
+    assert_eq!(experimental.experimental_menu_name(), Some("Test Feature"));
+    assert_eq!(
+        experimental.experimental_menu_description(),
+        Some("Test description")
+    );
+    assert_eq!(
+        experimental.experimental_announcement(),
+        Some("Test announcement")
+    );
 
-    // Non-beta stages should return None
-    assert_eq!(Stage::Stable.beta_menu_name(), None);
-    assert_eq!(Stage::Experimental.beta_menu_description(), None);
+    // Non-experimental stages should return None
+    assert_eq!(Stage::Stable.experimental_menu_name(), None);
+    assert_eq!(
+        Stage::UnderDevelopment.experimental_menu_description(),
+        None
+    );
+}
+
+#[test]
+fn test_stage_experimental_empty_announcement() {
+    let experimental = Stage::Experimental {
+        name: "Feature",
+        menu_description: "Desc",
+        announcement: "",
+    };
+    assert_eq!(experimental.experimental_announcement(), None);
 }
 
 #[test]
@@ -165,4 +184,45 @@ fn test_background_tasks_feature_defaults() {
     assert_eq!(Feature::BackgroundTasks.key(), "background_tasks");
     assert_eq!(Feature::BackgroundTasks.stage(), Stage::Stable);
     assert!(Feature::BackgroundTasks.default_enabled());
+}
+
+#[test]
+fn test_normalize_dependencies_relevant_memories_enables_auto_memory() {
+    let mut features = Features::default();
+    features.enable(Feature::RelevantMemories);
+    features.normalize_dependencies();
+
+    assert!(features.enabled(Feature::RelevantMemories));
+    assert!(features.enabled(Feature::AutoMemory));
+}
+
+#[test]
+fn test_normalize_dependencies_memory_extraction_enables_auto_memory() {
+    let mut features = Features::default();
+    features.enable(Feature::MemoryExtraction);
+    features.normalize_dependencies();
+
+    assert!(features.enabled(Feature::MemoryExtraction));
+    assert!(features.enabled(Feature::AutoMemory));
+}
+
+#[test]
+fn test_normalize_dependencies_auto_memory_alone_no_extras() {
+    let mut features = Features::default();
+    features.enable(Feature::AutoMemory);
+    features.normalize_dependencies();
+
+    assert!(features.enabled(Feature::AutoMemory));
+    assert!(!features.enabled(Feature::RelevantMemories));
+    assert!(!features.enabled(Feature::MemoryExtraction));
+}
+
+#[test]
+fn test_normalize_dependencies_elevated_sandbox_enables_base() {
+    let mut features = Features::default();
+    features.enable(Feature::WindowsSandboxElevated);
+    features.normalize_dependencies();
+
+    assert!(features.enabled(Feature::WindowsSandboxElevated));
+    assert!(features.enabled(Feature::WindowsSandbox));
 }

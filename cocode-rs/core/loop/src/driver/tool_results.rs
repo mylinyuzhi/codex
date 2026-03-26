@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use cocode_api::LanguageModelMessage;
-use cocode_api::ToolCall;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::ToolCall;
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
 use cocode_protocol::ContextModifier;
@@ -93,10 +93,11 @@ impl AgentLoop {
         let user_msg = if all_images.is_empty() {
             TrackedMessage::user(&tool_results_text, &next_turn_id)
         } else {
-            let mut content_parts = vec![cocode_api::UserContentPart::text(&tool_results_text)];
+            let mut content_parts =
+                vec![cocode_inference::UserContentPart::text(&tool_results_text)];
             for img in &all_images {
-                content_parts.push(cocode_api::UserContentPart::File(
-                    cocode_api::FilePart::image_base64(&img.data, &img.media_type),
+                content_parts.push(cocode_inference::UserContentPart::File(
+                    cocode_inference::FilePart::image_base64(&img.data, &img.media_type),
                 ));
             }
             let message = LanguageModelMessage::user(content_parts);

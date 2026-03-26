@@ -156,6 +156,30 @@ fn main() -> anyhow::Result<()> {
             schema_for!(cocode_app_server_protocol::PostToolUseHookInput),
         ),
         (
+            "PostToolUseFailureHookInput",
+            schema_for!(cocode_app_server_protocol::PostToolUseFailureHookInput),
+        ),
+        (
+            "PreCompactHookInput",
+            schema_for!(cocode_app_server_protocol::PreCompactHookInput),
+        ),
+        (
+            "PermissionRequestHookInput",
+            schema_for!(cocode_app_server_protocol::PermissionRequestHookInput),
+        ),
+        (
+            "SessionStartHookInput",
+            schema_for!(cocode_app_server_protocol::SessionStartHookInput),
+        ),
+        (
+            "SessionEndHookInput",
+            schema_for!(cocode_app_server_protocol::SessionEndHookInput),
+        ),
+        (
+            "SdkMcpToolDef",
+            schema_for!(cocode_app_server_protocol::SdkMcpToolDef),
+        ),
+        (
             "HookCallbackOutput",
             schema_for!(cocode_app_server_protocol::HookCallbackOutput),
         ),

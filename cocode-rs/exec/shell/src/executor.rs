@@ -910,9 +910,37 @@ impl ShellExecutor {
             return false;
         }
 
-        // Apply proxy env vars if network isolation is active
-        for (key, value) in state.proxy_env_vars() {
-            cmd.env(key, value);
+        // Apply sandbox environment variables.
+        // SANDBOX_RUNTIME signals to child processes that they are sandboxed.
+        // COCODE_SANDBOX indicates the sandbox backend (from codex-rs pattern).
+        // TMPDIR is set to a sandbox-writable temp dir (matches Claude Code's f21).
+        cmd.env("SANDBOX_RUNTIME", "1");
+        cmd.env(
+            "COCODE_SANDBOX",
+            if cfg!(target_os = "macos") {
+                "seatbelt"
+            } else {
+                "bwrap"
+            },
+        );
+        let sandbox_tmpdir = std::env::var("COCODE_TMPDIR")
+            .ok()
+            .filter(|p| p.starts_with('/'))
+            .unwrap_or_else(|| "/tmp/cocode".to_string());
+        cmd.env("TMPDIR", &sandbox_tmpdir);
+
+        // Signal network-disabled state so child tools can fail fast instead of
+        // hanging on connection timeouts (from codex-rs pattern).
+        if !state.config().allow_network {
+            cmd.env("COCODE_SANDBOX_NETWORK_DISABLED", "1");
+        }
+
+        // Apply proxy env vars only when network isolation is active.
+        // Avoids allocating an empty HashMap per command when no proxy is configured.
+        if state.network_active() {
+            for (key, value) in state.proxy_env_vars() {
+                cmd.env(key, value);
+            }
         }
 
         // Canonicalize CWD before sandbox wrapping so mount points match
@@ -929,9 +957,13 @@ impl ShellExecutor {
             cmd.current_dir(&canonical);
         }
 
-        // Wrap with platform enforcement (Seatbelt on macOS, bubblewrap on Linux)
+        // Wrap with platform enforcement (Seatbelt on macOS, bubblewrap on Linux).
+        // Pass the command string and session tag for macOS CMD64_ violation correlation.
         let config = state.config();
-        if let Err(e) = state.platform().wrap_command(&config, cmd) {
+        if let Err(e) = state
+            .platform()
+            .wrap_command(&config, command, state.session_tag(), cmd)
+        {
             tracing::warn!("Failed to apply sandbox wrapping: {e}");
             return false;
         }

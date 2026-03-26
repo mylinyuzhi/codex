@@ -15,16 +15,16 @@ use streaming::format_language_model_message;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_api::ApiClient;
-use cocode_api::AssistantContentPart;
-use cocode_api::ModelHub;
-use cocode_api::TextPart;
-use cocode_api::ToolCall;
-use cocode_api::ToolCallPart;
-use cocode_api::UnifiedFinishReason;
 use cocode_context::ConversationContext;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
+use cocode_inference::ApiClient;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::ModelHub;
+use cocode_inference::TextPart;
+use cocode_inference::ToolCall;
+use cocode_inference::ToolCallPart;
+use cocode_inference::UnifiedFinishReason;
 use cocode_message::MessageHistory;
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
@@ -865,7 +865,7 @@ impl AgentLoop {
                     .await;
                     if let Some(otel) = &self.otel_manager {
                         otel.counter(
-                            "cocode.api.retry",
+                            "cocode.inference.retry",
                             1,
                             &[("attempt", &output_recovery_attempts.to_string())],
                         );
@@ -881,10 +881,10 @@ impl AgentLoop {
             self.total_output_tokens += usage.output_tokens as i32;
 
             if let Some(otel) = &self.otel_manager {
-                otel.histogram("cocode.api.input_tokens", usage.input_tokens, &[]);
-                otel.histogram("cocode.api.output_tokens", usage.output_tokens, &[]);
+                otel.histogram("cocode.inference.input_tokens", usage.input_tokens, &[]);
+                otel.histogram("cocode.inference.output_tokens", usage.output_tokens, &[]);
                 if let Some(cached) = usage.cache_read_tokens {
-                    otel.histogram("cocode.api.cached_tokens", cached, &[]);
+                    otel.histogram("cocode.inference.cached_tokens", cached, &[]);
                 }
                 // Record SSE completion event with token breakdown
                 otel.sse_event_completed(

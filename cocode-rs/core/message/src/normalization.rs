@@ -4,12 +4,12 @@
 //! expected by the API, similar to Claude Code's `normalization.ts`.
 
 use crate::tracked::TrackedMessage;
-use cocode_api::AssistantContentPart;
-use cocode_api::LanguageModelMessage;
-use cocode_api::ReasoningPart;
-use cocode_api::TextPart;
-use cocode_api::ToolResultContent;
-use cocode_api::UserContentPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::ReasoningPart;
+use cocode_inference::TextPart;
+use cocode_inference::ToolResultContent;
+use cocode_inference::UserContentPart;
 
 /// Options for message normalization.
 #[derive(Debug, Clone, Default)]
@@ -232,7 +232,7 @@ pub fn validate_messages(messages: &[LanguageModelMessage]) -> Result<(), Valida
         // Check for proper tool result pairing
         if let LanguageModelMessage::Tool { content, .. } = msg {
             for part in content {
-                if let cocode_api::ToolContentPart::ToolResult(result_part) = part
+                if let cocode_inference::ToolContentPart::ToolResult(result_part) = part
                     && !has_matching_tool_use(messages, idx, &result_part.tool_call_id)
                 {
                     return Err(ValidationError::OrphanToolResult {
@@ -357,7 +357,7 @@ pub fn estimate_tokens(messages: &[LanguageModelMessage]) -> i32 {
             LanguageModelMessage::Tool { content, .. } => content
                 .iter()
                 .map(|p| match p {
-                    cocode_api::ToolContentPart::ToolResult(tr) => match &tr.output {
+                    cocode_inference::ToolContentPart::ToolResult(tr) => match &tr.output {
                         ToolResultContent::Text { value, .. } => (value.len() / 4) as i32,
                         ToolResultContent::Json { value, .. } => {
                             (value.to_string().len() / 4) as i32
@@ -369,7 +369,7 @@ pub fn estimate_tokens(messages: &[LanguageModelMessage]) -> i32 {
                         }
                         ToolResultContent::ExecutionDenied { .. } => 10,
                     },
-                    cocode_api::ToolContentPart::ToolApprovalResponse(_) => 10,
+                    cocode_inference::ToolContentPart::ToolApprovalResponse(_) => 10,
                 })
                 .sum(),
         })

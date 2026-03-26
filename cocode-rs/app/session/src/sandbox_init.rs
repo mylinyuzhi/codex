@@ -72,10 +72,10 @@ pub fn initialize_sandbox(config: &Config) -> Option<Arc<SandboxState>> {
         deny_write_paths: settings.filesystem.deny_write.clone(),
         allow_git_config: settings.filesystem.allow_git_config,
         allow_network: true, // Default to allowing network; proxy will filter
-        seccomp: settings.seccomp.clone(),
         extra_bind_ro: Vec::new(),
         weaker_network_isolation: settings.enable_weaker_network_isolation,
         allow_pty: settings.allow_pty,
+        ..Default::default()
     };
 
     // Create platform-specific implementation

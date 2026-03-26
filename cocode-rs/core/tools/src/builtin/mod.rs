@@ -45,6 +45,88 @@ mod prompts;
 
 pub(crate) mod input_helpers;
 
+/// Map a shell-parser security risk to a protocol-level [`SecurityRisk`].
+///
+/// Uses exhaustive matching on [`RiskKind`] per CLAUDE.md guidelines.
+fn map_shell_risk(
+    r: &cocode_shell_parser::security::SecurityRisk,
+) -> cocode_protocol::SecurityRisk {
+    use cocode_shell_parser::security::RiskKind;
+    use cocode_shell_parser::security::RiskLevel;
+
+    let risk_type = match r.kind {
+        // Ask-phase risks with specific mappings
+        RiskKind::NetworkExfiltration => cocode_protocol::RiskType::Network,
+        RiskKind::PrivilegeEscalation => cocode_protocol::RiskType::Elevated,
+        RiskKind::FileSystemTampering => cocode_protocol::RiskType::Destructive,
+        RiskKind::SensitiveRedirect => cocode_protocol::RiskType::SensitiveFile,
+        RiskKind::CodeExecution
+        | RiskKind::UnsafeHeredocSubstitution
+        | RiskKind::DangerousSubstitution => cocode_protocol::RiskType::SystemConfig,
+        RiskKind::MalformedTokens => cocode_protocol::RiskType::Unknown,
+        // Deny-phase risks should not reach ask-phase mapping (they are
+        // auto-denied earlier), but we enumerate them explicitly to satisfy
+        // exhaustive-match rules and avoid silent misclassification.
+        RiskKind::SingleQuoteBypass
+        | RiskKind::JqDanger
+        | RiskKind::ObfuscatedFlags
+        | RiskKind::ShellMetacharacters
+        | RiskKind::DangerousVariables
+        | RiskKind::NewlineInjection
+        | RiskKind::IfsInjection
+        | RiskKind::ProcEnvironAccess
+        | RiskKind::BackslashEscapedWhitespace
+        | RiskKind::BackslashEscapedOperators
+        | RiskKind::UnicodeWhitespace
+        | RiskKind::MidWordHash
+        | RiskKind::BraceExpansion
+        | RiskKind::ZshDangerousCommands
+        | RiskKind::CommentQuoteDesync
+        | RiskKind::QuotedNewlineHash => cocode_protocol::RiskType::Unknown,
+    };
+
+    let severity = match r.level {
+        RiskLevel::Low => cocode_protocol::RiskSeverity::Low,
+        RiskLevel::Medium => cocode_protocol::RiskSeverity::Medium,
+        RiskLevel::High => cocode_protocol::RiskSeverity::High,
+        RiskLevel::Critical => cocode_protocol::RiskSeverity::Critical,
+    };
+
+    cocode_protocol::SecurityRisk {
+        risk_type,
+        severity,
+        message: r.message.clone(),
+    }
+}
+
+/// Shared output formatting: redact secrets and wrap in [`ToolOutput`].
+///
+/// Used by both [`BashTool`] and [`ShellTool`] to consistently format
+/// command output with secret redaction.
+fn format_redacted_output(
+    text: &str,
+    exit_code: i32,
+) -> crate::error::Result<cocode_protocol::ToolOutput> {
+    let text = cocode_secret_redact::redact_secrets(text);
+
+    if exit_code != 0 {
+        return if text.is_empty() {
+            Ok(cocode_protocol::ToolOutput::error(format!(
+                "Command failed with exit code {exit_code}"
+            )))
+        } else {
+            Ok(cocode_protocol::ToolOutput::error(format!(
+                "{text}\n\nExit code: {exit_code}"
+            )))
+        };
+    }
+
+    if text.is_empty() {
+        return Ok(cocode_protocol::ToolOutput::text("(no output)"));
+    }
+    Ok(cocode_protocol::ToolOutput::text(text.into_owned()))
+}
+
 mod apply_patch;
 mod ask_user_question;
 mod bash;

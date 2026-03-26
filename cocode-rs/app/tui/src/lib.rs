@@ -118,7 +118,7 @@ pub use cocode_protocol::CorrelatedEvent;
 pub use cocode_protocol::SubmissionId;
 
 // Re-export content types used in UserCommand
-pub use cocode_api::UserContentPart;
+pub use cocode_inference::UserContentPart;
 
 #[cfg(test)]
 #[path = "lib.test.rs"]

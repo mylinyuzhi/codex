@@ -3,12 +3,12 @@
 //! These utilities help identify and extract specific content types from
 //! messages, similar to Claude Code's `type-guards.ts`.
 
-use cocode_api::AssistantContentPart;
-use cocode_api::LanguageModelMessage;
-use cocode_api::TextPart;
-use cocode_api::ToolCallPart;
-use cocode_api::ToolResultPart;
-use cocode_api::UserContentPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::TextPart;
+use cocode_inference::ToolCallPart;
+use cocode_inference::ToolResultPart;
+use cocode_inference::UserContentPart;
 
 /// Check if a content block is a text block.
 pub fn is_text_block(block: &AssistantContentPart) -> bool {
@@ -67,7 +67,7 @@ pub fn extract_tool_use(block: &AssistantContentPart) -> Option<(&str, &str, &se
 /// Extract tool result details from a tool result block.
 pub fn extract_tool_result(
     block: &AssistantContentPart,
-) -> Option<(&str, &cocode_api::ToolResultContent, bool)> {
+) -> Option<(&str, &cocode_inference::ToolResultContent, bool)> {
     match block {
         AssistantContentPart::ToolResult(ToolResultPart {
             tool_call_id,
@@ -93,7 +93,7 @@ pub fn has_tool_result(message: &LanguageModelMessage) -> bool {
         LanguageModelMessage::Assistant { content, .. } => content.iter().any(is_tool_result_block),
         LanguageModelMessage::Tool { content, .. } => content
             .iter()
-            .any(|p| matches!(p, cocode_api::ToolContentPart::ToolResult(_))),
+            .any(|p| matches!(p, cocode_inference::ToolContentPart::ToolResult(_))),
         _ => false,
     }
 }
@@ -158,7 +158,7 @@ pub fn get_text_content(message: &LanguageModelMessage) -> String {
 }
 
 /// Get all tool calls from a message.
-pub fn get_tool_calls(message: &LanguageModelMessage) -> Vec<cocode_api::ToolCall> {
+pub fn get_tool_calls(message: &LanguageModelMessage) -> Vec<cocode_inference::ToolCall> {
     match message {
         LanguageModelMessage::Assistant { content, .. } => content
             .iter()
@@ -168,7 +168,7 @@ pub fn get_tool_calls(message: &LanguageModelMessage) -> Vec<cocode_api::ToolCal
                     tool_name,
                     input,
                     ..
-                }) => Some(cocode_api::ToolCall {
+                }) => Some(cocode_inference::ToolCall {
                     tool_call_id: tool_call_id.clone(),
                     tool_name: tool_name.clone(),
                     input: input.clone(),
@@ -212,7 +212,7 @@ pub fn count_tool_results(message: &LanguageModelMessage) -> usize {
         }
         LanguageModelMessage::Tool { content, .. } => content
             .iter()
-            .filter(|p| matches!(p, cocode_api::ToolContentPart::ToolResult(_)))
+            .filter(|p| matches!(p, cocode_inference::ToolContentPart::ToolResult(_)))
             .count(),
         _ => 0,
     }

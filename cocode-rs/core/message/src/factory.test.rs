@@ -1,8 +1,8 @@
 use super::*;
-use cocode_api::AssistantContentPart;
-use cocode_api::CollectedResponse;
-use cocode_api::FinishReason;
-use cocode_api::ToolResultContent;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::CollectedResponse;
+use cocode_inference::FinishReason;
+use cocode_inference::ToolResultContent;
 
 fn make_response() -> CollectedResponse {
     CollectedResponse {

@@ -1,4 +1,11 @@
 use super::*;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+
+// ---------------------------------------------------------------------------
+// DomainFilter: basic domain filtering
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_is_allowed_empty_lists_allows_all() {
@@ -89,4 +96,140 @@ fn test_is_allowed_allow_exact_and_wildcard() {
     assert!(filter.is_allowed("example.com"));
     assert!(filter.is_allowed("api.example.com"));
     assert!(!filter.is_allowed("other.com"));
+}
+
+// ---------------------------------------------------------------------------
+// Host normalization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_normalize_host_trailing_dots() {
+    assert_eq!(normalize_host("example.com."), "example.com");
+    assert_eq!(normalize_host("example.com.."), "example.com");
+}
+
+#[test]
+fn test_normalize_host_port_stripping() {
+    assert_eq!(normalize_host("example.com:443"), "example.com");
+    assert_eq!(normalize_host("example.com:80"), "example.com");
+}
+
+#[test]
+fn test_normalize_host_bracketed_ipv6() {
+    assert_eq!(normalize_host("[::1]"), "::1");
+    assert_eq!(normalize_host("[::1]:443"), "::1");
+    assert_eq!(normalize_host("[fe80::1%25eth0]"), "fe80::1%25eth0");
+}
+
+#[test]
+fn test_normalize_host_lowercase() {
+    assert_eq!(normalize_host("EXAMPLE.COM"), "example.com");
+    assert_eq!(normalize_host("Example.Com:443"), "example.com");
+}
+
+#[test]
+fn test_normalize_host_whitespace_trimming() {
+    assert_eq!(normalize_host("  example.com  "), "example.com");
+}
+
+#[test]
+fn test_normalize_host_combined() {
+    // Trailing dot + port + uppercase
+    assert_eq!(normalize_host("EXAMPLE.COM.:443"), "example.com");
+}
+
+#[test]
+fn test_is_allowed_normalizes_host() {
+    let filter = DomainFilter::new(vec!["example.com".to_string()], vec![]);
+    // Trailing dot should match after normalization.
+    assert!(filter.is_allowed("example.com."));
+    // Port should be stripped.
+    assert!(filter.is_allowed("example.com:443"));
+    // Combined.
+    assert!(filter.is_allowed("EXAMPLE.COM.:8080"));
+}
+
+// ---------------------------------------------------------------------------
+// SSRF prevention: non-public IP detection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_non_public_ip_loopback() {
+    assert!(is_non_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    assert!(is_non_public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+}
+
+#[test]
+fn test_is_non_public_ip_private_rfc1918() {
+    assert!(is_non_public_ip("10.0.0.1".parse().unwrap()));
+    assert!(is_non_public_ip("172.16.0.1".parse().unwrap()));
+    assert!(is_non_public_ip("192.168.1.1".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ip_link_local() {
+    assert!(is_non_public_ip("169.254.0.1".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ip_cgnat() {
+    assert!(is_non_public_ip("100.64.0.1".parse().unwrap()));
+    assert!(is_non_public_ip("100.127.255.254".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ip_test_nets() {
+    assert!(is_non_public_ip("192.0.2.1".parse().unwrap())); // TEST-NET-1
+    assert!(is_non_public_ip("198.51.100.1".parse().unwrap())); // TEST-NET-2
+    assert!(is_non_public_ip("203.0.113.1".parse().unwrap())); // TEST-NET-3
+}
+
+#[test]
+fn test_is_non_public_ip_benchmarking() {
+    assert!(is_non_public_ip("198.18.0.1".parse().unwrap()));
+    assert!(is_non_public_ip("198.19.255.255".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ip_reserved() {
+    assert!(is_non_public_ip("240.0.0.1".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ip_public_addresses_pass() {
+    assert!(!is_non_public_ip("8.8.8.8".parse().unwrap()));
+    assert!(!is_non_public_ip("1.1.1.1".parse().unwrap()));
+    assert!(!is_non_public_ip("151.101.1.1".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ipv6_unique_local() {
+    assert!(is_non_public_ip("fd00::1".parse().unwrap()));
+}
+
+#[test]
+fn test_is_non_public_ipv6_link_local() {
+    assert!(is_non_public_ip("fe80::1".parse().unwrap()));
+}
+
+#[test]
+fn test_ssrf_prevention_in_filter() {
+    let filter = DomainFilter::new(vec![], vec![]).with_ssrf_protection();
+    // Private IPs should be blocked.
+    assert!(!filter.is_allowed("127.0.0.1"));
+    assert!(!filter.is_allowed("10.0.0.1"));
+    assert!(!filter.is_allowed("192.168.1.1"));
+    assert!(!filter.is_allowed("[::1]"));
+    // Public IPs should pass.
+    assert!(filter.is_allowed("8.8.8.8"));
+    // Domain names should pass (no DNS resolution here).
+    assert!(filter.is_allowed("example.com"));
+}
+
+#[test]
+fn test_ssrf_prevention_disabled_by_default() {
+    let filter = DomainFilter::new(vec![], vec![]);
+    // Without SSRF protection, private IPs are allowed.
+    assert!(filter.is_allowed("127.0.0.1"));
+    assert!(filter.is_allowed("10.0.0.1"));
 }

@@ -1,0 +1,56 @@
+[package]
+name = "cocode-app-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebSocket/stdio app-server for cocode IDE and browser integration"
+
+[[bin]]
+name = "cocode-app-server"
+path = "src/main.rs"
+
+[lib]
+name = "cocode_app_server"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Internal
+cocode-app-server-protocol.workspace = true
+cocode-config.workspace = true
+cocode-hooks.workspace = true
+cocode-protocol.workspace = true
+cocode-session.workspace = true
+cocode-subagent.workspace = true
+cocode-tools.workspace = true
+cocode-utils-common.workspace = true
+
+# External
+anyhow.workspace = true
+async-trait.workspace = true
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+    "ws",
+] }
+clap = { workspace = true, features = ["derive"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true

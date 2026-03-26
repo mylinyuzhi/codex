@@ -615,13 +615,13 @@ impl Tool for SmartEditTool {
         let user_prompt =
             build_correction_user_prompt(instruction, old_string, new_string, &error_msg, &content);
 
-        let request = cocode_api::LanguageModelCallOptions {
+        let request = cocode_inference::LanguageModelCallOptions {
             prompt: vec![
-                cocode_api::LanguageModelMessage::system(CORRECTION_SYSTEM_PROMPT),
-                cocode_api::LanguageModelMessage::user_text(user_prompt),
+                cocode_inference::LanguageModelMessage::system(CORRECTION_SYSTEM_PROMPT),
+                cocode_inference::LanguageModelMessage::user_text(user_prompt),
             ],
             max_output_tokens: Some(4096),
-            response_format: Some(cocode_api::ResponseFormat::json_with_schema(
+            response_format: Some(cocode_inference::ResponseFormat::json_with_schema(
                 correction_schema(),
             )),
             ..Default::default()

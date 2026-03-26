@@ -15,6 +15,8 @@ use ratatui::widgets::Widget;
 
 use unicode_width::UnicodeWidthStr;
 
+use cocode_protocol::ToolName;
+
 use crate::i18n::t;
 use crate::state::BackgroundTask;
 use crate::state::BackgroundTaskStatus;
@@ -26,7 +28,14 @@ use crate::theme::Theme;
 
 /// Names of read-only "exploring" tools that get grouped when
 /// consecutive and completed in the tool panel.
-const EXPLORING_TOOLS: &[&str] = &["Read", "ReadManyFiles", "Glob", "Grep", "LS", "LSP"];
+const EXPLORING_TOOLS: &[&str] = &[
+    ToolName::Read.as_str(),
+    ToolName::ReadManyFiles.as_str(),
+    ToolName::Glob.as_str(),
+    ToolName::Grep.as_str(),
+    ToolName::LS.as_str(),
+    ToolName::Lsp.as_str(),
+];
 
 /// Whether a tool name is an exploring tool.
 fn is_exploring(name: &str) -> bool {
@@ -63,12 +72,14 @@ fn group_exploring_cells(
             }
             let run_len = (i - run_start) as i32;
             if run_len >= 2 {
-                // Collect distinct tool names in the run
-                let mut names: Vec<&str> = tools[run_start..i]
-                    .iter()
-                    .map(|t| t.name.as_str())
-                    .collect();
-                names.dedup();
+                // Collect distinct tool names in the run (preserving first-seen order)
+                let mut names: Vec<&str> = Vec::with_capacity(EXPLORING_TOOLS.len());
+                for t in &tools[run_start..i] {
+                    let n = t.name.as_str();
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
                 let label = names.join(", ");
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(" "),

@@ -6,7 +6,7 @@
 use crate::tracked::TrackedMessage;
 use chrono::DateTime;
 use chrono::Utc;
-use cocode_api::ToolCall;
+use cocode_inference::ToolCall;
 use cocode_protocol::AbortReason;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::ToolResultContent;

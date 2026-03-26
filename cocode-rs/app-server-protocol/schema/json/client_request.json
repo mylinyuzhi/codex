@@ -268,6 +268,25 @@
           "$ref": "#/definitions/KeepAliveRequestParams"
         }
       }
+    },
+    {
+      "description": "Cancel a pending server-initiated request (hook callback, approval).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/cancelRequest"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/CancelRequestParams"
+        }
+      }
     }
   ],
   "definitions": {
@@ -515,13 +534,6 @@
           "enum": [
             "deny"
           ]
-        },
-        {
-          "description": "Approve with modified tool input.",
-          "type": "string",
-          "enum": [
-            "modify"
-          ]
         }
       ]
     },
@@ -544,9 +556,19 @@
         "request_id": {
           "description": "The request ID of the approval being resolved.",
           "type": "string"
-        },
-        "updated_input": {
-          "description": "Modified tool input (required when decision is `modify`)."
+        }
+      }
+    },
+    "CancelRequestParams": {
+      "description": "Parameters for `control/cancelRequest`.\n\nCancels a pending server-initiated request (hook callback, approval prompt). The server should treat this as if the request was denied/failed.",
+      "type": "object",
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "request_id": {
+          "description": "The request_id of the pending request to cancel.",
+          "type": "string"
         }
       }
     },
