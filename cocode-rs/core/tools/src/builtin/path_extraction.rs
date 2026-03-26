@@ -9,7 +9,7 @@
 //! ```no_run
 //! use cocode_tools::builtin::path_extraction::LlmPathExtractor;
 //! use cocode_protocol::model::{ModelRoles, ModelRole, ModelSpec};
-//! use cocode_api::LanguageModel;
+//! use cocode_inference::LanguageModel;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,9 +26,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_api::LanguageModel;
-use cocode_api::LanguageModelCallOptions;
-use cocode_api::LanguageModelMessage;
+use cocode_inference::LanguageModel;
+use cocode_inference::LanguageModelCallOptions;
+use cocode_inference::LanguageModelMessage;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelRoles;
 use cocode_shell::path_extractor::BoxFuture;

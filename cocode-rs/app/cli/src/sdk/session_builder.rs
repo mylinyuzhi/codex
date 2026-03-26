@@ -4,10 +4,13 @@
 //! into internal types and applies them to `SessionState`.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cocode_app_server_protocol::AgentDefinitionConfig;
 use cocode_app_server_protocol::HookCallbackConfig;
+use cocode_app_server_protocol::McpServerConfig;
 use cocode_app_server_protocol::SessionStartRequestParams;
 use cocode_hooks::HookSdkCallbackFn;
 use cocode_protocol::HookEventType;
@@ -15,6 +18,7 @@ use cocode_protocol::ModelSpec;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::SubagentType;
 use cocode_protocol::execution::ExecutionIdentity;
+use cocode_rmcp_client::RmcpClient;
 use cocode_session::SessionState;
 use cocode_subagent::AgentDefinition;
 use cocode_subagent::AgentSource;
@@ -24,16 +28,28 @@ use cocode_subagent::MemoryScope;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 
+use super::mcp_bridge::SdkMcpBridge;
+
+/// Result of applying SDK session parameters.
+pub struct SdkParamsResult {
+    /// Hook bridge for routing SDK callbacks (if hooks were registered).
+    pub hook_bridge: Option<Arc<SdkHookBridge>>,
+    /// MCP bridge for routing SDK-managed tool calls (if SDK tools were registered).
+    pub mcp_bridge: Option<Arc<SdkMcpBridge>>,
+    /// Successfully connected MCP servers: (name, tool_count).
+    pub mcp_servers: Vec<(String, i32)>,
+    /// Failed MCP servers: (name, error_message).
+    pub mcp_failures: Vec<(String, String)>,
+}
+
 /// Apply all SDK session parameters to the given `SessionState`.
 ///
 /// This wires agents, hooks, MCP servers, budget, tools, sandbox, thinking,
 /// and output format from the SDK's `SessionStartRequestParams`.
-///
-/// Returns an optional `SdkHookBridge` if SDK hook callbacks were registered.
 pub async fn apply_sdk_params(
     state: &mut SessionState,
     params: &SessionStartRequestParams,
-) -> anyhow::Result<Option<Arc<SdkHookBridge>>> {
+) -> anyhow::Result<SdkParamsResult> {
     let mgr = state.subagent_manager();
     let mut mgr = mgr.lock().await;
 
@@ -116,13 +132,38 @@ pub async fn apply_sdk_params(
     }
 
     // ── MCP servers ─────────────────────────────────────────────
-    // MCP servers require RmcpClient lifecycle management (spawn, connect,
-    // tool registration). Deferred to a focused PR.
-    if params.mcp_servers.is_some() {
-        tracing::info!("SDK MCP servers config received (wiring deferred)");
+    let mut mcp_servers_result = Vec::new();
+    let mut mcp_failures_result = Vec::new();
+    let mut mcp_bridge: Option<Arc<SdkMcpBridge>> = None;
+    if let Some(ref mcp_servers) = params.mcp_servers {
+        let (clients, successes, failures, bridge) =
+            connect_sdk_mcp_servers(state, mcp_servers).await?;
+        mcp_servers_result = successes;
+        mcp_failures_result = failures;
+        mcp_bridge = bridge;
+        if !clients.is_empty() {
+            state.push_mcp_clients(clients);
+        }
     }
 
-    Ok(hook_bridge)
+    Ok(SdkParamsResult {
+        hook_bridge,
+        mcp_bridge,
+        mcp_servers: mcp_servers_result,
+        mcp_failures: mcp_failures_result,
+    })
+}
+
+/// Convert SDK `ThinkingMode` to internal `ThinkingLevel`.
+pub(crate) fn convert_thinking_mode(
+    mode: cocode_app_server_protocol::ThinkingMode,
+) -> cocode_protocol::ThinkingLevel {
+    use cocode_protocol::ThinkingLevel;
+    match mode {
+        cocode_app_server_protocol::ThinkingMode::Enabled => ThinkingLevel::high(),
+        cocode_app_server_protocol::ThinkingMode::Disabled => ThinkingLevel::none(),
+        cocode_app_server_protocol::ThinkingMode::Adaptive => ThinkingLevel::medium(),
+    }
 }
 
 /// Info about a pending hook callback that needs to be sent to the SDK client.
@@ -228,10 +269,21 @@ fn register_sdk_hooks(
                 return Err("Hook callback request channel closed".to_string());
             }
 
-            // Wait for the SDK client to respond
-            match resp_rx.await {
-                Ok(output) => Ok(output),
-                Err(_) => Err("Hook callback response channel closed".to_string()),
+            // Wait for the SDK client to respond (with safety timeout)
+            let timeout_duration = Duration::from_secs(30);
+            match tokio::time::timeout(timeout_duration, resp_rx).await {
+                Ok(Ok(output)) => Ok(output),
+                Ok(Err(_)) => Err("Hook callback response channel closed".to_string()),
+                Err(_) => {
+                    // Timeout — clean up pending entry
+                    let mut map = pending.lock().await;
+                    map.remove(&request_id);
+                    tracing::warn!(
+                        request_id = %request_id,
+                        "Hook callback timed out after {timeout_duration:?}"
+                    );
+                    Err("Hook callback timed out".to_string())
+                }
             }
         })
     });
@@ -273,7 +325,20 @@ fn register_sdk_hooks(
             force_sync_execution: false,
             timeout_secs: hook_config
                 .timeout_ms
-                .map(|ms| (ms / 1000).clamp(1, cocode_hooks::MAX_TIMEOUT_SECS))
+                .map(|ms| {
+                    let raw = ms / 1000;
+                    let clamped = raw.clamp(1, cocode_hooks::MAX_TIMEOUT_SECS);
+                    if clamped != raw {
+                        tracing::warn!(
+                            callback_id = %hook_config.callback_id,
+                            timeout_ms = ms,
+                            clamped_secs = clamped,
+                            "Hook timeout_ms clamped to {clamped}s (valid range: 1-{}s)",
+                            cocode_hooks::MAX_TIMEOUT_SECS
+                        );
+                    }
+                    clamped
+                })
                 .unwrap_or(30),
             group_id: None,
             status_message: None,
@@ -382,4 +447,215 @@ fn convert_model_identity(model: &str) -> ExecutionIdentity {
             ExecutionIdentity::Spec(ModelSpec::new(provider, slug))
         }
     }
+}
+
+// ── SDK MCP server connection ─────────────────────────────────────────
+
+/// Connect SDK-provided MCP servers and register their tools.
+///
+/// Follows the same pattern as `cocode_plugin::connect_plugin_mcp_servers`:
+/// spawn/connect → initialize → list tools → register in tool registry.
+/// Failed servers are logged and skipped (don't fail the session).
+///
+/// For `McpServerConfig::Sdk` servers, tools are registered via
+/// `SdkMcpBridge` and routed through the NDJSON control channel.
+///
+/// Returns `(clients, successes, failures, mcp_bridge)` where:
+/// - `clients`: `Arc<RmcpClient>` to keep alive for session lifetime
+/// - `successes`: `(name, tool_count)` for startup status reporting
+/// - `failures`: `(name, error)` for startup status reporting
+/// - `mcp_bridge`: bridge for SDK-managed servers (if any)
+async fn connect_sdk_mcp_servers(
+    state: &mut SessionState,
+    servers: &HashMap<String, McpServerConfig>,
+) -> anyhow::Result<(
+    Vec<Arc<RmcpClient>>,
+    Vec<(String, i32)>,
+    Vec<(String, String)>,
+    Option<Arc<SdkMcpBridge>>,
+)> {
+    let tool_timeout = Duration::from_secs(60);
+
+    // Separate SDK-managed servers from real servers
+    let (sdk_servers, real_servers): (Vec<_>, Vec<_>) = servers
+        .iter()
+        .partition(|(_, config)| matches!(config, McpServerConfig::Sdk { .. }));
+
+    // Connect real servers concurrently
+    let connection_futures: Vec<_> = real_servers
+        .iter()
+        .map(|(name, config)| {
+            let name = (*name).clone();
+            let config = (*config).clone();
+            async move {
+                let result = connect_single_mcp_server(&name, &config).await;
+                (name, result)
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(connection_futures).await;
+
+    // Register tools sequentially (requires &mut ToolRegistry).
+    // Arc::get_mut succeeds here because apply_sdk_params runs before
+    // the executor clones the registry — assert this invariant.
+    let mut clients = Vec::new();
+    let mut successes: Vec<(String, i32)> = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let registry = Arc::get_mut(&mut state.tool_registry).ok_or_else(|| {
+        anyhow::anyhow!(
+            "SDK MCP tool registration failed: tool registry already shared. \
+             Ensure apply_sdk_params is called before the executor clones the registry."
+        )
+    })?;
+
+    for (name, result) in results {
+        match result {
+            Ok((client, tools_result)) => {
+                let tools_count = tools_result.tools.len() as i32;
+                registry.register_mcp_tools_executable(
+                    &name,
+                    tools_result.tools,
+                    client.clone(),
+                    tool_timeout,
+                );
+                tracing::info!(
+                    server = %name,
+                    tools = tools_count,
+                    "Connected SDK MCP server"
+                );
+                successes.push((name, tools_count));
+                clients.push(client);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Failed to connect SDK MCP server"
+                );
+                failures.push((name, format!("{e:#}")));
+            }
+        }
+    }
+
+    // Register SDK-managed servers via bridge
+    let mcp_bridge = if sdk_servers.is_empty() {
+        None
+    } else {
+        let bridge = Arc::new(SdkMcpBridge::new());
+        for (name, config) in &sdk_servers {
+            if let McpServerConfig::Sdk { tools } = config {
+                let tools_count = tools.len() as i32;
+                for tool_def in tools {
+                    let schema = tool_def
+                        .input_schema
+                        .clone()
+                        .unwrap_or_else(|| serde_json::json!({"type": "object"}));
+                    let wrapper = bridge.create_tool_wrapper(
+                        (*name).clone(),
+                        tool_def.name.clone(),
+                        tool_def.description.clone().unwrap_or_default(),
+                        schema.clone(),
+                    );
+                    let qualified_name = wrapper.qualified_name();
+                    registry.register_tool(qualified_name.clone(), Arc::new(wrapper));
+                    registry.register_mcp_tool_info(
+                        name,
+                        &tool_def.name,
+                        tool_def.description.as_deref(),
+                        &schema,
+                    );
+                }
+                tracing::info!(
+                    server = %name,
+                    tools = tools_count,
+                    "Registered SDK-managed MCP server"
+                );
+                successes.push(((*name).clone(), tools_count));
+            }
+        }
+        Some(bridge)
+    };
+
+    Ok((clients, successes, failures, mcp_bridge))
+}
+
+/// Connect a single SDK MCP server.
+async fn connect_single_mcp_server(
+    name: &str,
+    config: &McpServerConfig,
+) -> anyhow::Result<(Arc<RmcpClient>, cocode_mcp_types::ListToolsResult)> {
+    use cocode_mcp_types::ClientCapabilities;
+    use cocode_mcp_types::Implementation;
+    use cocode_mcp_types::InitializeRequestParams;
+    use cocode_mcp_types::MCP_SCHEMA_VERSION;
+    use futures::FutureExt as _;
+
+    let timeout = Duration::from_secs(30);
+
+    let client = match config {
+        McpServerConfig::Stdio { command, args, env } => Arc::new(
+            RmcpClient::new_stdio_client(
+                OsString::from(command),
+                args.iter().map(OsString::from).collect(),
+                env.clone(),
+                &[],
+                None,
+            )
+            .await?,
+        ),
+        McpServerConfig::Sdk { .. } => {
+            anyhow::bail!("SDK-managed servers should be handled by connect_sdk_mcp_servers")
+        }
+        McpServerConfig::Http { url } | McpServerConfig::Sse { url } => {
+            let cocode_home = dirs::home_dir()
+                .map(|p| p.join(".cocode"))
+                .unwrap_or_else(|| std::env::temp_dir().join(".cocode"));
+            Arc::new(
+                RmcpClient::new_streamable_http_client(
+                    name,
+                    url,
+                    /*bearer_token*/ None,
+                    /*http_headers*/ None,
+                    /*env_http_headers*/ None,
+                    Default::default(),
+                    cocode_home,
+                )
+                .await?,
+            )
+        }
+    };
+
+    let init_params = InitializeRequestParams {
+        capabilities: ClientCapabilities {
+            elicitation: None,
+            experimental: None,
+            roots: None,
+            sampling: None,
+        },
+        client_info: Implementation {
+            name: "cocode-sdk".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            title: Some(format!("cocode SDK MCP: {name}")),
+            user_agent: None,
+        },
+        protocol_version: MCP_SCHEMA_VERSION.to_string(),
+    };
+
+    let no_elicitation: cocode_rmcp_client::SendElicitation = Box::new(|_, _| {
+        async {
+            Err(anyhow::anyhow!(
+                "Elicitation not supported for SDK MCP servers"
+            ))
+        }
+        .boxed()
+    });
+
+    client
+        .initialize(init_params, Some(timeout), no_elicitation)
+        .await?;
+
+    let tools_result = client.list_tools(None, Some(timeout)).await?;
+
+    Ok((client, tools_result))
 }

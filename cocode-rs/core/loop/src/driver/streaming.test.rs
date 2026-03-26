@@ -1,5 +1,5 @@
 use super::select_tools_for_model;
-use cocode_api::LanguageModelTool;
+use cocode_inference::LanguageModelTool;
 use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ToolName;

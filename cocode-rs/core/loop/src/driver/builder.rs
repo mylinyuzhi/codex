@@ -3,11 +3,11 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use cocode_api::ApiClient;
-use cocode_api::ModelHub;
 use cocode_context::ConversationContext;
 use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
+use cocode_inference::ApiClient;
+use cocode_inference::ModelHub;
 use cocode_message::MessageHistory;
 use cocode_policy::ApprovalStore;
 use cocode_protocol::AgentStatus;

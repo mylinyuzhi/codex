@@ -90,7 +90,7 @@ fn test_proxy_env_vars_populated_with_network() {
     );
     assert_eq!(
         vars.get("ALL_PROXY").map(String::as_str),
-        Some("socks5://localhost:1080")
+        Some("socks5h://localhost:1080")
     );
     assert!(vars.get("NO_PROXY").is_some());
 }
@@ -111,7 +111,66 @@ fn test_activate_network() {
     );
     assert_eq!(
         vars.get("ALL_PROXY").map(String::as_str),
-        Some("socks5://localhost:9001")
+        Some("socks5h://localhost:9001")
+    );
+}
+
+#[test]
+fn test_proxy_env_vars_extended_vars() {
+    let state = make_active_state();
+    state.activate_network(ProxyPorts {
+        http_port: 3128,
+        socks_port: 1080,
+    });
+    let vars = state.proxy_env_vars();
+
+    // Docker proxy
+    assert_eq!(
+        vars.get("DOCKER_HTTP_PROXY").map(String::as_str),
+        Some("http://localhost:3128")
+    );
+    assert_eq!(
+        vars.get("DOCKER_HTTPS_PROXY").map(String::as_str),
+        Some("http://localhost:3128")
+    );
+
+    // gRPC proxy
+    assert_eq!(
+        vars.get("GRPC_PROXY").map(String::as_str),
+        Some("socks5h://localhost:1080")
+    );
+
+    // FTP / RSYNC
+    assert_eq!(
+        vars.get("FTP_PROXY").map(String::as_str),
+        Some("socks5h://localhost:1080")
+    );
+    assert_eq!(
+        vars.get("RSYNC_PROXY").map(String::as_str),
+        Some("localhost:1080")
+    );
+
+    // gcloud SDK
+    assert_eq!(
+        vars.get("CLOUDSDK_PROXY_TYPE").map(String::as_str),
+        Some("https")
+    );
+    assert_eq!(
+        vars.get("CLOUDSDK_PROXY_ADDRESS").map(String::as_str),
+        Some("localhost")
+    );
+    assert_eq!(
+        vars.get("CLOUDSDK_PROXY_PORT").map(String::as_str),
+        Some("3128")
+    );
+
+    // GIT_SSH_COMMAND
+    let git_ssh = vars
+        .get("GIT_SSH_COMMAND")
+        .expect("GIT_SSH_COMMAND missing");
+    assert!(
+        git_ssh.contains("nc -X 5 -x localhost:1080"),
+        "GIT_SSH_COMMAND should route via SOCKS proxy, got: {git_ssh}"
     );
 }
 
@@ -167,4 +226,156 @@ fn test_update_config_preserves_violations_and_network() {
     // Network and violations should be preserved
     assert!(state.network_active());
     assert_eq!(state.enforcement(), EnforcementLevel::Strict);
+}
+
+// ==========================================================================
+// describe_filesystem / describe_network tests
+// ==========================================================================
+
+#[test]
+fn test_describe_filesystem_with_writable_roots() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![WritableRoot::new("/home/user/project")],
+        denied_paths: vec![std::path::PathBuf::from("/etc/shadow")],
+        denied_read_paths: vec![std::path::PathBuf::from("/root/.ssh")],
+        deny_write_paths: vec![std::path::PathBuf::from("/usr")],
+        ..Default::default()
+    };
+    let settings = SandboxSettings::enabled();
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::WorkspaceWrite, settings, config, platform);
+
+    let desc = state.describe_filesystem();
+    let parsed: serde_json::Value = serde_json::from_str(&desc).expect("valid JSON");
+
+    // denied_paths should appear in both read.denyOnly and write.denyOnly
+    let read_deny = &parsed["read"]["denyOnly"];
+    assert!(
+        read_deny
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|v| v.as_str() == Some("/etc/shadow")),
+        "denied_paths should appear in read.denyOnly: {read_deny}"
+    );
+    assert!(
+        read_deny
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|v| v.as_str() == Some("/root/.ssh")),
+        "denied_read_paths should appear in read.denyOnly: {read_deny}"
+    );
+
+    let write_deny = &parsed["write"]["denyOnly"];
+    assert!(
+        write_deny
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|v| v.as_str() == Some("/etc/shadow")),
+        "denied_paths should appear in write.denyOnly: {write_deny}"
+    );
+    assert!(
+        write_deny
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|v| v.as_str() == Some("/usr")),
+        "deny_write_paths should appear in write.denyOnly: {write_deny}"
+    );
+
+    // Writable roots should have readOnlySubpaths
+    let allow_write = &parsed["write"]["allowOnly"];
+    let first = &allow_write[0];
+    assert!(first["path"].as_str().is_some());
+    assert!(
+        !first["readOnlySubpaths"]
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_describe_filesystem_empty_config() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        ..Default::default()
+    };
+    let settings = SandboxSettings::enabled();
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::ReadOnly, settings, config, platform);
+
+    let desc = state.describe_filesystem();
+    let parsed: serde_json::Value = serde_json::from_str(&desc).expect("valid JSON");
+
+    assert!(
+        parsed["read"]["denyOnly"]
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+    assert!(
+        parsed["write"]["allowOnly"]
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+    assert!(
+        parsed["write"]["denyOnly"]
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_describe_network_blocked() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: false,
+        ..Default::default()
+    };
+    let settings = SandboxSettings::enabled();
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::WorkspaceWrite, settings, config, platform);
+
+    let desc = state.describe_network();
+    assert!(desc.contains("blocked"), "expected 'blocked', got: {desc}");
+}
+
+#[test]
+fn test_describe_network_no_proxy() {
+    let state = make_active_state();
+    // network_active() is false (no proxy started), but allow_network is true
+    let desc = state.describe_network();
+    assert!(desc.contains("allowed"), "expected 'allowed', got: {desc}");
+}
+
+#[test]
+fn test_describe_network_with_proxy_and_domains() {
+    let mut settings = SandboxSettings::enabled();
+    settings.network.allowed_domains = vec!["github.com".to_string(), "*.npmjs.org".to_string()];
+    settings.network.denied_domains = vec!["evil.com".to_string()];
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: true,
+        ..Default::default()
+    };
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::WorkspaceWrite, settings, config, platform);
+    state.activate_network(ProxyPorts::default());
+
+    let desc = state.describe_network();
+    let parsed: serde_json::Value = serde_json::from_str(&desc).expect("valid JSON");
+
+    let allowed = parsed["allowedHosts"].as_array().expect("array");
+    assert_eq!(allowed.len(), 2);
+    assert_eq!(allowed[0].as_str(), Some("github.com"));
+
+    let denied = parsed["deniedHosts"].as_array().expect("array");
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].as_str(), Some("evil.com"));
 }

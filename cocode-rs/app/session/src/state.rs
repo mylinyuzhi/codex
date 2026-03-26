@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-use cocode_api::ApiClient;
-use cocode_api::ModelHub;
 use cocode_config::Config;
 use cocode_context::ContextInjection;
 use cocode_context::ConversationContext;
@@ -16,6 +14,8 @@ use cocode_hooks::HookDefinition;
 use cocode_hooks::HookHandler;
 use cocode_hooks::HookRegistry;
 use cocode_hooks::HookSource;
+use cocode_inference::ApiClient;
+use cocode_inference::ModelHub;
 use cocode_loop::AgentLoop;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
@@ -252,6 +252,9 @@ pub struct SessionState {
 
     /// Full system prompt override (replaces built-in prompt entirely).
     system_prompt_override: Option<String>,
+
+    /// JSON Schema for structured output (stored for future API wiring).
+    structured_output_schema: Option<serde_json::Value>,
 
     /// Subagent manager for Task tool agent spawning.
     ///
@@ -778,6 +781,7 @@ impl SessionState {
             queued_commands: Arc::new(Mutex::new(Vec::new())),
             system_prompt_suffix: plugin_agent_suffix,
             system_prompt_override: None,
+            structured_output_schema: None,
             config,
             permission_rules,
             todos: serde_json::json!([]),
@@ -1521,6 +1525,13 @@ impl SessionState {
         &self.subagent_manager
     }
 
+    /// Add MCP clients to the session (kept alive for session lifetime).
+    ///
+    /// Used by SDK mode to wire MCP servers after session construction.
+    pub fn push_mcp_clients(&mut self, clients: Vec<Arc<RmcpClient>>) {
+        self._mcp_clients.extend(clients);
+    }
+
     /// Update the loop configuration.
     pub fn set_loop_config(&mut self, config: LoopConfig) {
         self.loop_config = config;
@@ -1583,7 +1594,7 @@ impl SessionState {
     pub fn get_model_for_role(
         &self,
         role: ModelRole,
-    ) -> anyhow::Result<Option<(Arc<dyn cocode_api::LanguageModel>, ProviderApi)>> {
+    ) -> anyhow::Result<Option<(Arc<dyn cocode_inference::LanguageModel>, ProviderApi)>> {
         match self
             .model_hub
             .get_model_for_role_with_selections(role, &self.session.selections)
@@ -1603,7 +1614,7 @@ impl SessionState {
     /// Get the main model (shorthand for get_model_for_role(ModelRole::Main)).
     ///
     /// Returns the main model using the session's selections.
-    pub fn main_model(&self) -> anyhow::Result<Arc<dyn cocode_api::LanguageModel>> {
+    pub fn main_model(&self) -> anyhow::Result<Arc<dyn cocode_inference::LanguageModel>> {
         self.model_hub
             .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
             .map(|(m, _)| m)
@@ -1671,11 +1682,15 @@ impl SessionState {
         &self,
         role: ModelRole,
         model_info: Option<&cocode_protocol::ModelInfo>,
-    ) -> Option<cocode_api::ProviderOptions> {
+    ) -> Option<cocode_inference::ProviderOptions> {
         let thinking_level = self.thinking_level(role)?;
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
-        cocode_api::thinking_convert::to_provider_options(&thinking_level, model_info, self.api)
+        cocode_inference::thinking_convert::to_provider_options(
+            &thinking_level,
+            model_info,
+            self.api,
+        )
     }
 
     // ==========================================================
@@ -1693,10 +1708,17 @@ impl SessionState {
     }
 
     /// Set a JSON Schema for structured output validation.
-    pub fn set_structured_output_schema(&mut self, _schema: serde_json::Value) {
-        // TODO: Wire structured output schema to the agent loop.
-        // The schema should be passed to the API client for guided generation.
-        tracing::info!("Structured output schema set (API wiring pending)");
+    ///
+    /// The schema is stored for future use when structured output support
+    /// is wired through to the API client. Currently logs a warning
+    /// that the feature is not yet operational.
+    pub fn set_structured_output_schema(&mut self, schema: serde_json::Value) {
+        self.structured_output_schema = Some(schema);
+    }
+
+    /// Get the structured output schema, if set.
+    pub fn structured_output_schema(&self) -> Option<&serde_json::Value> {
+        self.structured_output_schema.as_ref()
     }
 
     /// Resolve the active output style for prompt generation.
@@ -1768,17 +1790,11 @@ impl SessionState {
             && state.is_active()
         {
             let settings = state.settings();
-            let enforcement_desc = format!("{:?}", state.enforcement());
             builder = builder.sandbox(
                 /*active=*/ true,
-                /*enforcement_desc=*/ Some(enforcement_desc),
+                /*enforcement_desc=*/ Some(state.describe_filesystem()),
                 /*allow_unsandboxed=*/ settings.allow_unsandboxed_commands,
-                /*network_desc=*/
-                if state.network_active() {
-                    Some("Proxy-filtered (domain allow/deny lists active)".to_string())
-                } else {
-                    Some("Allowed".to_string())
-                },
+                /*network_desc=*/ Some(state.describe_network()),
             );
         }
         builder
@@ -1932,13 +1948,7 @@ impl SessionState {
 
     /// Set the permission mode from a string (e.g., "default", "acceptEdits").
     pub fn set_permission_mode_from_str(&mut self, mode: &str) {
-        let parsed = match mode {
-            "acceptEdits" => PermissionMode::AcceptEdits,
-            "bypassPermissions" | "bypass" => PermissionMode::Bypass,
-            "plan" => PermissionMode::Plan,
-            _ => PermissionMode::Default,
-        };
-        self.set_permission_mode(parsed);
+        self.set_permission_mode(mode.parse().unwrap_or(PermissionMode::Default));
     }
 
     /// Set a model override for the next turn.
@@ -1947,15 +1957,7 @@ impl SessionState {
     /// Accepts a full provider/model slug (e.g., "anthropic/claude-sonnet-4")
     /// or a model name that the model hub will resolve.
     pub fn set_model_override(&mut self, model: &str) {
-        // Parse "provider/model" format or treat entire string as model name
-        let (provider, slug) = if let Some((p, m)) = model.split_once('/') {
-            (p.to_string(), m.to_string())
-        } else {
-            // Default to anthropic for unqualified names
-            ("anthropic".to_string(), model.to_string())
-        };
-
-        let spec = cocode_protocol::ModelSpec::new(provider, slug);
+        let spec = cocode_protocol::ModelSpec::parse_with_default_provider(model);
         let selection = cocode_protocol::RoleSelection::new(spec);
         self.session
             .selections
@@ -3186,8 +3188,8 @@ impl SessionState {
         );
 
         let summary_messages = vec![
-            cocode_api::LanguageModelMessage::system(&system_prompt),
-            cocode_api::LanguageModelMessage::user_text(&user_prompt),
+            cocode_inference::LanguageModelMessage::system(&system_prompt),
+            cocode_inference::LanguageModelMessage::user_text(&user_prompt),
         ];
 
         // 3. Call LLM for summary
@@ -3198,7 +3200,7 @@ impl SessionState {
             .prepare_compact_with_selections(&self.session.selections, &session_id, turn_count)
             .map_err(|e| anyhow::anyhow!("Failed to prepare compact model: {e}"))?;
 
-        let summary_request = cocode_api::RequestBuilder::new(ctx)
+        let summary_request = cocode_inference::RequestBuilder::new(ctx)
             .messages(summary_messages)
             .max_tokens(max_output_tokens as u64)
             .build();
@@ -3213,7 +3215,7 @@ impl SessionState {
             .content
             .iter()
             .filter_map(|b| match b {
-                cocode_api::AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
+                cocode_inference::AssistantContentPart::Text(tp) => Some(tp.text.as_str()),
                 _ => None,
             })
             .collect();

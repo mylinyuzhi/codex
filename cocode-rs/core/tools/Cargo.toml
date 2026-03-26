@@ -8,7 +8,7 @@ license.workspace = true
 cocode-protocol.workspace = true
 cocode-policy.workspace = true
 cocode-config.workspace = true
-cocode-api.workspace = true
+cocode-inference.workspace = true
 cocode-message.workspace = true
 cocode-error.workspace = true
 cocode-hooks.workspace = true
@@ -31,6 +31,7 @@ cocode-otel.workspace = true
 cocode-file-backup.workspace = true
 cocode-git.workspace = true
 cocode-utils-string.workspace = true
+cocode-secret-redact.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }

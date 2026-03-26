@@ -46,7 +46,7 @@ regex = { workspace = true }
 sha1 = { workspace = true }
 hex = "0.4"
 base64 = { workspace = true }
-cocode-api = { workspace = true }
+cocode-inference = { workspace = true }
 arboard = { workspace = true }
 image = { workspace = true, features = ["png"] }
 

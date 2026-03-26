@@ -626,6 +626,107 @@
         }
       }
     },
+    "ErrorInfo": {
+      "description": "Structured error classification for programmatic handling.\n\nFollows the codex-rs `CodexErrorInfo` pattern for typed error dispatch.",
+      "oneOf": [
+        {
+          "description": "Context window exceeded — compaction needed or context too large.",
+          "type": "string",
+          "enum": [
+            "context_window_exceeded"
+          ]
+        },
+        {
+          "description": "API rate limit hit — retry after backoff.",
+          "type": "string",
+          "enum": [
+            "rate_limit_exceeded"
+          ]
+        },
+        {
+          "description": "Authentication failed or expired.",
+          "type": "string",
+          "enum": [
+            "authentication_failed"
+          ]
+        },
+        {
+          "description": "Server overloaded — retry with backoff.",
+          "type": "object",
+          "required": [
+            "server_overloaded"
+          ],
+          "properties": {
+            "server_overloaded": {
+              "type": "object",
+              "properties": {
+                "retry_after_ms": {
+                  "description": "Suggested retry delay in milliseconds.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Tool execution failed.",
+          "type": "object",
+          "required": [
+            "tool_execution_failed"
+          ],
+          "properties": {
+            "tool_execution_failed": {
+              "type": "object",
+              "required": [
+                "tool_name"
+              ],
+              "properties": {
+                "tool_name": {
+                  "description": "Name of the tool that failed.",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "HTTP connection failure.",
+          "type": "object",
+          "required": [
+            "http_connection_failed"
+          ],
+          "properties": {
+            "http_connection_failed": {
+              "type": "object",
+              "properties": {
+                "http_status_code": {
+                  "description": "HTTP status code (if available).",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Maximum budget exceeded.",
+          "type": "string",
+          "enum": [
+            "budget_exceeded"
+          ]
+        }
+      ]
+    },
     "ErrorNotificationParams": {
       "description": "Parameters for `error`.",
       "type": "object",
@@ -638,6 +739,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "error_info": {
+          "description": "Structured error info for programmatic handling.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "message": {
@@ -941,12 +1053,37 @@
     "RateLimitParams": {
       "description": "Parameters for `rateLimit`.",
       "type": "object",
-      "required": [
-        "info"
-      ],
       "properties": {
-        "info": {
-          "description": "Rate limit details."
+        "limit": {
+          "description": "Maximum requests allowed per window.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "provider": {
+          "description": "Provider that imposed the rate limit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remaining": {
+          "description": "Remaining requests in the current window.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "reset_at": {
+          "description": "Unix timestamp (seconds) when the rate limit resets.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
         }
       }
     },
@@ -1079,10 +1216,10 @@
         "total_cost_cents": {
           "description": "Total cost in cents (if available).",
           "type": [
-            "number",
+            "integer",
             "null"
           ],
-          "format": "double"
+          "format": "int64"
         },
         "total_turns": {
           "description": "Total number of turns in the session.",

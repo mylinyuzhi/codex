@@ -1,4 +1,4 @@
-use cocode_api::ToolCall;
+use cocode_inference::ToolCall;
 use cocode_protocol::INTERRUPTED_BY_USER;
 use cocode_protocol::INTERRUPTED_FOR_TOOL_USE;
 

@@ -6,7 +6,7 @@ members = [
     "common/policy",
     "common/otel",
     "common/stack-trace-macro",
-    "core/api",
+    "core/inference",
     "core/message",
     "core/tools",
     "core/context",
@@ -43,11 +43,13 @@ members = [
     "utils/rustls-provider",
     "utils/stream-parser",
     "utils/sleep-inhibitor",
+    "utils/secret-redact",
     "retrieval",
     "lsp",
     "exec/shell",
     "exec/sandbox",
     "exec/arg0",
+    "exec/process-hardening",
     "features/skill",
     "features/hooks",
     "features/plugin",
@@ -56,6 +58,7 @@ members = [
     "features/cron",
     "features/auto-memory",
     "features/keybindings",
+    "features/ide",
     "core/loop",
     "core/subagent",
     "core/executor",
@@ -72,6 +75,7 @@ members = [
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
     "app-server-protocol",
+    "app-server",
 ]
 resolver = "2"
 
@@ -94,7 +98,7 @@ cocode-otel = { path = "common/otel" }
 cocode-stack-trace-macro = { path = "common/stack-trace-macro" }
 
 # Internal - core
-cocode-api = { path = "core/api" }
+cocode-inference = { path = "core/inference" }
 cocode-message = { path = "core/message" }
 cocode-tools = { path = "core/tools" }
 cocode-context = { path = "core/context" }
@@ -137,6 +141,7 @@ cocode-shell-parser = { path = "utils/shell-parser" }
 cocode-utils-rustls-provider = { path = "utils/rustls-provider" }
 cocode-utils-stream-parser = { path = "utils/stream-parser" }
 cocode-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
+cocode-secret-redact = { path = "utils/secret-redact" }
 
 # Internal - MCP
 cocode-mcp-types = { path = "mcp/mcp-types" }
@@ -146,6 +151,7 @@ cocode-rmcp-client = { path = "mcp/rmcp-client" }
 cocode-shell = { path = "exec/shell" }
 cocode-sandbox = { path = "exec/sandbox" }
 cocode-arg0 = { path = "exec/arg0" }
+cocode-process-hardening = { path = "exec/process-hardening" }
 
 # Internal - features
 cocode-skill = { path = "features/skill" }
@@ -156,12 +162,14 @@ cocode-team = { path = "features/team" }
 cocode-cron = { path = "features/cron" }
 cocode-auto-memory = { path = "features/auto-memory" }
 cocode-keybindings = { path = "features/keybindings" }
+cocode-ide = { path = "features/ide" }
 
 # Internal - app
 cocode-session = { path = "app/session" }
 cocode-cli = { path = "app/cli" }
 cocode-tui = { path = "app/tui" }
 cocode-app-server-protocol = { path = "app-server-protocol" }
+cocode-app-server = { path = "app-server" }
 
 # Internal - LSP
 cocode-lsp = { path = "lsp" }

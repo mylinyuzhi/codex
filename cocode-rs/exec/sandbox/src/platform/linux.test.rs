@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-
 use crate::config::EnforcementLevel;
 use crate::config::SandboxConfig;
-use crate::config::SeccompConfig;
 use crate::config::WritableRoot;
 
 use super::*;
@@ -356,7 +353,7 @@ fn test_wrap_command_disabled_is_noop() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
     let inner = cmd.as_std();
     assert_eq!(inner.get_program(), "echo");
@@ -381,7 +378,7 @@ fn test_wrap_command_readonly_rewrites() {
     let mut cmd = tokio::process::Command::new("/bin/bash");
     cmd.arg("-c").arg("echo hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -398,94 +395,11 @@ fn test_wrap_command_readonly_rewrites() {
 }
 
 // ==========================================================================
-// Seccomp resolution
+// In-process seccomp mode selection
 // ==========================================================================
 
 #[test]
-fn test_resolve_seccomp_inner_no_config() {
-    let seccomp = SeccompConfig::default();
-    assert!(resolve_seccomp_inner(&seccomp).is_none());
-}
-
-#[test]
-fn test_resolve_seccomp_inner_bpf_not_found() {
-    let seccomp = SeccompConfig {
-        bpf_path: Some(PathBuf::from("/nonexistent/filter.bpf")),
-        apply_path: None,
-    };
-    assert!(resolve_seccomp_inner(&seccomp).is_none());
-}
-
-#[test]
-fn test_resolve_seccomp_inner_bpf_exists_no_apply() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bpf = dir.path().join("filter.bpf");
-    std::fs::write(&bpf, b"dummy bpf").expect("write bpf");
-
-    let seccomp = SeccompConfig {
-        bpf_path: Some(bpf),
-        apply_path: None,
-    };
-
-    // No seccomp-apply in default paths on this system, so None
-    // (unless the binary happens to be installed)
-    let result = resolve_seccomp_inner(&seccomp);
-    if !SECCOMP_APPLY_PATHS
-        .iter()
-        .any(|p| std::path::Path::new(p).exists())
-    {
-        assert!(result.is_none());
-    }
-}
-
-#[test]
-fn test_resolve_seccomp_inner_both_exist() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bpf = dir.path().join("filter.bpf");
-    std::fs::write(&bpf, b"dummy bpf").expect("write bpf");
-    let apply = dir.path().join("seccomp-apply");
-    std::fs::write(&apply, b"#!/bin/sh\nexec \"$@\"").expect("write apply");
-
-    let seccomp = SeccompConfig {
-        bpf_path: Some(bpf.clone()),
-        apply_path: Some(apply.clone()),
-    };
-
-    let result = resolve_seccomp_inner(&seccomp);
-    assert!(result.is_some());
-    let (resolved_apply, resolved_bpf) = result.expect("seccomp resolved");
-    assert_eq!(resolved_apply, apply);
-    assert_eq!(resolved_bpf, bpf);
-}
-
-#[test]
-fn test_resolve_seccomp_inner_explicit_apply_not_found_falls_back() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bpf = dir.path().join("filter.bpf");
-    std::fs::write(&bpf, b"dummy bpf").expect("write bpf");
-
-    let seccomp = SeccompConfig {
-        bpf_path: Some(bpf),
-        // Explicit path that doesn't exist
-        apply_path: Some(PathBuf::from("/nonexistent/seccomp-apply")),
-    };
-
-    // Falls back to SECCOMP_APPLY_PATHS search; likely None in test env
-    let result = resolve_seccomp_inner(&seccomp);
-    if !SECCOMP_APPLY_PATHS
-        .iter()
-        .any(|p| std::path::Path::new(p).exists())
-    {
-        assert!(result.is_none());
-    }
-}
-
-// ==========================================================================
-// Seccomp command wrapping
-// ==========================================================================
-
-#[test]
-fn test_wrap_command_with_seccomp_inserts_inner_stage() {
+fn test_wrap_command_with_seccomp_inserts_apply_seccomp_inner() {
     if !cfg!(target_os = "linux") {
         return;
     }
@@ -494,28 +408,20 @@ fn test_wrap_command_with_seccomp_inserts_inner_stage() {
         return;
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bpf = dir.path().join("filter.bpf");
-    std::fs::write(&bpf, b"dummy bpf").expect("write bpf");
-    let apply = dir.path().join("seccomp-apply");
-    std::fs::write(&apply, b"#!/bin/sh\nexec \"$@\"").expect("write apply");
-
+    // Network blocked + no proxy → Restricted seccomp mode
     let config = SandboxConfig {
         enforcement: EnforcementLevel::ReadOnly,
         writable_roots: vec![],
         denied_paths: vec![],
         allow_network: false,
-        seccomp: SeccompConfig {
-            bpf_path: Some(bpf.clone()),
-            apply_path: Some(apply.clone()),
-        },
+        proxy_active: false,
         ..Default::default()
     };
 
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -524,32 +430,26 @@ fn test_wrap_command_with_seccomp_inserts_inner_stage() {
         .map(|a| a.to_string_lossy().to_string())
         .collect();
 
-    // Should contain two "--" separators: one before seccomp-apply, one before the inner command
-    let separator_positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| *a == "--")
-        .map(|(i, _)| i)
-        .collect();
-    assert_eq!(
-        separator_positions.len(),
-        2,
-        "Expected two '--' separators for two-stage pattern, got {separator_positions:?} in {args:?}"
+    // Should contain --apply-seccomp restricted -- in the inner args
+    assert!(
+        args.contains(&APPLY_SECCOMP_ARG1.to_string()),
+        "Expected --apply-seccomp in args: {args:?}"
+    );
+    assert!(
+        args.contains(&"restricted".to_string()),
+        "Expected 'restricted' mode in args: {args:?}"
     );
 
-    // Between the two separators: seccomp-apply <bpf>
-    let first_sep = separator_positions[0];
-    let second_sep = separator_positions[1];
-    assert_eq!(args[first_sep + 1], apply.display().to_string());
-    assert_eq!(args[first_sep + 2], bpf.display().to_string());
-
-    // After the second separator: the original program
-    assert_eq!(args[second_sep + 1], "/bin/echo");
-    assert_eq!(args[second_sep + 2], "hello");
+    // Two "--" separators: before seccomp inner, before real command
+    let sep_count = args.iter().filter(|a| *a == "--").count();
+    assert_eq!(
+        sep_count, 2,
+        "Expected two '--' separators, got {sep_count} in {args:?}"
+    );
 }
 
 #[test]
-fn test_wrap_command_without_seccomp_single_separator() {
+fn test_wrap_command_full_network_skips_seccomp() {
     if !cfg!(target_os = "linux") {
         return;
     }
@@ -558,18 +458,20 @@ fn test_wrap_command_without_seccomp_single_separator() {
         return;
     }
 
+    // Full network, no proxy → no seccomp
     let config = SandboxConfig {
         enforcement: EnforcementLevel::ReadOnly,
         writable_roots: vec![],
         denied_paths: vec![],
-        allow_network: false,
+        allow_network: true,
+        proxy_active: false,
         ..Default::default()
     };
 
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -578,10 +480,14 @@ fn test_wrap_command_without_seccomp_single_separator() {
         .map(|a| a.to_string_lossy().to_string())
         .collect();
 
-    // Without seccomp: only one "--" separator
-    let separator_count = args.iter().filter(|a| *a == "--").count();
+    // No seccomp: only one "--" separator
+    let sep_count = args.iter().filter(|a| *a == "--").count();
     assert_eq!(
-        separator_count, 1,
-        "Expected one '--' separator without seccomp, got {separator_count} in {args:?}"
+        sep_count, 1,
+        "Expected one '--' separator without seccomp, got {sep_count} in {args:?}"
+    );
+    assert!(
+        !args.contains(&APPLY_SECCOMP_ARG1.to_string()),
+        "Should NOT contain --apply-seccomp: {args:?}"
     );
 }

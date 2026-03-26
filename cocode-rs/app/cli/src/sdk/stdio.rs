@@ -13,10 +13,9 @@ use anyhow::Context;
 use cocode_app_server_protocol::ApprovalResolveRequestParams;
 use cocode_app_server_protocol::ClientRequest;
 use cocode_app_server_protocol::HookCallbackResponseParams;
-use cocode_app_server_protocol::JsonRpcNotification;
-use cocode_app_server_protocol::JsonRpcRequest;
 use cocode_app_server_protocol::JsonRpcResponse;
 use cocode_app_server_protocol::KeepAliveRequestParams;
+use cocode_app_server_protocol::McpRouteMessageResponseParams;
 use cocode_app_server_protocol::RequestId;
 use cocode_app_server_protocol::RewindFilesRequestParams;
 use cocode_app_server_protocol::ServerNotification;
@@ -35,6 +34,15 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 
+/// Wrapper that adds a JSON-RPC `id` field to a `ServerRequest` for
+/// single-pass serialization (avoids intermediate `serde_json::Value`).
+#[derive(serde::Serialize)]
+struct JsonRpcRequestEnvelope<'a> {
+    id: RequestId,
+    #[serde(flatten)]
+    inner: &'a ServerRequest,
+}
+
 /// Parsed inbound message from stdin.
 #[derive(Debug)]
 pub enum InboundMessage {
@@ -48,10 +56,12 @@ pub enum InboundMessage {
     SetPermissionMode(SetPermissionModeRequestParams),
     StopTask(StopTaskRequestParams),
     HookCallbackResponse(HookCallbackResponseParams),
+    McpRouteMessageResponse(McpRouteMessageResponseParams),
     SetThinking(SetThinkingRequestParams),
     RewindFiles(RewindFilesRequestParams),
     UpdateEnv(UpdateEnvRequestParams),
     KeepAlive(#[allow(dead_code)] KeepAliveRequestParams),
+    CancelRequest(cocode_app_server_protocol::CancelRequestParams),
 }
 
 /// Reads client requests from stdin as NDJSON (JSON-RPC or legacy format).
@@ -90,6 +100,13 @@ impl StdinReader {
             serde_json::from_str(line).context("failed to parse client request")?;
 
         match request {
+            ClientRequest::Initialize(_) => {
+                // In stdio SDK mode, initialize is a no-op (session/start
+                // implicitly initializes). Treat as keep-alive.
+                Ok(InboundMessage::KeepAlive(KeepAliveRequestParams {
+                    timestamp: None,
+                }))
+            }
             ClientRequest::SessionStart(params) => Ok(InboundMessage::SessionStart(params)),
             ClientRequest::TurnStart(params) => Ok(InboundMessage::TurnStart(params)),
             ClientRequest::TurnInterrupt(params) => Ok(InboundMessage::TurnInterrupt(params)),
@@ -103,11 +120,26 @@ impl StdinReader {
             ClientRequest::HookCallbackResponse(params) => {
                 Ok(InboundMessage::HookCallbackResponse(params))
             }
+            ClientRequest::McpRouteMessageResponse(params) => {
+                Ok(InboundMessage::McpRouteMessageResponse(params))
+            }
             ClientRequest::SessionResume(params) => Ok(InboundMessage::SessionResume(params)),
             ClientRequest::SetThinking(params) => Ok(InboundMessage::SetThinking(params)),
             ClientRequest::RewindFiles(params) => Ok(InboundMessage::RewindFiles(params)),
             ClientRequest::UpdateEnv(params) => Ok(InboundMessage::UpdateEnv(params)),
             ClientRequest::KeepAlive(params) => Ok(InboundMessage::KeepAlive(params)),
+            // Session/config management requests are not supported in stdio
+            // SDK mode (they require the app-server). Treat as keep-alive.
+            ClientRequest::SessionList(_)
+            | ClientRequest::SessionRead(_)
+            | ClientRequest::SessionArchive(_)
+            | ClientRequest::ConfigRead(_)
+            | ClientRequest::ConfigWrite(_) => {
+                Ok(InboundMessage::KeepAlive(KeepAliveRequestParams {
+                    timestamp: None,
+                }))
+            }
+            ClientRequest::CancelRequest(params) => Ok(InboundMessage::CancelRequest(params)),
         }
     }
 }
@@ -127,25 +159,21 @@ impl StdoutWriter {
     }
 
     /// Write a `ServerNotification` as a JSON-RPC notification (no `id`).
+    ///
+    /// `ServerNotification` already serializes as `{"method":"..","params":{..}}`
+    /// which is the JSON-RPC notification wire format, so we serialize directly.
     pub async fn write_notification(&mut self, notif: &ServerNotification) -> anyhow::Result<()> {
-        let value = serde_json::to_value(notif).context("failed to serialize notification")?;
-        let rpc = JsonRpcNotification {
-            method: value["method"].as_str().unwrap_or("unknown").to_string(),
-            params: value.get("params").cloned(),
-        };
-        self.write_json(&rpc).await
+        self.write_json(notif).await
     }
 
     /// Write a `ServerRequest` as a JSON-RPC request (with `id`).
     pub async fn write_server_request(&mut self, req: &ServerRequest) -> anyhow::Result<()> {
         self.request_counter += 1;
-        let value = serde_json::to_value(req).context("failed to serialize server request")?;
-        let rpc = JsonRpcRequest {
+        let envelope = JsonRpcRequestEnvelope {
             id: RequestId::Integer(self.request_counter),
-            method: value["method"].as_str().unwrap_or("unknown").to_string(),
-            params: value.get("params").cloned(),
+            inner: req,
         };
-        self.write_json(&rpc).await
+        self.write_json(&envelope).await
     }
 
     /// Write a JSON-RPC response (for client-initiated requests).
@@ -176,3 +204,7 @@ impl StdoutWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "stdio.test.rs"]
+mod tests;

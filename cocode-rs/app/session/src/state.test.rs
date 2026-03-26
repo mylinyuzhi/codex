@@ -1,7 +1,7 @@
 use super::*;
-use cocode_api::AssistantContentPart;
 use cocode_config::json_config::ExtraMarketplaceConfig;
 use cocode_config::json_config::MarketplaceSourceConfig;
+use cocode_inference::AssistantContentPart;
 use cocode_protocol::ToolName;
 
 #[test]

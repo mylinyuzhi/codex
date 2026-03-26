@@ -1,9 +1,9 @@
 //! LLM-based compaction orchestration and shared compaction utilities.
 
-use cocode_api::AssistantContentPart;
-use cocode_api::LanguageModelMessage;
-use cocode_api::RequestBuilder;
-use cocode_api::TextPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::RequestBuilder;
+use cocode_inference::TextPart;
 use cocode_prompt::SystemPromptBuilder;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::AutoCompactTracking;
