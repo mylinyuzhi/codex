@@ -180,6 +180,12 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         std::process::exit(exit_code);
     }
 
+    // Process hardening: remove dangerous env vars before any other
+    // code runs. Defense-in-depth: sandbox also clears these per-command,
+    // but cleaning at process level prevents accidental use in non-sandboxed
+    // paths (e.g., MCP servers, subprocesses spawned before sandbox init).
+    harden_process_env();
+
     // This modifies the environment, which is not thread-safe, so do this
     // before creating any threads/the Tokio runtime.
     load_dotenv();
@@ -235,6 +241,34 @@ where
 
         main_fn(paths).await
     })
+}
+
+/// Remove environment variables that could be used for library injection attacks.
+///
+/// On Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` can inject shared
+/// libraries into the process. On macOS: `DYLD_INSERT_LIBRARIES`,
+/// `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH` serve the same purpose.
+///
+/// Called before any threads are spawned (single-threaded at this point).
+fn harden_process_env() {
+    let dangerous_vars = [
+        // Linux library injection
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        // macOS library injection
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+    ];
+
+    for var in &dangerous_vars {
+        if std::env::var_os(var).is_some() {
+            // SAFETY: This is called before any threads are spawned.
+            unsafe { std::env::remove_var(var) };
+            tracing::debug!("Process hardening: removed {var}");
+        }
+    }
 }
 
 /// Find the cocode home directory.

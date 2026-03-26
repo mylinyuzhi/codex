@@ -135,6 +135,7 @@ impl Tool for WebFetchTool {
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: Some(input.clone()),
             },
         }
     }

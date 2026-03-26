@@ -163,6 +163,7 @@ status.dialogs_waiting: "%{count} 等待中"
 
 # 思考状态
 status.fast_mode: "快速"
+status.sandbox: "沙箱"
 
 status.thinking: "思考中..."
 status.thinking_with_duration: "思考中... %{duration}秒"
@@ -392,6 +393,10 @@ toast.slow_query: "查询耗时 %{duration} 秒"
 toast.fast_mode_on: "快速模式已启用"
 toast.fast_mode_off: "快速模式已禁用"
 
+# 沙箱
+toast.sandbox_active: "沙箱已激活：%{enforcement}"
+toast.sandbox_violations: "检测到 %{count} 个沙箱违规"
+
 # 权限模式
 toast.permission_mode_changed: "权限模式"
 
@@ -514,6 +519,7 @@ tool.title_running: "工具 (%{count} 运行中)"
 tool.running: "运行中"
 tool.completed: "已完成"
 tool.failed: "失败"
+tool.exploring_group: "探索（%{count} 次调用）"
 
 # ============================================================
 # 子代理面板

@@ -111,6 +111,7 @@ impl Tool for ExitPlanModeTool {
                 risks: Vec::new(),
                 allow_remember: false,
                 proposed_prefix_pattern: None,
+                input: None,
             },
         }
     }

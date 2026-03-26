@@ -31,6 +31,7 @@ async fn test_generates_user_sent_format() {
             id: "cmd-1".to_string(),
             prompt: "use TypeScript instead".to_string(),
             queued_at: 1234567890,
+            target_turn: None,
         }])
         .build();
 
@@ -61,11 +62,13 @@ async fn test_generates_multiple_commands() {
                 id: "cmd-1".to_string(),
                 prompt: "use TypeScript".to_string(),
                 queued_at: 1234567890,
+                target_turn: None,
             },
             QueuedCommandInfo {
                 id: "cmd-2".to_string(),
                 prompt: "add error handling".to_string(),
                 queued_at: 1234567891,
+                target_turn: None,
             },
         ])
         .build();

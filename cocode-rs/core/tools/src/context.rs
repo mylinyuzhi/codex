@@ -1329,6 +1329,8 @@ pub struct ToolContext {
     pub auto_memory_dir: Option<PathBuf>,
     /// Shell executor for command execution and background task management.
     pub shell_executor: ShellExecutor,
+    /// Sandbox state for platform-level command isolation.
+    pub sandbox_state: Option<Arc<cocode_sandbox::SandboxState>>,
     /// Optional LSP server manager for language intelligence tools.
     pub lsp_manager: Option<Arc<LspServerManager>>,
     /// Optional skill manager for executing named skills.
@@ -1415,6 +1417,7 @@ impl ToolContext {
             plan_file_path: None,
             auto_memory_dir: None,
             shell_executor,
+            sandbox_state: None,
             lsp_manager: None,
             skill_manager: None,
             skill_usage_tracker: None,
@@ -1535,6 +1538,12 @@ impl ToolContext {
     /// Set the shell executor.
     pub fn with_shell_executor(mut self, executor: ShellExecutor) -> Self {
         self.shell_executor = executor;
+        self
+    }
+
+    /// Set the sandbox state.
+    pub fn with_sandbox_state(mut self, state: Arc<cocode_sandbox::SandboxState>) -> Self {
+        self.sandbox_state = Some(state);
         self
     }
 
@@ -1810,6 +1819,7 @@ pub struct ToolContextBuilder {
     plan_file_path: Option<PathBuf>,
     auto_memory_dir: Option<PathBuf>,
     shell_executor: Option<ShellExecutor>,
+    sandbox_state: Option<Arc<cocode_sandbox::SandboxState>>,
     lsp_manager: Option<Arc<LspServerManager>>,
     skill_manager: Option<Arc<SkillManager>>,
     skill_usage_tracker: Option<Arc<SkillUsageTracker>>,
@@ -1854,6 +1864,7 @@ impl ToolContextBuilder {
             plan_file_path: None,
             auto_memory_dir: None,
             shell_executor: None,
+            sandbox_state: None,
             lsp_manager: None,
             skill_manager: None,
             skill_usage_tracker: None,
@@ -1980,6 +1991,18 @@ impl ToolContextBuilder {
     /// Set the shell executor.
     pub fn shell_executor(mut self, executor: ShellExecutor) -> Self {
         self.shell_executor = Some(executor);
+        self
+    }
+
+    /// Set the sandbox state.
+    pub fn sandbox_state(mut self, state: Arc<cocode_sandbox::SandboxState>) -> Self {
+        self.sandbox_state = Some(state);
+        self
+    }
+
+    /// Set the sandbox state from an Option (no-op if None).
+    pub fn maybe_sandbox_state(mut self, state: Option<Arc<cocode_sandbox::SandboxState>>) -> Self {
+        self.sandbox_state = state;
         self
     }
 
@@ -2116,6 +2139,7 @@ impl ToolContextBuilder {
             plan_file_path: self.plan_file_path,
             auto_memory_dir: self.auto_memory_dir,
             shell_executor,
+            sandbox_state: self.sandbox_state,
             lsp_manager: self.lsp_manager,
             skill_manager: self.skill_manager,
             skill_usage_tracker: self.skill_usage_tracker,

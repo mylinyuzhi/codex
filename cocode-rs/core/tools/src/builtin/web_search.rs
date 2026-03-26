@@ -241,6 +241,7 @@ impl Tool for WebSearchTool {
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: Some(input.clone()),
             },
         }
     }

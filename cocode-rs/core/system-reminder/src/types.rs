@@ -173,6 +173,10 @@ pub enum AttachmentType {
     /// MCP server instructions have changed.
     McpInstructionsDelta,
 
+    // === Sandbox ===
+    /// Recent sandbox violations (operation denied by sandbox policy).
+    SandboxViolations,
+
     // === Session info ===
     /// Current session name (displayed to model for context).
     SessionName,
@@ -224,6 +228,7 @@ impl AttachmentType {
             | AttachmentType::WorktreeState
             | AttachmentType::DeferredToolsDelta
             | AttachmentType::McpInstructionsDelta
+            | AttachmentType::SandboxViolations
             | AttachmentType::SessionName
             | AttachmentType::OutputTokenUsage
             | AttachmentType::ConfigChange => XmlTag::SystemReminder,
@@ -253,7 +258,8 @@ impl AttachmentType {
             | AttachmentType::NestedMemory
             | AttachmentType::TeamContext
             | AttachmentType::TeamMailbox
-            | AttachmentType::AutoMemoryPrompt => ReminderTier::Core,
+            | AttachmentType::AutoMemoryPrompt
+            | AttachmentType::SandboxViolations => ReminderTier::Core,
 
             // MainAgentOnly tier
             AttachmentType::AvailableSkills
@@ -336,6 +342,7 @@ impl AttachmentType {
             AttachmentType::WorktreeState => "worktree_state",
             AttachmentType::DeferredToolsDelta => "deferred_tools_delta",
             AttachmentType::McpInstructionsDelta => "mcp_instructions_delta",
+            AttachmentType::SandboxViolations => "sandbox_violations",
             AttachmentType::SessionName => "session_name",
             AttachmentType::OutputTokenUsage => "output_token_usage",
             AttachmentType::ConfigChange => "config_change",

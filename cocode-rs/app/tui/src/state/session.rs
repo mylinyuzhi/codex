@@ -93,6 +93,12 @@ pub struct SessionState {
 
     /// Whether fast mode is active.
     pub fast_mode: bool,
+
+    /// Whether sandbox mode is active.
+    pub sandbox_active: bool,
+
+    /// Recent sandbox violation count (auto-clears after display).
+    pub sandbox_violation_count: i32,
 }
 
 impl SessionState {

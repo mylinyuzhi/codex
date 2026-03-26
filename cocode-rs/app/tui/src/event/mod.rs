@@ -19,6 +19,7 @@ use crossterm::event::MouseEvent;
 
 /// Events that can be processed by the TUI.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // Passed through mpsc channels (heap-allocated)
 pub enum TuiEvent {
     // ========== Terminal Events ==========
     /// A key was pressed.

@@ -289,6 +289,10 @@ pub struct AppConfig {
     )]
     pub output_style: Option<String>,
 
+    /// Sandbox settings (enable/disable, auto-allow, excluded commands, etc.).
+    #[serde(default)]
+    pub sandbox: Option<cocode_sandbox::SandboxSettings>,
+
     /// Plugin enable/disable state.
     ///
     /// Keys are `"pluginName"` or `"pluginName@marketplaceName"`.
@@ -466,6 +470,8 @@ pub struct ResolvedAppConfig {
     pub allow_managed_hooks_only: bool,
     /// Effective OTel configuration.
     pub otel: Option<OtelJsonConfig>,
+    /// Effective sandbox settings.
+    pub sandbox: Option<cocode_sandbox::SandboxSettings>,
     /// Effective output style name.
     pub output_style: Option<String>,
     /// Effective plugin enable/disable state.
@@ -501,6 +507,7 @@ impl AppConfig {
             hooks: self.hooks.clone(),
             disable_all_hooks: self.disable_all_hooks,
             allow_managed_hooks_only: self.allow_managed_hooks_only,
+            sandbox: self.sandbox.clone(),
             otel: self.otel.clone(),
             output_style: self.output_style.clone(),
             enabled_plugins: self.enabled_plugins.clone(),

@@ -106,6 +106,78 @@ impl AgentLoop {
         self.message_history.add_turn(turn);
     }
 
+    /// Generate synthetic interrupt results for tool calls that did not complete.
+    ///
+    /// When the user interrupts a turn, some tool calls may have completed (their
+    /// results are already in `completed_call_ids`) while others were aborted or
+    /// never started. For each incomplete tool call this method:
+    ///
+    /// 1. Adds a `TrackedToolCall` to the current turn (UI tracking only).
+    /// 2. Builds `<tool_result>` XML text so `messages_for_api()` includes the
+    ///    synthetic result — the Anthropic API requires every `tool_use` block
+    ///    to have a matching `tool_result`.
+    /// 3. Appends a guidance message so the model knows the turn was interrupted.
+    ///
+    /// Matches Claude Code's `createInterruptToolResults` (`Sp8`) +
+    /// `createUserGuidanceMessage` (`Ug`) pattern.
+    pub(crate) fn add_interrupt_results_to_history(
+        &mut self,
+        tool_calls: &[ToolCall],
+        completed_call_ids: &std::collections::HashSet<String>,
+        tool_use_in_progress: bool,
+        completed_results_turn_added: bool,
+    ) {
+        let interrupt_text = if tool_use_in_progress {
+            cocode_protocol::INTERRUPTED_FOR_TOOL_USE
+        } else {
+            cocode_protocol::INTERRUPTED_BY_USER
+        };
+
+        // Filter to only the tool calls that did NOT complete
+        let interrupted_calls: Vec<&ToolCall> = tool_calls
+            .iter()
+            .filter(|tc| !completed_call_ids.contains(&tc.tool_call_id))
+            .collect();
+
+        if interrupted_calls.is_empty() {
+            // All tools completed, but the turn was still interrupted.
+            // Add guidance-only message so the model knows (matches CC's
+            // separate Ug call that fires regardless of Sp8 output).
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            let user_msg = TrackedMessage::user(interrupt_text, &turn_id);
+            let turn_offset = if completed_results_turn_added { 2 } else { 1 };
+            let turn = Turn::new(self.turn_number + turn_offset, user_msg);
+            self.message_history.add_turn(turn);
+            return;
+        }
+
+        // 1. UI tracking: add to current turn's tool_calls Vec
+        for tc in &interrupted_calls {
+            self.message_history.add_tool_result(
+                &tc.tool_call_id,
+                &tc.tool_name,
+                ToolResultContent::Text(interrupt_text.to_string()),
+                /*is_error=*/ true,
+            );
+        }
+
+        // 2. API-visible: build <tool_result> XML (mirrors add_tool_results_to_history)
+        let full_text = build_interrupt_tool_results_xml(&interrupted_calls, interrupt_text);
+
+        // 3. Create a properly-numbered turn with the user message
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let user_msg = TrackedMessage::user(&full_text, &turn_id);
+        let turn_offset = if completed_results_turn_added { 2 } else { 1 };
+        let turn = Turn::new(self.turn_number + turn_offset, user_msg);
+        self.message_history.add_turn(turn);
+
+        debug!(
+            interrupted = interrupted_calls.len(),
+            completed = completed_call_ids.len(),
+            "Added interrupt results to history"
+        );
+    }
+
     /// Apply context modifiers from tool execution results.
     ///
     /// This processes modifiers collected from tool outputs and updates the
@@ -302,3 +374,34 @@ impl AgentLoop {
         }
     }
 }
+
+/// Build `<tool_result>` XML blocks for interrupted tool calls, followed by
+/// a guidance message. The format mirrors `add_tool_results_to_history`'s XML
+/// (line 77) so `messages_for_api()` includes them in the conversation.
+fn build_interrupt_tool_results_xml(
+    interrupted_calls: &[&ToolCall],
+    interrupt_text: &str,
+) -> String {
+    if interrupted_calls.is_empty() {
+        // Guidance-only (no per-tool blocks)
+        return interrupt_text.to_string();
+    }
+
+    let tool_results_xml: String = interrupted_calls
+        .iter()
+        .map(|tc| {
+            format!(
+                "<tool_result tool_use_id=\"{}\" name=\"{}\">\n{interrupt_text}\n</tool_result>",
+                tc.tool_call_id, tc.tool_name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // Append guidance text after the per-tool results
+    format!("{tool_results_xml}\n\n{interrupt_text}")
+}
+
+#[cfg(test)]
+#[path = "tool_results.test.rs"]
+mod tests;

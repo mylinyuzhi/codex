@@ -15,6 +15,7 @@ cocode-hooks.workspace = true
 cocode-mcp-types.workspace = true
 cocode-rmcp-client.workspace = true
 cocode-auto-memory.workspace = true
+cocode-sandbox.workspace = true
 cocode-shell.workspace = true
 cocode-shell-parser.workspace = true
 cocode-apply-patch.workspace = true

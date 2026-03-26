@@ -41,6 +41,7 @@ use crate::generators::PlanVerificationGenerator;
 use crate::generators::QueuedCommandsGenerator;
 use crate::generators::RelevantMemoriesGenerator;
 use crate::generators::RewindReminderGenerator;
+use crate::generators::SandboxViolationsGenerator;
 use crate::generators::SecurityGuidelinesGenerator;
 use crate::generators::SessionNameGenerator;
 use crate::generators::SubagentPlanReminderGenerator;
@@ -114,6 +115,7 @@ impl SystemReminderOrchestrator {
             Arc::new(NestedMemoryGenerator),
             Arc::new(TeamContextGenerator),
             Arc::new(TeamMailboxGenerator),
+            Arc::new(SandboxViolationsGenerator),
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator::new()),
             Arc::new(LspDiagnosticsGenerator),

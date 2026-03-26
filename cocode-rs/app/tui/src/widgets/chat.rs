@@ -365,8 +365,12 @@ impl Widget for ChatWidget<'_> {
             .collect();
 
         // Transcript mode: only show last N messages
-        let limit = crate::constants::TRANSCRIPT_MODE_MESSAGE_LIMIT;
-        if self.transcript_mode && visible_messages.len() > limit {
+        let limit = if self.transcript_mode {
+            crate::constants::TRANSCRIPT_MODE_MESSAGE_LIMIT
+        } else {
+            crate::constants::MAX_MESSAGE_DISPLAY as usize
+        };
+        if visible_messages.len() > limit {
             visible_messages = visible_messages.split_off(visible_messages.len() - limit);
         }
 
