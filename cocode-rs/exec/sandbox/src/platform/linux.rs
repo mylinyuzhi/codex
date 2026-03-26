@@ -1,7 +1,11 @@
-//! Linux sandbox implementation using bubblewrap + seccomp.
+//! Linux sandbox implementation using bubblewrap + in-process seccomp.
 //!
 //! Wraps commands with `bwrap` for namespace isolation (network, PID, IPC, UTS, user)
 //! and applies seccomp BPF filters to block sandbox-escaping syscalls.
+//!
+//! The seccomp filter is compiled at runtime (via `seccompiler`) and passed
+//! to the inner stage using the cocode binary's `--apply-seccomp` arg0
+//! dispatch. This eliminates external binary dependencies.
 
 use std::path::PathBuf;
 
@@ -12,14 +16,17 @@ use snafu::OptionExt;
 
 use crate::config::EnforcementLevel;
 use crate::config::SandboxConfig;
-use crate::config::SeccompConfig;
 use crate::config::WritableRoot;
 use crate::error::Result;
 use crate::error::sandbox_error::*;
 use crate::platform::SandboxPlatform;
+use crate::seccomp;
 
 /// Default paths to search for bubblewrap.
 const BWRAP_PATHS: &[&str] = &["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
+
+/// Arg1 flag for the seccomp-apply inner stage dispatch.
+pub const APPLY_SECCOMP_ARG1: &str = "--apply-seccomp";
 
 /// Linux bubblewrap sandbox implementation.
 pub struct LinuxSandbox;
@@ -39,6 +46,8 @@ impl SandboxPlatform for LinuxSandbox {
     fn wrap_command(
         &self,
         config: &SandboxConfig,
+        _command: &str,
+        _session_tag: &str,
         cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         if config.enforcement == EnforcementLevel::Disabled {
@@ -50,14 +59,15 @@ impl SandboxPlatform for LinuxSandbox {
         })?;
 
         let bwrap_args = build_bwrap_args(config);
-        let seccomp_inner = resolve_seccomp_inner(&config.seccomp);
+        let seccomp_mode =
+            seccomp::determine_seccomp_mode(config.allow_network, config.proxy_active);
 
         info!(
             enforcement = ?config.enforcement,
             writable_roots = config.writable_roots.len(),
             allow_network = config.allow_network,
             bwrap_args_count = bwrap_args.len(),
-            seccomp_active = seccomp_inner.is_some(),
+            seccomp_mode = ?seccomp_mode,
             "Wrapping command with Linux bubblewrap sandbox"
         );
 
@@ -71,19 +81,25 @@ impl SandboxPlatform for LinuxSandbox {
 
         // Two-stage sandbox pattern:
         //   Stage 1 (outer): bwrap provides namespace isolation
-        //   Stage 2 (inner): seccomp-apply loads a BPF filter to restrict syscalls
+        //   Stage 2 (inner): in-process seccomp via arg0 dispatch
         //
         // Without seccomp:  bwrap [args] -- <program> <args>
-        // With seccomp:     bwrap [args] -- seccomp-apply <bpf> -- <program> <args>
+        // With seccomp:     bwrap [args] -- <cocode> --apply-seccomp <mode> -- <program> <args>
         *cmd = tokio::process::Command::new(&bwrap_path);
         for arg in &bwrap_args {
             cmd.arg(arg);
         }
         cmd.arg("--");
 
-        if let Some((apply_bin, bpf_file)) = &seccomp_inner {
-            cmd.arg(apply_bin);
-            cmd.arg(bpf_file);
+        if let Some(mode) = seccomp_mode {
+            // Binary is visible inside bwrap via the read-only root bind.
+            let cocode_exe = std::env::current_exe().ok().unwrap_or_else(|| {
+                // Fallback: search PATH for the binary
+                PathBuf::from("cocode")
+            });
+            cmd.arg(&cocode_exe);
+            cmd.arg(APPLY_SECCOMP_ARG1);
+            cmd.arg(mode.as_str_arg());
             cmd.arg("--");
         }
 
@@ -171,51 +187,6 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     }
 
     args
-}
-
-/// Default paths to search for the seccomp-apply helper binary.
-const SECCOMP_APPLY_PATHS: &[&str] = &["/usr/bin/seccomp-apply", "/usr/local/bin/seccomp-apply"];
-
-/// Resolve seccomp inner-stage arguments if both the BPF filter and the
-/// apply binary are available.
-///
-/// Returns `Some((apply_path, bpf_path))` when seccomp should be active,
-/// or `None` when it should be skipped (missing BPF file, missing binary,
-/// or seccomp not configured).
-fn resolve_seccomp_inner(seccomp: &SeccompConfig) -> Option<(PathBuf, PathBuf)> {
-    let bpf_path = seccomp.bpf_path.as_ref()?;
-    if !bpf_path.exists() {
-        warn!(
-            bpf_path = %bpf_path.display(),
-            "Seccomp BPF file not found; skipping seccomp enforcement"
-        );
-        return None;
-    }
-
-    // Use explicit apply_path if set and exists, otherwise search defaults
-    let apply_path = seccomp
-        .apply_path
-        .as_ref()
-        .filter(|p| p.exists())
-        .cloned()
-        .or_else(|| {
-            SECCOMP_APPLY_PATHS
-                .iter()
-                .map(PathBuf::from)
-                .find(|p| p.exists())
-        });
-
-    let Some(apply_path) = apply_path else {
-        warn!("seccomp-apply binary not found; skipping seccomp enforcement");
-        return None;
-    };
-
-    info!(
-        bpf_path = %bpf_path.display(),
-        apply_path = %apply_path.display(),
-        "Seccomp inner stage resolved"
-    );
-    Some((apply_path, bpf_path.clone()))
 }
 
 /// Find symlinks within protected subpaths that could be used for escape attacks.

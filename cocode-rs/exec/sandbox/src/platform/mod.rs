@@ -24,8 +24,17 @@ pub trait SandboxPlatform: Send + Sync {
     ///
     /// Modifies the command to execute within the platform-specific sandbox,
     /// applying filesystem, network, and process isolation according to the config.
-    fn wrap_command(&self, config: &SandboxConfig, cmd: &mut tokio::process::Command)
-    -> Result<()>;
+    ///
+    /// `command` is the original shell command string (used on macOS for
+    /// violation correlation via `CMD64_` tags). `session_tag` is the
+    /// session-unique tag for log filtering (format: `_<hex>_SBX`).
+    fn wrap_command(
+        &self,
+        config: &SandboxConfig,
+        command: &str,
+        session_tag: &str,
+        cmd: &mut tokio::process::Command,
+    ) -> Result<()>;
 }
 
 /// Returns the platform-appropriate sandbox implementation.
@@ -59,6 +68,8 @@ impl SandboxPlatform for NoopSandbox {
     fn wrap_command(
         &self,
         _config: &SandboxConfig,
+        _command: &str,
+        _session_tag: &str,
         _cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         Ok(())

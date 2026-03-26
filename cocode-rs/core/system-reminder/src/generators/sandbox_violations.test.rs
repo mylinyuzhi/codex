@@ -41,11 +41,11 @@ async fn test_single_violation_with_path() {
 
     let reminder = result.expect("reminder");
     let content = reminder.content().expect("text content");
-    assert!(content.contains("<sandbox-violations>"));
+    assert!(content.contains("<sandbox_violations>"));
     assert!(content.contains("1 violation(s) detected:"));
     assert!(content.contains("file-write-data"));
     assert!(content.contains("path=/etc/passwd"));
-    assert!(content.contains("</sandbox-violations>"));
+    assert!(content.contains("</sandbox_violations>"));
 }
 
 #[tokio::test]

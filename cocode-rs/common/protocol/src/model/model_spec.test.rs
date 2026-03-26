@@ -161,3 +161,27 @@ fn test_display_name_excluded_from_hash() {
     set.insert(a);
     assert!(set.contains(&b));
 }
+
+#[test]
+fn test_parse_with_default_provider_qualified() {
+    let spec = ModelSpec::parse_with_default_provider("openai/gpt-5");
+    assert_eq!(spec.provider, "openai");
+    assert_eq!(spec.slug, "gpt-5");
+    assert_eq!(spec.api, ProviderApi::Openai);
+}
+
+#[test]
+fn test_parse_with_default_provider_bare_model() {
+    let spec = ModelSpec::parse_with_default_provider("claude-opus-4");
+    assert_eq!(spec.provider, "anthropic");
+    assert_eq!(spec.slug, "claude-opus-4");
+    assert_eq!(spec.api, ProviderApi::Anthropic);
+}
+
+#[test]
+fn test_parse_with_default_provider_slashes_in_model() {
+    let spec =
+        ModelSpec::parse_with_default_provider("fireworks/accounts/fireworks/models/llama-v3");
+    assert_eq!(spec.provider, "fireworks");
+    assert_eq!(spec.slug, "accounts/fireworks/models/llama-v3");
+}

@@ -92,6 +92,14 @@ pub enum ToolError {
 }
 
 impl ToolError {
+    /// Create an `ExecutionFailed` error with the given message.
+    pub fn execution_failed(message: impl Into<String>) -> Self {
+        tool_error::ExecutionFailedSnafu {
+            message: message.into(),
+        }
+        .build()
+    }
+
     /// Check if this error is a cancellation.
     pub fn is_cancelled(&self) -> bool {
         matches!(self, ToolError::Cancelled { .. })

@@ -28,12 +28,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cocode_api::ApiClient;
-use cocode_api::AssistantContentPart;
-use cocode_api::LanguageModel;
-use cocode_api::LanguageModelCallOptions;
-use cocode_api::LanguageModelMessage;
-use cocode_api::TextPart;
+use cocode_inference::ApiClient;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::LanguageModel;
+use cocode_inference::LanguageModelCallOptions;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::TextPart;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::SessionMemoryExtractionConfig;

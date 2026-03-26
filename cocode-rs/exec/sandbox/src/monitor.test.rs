@@ -129,6 +129,48 @@ fn test_decode_command_tag_invalid() {
     assert_eq!(decode_command_tag("CMD64_invalid_base64_END_tag"), None);
 }
 
+#[test]
+fn test_command_tag_truncates_long_commands() {
+    let long = "x".repeat(500);
+    let tag = generate_command_tag(&long, "_test_SBX");
+    let decoded = decode_command_tag(&tag).unwrap();
+    assert_eq!(decoded.len(), 100, "should truncate to 100 chars");
+    assert_eq!(decoded, "x".repeat(100));
+}
+
+#[test]
+fn test_command_tag_truncation_at_utf8_boundary() {
+    // Each emoji is 4 bytes; 25 emojis = 100 bytes exactly
+    let emojis = "🎉".repeat(25);
+    assert_eq!(emojis.len(), 100);
+    let tag = generate_command_tag(&emojis, "_test_SBX");
+    let decoded = decode_command_tag(&tag).unwrap();
+    assert_eq!(decoded, emojis, "100-byte input should be preserved fully");
+
+    // 26 emojis = 104 bytes; should truncate to 25 emojis (100 bytes)
+    let emojis_over = "🎉".repeat(26);
+    let tag_over = generate_command_tag(&emojis_over, "_test_SBX");
+    let decoded_over = decode_command_tag(&tag_over).unwrap();
+    assert_eq!(
+        decoded_over,
+        "🎉".repeat(25),
+        "should truncate at char boundary, not mid-emoji"
+    );
+}
+
+#[test]
+fn test_command_tag_exact_boundary() {
+    let exactly_100 = "a".repeat(100);
+    let tag = generate_command_tag(&exactly_100, "_t_SBX");
+    let decoded = decode_command_tag(&tag).unwrap();
+    assert_eq!(decoded.len(), 100);
+
+    let exactly_101 = "a".repeat(101);
+    let tag = generate_command_tag(&exactly_101, "_t_SBX");
+    let decoded = decode_command_tag(&tag).unwrap();
+    assert_eq!(decoded.len(), 100);
+}
+
 // --- Log predicate ---
 
 #[test]

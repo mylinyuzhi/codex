@@ -1,10 +1,10 @@
 //! Error types for the agent loop.
 
-use cocode_api::ApiError;
 use cocode_error::ErrorExt;
 use cocode_error::Location;
 use cocode_error::StatusCode;
 use cocode_error::stack_trace_debug;
+use cocode_inference::ApiError;
 use cocode_protocol::StallRecovery;
 use snafu::Snafu;
 

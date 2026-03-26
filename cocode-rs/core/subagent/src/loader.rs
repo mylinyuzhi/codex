@@ -216,7 +216,10 @@ fn load_agent_from_file(path: &Path, source: AgentSource) -> Result<AgentDefinit
     };
 
     let identity = fm.model.as_deref().map(ExecutionIdentity::parse_loose);
-    let permission_mode = fm.permission_mode.as_deref().map(parse_permission_mode);
+    let permission_mode = fm.permission_mode.as_deref().map(|s| {
+        s.parse()
+            .unwrap_or(cocode_protocol::PermissionMode::Default)
+    });
 
     let memory = fm.memory.as_deref().and_then(parse_memory_scope);
     let isolation = fm.isolation.as_deref().and_then(parse_isolation_mode);
@@ -300,19 +303,6 @@ fn parse_isolation_mode(s: &str) -> Option<IsolationMode> {
             tracing::warn!(value = s, "Unknown isolation mode, ignoring");
             None
         }
-    }
-}
-
-/// Parse a permission mode string.
-fn parse_permission_mode(s: &str) -> cocode_protocol::PermissionMode {
-    use cocode_protocol::PermissionMode;
-
-    match s.to_lowercase().as_str() {
-        "bypass" => PermissionMode::Bypass,
-        "dontask" | "dont_ask" | "dont-ask" => PermissionMode::DontAsk,
-        "plan" => PermissionMode::Plan,
-        "acceptedits" | "accept_edits" | "accept-edits" => PermissionMode::AcceptEdits,
-        _ => PermissionMode::Default,
     }
 }
 

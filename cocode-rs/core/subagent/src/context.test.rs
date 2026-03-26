@@ -1,7 +1,7 @@
 use super::*;
 
-use cocode_api::AssistantContentPart;
-use cocode_api::ToolCallPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::ToolCallPart;
 use cocode_message::TrackedMessage;
 use cocode_protocol::ToolName;
 

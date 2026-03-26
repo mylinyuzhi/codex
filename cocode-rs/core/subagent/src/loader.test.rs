@@ -301,40 +301,5 @@ fn test_load_custom_agents_integration() {
 // parse_identity tests moved to cocode_protocol::execution::identity.test.rs
 // (ExecutionIdentity::parse_loose)
 
-#[test]
-fn test_parse_permission_mode_variants() {
-    use cocode_protocol::PermissionMode;
-
-    assert!(matches!(
-        parse_permission_mode("bypass"),
-        PermissionMode::Bypass
-    ));
-    assert!(matches!(
-        parse_permission_mode("dontask"),
-        PermissionMode::DontAsk
-    ));
-    assert!(matches!(
-        parse_permission_mode("dont-ask"),
-        PermissionMode::DontAsk
-    ));
-    assert!(matches!(
-        parse_permission_mode("default"),
-        PermissionMode::Default
-    ));
-    assert!(matches!(
-        parse_permission_mode("plan"),
-        PermissionMode::Plan
-    ));
-    assert!(matches!(
-        parse_permission_mode("acceptEdits"),
-        PermissionMode::AcceptEdits
-    ));
-    assert!(matches!(
-        parse_permission_mode("accept-edits"),
-        PermissionMode::AcceptEdits
-    ));
-    assert!(matches!(
-        parse_permission_mode("anything"),
-        PermissionMode::Default
-    ));
-}
+// Permission mode parsing tests are in cocode_protocol::permission::tests
+// (PermissionMode implements FromStr directly).

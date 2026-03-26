@@ -128,11 +128,11 @@ pub use type_guards::is_tool_use_block;
 pub use type_guards::is_user_message;
 
 // Re-export commonly used types from dependencies
-pub use cocode_api::AssistantContentPart;
-pub use cocode_api::LanguageModelMessage;
-pub use cocode_api::ToolCall;
-pub use cocode_api::ToolResultContent;
-pub use cocode_api::UserContentPart;
+pub use cocode_inference::AssistantContentPart;
+pub use cocode_inference::LanguageModelMessage;
+pub use cocode_inference::ToolCall;
+pub use cocode_inference::ToolResultContent;
+pub use cocode_inference::UserContentPart;
 pub use cocode_protocol::AbortReason;
 pub use cocode_protocol::TokenUsage;
 

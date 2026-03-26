@@ -21,6 +21,9 @@ Two usage patterns:
 """
 
 from cocode_sdk.client import CanUseTool, CocodeClient, HookHandler
+from cocode_sdk.decorators import HookDefinition, hook
+from cocode_sdk.structured import TypedClient
+from cocode_sdk.tools import ToolDefinition, tool
 from cocode_sdk.generated.protocol import (
     AgentDefinitionConfig,
     AgentHookConfig,
@@ -104,6 +107,12 @@ __all__ = [
     "CanUseTool",
     "CocodeClient",
     "HookHandler",
+    "TypedClient",
+    # Decorators
+    "tool",
+    "ToolDefinition",
+    "hook",
+    "HookDefinition",
     # Config types
     "AgentDefinitionConfig",
     "AgentHookConfig",

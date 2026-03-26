@@ -13,7 +13,7 @@ cocode-config.workspace = true
 cocode-error.workspace = true
 
 # Internal - core
-cocode-api.workspace = true
+cocode-inference.workspace = true
 cocode-message.workspace = true
 cocode-tools.workspace = true
 cocode-context.workspace = true

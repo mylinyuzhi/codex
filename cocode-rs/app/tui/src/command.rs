@@ -3,7 +3,7 @@
 //! These commands represent user actions that need to be communicated
 //! to the core agent loop for processing.
 
-use cocode_api::UserContentPart;
+use cocode_inference::UserContentPart;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::RoleSelection;
 use cocode_protocol::SubmissionId;
@@ -172,7 +172,7 @@ impl UserCommand {
     ///
     /// ```
     /// use cocode_tui::UserCommand;
-    /// use cocode_api::UserContentPart;
+    /// use cocode_inference::UserContentPart;
     ///
     /// let cmd = UserCommand::SubmitInput {
     ///     content: vec![UserContentPart::text("Hello")],

@@ -16,6 +16,12 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 pub enum ClientRequest {
+    /// Initialize the connection (version negotiation and capabilities).
+    ///
+    /// Must be the first request on a WebSocket connection. For stdio
+    /// (SDK mode), this is optional — `session/start` implicitly initializes.
+    #[serde(rename = "initialize")]
+    Initialize(InitializeRequestParams),
     /// Start a new session.
     #[serde(rename = "session/start")]
     SessionStart(Box<SessionStartRequestParams>),
@@ -64,6 +70,35 @@ pub enum ClientRequest {
     /// Keepalive signal (prevents idle timeouts).
     #[serde(rename = "control/keepAlive")]
     KeepAlive(KeepAliveRequestParams),
+
+    // ── Session management ────────────────────────────────────────
+    /// List saved sessions.
+    #[serde(rename = "session/list")]
+    SessionList(SessionListRequestParams),
+    /// Read a session's items by ID (without resuming).
+    #[serde(rename = "session/read")]
+    SessionRead(SessionReadRequestParams),
+    /// Archive a session.
+    #[serde(rename = "session/archive")]
+    SessionArchive(SessionArchiveRequestParams),
+
+    // ── Config management ─────────────────────────────────────────
+    /// Read effective configuration.
+    #[serde(rename = "config/read")]
+    ConfigRead(ConfigReadRequestParams),
+    /// Write a single configuration value.
+    #[serde(rename = "config/value/write")]
+    ConfigWrite(ConfigWriteRequestParams),
+
+    // ── MCP routing ────────────────────────────────────────────
+    /// Response to an `mcp/routeMessage` server request.
+    #[serde(rename = "mcp/routeMessageResponse")]
+    McpRouteMessageResponse(McpRouteMessageResponseParams),
+
+    // ── Cancel pending request ─────────────────────────────────
+    /// Cancel a pending server-initiated request (hook callback, approval).
+    #[serde(rename = "control/cancelRequest")]
+    CancelRequest(CancelRequestParams),
 }
 
 /// Parameters for `session/start`.
@@ -226,6 +261,22 @@ pub enum ServerRequest {
     /// Invoke an SDK-registered hook callback.
     #[serde(rename = "hook/callback")]
     HookCallback(HookCallbackParams),
+    /// Cancel a previously sent request (e.g., hook callback timeout).
+    #[serde(rename = "control/cancelRequest")]
+    CancelRequest(ServerCancelRequestParams),
+}
+
+/// Parameters for server-originated `control/cancelRequest`.
+///
+/// Tells the client to stop waiting for a response to the given request_id.
+/// Emitted when a hook callback times out or an approval is superseded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ServerCancelRequestParams {
+    /// The request_id being cancelled.
+    pub request_id: String,
+    /// Reason for cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Parameters for `approval/askForApproval`.
@@ -311,6 +362,19 @@ pub struct HookCallbackResponseParams {
     pub error: Option<String>,
 }
 
+/// Parameters for `mcp/routeMessageResponse`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpRouteMessageResponseParams {
+    /// The request_id from the corresponding McpRouteMessage.
+    pub request_id: String,
+    /// MCP response payload.
+    #[serde(default)]
+    pub response: Value,
+    /// Error message if the routing failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Parameters for `control/updateEnv`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateEnvRequestParams {
@@ -338,4 +402,177 @@ pub struct KeepAliveRequestParams {
     /// Optional timestamp (milliseconds since epoch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
+}
+
+// ===========================================================================
+// Initialize handshake
+// ===========================================================================
+
+/// Parameters for the `initialize` request.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InitializeRequestParams {
+    /// Client identification (for logging and compliance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<ClientInfo>,
+    /// Client capabilities for protocol negotiation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<InitializeCapabilities>,
+}
+
+/// Client identification metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClientInfo {
+    /// Client name (e.g., "cocode_vscode", "cocode_web").
+    pub name: String,
+    /// Human-readable title (e.g., "Cocode for VS Code").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Client version string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// Client capabilities for protocol negotiation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct InitializeCapabilities {
+    /// Opt into experimental API features.
+    #[serde(default)]
+    pub experimental_api: bool,
+    /// Notification methods the client does not want to receive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opt_out_notification_methods: Option<Vec<String>>,
+}
+
+/// Result of the `initialize` request.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InitializeResult {
+    /// Server protocol version.
+    pub protocol_version: String,
+    /// Platform family (e.g., "unix", "windows").
+    pub platform_family: String,
+    /// Platform OS (e.g., "linux", "macos", "windows").
+    pub platform_os: String,
+}
+
+// ===========================================================================
+// Session management
+// ===========================================================================
+
+/// Parameters for `session/list`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SessionListRequestParams {
+    /// Maximum number of sessions to return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i32>,
+    /// Cursor for pagination (session ID to start after).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// Result of `session/list`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionListResult {
+    /// List of session summaries.
+    pub sessions: Vec<SessionSummary>,
+    /// Cursor for the next page (absent if no more results).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Summary of a saved session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionSummary {
+    /// Session identifier.
+    pub id: String,
+    /// Display name (auto-generated or user-set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Working directory used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    /// Model used for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// ISO 8601 timestamp of creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp of last activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Number of turns in the session.
+    #[serde(default)]
+    pub turn_count: i32,
+}
+
+/// Parameters for `session/read`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionReadRequestParams {
+    /// Session ID to read.
+    pub session_id: String,
+}
+
+/// Parameters for `session/archive`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionArchiveRequestParams {
+    /// Session ID to archive.
+    pub session_id: String,
+}
+
+// ===========================================================================
+// Config management
+// ===========================================================================
+
+/// Parameters for `config/read`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigReadRequestParams {
+    /// Specific key to read (if absent, returns all effective config).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+/// Result of `config/read`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigReadResult {
+    /// Effective configuration value(s).
+    pub config: Value,
+}
+
+/// Parameters for `config/value/write`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigWriteRequestParams {
+    /// Configuration key (dot-separated path, e.g. "model.main").
+    pub key: String,
+    /// New value.
+    pub value: Value,
+    /// Config scope to write to (defaults to "user").
+    #[serde(default = "default_config_scope")]
+    pub scope: ConfigWriteScope,
+}
+
+/// Scope for config writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigWriteScope {
+    /// User-level config (~/.cocode/config.json).
+    User,
+    /// Project-level config (.cocode/config.json).
+    Project,
+}
+
+fn default_config_scope() -> ConfigWriteScope {
+    ConfigWriteScope::User
+}
+
+// ===========================================================================
+// Cancel request
+// ===========================================================================
+
+/// Parameters for `control/cancelRequest`.
+///
+/// Cancels a pending server-initiated request (hook callback, approval prompt).
+/// The server should treat this as if the request was denied/failed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelRequestParams {
+    /// The request_id of the pending request to cancel.
+    pub request_id: String,
 }

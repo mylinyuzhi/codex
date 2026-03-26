@@ -88,6 +88,7 @@ pub use permission::ApprovalDecision;
 pub use permission::ApprovalRequest;
 pub use permission::PermissionDecision;
 pub use permission::PermissionMode;
+pub use permission::PermissionModeParseError;
 pub use permission::PermissionResult;
 pub use permission::PlanExitOption;
 pub use permission::RiskSeverity;

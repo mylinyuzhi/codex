@@ -193,3 +193,41 @@ fn test_approval_request_proposed_prefix_pattern() {
     let parsed: ApprovalRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.proposed_prefix_pattern, Some("git *".to_string()));
 }
+
+#[test]
+fn test_permission_mode_from_str_camel_case() {
+    assert_eq!("default".parse(), Ok(PermissionMode::Default));
+    assert_eq!("plan".parse(), Ok(PermissionMode::Plan));
+    assert_eq!("acceptEdits".parse(), Ok(PermissionMode::AcceptEdits));
+    assert_eq!("bypassPermissions".parse(), Ok(PermissionMode::Bypass));
+    assert_eq!("bypass".parse(), Ok(PermissionMode::Bypass));
+    assert_eq!("dontAsk".parse(), Ok(PermissionMode::DontAsk));
+}
+
+#[test]
+fn test_permission_mode_from_str_kebab_case() {
+    assert_eq!("accept-edits".parse(), Ok(PermissionMode::AcceptEdits));
+    assert_eq!("bypass-permissions".parse(), Ok(PermissionMode::Bypass));
+    assert_eq!("dont-ask".parse(), Ok(PermissionMode::DontAsk));
+}
+
+#[test]
+fn test_permission_mode_from_str_snake_case() {
+    assert_eq!("accept_edits".parse(), Ok(PermissionMode::AcceptEdits));
+    assert_eq!("dont_ask".parse(), Ok(PermissionMode::DontAsk));
+}
+
+#[test]
+fn test_permission_mode_from_str_case_insensitive() {
+    assert_eq!("AcceptEdits".parse(), Ok(PermissionMode::AcceptEdits));
+    assert_eq!("BYPASS".parse(), Ok(PermissionMode::Bypass));
+    assert_eq!("DontAsk".parse(), Ok(PermissionMode::DontAsk));
+    assert_eq!("PLAN".parse(), Ok(PermissionMode::Plan));
+}
+
+#[test]
+fn test_permission_mode_from_str_invalid() {
+    assert!("unknown".parse::<PermissionMode>().is_err());
+    assert!("".parse::<PermissionMode>().is_err());
+    assert!("yolo".parse::<PermissionMode>().is_err());
+}

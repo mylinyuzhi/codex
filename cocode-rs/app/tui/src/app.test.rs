@@ -33,7 +33,7 @@ fn test_create_channels() {
     assert!(
         command_tx
             .try_send(UserCommand::SubmitInput {
-                content: vec![cocode_api::UserContentPart::text("test")],
+                content: vec![cocode_inference::UserContentPart::text("test")],
                 display_text: "test".to_string()
             })
             .is_ok()

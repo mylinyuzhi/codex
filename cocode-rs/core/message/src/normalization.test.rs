@@ -65,7 +65,8 @@ fn test_merge_consecutive() {
 fn test_strip_thinking_signatures() {
     let mut tracked = make_tracked_assistant("", "turn-1");
     tracked.inner = LanguageModelMessage::assistant(vec![AssistantContentPart::Reasoning(
-        ReasoningPart::new("Let me think...").with_metadata(cocode_api::ProviderMetadata::new()),
+        ReasoningPart::new("Let me think...")
+            .with_metadata(cocode_inference::ProviderMetadata::new()),
     )]);
 
     let options = NormalizationOptions {

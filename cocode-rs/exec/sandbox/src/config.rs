@@ -154,9 +154,12 @@ pub struct SandboxConfig {
     /// Whether network access is allowed.
     #[serde(default)]
     pub allow_network: bool,
-    /// Seccomp BPF filter configuration (Linux only).
-    #[serde(default)]
-    pub seccomp: SeccompConfig,
+    /// Whether the network proxy is active (runtime-only, not persisted).
+    ///
+    /// Controls seccomp mode selection: `ProxyRouted` when true, `Restricted` when false.
+    /// Synced from `SandboxState::network_active()` in the `config()` snapshot method.
+    #[serde(skip)]
+    pub proxy_active: bool,
     /// Paths to bind-mount into the sandbox (e.g., proxy bridge UDS sockets).
     #[serde(default)]
     pub extra_bind_ro: Vec<PathBuf>,
@@ -191,9 +194,37 @@ pub struct FilesystemConfig {
     pub allow_git_config: bool,
 }
 
+/// Network access mode controlling HTTP method enforcement.
+///
+/// In `Limited` mode, only safe HTTP methods (GET, HEAD, OPTIONS) are allowed.
+/// CONNECT tunnels and SOCKS5 are blocked (cannot inspect methods through tunnels).
+/// In `Full` mode (default), all methods are permitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    /// Full network access: all HTTP methods allowed, CONNECT tunneled, SOCKS5 active.
+    #[default]
+    Full,
+    /// Limited (read-only) access: only GET/HEAD/OPTIONS. CONNECT and SOCKS5 blocked.
+    Limited,
+}
+
+impl NetworkMode {
+    /// Check if an HTTP method is allowed in this mode.
+    pub fn allows_method(&self, method: &str) -> bool {
+        match self {
+            Self::Full => true,
+            Self::Limited => matches!(method, "GET" | "HEAD" | "OPTIONS"),
+        }
+    }
+}
+
 /// Network access configuration for the sandbox.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct NetworkConfig {
+    /// Network access mode (Full or Limited).
+    #[serde(default)]
+    pub mode: NetworkMode,
     /// Domain allow list. When non-empty, only these domains are permitted.
     /// Empty means all domains allowed (unless denied).
     #[serde(default)]
@@ -219,6 +250,13 @@ pub struct NetworkConfig {
     /// MITM proxy configuration for HTTPS inspection.
     #[serde(default)]
     pub mitm_proxy: Option<MitmProxyConfig>,
+    /// Block connections to non-public IP addresses (SSRF prevention).
+    ///
+    /// When enabled, the proxy filter rejects connections to loopback,
+    /// private (RFC 1918), link-local, CGNAT, TEST-NET, and other
+    /// reserved IP ranges.
+    #[serde(default)]
+    pub block_non_public_ips: bool,
 }
 
 /// MITM proxy configuration for HTTPS traffic inspection.
@@ -229,17 +267,6 @@ pub struct MitmProxyConfig {
     /// Domains to intercept via MITM.
     #[serde(default)]
     pub domains: Vec<String>,
-}
-
-/// Seccomp BPF filter configuration (Linux only).
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct SeccompConfig {
-    /// Path to the pre-compiled BPF filter file.
-    #[serde(default)]
-    pub bpf_path: Option<PathBuf>,
-    /// Path to the seccomp-apply binary.
-    #[serde(default)]
-    pub apply_path: Option<PathBuf>,
 }
 
 /// Per-command violation ignore patterns.
@@ -319,10 +346,6 @@ pub struct SandboxSettings {
     #[serde(default)]
     pub enable_weaker_network_isolation: bool,
 
-    /// Seccomp BPF filter configuration (Linux only).
-    #[serde(default)]
-    pub seccomp: SeccompConfig,
-
     /// Allow pseudo-terminal access inside the sandbox (macOS).
     #[serde(default)]
     pub allow_pty: bool,
@@ -357,7 +380,6 @@ impl Default for SandboxSettings {
             ignore_violations: HashMap::new(),
             enable_weaker_nested_sandbox: false,
             enable_weaker_network_isolation: false,
-            seccomp: SeccompConfig::default(),
             allow_pty: false,
             mandatory_deny_search_depth: default_mandatory_deny_search_depth(),
         }

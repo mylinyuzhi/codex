@@ -11,8 +11,6 @@ use async_trait::async_trait;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
-use cocode_protocol::RiskSeverity;
-use cocode_protocol::RiskType;
 use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use cocode_shell::CommandResult;
@@ -101,30 +99,7 @@ pub fn is_read_only_command(command: &str) -> bool {
             let subcommand = trimmed.split_whitespace().nth(1).unwrap_or("");
             PLAN_MODE_GIT_SUBCOMMANDS.contains(&subcommand)
         }
-        _ => matches!(
-            first_word,
-            "ls" | "cat"
-                | "head"
-                | "tail"
-                | "wc"
-                | "grep"
-                | "rg"
-                | "find"
-                | "which"
-                | "whoami"
-                | "pwd"
-                | "echo"
-                | "date"
-                | "env"
-                | "printenv"
-                | "uname"
-                | "hostname"
-                | "df"
-                | "du"
-                | "file"
-                | "stat"
-                | "type"
-        ),
+        _ => PLAN_MODE_SAFE_BINARIES.contains(&first_word),
     }
 }
 
@@ -158,7 +133,7 @@ fn is_plan_mode_safe_binary(name: &str, args: &[String]) -> bool {
 /// 1. **Fast path**: `is_read_only_command()` for simple commands without operators
 /// 2. **Shell parser**: `try_extract_safe_commands()` for pipelines and chained commands,
 ///    verifying every binary in the pipeline is in the safe set
-fn is_plan_mode_allowed(command: &str) -> bool {
+pub(super) fn is_plan_mode_allowed(command: &str) -> bool {
     let trimmed = command.trim();
 
     // Commands with potential shell expansions ($VAR, $(cmd), `cmd`) skip the
@@ -292,7 +267,7 @@ impl Tool for BashTool {
         30_000
     }
 
-    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         let command = match input.get("command").and_then(|v| v.as_str()) {
             Some(cmd) => cmd,
             None => return PermissionResult::Passthrough,
@@ -301,18 +276,28 @@ impl Tool for BashTool {
         // Sandbox auto-allow: when sandbox is active, auto-allow is enabled,
         // and the command qualifies for sandboxing (not bypass-requested, not excluded),
         // the sandbox itself becomes the security boundary — no manual approval needed.
+        //
+        // In closed mode (allow_unsandboxed_commands=false), the bypass parameter is
+        // silently ignored — the command always runs sandboxed. We compute
+        // `effective_bypass` so auto-allow still triggers even when the model sends
+        // `dangerouslyDisableSandbox: true` in closed mode.
         let bypass_requested =
             super::input_helpers::bool_or(input, "dangerouslyDisableSandbox", false);
-        if let Some(ref state) = _ctx.sandbox_state
+        let effective_bypass = bypass_requested
+            && ctx
+                .sandbox_state
+                .as_ref()
+                .is_some_and(|s| s.settings().allow_unsandboxed_commands);
+        if let Some(ref state) = ctx.sandbox_state
             && state.auto_allow_enabled()
-            && !bypass_requested
+            && !effective_bypass
             && state.should_sandbox_command(command, cocode_sandbox::SandboxBypass::No)
         {
             return PermissionResult::Allowed;
         }
 
         // Plan mode: only allow read-only commands.
-        if _ctx.is_plan_mode {
+        if ctx.is_plan_mode {
             if is_plan_mode_allowed(command) {
                 return PermissionResult::Allowed;
             }
@@ -363,44 +348,10 @@ impl Tool for BashTool {
             if !ask_phase_risks.is_empty() {
                 let risks: Vec<SecurityRisk> = ask_phase_risks
                     .iter()
-                    .map(|r| SecurityRisk {
-                        risk_type: match r.kind {
-                            cocode_shell_parser::security::RiskKind::NetworkExfiltration => {
-                                RiskType::Network
-                            }
-                            cocode_shell_parser::security::RiskKind::PrivilegeEscalation => {
-                                RiskType::Elevated
-                            }
-                            cocode_shell_parser::security::RiskKind::FileSystemTampering => {
-                                RiskType::Destructive
-                            }
-                            cocode_shell_parser::security::RiskKind::SensitiveRedirect => {
-                                RiskType::SensitiveFile
-                            }
-                            cocode_shell_parser::security::RiskKind::CodeExecution => {
-                                RiskType::SystemConfig
-                            }
-                            _ => RiskType::Unknown,
-                        },
-                        severity: match r.level {
-                            cocode_shell_parser::security::RiskLevel::Low => RiskSeverity::Low,
-                            cocode_shell_parser::security::RiskLevel::Medium => {
-                                RiskSeverity::Medium
-                            }
-                            cocode_shell_parser::security::RiskLevel::High => RiskSeverity::High,
-                            cocode_shell_parser::security::RiskLevel::Critical => {
-                                RiskSeverity::Critical
-                            }
-                        },
-                        message: r.message.clone(),
-                    })
+                    .map(|r| super::map_shell_risk(r))
                     .collect();
 
-                let description = if command.len() > 120 {
-                    format!("{}...", &command[..120])
-                } else {
-                    command.to_string()
-                };
+                let description = cocode_utils_string::truncate_str(command, 120);
 
                 return PermissionResult::NeedsApproval {
                     request: ApprovalRequest {
@@ -420,11 +371,7 @@ impl Tool for BashTool {
         {
             let commands = parsed.extract_commands();
             if let Some(reason) = check_compound_risks(&commands) {
-                let description = if command.len() > 120 {
-                    format!("{}...", &command[..120])
-                } else {
-                    command.to_string()
-                };
+                let description = cocode_utils_string::truncate_str(command, 120);
                 return PermissionResult::NeedsApproval {
                     request: ApprovalRequest {
                         request_id: format!("bash-compound-{}", uuid::Uuid::new_v4()),
@@ -440,13 +387,9 @@ impl Tool for BashTool {
         }
 
         // Non-read-only command with no detected risks → still needs approval
-        let description = if command.len() > 120 {
-            format!("{}...", &command[..120])
-        } else {
-            command.to_string()
-        };
+        let description = cocode_utils_string::truncate_str(command, 120);
         // Annotate when sandbox bypass is active so the user knows this runs unsandboxed
-        let description = if bypass_requested && _ctx.sandbox_state.is_some() {
+        let description = if effective_bypass {
             format!("{description} (unsandboxed)")
         } else {
             description
@@ -520,7 +463,8 @@ impl Tool for BashTool {
                     ctx.cwd = new_cwd.clone();
                 }
 
-                // Annotate sandbox violations in stderr (matches Claude Code's pattern)
+                // Annotate sandbox violations in stderr using XML tags so the
+                // model can machine-parse them distinct from normal output.
                 if result.sandboxed
                     && let Some(ref state) = ctx.sandbox_state
                 {
@@ -531,18 +475,19 @@ impl Tool for BashTool {
                         if !result.stderr.is_empty() {
                             result.stderr.push('\n');
                         }
-                        result
-                            .stderr
-                            .push_str("--- Sandbox Violations Detected ---\n");
+                        result.stderr.push_str("<sandbox_violations>\n");
                         for v in &non_benign {
-                            if let Some(ref path) = v.path {
-                                result
-                                    .stderr
-                                    .push_str(&format!("  {} {path}\n", v.operation));
-                            } else {
-                                result.stderr.push_str(&format!("  {}\n", v.operation));
+                            let op = &v.operation;
+                            match v.path {
+                                Some(ref path) => {
+                                    result.stderr.push_str(&format!("Sandbox: {op} {path}\n"));
+                                }
+                                None => {
+                                    result.stderr.push_str(&format!("Sandbox: {op}\n"));
+                                }
                             }
                         }
+                        result.stderr.push_str("</sandbox_violations>");
                     }
                 }
 
@@ -557,7 +502,7 @@ impl Tool for BashTool {
     }
 }
 
-/// Convert a [`CommandResult`] to a [`ToolOutput`].
+/// Convert a [`CommandResult`] to a [`ToolOutput`], redacting secrets.
 fn format_command_result(result: &CommandResult) -> Result<ToolOutput> {
     let mut text = String::new();
     if !result.stdout.is_empty() {
@@ -571,19 +516,7 @@ fn format_command_result(result: &CommandResult) -> Result<ToolOutput> {
         text.push_str(&result.stderr);
     }
 
-    if result.exit_code != 0 {
-        if text.is_empty() {
-            text = format!("Command failed with exit code {}", result.exit_code);
-        } else {
-            text.push_str(&format!("\n\nExit code: {}", result.exit_code));
-        }
-        return Ok(ToolOutput::error(text));
-    }
-
-    if text.is_empty() {
-        text = "(no output)".to_string();
-    }
-    Ok(ToolOutput::text(text))
+    super::format_redacted_output(&text, result.exit_code)
 }
 
 #[cfg(test)]

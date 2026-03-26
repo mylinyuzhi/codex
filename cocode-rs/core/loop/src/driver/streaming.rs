@@ -2,18 +2,18 @@
 
 use std::time::Instant;
 
-use cocode_api::AssistantContentPart;
-use cocode_api::CollectedResponse;
-use cocode_api::FinishReason;
-use cocode_api::LanguageModelMessage;
-use cocode_api::LanguageModelTool;
-use cocode_api::QueryResultType;
-use cocode_api::RequestBuilder;
-use cocode_api::StreamOptions;
-use cocode_api::TextPart;
-use cocode_api::ToolCall;
-use cocode_api::ToolCallPart;
 use cocode_error::ErrorExt;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::CollectedResponse;
+use cocode_inference::FinishReason;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::LanguageModelTool;
+use cocode_inference::QueryResultType;
+use cocode_inference::RequestBuilder;
+use cocode_inference::StreamOptions;
+use cocode_inference::TextPart;
+use cocode_inference::ToolCall;
+use cocode_inference::ToolCallPart;
 use cocode_prompt::SystemPromptBuilder;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::QueryTracking;
@@ -216,7 +216,7 @@ impl AgentLoop {
                     let err_str = e.to_string();
                     // Only attempt model fallback for overload/rate-limit errors.
                     // Transient network errors should NOT trigger a model switch.
-                    let classified = cocode_api::error::classify_by_message(&err_str);
+                    let classified = cocode_inference::error::classify_by_message(&err_str);
                     if classified.is_overload_or_rate_limit() {
                         self.try_model_fallback(&err_str).await;
                     }
@@ -289,7 +289,7 @@ impl AgentLoop {
                     // P26: Use structured error classification instead of raw string matching.
                     // The provider's is_retryable hint (from StreamError) is used as a fast
                     // path; otherwise fall back to heuristic message classification.
-                    let classified = cocode_api::error::classify_by_message(&msg);
+                    let classified = cocode_inference::error::classify_by_message(&msg);
                     let is_retryable = result
                         .is_retryable
                         .unwrap_or_else(|| classified.is_retryable());
@@ -375,7 +375,7 @@ impl AgentLoop {
             let mut msgs = Vec::new();
             for block in blocks {
                 if let Some(opts) =
-                    cocode_api::prompt_cache::build_cache_provider_options(block.cache_scope)
+                    cocode_inference::prompt_cache::build_cache_provider_options(block.cache_scope)
                 {
                     msgs.push(LanguageModelMessage::system_with_options(&block.text, opts));
                 } else {
@@ -458,15 +458,15 @@ impl AgentLoop {
             }
             InjectedMessage::UserBlocks { blocks, .. } => {
                 // User blocks (typically tool_result) become user messages
-                let content_parts: Vec<cocode_api::UserContentPart> = blocks
+                let content_parts: Vec<cocode_inference::UserContentPart> = blocks
                     .iter()
                     .map(|block| match block {
                         InjectedBlock::Text(text) => {
-                            cocode_api::UserContentPart::text(text.as_str())
+                            cocode_inference::UserContentPart::text(text.as_str())
                         }
                         InjectedBlock::ToolUse { .. } | InjectedBlock::ToolResult { .. } => {
                             // Tool-related blocks in user messages are serialized as text
-                            cocode_api::UserContentPart::text(format!("{block:?}"))
+                            cocode_inference::UserContentPart::text(format!("{block:?}"))
                         }
                     })
                     .collect();
@@ -487,10 +487,10 @@ impl AgentLoop {
             InjectedBlock::ToolResult {
                 tool_use_id,
                 content,
-            } => AssistantContentPart::ToolResult(cocode_api::ToolResultPart::new(
+            } => AssistantContentPart::ToolResult(cocode_inference::ToolResultPart::new(
                 tool_use_id.as_str(),
                 "",
-                cocode_api::ToolResultContent::text(content.as_str()),
+                cocode_inference::ToolResultContent::text(content.as_str()),
             )),
         }
     }
@@ -570,7 +570,7 @@ pub(super) fn format_language_model_message(m: &LanguageModelMessage) -> String 
             let text: String = content
                 .iter()
                 .filter_map(|part| match part {
-                    cocode_api::UserContentPart::Text(tp) => Some(tp.text.as_str()),
+                    cocode_inference::UserContentPart::Text(tp) => Some(tp.text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -592,7 +592,7 @@ pub(super) fn format_language_model_message(m: &LanguageModelMessage) -> String 
             let text: String = content
                 .iter()
                 .filter_map(|part| match part {
-                    cocode_api::ToolContentPart::ToolResult(r) => Some(r.tool_name.as_str()),
+                    cocode_inference::ToolContentPart::ToolResult(r) => Some(r.tool_name.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

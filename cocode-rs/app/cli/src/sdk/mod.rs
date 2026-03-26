@@ -8,8 +8,14 @@
 
 mod control;
 mod event_mapper;
+mod mcp_bridge;
 mod session_builder;
 mod stdio;
+
+// Re-export shared types from cocode-app-server for consistency.
+// The local modules (control, event_mapper, session_builder) remain
+// as thin wrappers or are being migrated to the app-server crate.
+// TODO: migrate SDK mode to use cocode_app_server types directly.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +48,14 @@ use self::stdio::InboundMessage;
 use self::stdio::StdinReader;
 use self::stdio::StdoutWriter;
 
+/// Current time as milliseconds since the Unix epoch.
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Why the SDK turn loop exited.
 enum SdkExitReason {
     /// Maximum turn limit reached.
@@ -56,6 +70,10 @@ enum SdkExitReason {
 struct SessionMetrics {
     total_turns: i32,
     usage: cocode_app_server_protocol::Usage,
+    /// Final text from the last completed turn (for structured output extraction).
+    last_final_text: Option<String>,
+    /// Latest known cost in cents (from CostWarningThresholdReached events).
+    last_cost_cents: Option<i32>,
 }
 
 /// Run the CLI in SDK mode.
@@ -70,11 +88,11 @@ pub async fn run_sdk_mode(config: &ConfigManager) -> anyhow::Result<()> {
     let mut writer = StdoutWriter::new();
 
     // Step 1: Read session start or resume request from stdin
-    let (start_params, mut state, hook_bridge) = match reader.read_message().await? {
+    let (start_params, mut state, sdk_result) = match reader.read_message().await? {
         InboundMessage::SessionStart(params) => {
             info!(prompt_len = params.prompt.len(), "SDK session start");
-            let (state, bridge) = build_session_state(config, &params).await?;
-            (*params, state, bridge)
+            let (state, result) = build_session_state(config, &params).await?;
+            (*params, state, Some(result))
         }
         InboundMessage::SessionResume(params) => {
             info!(session_id = params.session_id, "SDK session resume");
@@ -131,6 +149,39 @@ pub async fn run_sdk_mode(config: &ConfigManager) -> anyhow::Result<()> {
         }))
         .await?;
 
+    // Extract bridges and emit MCP startup notifications
+    let hook_bridge = sdk_result.as_ref().and_then(|r| r.hook_bridge.clone());
+    let mcp_bridge = sdk_result.as_ref().and_then(|r| r.mcp_bridge.clone());
+    if let Some(ref result) = sdk_result
+        && (!result.mcp_servers.is_empty() || !result.mcp_failures.is_empty())
+    {
+        let servers = result
+            .mcp_servers
+            .iter()
+            .map(
+                |(name, count)| cocode_app_server_protocol::McpServerInfoParams {
+                    name: name.clone(),
+                    tool_count: *count,
+                },
+            )
+            .collect();
+        let failed = result
+            .mcp_failures
+            .iter()
+            .map(
+                |(name, error)| cocode_app_server_protocol::McpServerFailure {
+                    name: name.clone(),
+                    error: error.clone(),
+                },
+            )
+            .collect();
+        writer
+            .write_notification(&ServerNotification::McpStartupComplete(
+                cocode_app_server_protocol::McpStartupCompleteParams { servers, failed },
+            ))
+            .await?;
+    }
+
     let session_start_time = std::time::Instant::now();
 
     // Step 3: Run turn loop
@@ -140,6 +191,7 @@ pub async fn run_sdk_mode(config: &ConfigManager) -> anyhow::Result<()> {
         &mut reader,
         &mut writer,
         &hook_bridge,
+        &mcp_bridge,
     )
     .await;
 
@@ -166,18 +218,45 @@ pub async fn run_sdk_mode(config: &ConfigManager) -> anyhow::Result<()> {
             .await?;
     }
 
+    // Extract structured output from the final text if a schema was configured
+    let structured_output = if state.structured_output_schema().is_some() {
+        metrics.last_final_text.as_deref().and_then(|text| {
+            // Try to extract JSON from the final text
+            let trimmed = text.trim();
+            // Handle markdown JSON blocks
+            let json_str = if trimmed.starts_with("```json") {
+                trimmed
+                    .strip_prefix("```json")
+                    .and_then(|s| s.strip_suffix("```"))
+                    .unwrap_or(trimmed)
+                    .trim()
+            } else if trimmed.starts_with("```") {
+                trimmed
+                    .strip_prefix("```")
+                    .and_then(|s| s.strip_suffix("```"))
+                    .unwrap_or(trimmed)
+                    .trim()
+            } else {
+                trimmed
+            };
+            serde_json::from_str(json_str).ok()
+        })
+    } else {
+        None
+    };
+
     // Emit session/result with aggregated metrics
     let session_duration = session_start_time.elapsed().as_millis() as i64;
     writer
         .write_notification(&ServerNotification::SessionResult(SessionResultParams {
             session_id: session_id.clone(),
             total_turns: metrics.total_turns,
-            total_cost_cents: None,
+            total_cost_cents: metrics.last_cost_cents.map(i64::from),
             duration_ms: session_duration,
             duration_api_ms: None,
             usage: metrics.usage,
             stop_reason: reason,
-            structured_output: None,
+            structured_output,
         }))
         .await?;
 
@@ -203,10 +282,13 @@ async fn run_sdk_turn_loop(
     reader: &mut StdinReader,
     writer: &mut StdoutWriter,
     hook_bridge: &Option<std::sync::Arc<session_builder::SdkHookBridge>>,
+    mcp_bridge: &Option<std::sync::Arc<mcp_bridge::SdkMcpBridge>>,
 ) -> (anyhow::Result<SdkExitReason>, SessionMetrics) {
     let mut metrics = SessionMetrics {
         total_turns: 0,
         usage: Default::default(),
+        last_final_text: None,
+        last_cost_cents: None,
     };
     let result = run_sdk_turn_loop_inner(
         state,
@@ -214,6 +296,7 @@ async fn run_sdk_turn_loop(
         reader,
         writer,
         hook_bridge,
+        mcp_bridge,
         &mut metrics,
     )
     .await;
@@ -228,6 +311,7 @@ async fn run_sdk_turn_loop_inner(
     reader: &mut StdinReader,
     writer: &mut StdoutWriter,
     hook_bridge: &Option<std::sync::Arc<session_builder::SdkHookBridge>>,
+    mcp_bridge: &Option<std::sync::Arc<mcp_bridge::SdkMcpBridge>>,
     metrics: &mut SessionMetrics,
 ) -> anyhow::Result<SdkExitReason> {
     // First turn uses the prompt from session/start
@@ -257,7 +341,7 @@ async fn run_sdk_turn_loop_inner(
         // Run the turn in a scoped block so the turn future (which borrows
         // &mut state) is dropped before the between-turns code.
         enum TurnOutcome {
-            Completed(cocode_app_server_protocol::TurnCompletedParams),
+            Completed(cocode_app_server_protocol::TurnCompletedParams, String),
             Failed(String),
             Interrupted,
         }
@@ -300,7 +384,28 @@ async fn run_sdk_turn_loop_inner(
                             ),
                         ).await?;
                     }
+                    // Poll for SDK MCP route requests (from @tool() decorator)
+                    Some(req) = async {
+                        match mcp_bridge {
+                            Some(b) => b.recv_request().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        writer.write_server_request(
+                            &ServerRequest::McpRouteMessage(
+                                cocode_app_server_protocol::McpRouteMessageParams {
+                                    request_id: req.request_id,
+                                    server_name: req.server_name,
+                                    message: req.message,
+                                },
+                            ),
+                        ).await?;
+                    }
                     Some(event) = event_rx.recv() => {
+                        // Capture cost from warnings
+                        if let LoopEvent::CostWarningThresholdReached { current_cost_cents, .. } = &event {
+                            metrics.last_cost_cents = Some(*current_cost_cents);
+                        }
                         if let LoopEvent::ApprovalRequired { ref request } = event {
                             let server_req = SdkPermissionBridge::create_server_request(request);
                             writer.write_server_request(&server_req).await?;
@@ -365,24 +470,50 @@ async fn run_sdk_turn_loop_inner(
                                     );
                                 }
                             }
+                            Ok(InboundMessage::McpRouteMessageResponse(params)) => {
+                                if let Some(bridge) = mcp_bridge {
+                                    let response = if let Some(err) = params.error {
+                                        serde_json::json!({"error": err})
+                                    } else {
+                                        params.response
+                                    };
+                                    bridge.resolve(&params.request_id, response).await;
+                                } else {
+                                    tracing::warn!(
+                                        request_id = params.request_id,
+                                        "MCP route response but no bridge"
+                                    );
+                                }
+                            }
                             Ok(InboundMessage::UpdateEnv(_)) => {
                                 // Env updates are deferred to between turns
                                 // (state is mutably borrowed by turn_future).
                             }
                             Ok(InboundMessage::KeepAlive(_)) => {
-                                let ts = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as i64)
-                                    .unwrap_or(0);
                                 let _ = writer
                                     .write_notification(
                                         &ServerNotification::KeepAlive(
                                             cocode_app_server_protocol::KeepAliveParams {
-                                                timestamp: ts,
+                                                timestamp: epoch_ms(),
                                             },
                                         ),
                                     )
                                     .await;
+                            }
+                            Ok(InboundMessage::CancelRequest(params)) => {
+                                // Cancel a pending server request (hook callback)
+                                if let Some(bridge) = &hook_bridge {
+                                    bridge.resolve(
+                                        &params.request_id,
+                                        serde_json::json!({"error": "cancelled_by_client"}),
+                                    ).await;
+                                }
+                                // Approval cancellation is handled by the permission
+                                // bridge in the control module
+                                tracing::debug!(
+                                    request_id = %params.request_id,
+                                    "Cancelled pending request"
+                                );
                             }
                             Ok(InboundMessage::TurnInterrupt(_)) => {
                                 cancel_token.cancel();
@@ -432,6 +563,9 @@ async fn run_sdk_turn_loop_inner(
                 }
             }
 
+            // Capture final text for structured output before flush drains it
+            let turn_final_text = mapper.accumulated_text().to_string();
+
             // Flush accumulated text/reasoning
             for notif in mapper.flush() {
                 writer.write_notification(&notif).await?;
@@ -439,6 +573,10 @@ async fn run_sdk_turn_loop_inner(
 
             // Drain any in-flight hook callbacks to prevent deadlocks
             if let Some(bridge) = hook_bridge {
+                bridge.drain_pending().await;
+            }
+            // Drain any in-flight MCP route requests
+            if let Some(bridge) = mcp_bridge {
                 bridge.drain_pending().await;
             }
 
@@ -452,10 +590,13 @@ async fn run_sdk_turn_loop_inner(
                         cache_creation_tokens: result.usage.cache_creation_tokens,
                         reasoning_tokens: result.usage.reasoning_tokens,
                     };
-                    TurnOutcome::Completed(cocode_app_server_protocol::TurnCompletedParams {
-                        turn_id: turn_id.clone(),
-                        usage,
-                    })
+                    TurnOutcome::Completed(
+                        cocode_app_server_protocol::TurnCompletedParams {
+                            turn_id: turn_id.clone(),
+                            usage,
+                        },
+                        turn_final_text,
+                    )
                 }
                 Some(Err(e)) => TurnOutcome::Failed(format!("{e:#}")),
                 None => TurnOutcome::Interrupted,
@@ -465,7 +606,7 @@ async fn run_sdk_turn_loop_inner(
 
         // Emit turn result
         match outcome {
-            TurnOutcome::Completed(params) => {
+            TurnOutcome::Completed(params, final_text) => {
                 // Accumulate usage
                 agg_usage.input_tokens += params.usage.input_tokens;
                 agg_usage.output_tokens += params.usage.output_tokens;
@@ -477,6 +618,10 @@ async fn run_sdk_turn_loop_inner(
                 }
                 if let Some(rt) = params.usage.reasoning_tokens {
                     *agg_usage.reasoning_tokens.get_or_insert(0) += rt;
+                }
+                // Store final text for structured output extraction
+                if !final_text.is_empty() {
+                    metrics.last_final_text = Some(final_text);
                 }
                 writer
                     .write_notification(&ServerNotification::TurnCompleted(params))
@@ -537,14 +682,7 @@ async fn run_sdk_turn_loop_inner(
                     state.cancel_background_task(&params.task_id).await;
                 }
                 Ok(InboundMessage::SetThinking(params)) => {
-                    use cocode_protocol::ThinkingLevel;
-                    let level = match params.thinking.mode {
-                        cocode_app_server_protocol::ThinkingMode::Enabled => ThinkingLevel::high(),
-                        cocode_app_server_protocol::ThinkingMode::Disabled => ThinkingLevel::none(),
-                        cocode_app_server_protocol::ThinkingMode::Adaptive => {
-                            ThinkingLevel::medium()
-                        }
-                    };
+                    let level = session_builder::convert_thinking_mode(params.thinking.mode);
                     state.switch_thinking_level(cocode_protocol::ModelRole::Main, level);
                 }
                 Ok(InboundMessage::RewindFiles(params)) => {
@@ -557,13 +695,11 @@ async fn run_sdk_turn_loop_inner(
                     state.apply_sdk_env_overrides(&params.env);
                 }
                 Ok(InboundMessage::KeepAlive(_)) => {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
                     let _ = writer
                         .write_notification(&ServerNotification::KeepAlive(
-                            cocode_app_server_protocol::KeepAliveParams { timestamp: ts },
+                            cocode_app_server_protocol::KeepAliveParams {
+                                timestamp: epoch_ms(),
+                            },
                         ))
                         .await;
                 }
@@ -582,12 +718,10 @@ async fn run_sdk_turn_loop_inner(
 }
 
 /// Build a `SessionState` from SDK start parameters.
-type HookBridge = Option<std::sync::Arc<session_builder::SdkHookBridge>>;
-
 async fn build_session_state(
     config: &ConfigManager,
     params: &SessionStartRequestParams,
-) -> anyhow::Result<(SessionState, HookBridge)> {
+) -> anyhow::Result<(SessionState, session_builder::SdkParamsResult)> {
     let working_dir = params
         .cwd
         .as_ref()
@@ -654,9 +788,9 @@ async fn build_session_state(
     }
 
     // Apply SDK-specific parameters (agents, hooks, MCP, etc.)
-    let hook_bridge = session_builder::apply_sdk_params(&mut state, params).await?;
+    let sdk_result = session_builder::apply_sdk_params(&mut state, params).await?;
 
-    Ok((state, hook_bridge))
+    Ok((state, sdk_result))
 }
 
 /// Resume an existing session by ID.

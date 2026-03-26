@@ -48,7 +48,7 @@ impl AttachmentGenerator for SandboxViolationsGenerator {
         let mut lines = Vec::with_capacity(count + 2);
 
         lines.push(format!(
-            "<sandbox-violations>{count} violation(s) detected:"
+            "<sandbox_violations>{count} violation(s) detected:"
         ));
 
         for (operation, path, command_tag) in &ctx.sandbox_violations {
@@ -62,7 +62,7 @@ impl AttachmentGenerator for SandboxViolationsGenerator {
             lines.push(entry);
         }
 
-        lines.push("</sandbox-violations>".to_string());
+        lines.push("</sandbox_violations>".to_string());
 
         Ok(Some(SystemReminder::new(
             AttachmentType::SandboxViolations,

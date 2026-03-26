@@ -5,12 +5,12 @@
 
 use chrono::DateTime;
 use chrono::Utc;
-use cocode_api::AssistantContentPart;
-use cocode_api::LanguageModelMessage;
-use cocode_api::ToolContentPart;
-use cocode_api::ToolResultContent;
-use cocode_api::ToolResultPart;
-use cocode_api::UserContentPart;
+use cocode_inference::AssistantContentPart;
+use cocode_inference::LanguageModelMessage;
+use cocode_inference::ToolContentPart;
+use cocode_inference::ToolResultContent;
+use cocode_inference::ToolResultPart;
+use cocode_inference::UserContentPart;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
@@ -296,7 +296,7 @@ impl TrackedMessage {
     }
 
     /// Get tool calls from this message.
-    pub fn tool_calls(&self) -> Vec<cocode_api::ToolCall> {
+    pub fn tool_calls(&self) -> Vec<cocode_inference::ToolCall> {
         crate::type_guards::get_tool_calls(&self.inner)
     }
 
