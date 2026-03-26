@@ -189,7 +189,6 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
 
         // ========== Permission ==========
         LoopEvent::ApprovalRequired { request } => {
-            state.ui.query_timing.on_permission_dialog_open();
             if request.tool_name == cocode_protocol::ToolName::ExitPlanMode.as_str() {
                 state.ui.set_overlay(Overlay::PlanExitApproval(
                     crate::state::PlanExitOverlay::new(request),
@@ -212,7 +211,6 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             request_id,
             questions,
         } => {
-            state.ui.query_timing.on_permission_dialog_open();
             state
                 .ui
                 .set_overlay(Overlay::Question(crate::state::QuestionOverlay::new(
@@ -229,7 +227,6 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             schema,
             url,
         } => {
-            state.ui.query_timing.on_permission_dialog_open();
             let overlay = crate::state::ElicitationOverlay::from_request(
                 request_id,
                 server_name,
@@ -858,7 +855,6 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             request,
             access_type,
         } => {
-            state.ui.query_timing.on_permission_dialog_open();
             state
                 .ui
                 .set_overlay(Overlay::SandboxPermission(SandboxPermissionOverlay::new(
@@ -890,10 +886,32 @@ pub fn handle_agent_event(state: &mut AppState, event: LoopEvent) {
             );
         }
 
+        // ========== Sandbox State ==========
+        LoopEvent::SandboxStateChanged {
+            active,
+            enforcement,
+        } => {
+            state.session.sandbox_active = active;
+            if active {
+                state
+                    .ui
+                    .toast_info(t!("toast.sandbox_active", enforcement = enforcement).to_string());
+            }
+        }
+        LoopEvent::SandboxViolationsDetected { count } => {
+            state.session.sandbox_violation_count += count;
+            state
+                .ui
+                .toast_warning(t!("toast.sandbox_violations", count = count).to_string());
+        }
+
         // ========== Fast Mode ==========
         LoopEvent::FastModeChanged { active } => {
             state.session.fast_mode = active;
         }
+
+        // Rate limit info — informational only in TUI, no UI action needed.
+        LoopEvent::RateLimit { .. } => {}
     }
 }
 

@@ -506,6 +506,11 @@ impl SubagentManager {
         self.definitions.push(definition);
     }
 
+    /// Retain only definitions matching the predicate.
+    pub fn retain_definitions(&mut self, f: impl Fn(&AgentDefinition) -> bool) {
+        self.definitions.retain(f);
+    }
+
     /// Spawn a new subagent instance of the given type (simple version).
     ///
     /// Returns the unique agent ID on success. This is a basic spawn that

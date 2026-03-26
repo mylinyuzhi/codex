@@ -308,6 +308,158 @@
       }
     },
     {
+      "description": "A background task has started.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task/started"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskStartedParams"
+        }
+      }
+    },
+    {
+      "description": "A background task has completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "The current turn was interrupted.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/interrupted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnInterruptedParams"
+        }
+      }
+    },
+    {
+      "description": "Maximum turns limit reached.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/maxReached"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/MaxTurnsReachedParams"
+        }
+      }
+    },
+    {
+      "description": "Model fallback started (switching to a different model).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "model/fallbackStarted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ModelFallbackStartedParams"
+        }
+      }
+    },
+    {
+      "description": "Permission mode has changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "permission/modeChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionModeChangedParams"
+        }
+      }
+    },
+    {
+      "description": "Aggregated session result emitted before session/ended.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/result"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionResultParams"
+        }
+      }
+    },
+    {
+      "description": "Follow-up prompt suggestions after a turn completes.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "prompt/suggestion"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/PromptSuggestionParams"
+        }
+      }
+    },
+    {
       "description": "A non-fatal error occurred.",
       "type": "object",
       "required": [
@@ -344,6 +496,44 @@
           "$ref": "#/definitions/RateLimitParams"
         }
       }
+    },
+    {
+      "description": "Keepalive echo from the server.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "keepAlive"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/KeepAliveParams"
+        }
+      }
+    },
+    {
+      "description": "Session has ended (clean termination).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/ended"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionEndedParams"
+        }
+      }
     }
   ],
   "definitions": {
@@ -366,6 +556,26 @@
         },
         "turn_id": {
           "description": "Turn identifier.",
+          "type": "string"
+        }
+      }
+    },
+    "CommandInfo": {
+      "description": "Information about an available command or skill.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "description": {
+          "description": "Short description of the command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Command name (e.g., \"/commit\").",
           "type": "string"
         }
       }
@@ -539,6 +749,34 @@
         }
       ]
     },
+    "KeepAliveParams": {
+      "description": "Parameters for `keepAlive`.",
+      "type": "object",
+      "required": [
+        "timestamp"
+      ],
+      "properties": {
+        "timestamp": {
+          "description": "Timestamp (milliseconds since epoch).",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "MaxTurnsReachedParams": {
+      "description": "Parameters for `turn/maxReached`.",
+      "type": "object",
+      "properties": {
+        "max_turns": {
+          "description": "Maximum turns limit that was reached.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
+    },
     "McpServerFailure": {
       "description": "Info about a failed MCP server startup.",
       "type": "object",
@@ -648,6 +886,58 @@
         }
       }
     },
+    "ModelFallbackStartedParams": {
+      "description": "Parameters for `model/fallbackStarted`.",
+      "type": "object",
+      "required": [
+        "from_model",
+        "reason",
+        "to_model"
+      ],
+      "properties": {
+        "from_model": {
+          "description": "Original model.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Reason for fallback.",
+          "type": "string"
+        },
+        "to_model": {
+          "description": "Fallback model.",
+          "type": "string"
+        }
+      }
+    },
+    "PermissionModeChangedParams": {
+      "description": "Parameters for `permission/modeChanged`.",
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "description": "The new permission mode.",
+          "type": "string"
+        }
+      }
+    },
+    "PromptSuggestionParams": {
+      "description": "Parameters for `prompt/suggestion`.",
+      "type": "object",
+      "required": [
+        "suggestions"
+      ],
+      "properties": {
+        "suggestions": {
+          "description": "Suggested follow-up prompts.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "RateLimitParams": {
       "description": "Parameters for `rateLimit`.",
       "type": "object",
@@ -683,6 +973,132 @@
         }
       }
     },
+    "SessionEndedParams": {
+      "description": "Parameters for `session/ended`.",
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "description": "Reason for session termination.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionEndedReason"
+            }
+          ]
+        }
+      }
+    },
+    "SessionEndedReason": {
+      "description": "Reason why a session ended.",
+      "oneOf": [
+        {
+          "description": "All turns completed normally.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        },
+        {
+          "description": "Maximum turn limit reached.",
+          "type": "string",
+          "enum": [
+            "max_turns"
+          ]
+        },
+        {
+          "description": "Budget limit exceeded.",
+          "type": "string",
+          "enum": [
+            "max_budget"
+          ]
+        },
+        {
+          "description": "An error terminated the session.",
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        },
+        {
+          "description": "User interrupted the session.",
+          "type": "string",
+          "enum": [
+            "user_interrupt"
+          ]
+        },
+        {
+          "description": "stdin was closed (SDK client disconnected).",
+          "type": "string",
+          "enum": [
+            "stdin_closed"
+          ]
+        }
+      ]
+    },
+    "SessionResultParams": {
+      "description": "Parameters for `session/result`.",
+      "type": "object",
+      "required": [
+        "duration_ms",
+        "session_id",
+        "stop_reason",
+        "total_turns",
+        "usage"
+      ],
+      "properties": {
+        "duration_api_ms": {
+          "description": "Total time spent on API calls in milliseconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "duration_ms": {
+          "description": "Total session duration in milliseconds.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "session_id": {
+          "description": "Session identifier.",
+          "type": "string"
+        },
+        "stop_reason": {
+          "description": "Why the session ended.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionEndedReason"
+            }
+          ]
+        },
+        "structured_output": {
+          "description": "Structured output (if output_format schema was provided)."
+        },
+        "total_cost_cents": {
+          "description": "Total cost in cents (if available).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total_turns": {
+          "description": "Total number of turns in the session.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "usage": {
+          "description": "Aggregated token usage across all turns.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Usage"
+            }
+          ]
+        }
+      }
+    },
     "SessionStartedParams": {
       "description": "Parameters for `session/started`.",
       "type": "object",
@@ -690,6 +1106,31 @@
         "session_id"
       ],
       "properties": {
+        "commands": {
+          "description": "Available slash commands / skills.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/CommandInfo"
+          }
+        },
+        "models": {
+          "description": "Available model identifiers.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "protocol_version": {
+          "description": "Protocol version (for future version negotiation).",
+          "default": "1",
+          "type": "string"
+        },
         "session_id": {
           "description": "Session identifier.",
           "type": "string"
@@ -758,6 +1199,47 @@
         },
         "description": {
           "description": "Short description.",
+          "type": "string"
+        }
+      }
+    },
+    "TaskCompletedParams": {
+      "description": "Parameters for `task/completed`.",
+      "type": "object",
+      "required": [
+        "result",
+        "task_id"
+      ],
+      "properties": {
+        "is_error": {
+          "description": "Whether the task failed.",
+          "default": false,
+          "type": "boolean"
+        },
+        "result": {
+          "description": "Task result text.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task identifier.",
+          "type": "string"
+        }
+      }
+    },
+    "TaskStartedParams": {
+      "description": "Parameters for `task/started`.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "task_type"
+      ],
+      "properties": {
+        "task_id": {
+          "description": "Task identifier.",
+          "type": "string"
+        },
+        "task_type": {
+          "description": "Type of task (e.g., \"shell\", \"agent\").",
           "type": "string"
         }
       }
@@ -1128,6 +1610,19 @@
         "error": {
           "description": "Error message.",
           "type": "string"
+        }
+      }
+    },
+    "TurnInterruptedParams": {
+      "description": "Parameters for `turn/interrupted`.",
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "description": "Turn identifier (if available).",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

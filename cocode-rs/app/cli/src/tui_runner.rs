@@ -885,6 +885,10 @@ fn queue_command_shared(shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>, promp
         id: id.clone(),
         prompt: prompt.to_string(),
         queued_at: now,
+        // target_turn is None here because we're pushing from the TUI
+        // driver and don't know the exact turn number. The AgentLoop
+        // accepts commands with target_turn == None regardless of turn.
+        target_turn: None,
     };
     shared_queue
         .lock()

@@ -49,6 +49,22 @@ pub enum SandboxError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Required dependencies are missing for sandbox enforcement.
+    #[snafu(display("Missing sandbox dependencies: {}", missing.join(", ")))]
+    MissingDependencies {
+        missing: Vec<String>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Sandbox bootstrap failed.
+    #[snafu(display("Sandbox bootstrap failed: {message}"))]
+    BootstrapFailed {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for SandboxError {
@@ -59,6 +75,8 @@ impl ErrorExt for SandboxError {
             Self::NetworkDenied { .. } => StatusCode::PermissionDenied,
             Self::PlatformNotAvailable { .. } => StatusCode::Unsupported,
             Self::ApplyError { .. } => StatusCode::Internal,
+            Self::MissingDependencies { .. } => StatusCode::Unsupported,
+            Self::BootstrapFailed { .. } => StatusCode::Internal,
         }
     }
 

@@ -66,6 +66,10 @@ pub struct StatusBar<'a> {
     spinner_frame: &'a str,
     /// Whether fast mode is active.
     fast_mode: bool,
+    /// Whether sandbox mode is active.
+    sandbox_active: bool,
+    /// Recent sandbox violation count.
+    sandbox_violation_count: i32,
 }
 
 impl<'a> StatusBar<'a> {
@@ -98,6 +102,8 @@ impl<'a> StatusBar<'a> {
             spinner_text: None,
             spinner_frame: "⠋",
             fast_mode: false,
+            sandbox_active: false,
+            sandbox_violation_count: 0,
         }
     }
 
@@ -178,6 +184,18 @@ impl<'a> StatusBar<'a> {
     /// Set whether fast mode is active.
     pub fn fast_mode(mut self, active: bool) -> Self {
         self.fast_mode = active;
+        self
+    }
+
+    /// Set whether sandbox mode is active.
+    pub fn sandbox_active(mut self, active: bool) -> Self {
+        self.sandbox_active = active;
+        self
+    }
+
+    /// Set the sandbox violation count.
+    pub fn sandbox_violation_count(mut self, count: i32) -> Self {
+        self.sandbox_violation_count = count;
         self
     }
 
@@ -419,6 +437,29 @@ impl<'a> StatusBar<'a> {
             None
         }
     }
+
+    /// Format the sandbox mode indicator with optional violation count.
+    fn format_sandbox(&self) -> Option<Vec<Span<'static>>> {
+        if !self.sandbox_active {
+            return None;
+        }
+
+        let mut spans = vec![
+            Span::raw(format!(" {} ", t!("status.sandbox")))
+                .fg(self.theme.success)
+                .bold(),
+        ];
+
+        if self.sandbox_violation_count > 0 {
+            spans.push(
+                Span::raw(format!("!{} ", self.sandbox_violation_count))
+                    .fg(self.theme.warning)
+                    .bold(),
+            );
+        }
+
+        Some(spans)
+    }
 }
 
 impl Widget for StatusBar<'_> {
@@ -437,9 +478,13 @@ impl Widget for StatusBar<'_> {
         // Each is (spans_to_add, display_width).
         let mut optional: Vec<Vec<Span>> = Vec::new();
 
-        // Priority 1 (dropped last): fast mode, plan mode, context gauge, spinner
+        // Priority 1 (dropped last): fast mode, sandbox, plan mode, context gauge, spinner
         if let Some(fast_span) = self.format_fast_mode() {
             optional.push(vec![fast_span, sep()]);
+        }
+        if let Some(mut sandbox_spans) = self.format_sandbox() {
+            sandbox_spans.push(sep());
+            optional.push(sandbox_spans);
         }
         if let Some(plan_span) = self.format_plan_mode() {
             optional.push(vec![plan_span, sep()]);

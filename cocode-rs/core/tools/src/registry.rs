@@ -126,6 +126,18 @@ impl ToolRegistry {
     ) {
         for tool_def in tools {
             let tool_name = tool_def.name.clone();
+            let tool_description = tool_def.description.clone();
+            let tool_schema = {
+                let mut s = serde_json::json!({"type": "object"});
+                if let Some(props) = &tool_def.input_schema.properties {
+                    s["properties"] = props.clone();
+                }
+                if let Some(required) = &tool_def.input_schema.required {
+                    s["required"] = serde_json::to_value(required).unwrap_or_default();
+                }
+                s
+            };
+
             let wrapper =
                 McpToolWrapper::new(server_name.to_string(), tool_def, client.clone(), timeout);
             let qualified_name = wrapper.qualified_name();
@@ -146,8 +158,8 @@ impl ToolRegistry {
                 McpToolInfo {
                     server: server_name.to_string(),
                     name: tool_name,
-                    description: None, // Could be added from tool_def if needed
-                    input_schema: serde_json::json!({}), // Simplified
+                    description: tool_description,
+                    input_schema: tool_schema,
                 },
             );
         }
@@ -345,6 +357,21 @@ impl ToolRegistry {
         let mut names: Vec<_> = self.mcp_tools.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// Restrict the registry to only the named tools.
+    ///
+    /// Removes all tools whose names are not in the provided list.
+    /// MCP tools and aliases are preserved if their target tool survives.
+    pub fn restrict_to(&mut self, names: &[String]) {
+        let allowed: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+        self.tools.retain(|name, _| allowed.contains(name.as_str()));
+        self.aliases
+            .retain(|_, target| allowed.contains(target.as_str()));
+        self.mcp_tools
+            .retain(|name, _| allowed.contains(name.as_str()));
+        self.deferred_tools
+            .retain(|name, _| allowed.contains(name.as_str()));
     }
 
     /// Clear all tools.

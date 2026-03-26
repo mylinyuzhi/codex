@@ -127,6 +127,9 @@ pub use config::ConfigOverrides;
 // Re-export sandbox types from protocol
 pub use cocode_protocol::SandboxMode;
 
+// Re-export sandbox settings
+pub use cocode_sandbox::SandboxSettings;
+
 // Re-export extended config types from protocol
 pub use cocode_protocol::AttachmentConfig;
 pub use cocode_protocol::CompactConfig;

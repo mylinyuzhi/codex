@@ -159,6 +159,15 @@ pub enum HookHandler {
     /// An inline function handler (not serializable).
     #[serde(skip)]
     Inline,
+
+    /// SDK callback handler — routes hook execution to the SDK client.
+    ///
+    /// When this handler fires, the server emits a `ServerRequest::HookCallback`
+    /// with the `callback_id` and waits for the client's response.
+    SdkCallback {
+        /// Unique callback identifier (pre-registered at session init).
+        callback_id: String,
+    },
 }
 
 fn default_max_turns() -> i32 {

@@ -10,6 +10,7 @@ fn test_command_result_success() {
         truncated: false,
         new_cwd: None,
         extracted_paths: None,
+        sandboxed: false,
     };
     assert!(result.success());
 }
@@ -24,6 +25,7 @@ fn test_command_result_failure() {
         truncated: false,
         new_cwd: None,
         extracted_paths: None,
+        sandboxed: false,
     };
     assert!(!result.success());
 }
@@ -38,6 +40,7 @@ fn test_command_result_truncated() {
         truncated: true,
         new_cwd: None,
         extracted_paths: None,
+        sandboxed: false,
     };
     assert!(result.truncated);
     assert!(result.success());
@@ -82,6 +85,7 @@ fn test_command_result_serde_roundtrip() {
         truncated: false,
         new_cwd: Some(PathBuf::from("/home/user")),
         extracted_paths: None,
+        sandboxed: false,
     };
 
     let json = serde_json::to_string(&result).expect("serialize");
@@ -108,6 +112,7 @@ fn test_command_result_new_cwd_skipped_when_none() {
         truncated: false,
         new_cwd: None,
         extracted_paths: None,
+        sandboxed: false,
     };
 
     let json = serde_json::to_string(&result).expect("serialize");
@@ -158,6 +163,7 @@ fn test_command_result_with_extracted_paths() {
         truncated: false,
         new_cwd: None,
         extracted_paths: Some(extracted),
+        sandboxed: false,
     };
 
     let json = serde_json::to_string(&result).expect("serialize");

@@ -736,6 +736,11 @@ impl ConfigManager {
                     Vec::new()
                 }
             });
+        let sandbox_settings = overrides
+            .sandbox_settings
+            .clone()
+            .or_else(|| resolved.sandbox.clone())
+            .unwrap_or_default();
 
         // Load extended configs from environment variables
         let env_loader = EnvLoader::new();
@@ -781,6 +786,7 @@ impl ConfigManager {
             ephemeral: overrides.ephemeral.unwrap_or(false),
             sandbox_mode,
             writable_roots,
+            sandbox_settings,
             tool_config,
             compact_config,
             plan_config,

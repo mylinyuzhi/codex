@@ -22,6 +22,7 @@ use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
 use cocode_tools::FileReadState;
 use cocode_tools::FileTracker;
+use cocode_tools::PermissionRequester;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::ToolRegistry;
 use tokio::sync::mpsc;
@@ -61,6 +62,7 @@ pub struct AgentLoopBuilder {
     team_store: Option<Arc<cocode_team::TeamStore>>,
     team_mailbox: Option<Arc<cocode_team::Mailbox>>,
     shell_executor: Option<ShellExecutor>,
+    sandbox_state: Option<std::sync::Arc<cocode_sandbox::SandboxState>>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
     queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
@@ -83,6 +85,8 @@ pub struct AgentLoopBuilder {
     cocode_home: Option<std::path::PathBuf>,
     /// Shared set of agent IDs killed via TaskStop (persists across turns).
     killed_agents: cocode_tools::context::KilledAgents,
+    /// Optional permission requester for interactive approval flow (SDK mode).
+    permission_requester: Option<Arc<dyn PermissionRequester>>,
 }
 
 impl AgentLoopBuilder {
@@ -120,6 +124,7 @@ impl AgentLoopBuilder {
             team_store: None,
             team_mailbox: None,
             shell_executor: None,
+            sandbox_state: None,
             spawn_agent_fn: None,
             skill_manager: None,
             queued_commands: Arc::new(Mutex::new(Vec::new())),
@@ -137,6 +142,7 @@ impl AgentLoopBuilder {
             reminder_file_tracker_state: Vec::new(),
             cocode_home: None,
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            permission_requester: None,
         }
     }
 
@@ -237,6 +243,15 @@ impl AgentLoopBuilder {
     /// Set the shell executor for command execution and background tasks.
     pub fn shell_executor(mut self, executor: ShellExecutor) -> Self {
         self.shell_executor = Some(executor);
+        self
+    }
+
+    /// Set the sandbox state from an Option (no-op if None).
+    pub fn maybe_sandbox_state(
+        mut self,
+        state: Option<std::sync::Arc<cocode_sandbox::SandboxState>>,
+    ) -> Self {
+        self.sandbox_state = state;
         self
     }
 
@@ -346,6 +361,12 @@ impl AgentLoopBuilder {
     /// If not set, a fresh approval store is created per loop instance.
     pub fn approval_store(mut self, store: Arc<tokio::sync::Mutex<ApprovalStore>>) -> Self {
         self.approval_store = Some(store);
+        self
+    }
+
+    /// Set the permission requester for interactive approval flow (SDK mode).
+    pub fn permission_requester(mut self, requester: Arc<dyn PermissionRequester>) -> Self {
+        self.permission_requester = Some(requester);
         self
     }
 
@@ -479,6 +500,7 @@ impl AgentLoopBuilder {
             team_store: self.team_store,
             team_mailbox: self.team_mailbox,
             shell_executor,
+            sandbox_state: self.sandbox_state,
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
             invoked_skills_tracker: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -505,6 +527,7 @@ impl AgentLoopBuilder {
             cocode_home: self.cocode_home,
             background_agent_tasks: Vec::new(),
             killed_agents: self.killed_agents,
+            permission_requester: self.permission_requester,
         }
     }
 }

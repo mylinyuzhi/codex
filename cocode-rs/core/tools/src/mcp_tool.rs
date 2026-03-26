@@ -146,9 +146,27 @@ impl Tool for McpToolWrapper {
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
-        // MCP tools are considered unsafe by default since we don't know
-        // their side effects
-        ConcurrencySafety::Unsafe
+        // Use the MCP tool's readOnlyHint annotation when available.
+        // Tools marked read-only are safe for concurrent execution.
+        if self
+            .mcp_tool
+            .annotations
+            .as_ref()
+            .and_then(|a| a.read_only_hint)
+            == Some(true)
+        {
+            ConcurrencySafety::Safe
+        } else {
+            ConcurrencySafety::Unsafe
+        }
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.mcp_tool
+            .annotations
+            .as_ref()
+            .and_then(|a| a.read_only_hint)
+            .unwrap_or(false)
     }
 
     async fn execute(&self, input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {

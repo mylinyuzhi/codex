@@ -380,6 +380,9 @@ pub struct ApprovalRequest {
     /// E.g. "git *" for command "git push origin main".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposed_prefix_pattern: Option<String>,
+    /// Tool input parameters (for SDK clients to make informed decisions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
 }
 
 /// A security risk associated with an operation.

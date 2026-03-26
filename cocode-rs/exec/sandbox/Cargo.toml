@@ -7,13 +7,21 @@ license.workspace = true
 [dependencies]
 cocode-protocol.workspace = true
 cocode-error.workspace = true
+base64.workspace = true
+rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
 snafu.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "io-util", "rt", "net", "macros", "time"] }
+tokio-util.workspace = true
 
 [dev-dependencies]
+pretty_assertions.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util"] }
+tokio-util.workspace = true
 
 [lints]
 workspace = true

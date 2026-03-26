@@ -24,6 +24,70 @@ use crate::state::ToolExecution;
 use crate::state::ToolStatus;
 use crate::theme::Theme;
 
+/// Names of read-only "exploring" tools that get grouped when
+/// consecutive and completed in the tool panel.
+const EXPLORING_TOOLS: &[&str] = &["Read", "ReadManyFiles", "Glob", "Grep", "LS", "LSP"];
+
+/// Whether a tool name is an exploring tool.
+fn is_exploring(name: &str) -> bool {
+    EXPLORING_TOOLS.contains(&name)
+}
+
+/// Group consecutive completed exploring tools into collapsed cells.
+///
+/// Runs of 2+ consecutive completed exploring tools are replaced by a
+/// single summary entry showing distinct tool types used in the run.
+fn group_exploring_cells(
+    tools: &[&ToolExecution],
+    theme: &Theme,
+    batch_counts: &std::collections::HashMap<&str, i32>,
+) -> Vec<ListItem<'static>> {
+    let check_parallel = |t: &ToolExecution| -> bool {
+        t.batch_id
+            .as_deref()
+            .is_some_and(|bid| batch_counts.get(bid).copied().unwrap_or(0) > 1)
+    };
+
+    let mut items: Vec<ListItem<'static>> = Vec::new();
+    let mut i = 0;
+    while i < tools.len() {
+        let t = tools[i];
+        if matches!(t.status, ToolStatus::Completed) && is_exploring(&t.name) {
+            // Count consecutive completed exploring tools
+            let run_start = i;
+            while i < tools.len()
+                && matches!(tools[i].status, ToolStatus::Completed)
+                && is_exploring(&tools[i].name)
+            {
+                i += 1;
+            }
+            let run_len = (i - run_start) as i32;
+            if run_len >= 2 {
+                // Collect distinct tool names in the run
+                let mut names: Vec<&str> = tools[run_start..i]
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect();
+                names.dedup();
+                let label = names.join(", ");
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::raw("✓").fg(theme.tool_completed),
+                    Span::raw(format!(" {} ", t!("tool.exploring_group", count = run_len))),
+                    Span::raw(format!("({label})")).fg(theme.text_dim).italic(),
+                ])));
+            } else {
+                // Single exploring tool — render normally
+                items.push(ToolPanel::format_tool(t, theme, check_parallel(t)));
+            }
+        } else {
+            items.push(ToolPanel::format_tool(t, theme, check_parallel(t)));
+            i += 1;
+        }
+    }
+    items
+}
+
 /// Tool panel widget showing tool execution status.
 pub struct ToolPanel<'a> {
     tools: &'a [ToolExecution],
@@ -191,17 +255,12 @@ impl Widget for ToolPanel<'_> {
             }
         }
 
-        let mut items: Vec<ListItem> = display_tools
-            .iter()
-            .rev()
-            .map(|t| {
-                let is_parallel = t
-                    .batch_id
-                    .as_deref()
-                    .is_some_and(|bid| batch_counts.get(bid).copied().unwrap_or(0) > 1);
-                Self::format_tool(t, self.theme, is_parallel)
-            })
-            .collect();
+        // Reverse back to chronological order for grouping
+        let chrono_tools: Vec<_> = display_tools.into_iter().rev().collect();
+
+        // Group consecutive exploring tools, then render the rest normally
+        let mut items: Vec<ListItem> =
+            group_exploring_cells(&chrono_tools, self.theme, &batch_counts);
 
         // Show streaming tool uses (tools being built during streaming)
         for st in self.streaming_tools {

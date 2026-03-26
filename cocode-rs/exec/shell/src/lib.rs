@@ -54,7 +54,7 @@
 //! let mut executor = ShellExecutor::new(PathBuf::from("/project"));
 //!
 //! // Use execute_with_cwd_tracking to track cd changes
-//! executor.execute_with_cwd_tracking("cd src", 10).await;
+//! executor.execute_with_cwd_tracking("cd src", 10, cocode_sandbox::SandboxBypass::No).await;
 //!
 //! // Subsequent commands use the new CWD
 //! assert!(executor.cwd().ends_with("src"));
@@ -77,8 +77,8 @@
 //! let subagent_executor = main_executor.fork_for_subagent(PathBuf::from("/project"));
 //!
 //! // Subagent bash calls always start from initial CWD
-//! subagent_executor.execute("cd /tmp && pwd", 10).await;  // outputs /tmp
-//! subagent_executor.execute("pwd", 10).await;             // outputs /project (reset!)
+//! subagent_executor.execute("cd /tmp && pwd", 10, cocode_sandbox::SandboxBypass::No).await;  // outputs /tmp
+//! subagent_executor.execute("pwd", 10, cocode_sandbox::SandboxBypass::No).await;             // outputs /project (reset!)
 //! # }
 //! ```
 //!

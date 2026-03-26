@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use cocode_app_server_protocol::*;
 use cocode_protocol::LoopEvent;
+use cocode_protocol::ToolName;
 
 /// Stateful mapper that translates `LoopEvent`s into `ServerNotification`s.
 ///
@@ -19,12 +20,12 @@ pub struct EventMapper {
     active_items: HashMap<String, ThreadItem>,
     /// Accumulated agent message text for the current turn.
     text_buffer: String,
-    /// Whether the agent message item has been started.
-    text_item_started: bool,
+    /// Assigned item ID for the current text message (set on first delta).
+    text_item_id: Option<String>,
     /// Accumulated reasoning text for the current turn.
     thinking_buffer: String,
-    /// Whether the reasoning item has been started.
-    thinking_item_started: bool,
+    /// Assigned item ID for the current thinking block (set on first delta).
+    thinking_item_id: Option<String>,
     /// Counter for generating item IDs.
     item_counter: i32,
 }
@@ -36,9 +37,9 @@ impl EventMapper {
             turn_id,
             active_items: HashMap::new(),
             text_buffer: String::new(),
-            text_item_started: false,
+            text_item_id: None,
             thinking_buffer: String::new(),
-            thinking_item_started: false,
+            thinking_item_id: None,
             item_counter: 0,
         }
     }
@@ -56,29 +57,33 @@ impl EventMapper {
         let mut notifications = Vec::new();
 
         // Flush thinking buffer as a completed ReasoningItem
-        if self.thinking_item_started && !self.thinking_buffer.is_empty() {
-            notifications.push(ServerNotification::ItemCompleted(ItemEventParams {
-                item: ThreadItem {
-                    id: "thinking_0".into(),
-                    details: ThreadItemDetails::Reasoning(ReasoningItem {
-                        text: std::mem::take(&mut self.thinking_buffer),
-                    }),
-                },
-            }));
-            self.thinking_item_started = false;
+        if let Some(ref thinking_id) = self.thinking_item_id {
+            if !self.thinking_buffer.is_empty() {
+                notifications.push(ServerNotification::ItemCompleted(ItemEventParams {
+                    item: ThreadItem {
+                        id: thinking_id.clone(),
+                        details: ThreadItemDetails::Reasoning(ReasoningItem {
+                            text: std::mem::take(&mut self.thinking_buffer),
+                        }),
+                    },
+                }));
+            }
+            self.thinking_item_id = None;
         }
 
         // Flush text buffer as a completed AgentMessage
-        if self.text_item_started && !self.text_buffer.is_empty() {
-            notifications.push(ServerNotification::ItemCompleted(ItemEventParams {
-                item: ThreadItem {
-                    id: "msg_0".into(),
-                    details: ThreadItemDetails::AgentMessage(AgentMessageItem {
-                        text: std::mem::take(&mut self.text_buffer),
-                    }),
-                },
-            }));
-            self.text_item_started = false;
+        if let Some(ref text_id) = self.text_item_id {
+            if !self.text_buffer.is_empty() {
+                notifications.push(ServerNotification::ItemCompleted(ItemEventParams {
+                    item: ThreadItem {
+                        id: text_id.clone(),
+                        details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                            text: std::mem::take(&mut self.text_buffer),
+                        }),
+                    },
+                }));
+            }
+            self.text_item_id = None;
         }
 
         notifications
@@ -92,35 +97,38 @@ impl EventMapper {
                 let mut notifications = Vec::new();
 
                 // Close reasoning item when text starts (thinking → text transition)
-                if self.thinking_item_started && !self.thinking_buffer.is_empty() {
+                if let Some(thinking_id) = self.thinking_item_id.take()
+                    && !self.thinking_buffer.is_empty()
+                {
                     notifications.push(ServerNotification::ItemCompleted(ItemEventParams {
                         item: ThreadItem {
-                            id: "thinking_0".into(),
+                            id: thinking_id,
                             details: ThreadItemDetails::Reasoning(ReasoningItem {
                                 text: std::mem::take(&mut self.thinking_buffer),
                             }),
                         },
                     }));
-                    self.thinking_item_started = false;
                 }
 
                 // Start agent message item on first delta
-                if !self.text_item_started {
-                    self.text_item_started = true;
+                if self.text_item_id.is_none() {
+                    let id = self.next_item_id();
                     notifications.push(ServerNotification::ItemStarted(ItemEventParams {
                         item: ThreadItem {
-                            id: "msg_0".into(),
+                            id: id.clone(),
                             details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                                 text: String::new(),
                             }),
                         },
                     }));
+                    self.text_item_id = Some(id);
                 }
 
+                let item_id = self.text_item_id.clone().unwrap_or_default();
                 self.text_buffer.push_str(&delta);
                 notifications.push(ServerNotification::AgentMessageDelta(
                     AgentMessageDeltaParams {
-                        item_id: "msg_0".into(),
+                        item_id,
                         turn_id: self.turn_id.clone(),
                         delta,
                     },
@@ -132,21 +140,23 @@ impl EventMapper {
                 let mut notifications = Vec::new();
 
                 // Start reasoning item on first delta
-                if !self.thinking_item_started {
-                    self.thinking_item_started = true;
+                if self.thinking_item_id.is_none() {
+                    let id = self.next_item_id();
                     notifications.push(ServerNotification::ItemStarted(ItemEventParams {
                         item: ThreadItem {
-                            id: "thinking_0".into(),
+                            id: id.clone(),
                             details: ThreadItemDetails::Reasoning(ReasoningItem {
                                 text: String::new(),
                             }),
                         },
                     }));
+                    self.thinking_item_id = Some(id);
                 }
 
+                let item_id = self.thinking_item_id.clone().unwrap_or_default();
                 self.thinking_buffer.push_str(&delta);
                 notifications.push(ServerNotification::ReasoningDelta(ReasoningDeltaParams {
-                    item_id: "thinking_0".into(),
+                    item_id,
                     turn_id: self.turn_id.clone(),
                     delta,
                 }));
@@ -288,20 +298,6 @@ impl EventMapper {
                 )]
             }
 
-            // ── User questions ──────────────────────────────────────
-            LoopEvent::QuestionAsked {
-                request_id,
-                questions,
-            } => {
-                vec![ServerNotification::Error(ErrorNotificationParams {
-                    message: format!(
-                        "User question requested (request_id={request_id}): {questions}"
-                    ),
-                    category: Some("user_question".into()),
-                    retryable: false,
-                })]
-            }
-
             // ── Compaction events ───────────────────────────────────
             LoopEvent::CompactionCompleted {
                 removed_messages,
@@ -342,10 +338,68 @@ impl EventMapper {
                 })]
             }
 
-            // ── Events intentionally dropped (UI-only) ─────────────
-            // Internal to TUI rendering. When TUI migrates to this
-            // protocol, they will be added as new ServerNotification variants.
-            LoopEvent::StreamRequestStart
+            // ── Background task events ────────────────────────────────
+            LoopEvent::BackgroundTaskStarted { task_id, task_type } => {
+                vec![ServerNotification::TaskStarted(TaskStartedParams {
+                    task_id,
+                    task_type: format!("{task_type:?}"),
+                })]
+            }
+
+            LoopEvent::BackgroundTaskCompleted { task_id, result } => {
+                vec![ServerNotification::TaskCompleted(TaskCompletedParams {
+                    task_id,
+                    result,
+                    is_error: false,
+                })]
+            }
+
+            // ── Turn lifecycle (additional) ──────────────────────────
+            LoopEvent::Interrupted => {
+                vec![ServerNotification::TurnInterrupted(TurnInterruptedParams {
+                    turn_id: None,
+                })]
+            }
+
+            LoopEvent::MaxTurnsReached => {
+                vec![ServerNotification::MaxTurnsReached(MaxTurnsReachedParams {
+                    max_turns: None,
+                })]
+            }
+
+            // ── Model events ─────────────────────────────────────────
+            LoopEvent::ModelFallbackStarted { from, to, reason } => {
+                vec![ServerNotification::ModelFallbackStarted(
+                    ModelFallbackStartedParams {
+                        from_model: from,
+                        to_model: to,
+                        reason,
+                    },
+                )]
+            }
+
+            // ── Permission events ────────────────────────────────────
+            LoopEvent::PermissionModeChanged { mode } => {
+                vec![ServerNotification::PermissionModeChanged(
+                    PermissionModeChangedParams {
+                        mode: format!("{mode:?}"),
+                    },
+                )]
+            }
+
+            // ── Rate limit events ──────────────────────────────────
+            LoopEvent::RateLimit { info } => {
+                vec![ServerNotification::RateLimit(RateLimitParams { info })]
+            }
+
+            // ── Events intentionally dropped ─────────────────────────
+            // UI-only events internal to TUI rendering, plus events
+            // handled as ServerRequest in the turn loop (not notifications).
+            //
+            // QuestionAsked: handled as ServerRequest::RequestUserInput in turn loop
+            // ApprovalRequired: handled as ServerRequest::AskForApproval in turn loop
+            LoopEvent::QuestionAsked { .. }
+            | LoopEvent::StreamRequestStart
             | LoopEvent::StreamRequestEnd { .. }
             | LoopEvent::TurnStarted { .. }
             | LoopEvent::TurnCompleted { .. }
@@ -357,9 +411,7 @@ impl EventMapper {
             | LoopEvent::ApprovalResponse { .. }
             | LoopEvent::PermissionChecked { .. }
             | LoopEvent::SubagentProgress { .. }
-            | LoopEvent::BackgroundTaskStarted { .. }
             | LoopEvent::BackgroundTaskProgress { .. }
-            | LoopEvent::BackgroundTaskCompleted { .. }
             | LoopEvent::AllAgentsKilled { .. }
             | LoopEvent::CompactionStarted
             | LoopEvent::MicroCompactionStarted { .. }
@@ -377,7 +429,6 @@ impl EventMapper {
             | LoopEvent::SessionMemoryExtractionStarted { .. }
             | LoopEvent::SessionMemoryExtractionCompleted { .. }
             | LoopEvent::SessionMemoryExtractionFailed { .. }
-            | LoopEvent::ModelFallbackStarted { .. }
             | LoopEvent::ModelFallbackCompleted
             | LoopEvent::Tombstone { .. }
             | LoopEvent::Retry { .. }
@@ -385,7 +436,6 @@ impl EventMapper {
             | LoopEvent::PlanModeEntered { .. }
             | LoopEvent::PlanModeExited { .. }
             | LoopEvent::ContextCleared { .. }
-            | LoopEvent::PermissionModeChanged { .. }
             | LoopEvent::HookExecuted { .. }
             | LoopEvent::StreamStallDetected { .. }
             | LoopEvent::StreamWatchdogWarning { .. }
@@ -400,8 +450,6 @@ impl EventMapper {
             | LoopEvent::PluginAgentsLoaded { .. }
             | LoopEvent::PluginDataReady { .. }
             | LoopEvent::OutputStylesReady { .. }
-            | LoopEvent::Interrupted
-            | LoopEvent::MaxTurnsReached
             | LoopEvent::SystemReminderDisplay { .. }
             | LoopEvent::RewindCompleted { .. }
             | LoopEvent::RewindFailed { .. }
@@ -414,6 +462,8 @@ impl EventMapper {
             | LoopEvent::CronJobsMissed { .. }
             | LoopEvent::CostWarningThresholdReached { .. }
             | LoopEvent::SandboxApprovalRequired { .. }
+            | LoopEvent::SandboxStateChanged { .. }
+            | LoopEvent::SandboxViolationsDetected { .. }
             | LoopEvent::FastModeChanged { .. } => vec![],
         }
     }
@@ -427,7 +477,7 @@ fn build_tool_item(
     status: ItemStatus,
 ) -> ThreadItem {
     let details = match tool_name {
-        "Bash" => {
+        name if name == ToolName::Bash.as_str() => {
             let command = input["command"].as_str().unwrap_or("").to_string();
             ThreadItemDetails::CommandExecution(CommandExecutionItem {
                 command,
@@ -436,13 +486,16 @@ fn build_tool_item(
                 status,
             })
         }
-        "Edit" | "Write" | "NotebookEdit" => {
+        name if name == ToolName::Edit.as_str()
+            || name == ToolName::Write.as_str()
+            || name == ToolName::NotebookEdit.as_str() =>
+        {
             let path = input["file_path"]
                 .as_str()
                 .or_else(|| input["path"].as_str())
                 .unwrap_or("")
                 .to_string();
-            let kind = if tool_name == "Write" {
+            let kind = if tool_name == ToolName::Write.as_str() {
                 FileChangeKind::Add
             } else {
                 FileChangeKind::Update
@@ -452,7 +505,7 @@ fn build_tool_item(
                 status,
             })
         }
-        "WebSearch" | "WebFetch" => {
+        name if name == ToolName::WebSearch.as_str() || name == ToolName::WebFetch.as_str() => {
             let query = input["query"]
                 .as_str()
                 .or_else(|| input["url"].as_str())
@@ -477,7 +530,9 @@ fn build_tool_item(
                 status,
             })
         }
-        "Agent" => {
+        // The subagent tool is called "Task" internally but the model prompt
+        // may use "Agent" (Claude Code compatibility). Match both.
+        name if name == ToolName::Task.as_str() || name == "Agent" => {
             let agent_type = input["subagent_type"]
                 .as_str()
                 .unwrap_or("general-purpose")
