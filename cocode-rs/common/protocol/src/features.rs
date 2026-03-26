@@ -11,38 +11,46 @@ use std::collections::BTreeSet;
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    Experimental,
-    Beta {
+    /// Still under development; not shown in menus or announcements.
+    UnderDevelopment,
+    /// User-facing experimental feature available in the `/experimental` menu.
+    Experimental {
         name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
     },
+    /// Stable and ready for production use.
     Stable,
+    /// Should not be used; kept for backward compatibility.
     Deprecated,
+    /// Feature flag is a no-op; kept so old configs still parse.
     Removed,
 }
 
 impl Stage {
-    pub fn beta_menu_name(self) -> Option<&'static str> {
+    pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
-            Stage::Beta { name, .. } => Some(name),
-            _ => None,
+            Stage::Experimental { name, .. } => Some(name),
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 
-    pub fn beta_menu_description(self) -> Option<&'static str> {
+    pub fn experimental_menu_description(self) -> Option<&'static str> {
         match self {
-            Stage::Beta {
+            Stage::Experimental {
                 menu_description, ..
             } => Some(menu_description),
-            _ => None,
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 
-    pub fn beta_announcement(self) -> Option<&'static str> {
+    pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
-            Stage::Beta { announcement, .. } => Some(announcement),
-            _ => None,
+            Stage::Experimental {
+                announcement: "", ..
+            } => None,
+            Stage::Experimental { announcement, .. } => Some(announcement),
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 }
@@ -103,6 +111,8 @@ pub enum Feature {
     MemoryExtraction,
     /// Enable user-customizable keybindings via `keybindings.json`.
     KeybindingCustomization,
+    /// Enable IDE integration (MCP connection to IDE extensions).
+    Ide,
 }
 
 impl Feature {
@@ -174,6 +184,22 @@ impl Features {
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
     }
+
+    /// Normalize feature dependencies (auto-enable prerequisites).
+    ///
+    /// For example, `RelevantMemories` requires `AutoMemory`, and
+    /// `MemoryExtraction` requires `AutoMemory`.
+    pub fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::RelevantMemories) && !self.enabled(Feature::AutoMemory) {
+            self.enable(Feature::AutoMemory);
+        }
+        if self.enabled(Feature::MemoryExtraction) && !self.enabled(Feature::AutoMemory) {
+            self.enable(Feature::AutoMemory);
+        }
+        if self.enabled(Feature::WindowsSandboxElevated) && !self.enabled(Feature::WindowsSandbox) {
+            self.enable(Feature::WindowsSandbox);
+        }
+    }
 }
 
 /// Returns all feature specifications.
@@ -220,35 +246,35 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
-    // Beta program. Rendered in the `/experimental` menu for users.
+    // Under development: not shown in menus or announcements.
     FeatureSpec {
         id: Feature::HierarchicalAgents,
         key: "hierarchical_agents",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -266,13 +292,13 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Retrieval,
         key: "code_search",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Lsp,
         key: "lsp",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -290,7 +316,7 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SmartEdit,
         key: "smart_edit",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -302,25 +328,25 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PlanModeInterview,
         key: "plan_mode_interview",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::StructuredTasks,
         key: "structured_tasks",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Cron,
         key: "cron",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Worktree,
         key: "worktree",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -332,25 +358,31 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AutoMemory,
         key: "auto_memory",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RelevantMemories,
         key: "relevant_memories",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::MemoryExtraction,
         key: "memory_extraction",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::KeybindingCustomization,
         key: "keybinding_customization",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Ide,
+        key: "ide",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

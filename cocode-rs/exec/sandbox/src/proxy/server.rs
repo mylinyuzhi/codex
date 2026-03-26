@@ -137,10 +137,11 @@ async fn run_http_proxy(
     }
 }
 
-/// Handle a single HTTP CONNECT request.
+/// Handle a single HTTP proxy request (CONNECT or plain HTTP).
 ///
-/// Reads the request line, extracts the target host, checks the domain
-/// filter, and either tunnels the connection or responds with 403.
+/// Reads the request line, extracts the method and target host, checks
+/// the domain filter and network mode, and either tunnels/proxies the
+/// connection or responds with 403.
 async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 4096];
     let n = client.read(&mut buf).await?;
@@ -151,9 +152,35 @@ async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> an
     let request = String::from_utf8_lossy(&buf[..n]);
     let first_line = request.lines().next().unwrap_or("");
 
-    // Expected: "CONNECT host:port HTTP/1.1"
     let parts: Vec<&str> = first_line.split_whitespace().collect();
-    if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("CONNECT") {
+    if parts.len() < 3 {
+        client
+            .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            .await?;
+        return Ok(());
+    }
+
+    let method = parts[0];
+
+    // In Limited mode, CONNECT is blocked because tunnels hide inner methods.
+    if !filter.allows_method(method) {
+        tracing::info!(
+            method,
+            "HTTP proxy: method blocked by network mode (limited)"
+        );
+        send_http_forbidden(
+            &mut client,
+            &format!(
+                "Method '{method}' is not allowed in limited network mode. \
+                 Only GET, HEAD, and OPTIONS are permitted."
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if !method.eq_ignore_ascii_case("CONNECT") {
+        // Not a forward proxy — only CONNECT is supported.
         client
             .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             .await?;
@@ -165,12 +192,11 @@ async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> an
 
     if !filter.is_allowed(host) {
         tracing::info!(host, "HTTP proxy: domain denied");
-        let body = format!("Domain '{host}' is not allowed by sandbox policy");
-        let response = format!(
-            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        client.write_all(response.as_bytes()).await?;
+        send_http_forbidden(
+            &mut client,
+            &format!("Domain '{host}' is not allowed by sandbox policy"),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -180,6 +206,16 @@ async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> an
         .await?;
 
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    Ok(())
+}
+
+/// Send an HTTP 403 Forbidden response with a body message.
+async fn send_http_forbidden(client: &mut TcpStream, body: &str) -> anyhow::Result<()> {
+    let response = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    client.write_all(response.as_bytes()).await?;
     Ok(())
 }
 
@@ -227,6 +263,8 @@ async fn run_socks_proxy(
 // SOCKS5 constants.
 const SOCKS5_VERSION: u8 = 0x05;
 const SOCKS5_AUTH_NONE: u8 = 0x00;
+/// RFC 1928: no acceptable authentication methods (clean refusal).
+const SOCKS5_AUTH_NO_ACCEPTABLE: u8 = 0xFF;
 const SOCKS5_CMD_CONNECT: u8 = 0x01;
 const SOCKS5_ATYP_IPV4: u8 = 0x01;
 const SOCKS5_ATYP_DOMAIN: u8 = 0x03;
@@ -239,7 +277,20 @@ const SOCKS5_REPLY_CMD_NOT_SUPPORTED: u8 = 0x07;
 ///
 /// Negotiates NO AUTH, reads the CONNECT request, checks the domain filter,
 /// and either tunnels or refuses the connection.
+///
+/// In Limited network mode, SOCKS5 is blocked entirely because HTTP methods
+/// cannot be inspected through SOCKS tunnels.
 async fn handle_socks5(mut client: TcpStream, filter: &DomainFilter) -> anyhow::Result<()> {
+    // Limited mode: block SOCKS5 entirely (can't inspect HTTP methods through tunnel).
+    if filter.network_mode() == crate::config::NetworkMode::Limited {
+        tracing::info!("SOCKS5 proxy: blocked by limited network mode");
+        // Per RFC 1928, 0xFF = "no acceptable authentication methods" — cleanest refusal.
+        let _ = client
+            .write_all(&[SOCKS5_VERSION, SOCKS5_AUTH_NO_ACCEPTABLE])
+            .await;
+        return Ok(());
+    }
+
     // --- Auth negotiation ---
     let version = client.read_u8().await?;
     if version != SOCKS5_VERSION {

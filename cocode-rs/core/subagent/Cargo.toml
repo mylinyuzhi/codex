@@ -22,7 +22,7 @@ uuid = { workspace = true, features = ["v4"] }
 once_cell.workspace = true
 
 [dev-dependencies]
-cocode-api.workspace = true
+cocode-inference.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

@@ -1581,7 +1581,7 @@ fn embed_images_in_answers(answers: &mut serde_json::Value, paste_manager: &Past
             None => continue,
         };
         for block in paste_manager.resolve_to_blocks(text) {
-            if let cocode_api::UserContentPart::File(file_part) = block
+            if let cocode_inference::UserContentPart::File(file_part) = block
                 && file_part.media_type.starts_with("image/")
             {
                 let data = file_part.data.to_base64();

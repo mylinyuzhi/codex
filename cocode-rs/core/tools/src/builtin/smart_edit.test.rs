@@ -110,9 +110,9 @@ async fn test_smart_edit_with_mock_model_call() {
                 "explanation": "Fixed variable name in search string"
             });
             Ok(ModelCallResult {
-                response: cocode_api::LanguageModelGenerateResult::text(
+                response: cocode_inference::LanguageModelGenerateResult::text(
                     serde_json::to_string(&json).unwrap(),
-                    cocode_api::Usage::default(),
+                    cocode_inference::Usage::default(),
                 ),
             })
         })
@@ -161,9 +161,9 @@ async fn test_smart_edit_no_changes_required() {
                 "explanation": "The edit is already applied"
             });
             Ok(ModelCallResult {
-                response: cocode_api::LanguageModelGenerateResult::text(
+                response: cocode_inference::LanguageModelGenerateResult::text(
                     serde_json::to_string(&json).unwrap(),
-                    cocode_api::Usage::default(),
+                    cocode_inference::Usage::default(),
                 ),
             })
         })

@@ -21,9 +21,9 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use cocode_api::DataContent;
-use cocode_api::FilePart;
-use cocode_api::UserContentPart;
+use cocode_inference::DataContent;
+use cocode_inference::FilePart;
+use cocode_inference::UserContentPart;
 use regex::Regex;
 
 /// Threshold for inline vs disk storage (1KB).

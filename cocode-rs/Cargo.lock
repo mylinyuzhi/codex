@@ -507,6 +507,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "http",
@@ -521,8 +522,12 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -881,32 +886,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "cocode-api"
+name = "cocode-app-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
+ "clap",
+ "cocode-app-server-protocol",
  "cocode-config",
- "cocode-error",
+ "cocode-hooks",
  "cocode-protocol",
- "dotenvy",
+ "cocode-session",
+ "cocode-subagent",
+ "cocode-tools",
+ "cocode-utils-common",
  "futures",
- "humantime-serde",
  "pretty_assertions",
- "rand 0.9.2",
- "reqwest",
  "serde",
  "serde_json",
- "snafu",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "uuid",
- "vercel-ai",
- "vercel-ai-anthropic",
- "vercel-ai-google",
- "vercel-ai-openai",
- "vercel-ai-openai-compatible",
- "vercel-ai-provider",
 ]
 
 [[package]]
@@ -986,15 +989,19 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "cocode-app-server",
  "cocode-app-server-protocol",
  "cocode-arg0",
  "cocode-config",
  "cocode-error",
  "cocode-hooks",
  "cocode-loop",
+ "cocode-mcp-types",
  "cocode-otel",
  "cocode-plugin",
+ "cocode-process-hardening",
  "cocode-protocol",
+ "cocode-rmcp-client",
  "cocode-session",
  "cocode-skill",
  "cocode-subagent",
@@ -1003,6 +1010,7 @@ dependencies = [
  "cocode-tui",
  "cocode-utils-common",
  "dirs 6.0.0",
+ "futures",
  "serde",
  "serde_json",
  "tempfile",
@@ -1087,11 +1095,11 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
- "cocode-api",
  "cocode-context",
  "cocode-error",
  "cocode-git",
  "cocode-hooks",
+ "cocode-inference",
  "cocode-loop",
  "cocode-otel",
  "cocode-policy",
@@ -1207,6 +1215,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-ide"
+version = "0.0.0"
+dependencies = [
+ "cocode-mcp-types",
+ "cocode-rmcp-client",
+ "dirs 6.0.0",
+ "futures",
+ "pretty_assertions",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "cocode-inference"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cocode-config",
+ "cocode-error",
+ "cocode-protocol",
+ "dotenvy",
+ "futures",
+ "humantime-serde",
+ "pretty_assertions",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vercel-ai",
+ "vercel-ai-anthropic",
+ "vercel-ai-google",
+ "vercel-ai-openai",
+ "vercel-ai-openai-compatible",
+ "vercel-ai-provider",
+]
+
+[[package]]
 name = "cocode-keybindings"
 version = "0.0.0"
 dependencies = [
@@ -1236,12 +1292,12 @@ dependencies = [
 name = "cocode-loop"
 version = "0.0.0"
 dependencies = [
- "cocode-api",
  "cocode-auto-memory",
  "cocode-context",
  "cocode-error",
  "cocode-file-backup",
  "cocode-hooks",
+ "cocode-inference",
  "cocode-lsp",
  "cocode-message",
  "cocode-otel",
@@ -1308,7 +1364,7 @@ name = "cocode-message"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "cocode-api",
+ "cocode-inference",
  "cocode-protocol",
  "serde",
  "serde_json",
@@ -1397,6 +1453,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cocode-process-hardening"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pretty_assertions",
 ]
 
 [[package]]
@@ -1532,8 +1596,11 @@ dependencies = [
  "base64 0.22.1",
  "cocode-error",
  "cocode-protocol",
+ "cocode-utils-string",
+ "libc",
  "pretty_assertions",
  "rand 0.9.2",
+ "seccompiler",
  "serde",
  "serde_json",
  "snafu",
@@ -1544,12 +1611,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-secret-redact"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "regex",
+]
+
+[[package]]
 name = "cocode-session"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "cocode-api",
  "cocode-auto-memory",
  "cocode-config",
  "cocode-context",
@@ -1558,6 +1632,7 @@ dependencies = [
  "cocode-executor",
  "cocode-file-backup",
  "cocode-hooks",
+ "cocode-inference",
  "cocode-loop",
  "cocode-lsp",
  "cocode-message",
@@ -1665,10 +1740,10 @@ dependencies = [
 name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
- "cocode-api",
  "cocode-auto-memory",
  "cocode-config",
  "cocode-error",
+ "cocode-inference",
  "cocode-message",
  "cocode-protocol",
  "cocode-tools",
@@ -1752,7 +1827,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "cocode-api",
  "cocode-apply-patch",
  "cocode-auto-memory",
  "cocode-config",
@@ -1763,6 +1837,7 @@ dependencies = [
  "cocode-file-ignore",
  "cocode-git",
  "cocode-hooks",
+ "cocode-inference",
  "cocode-lsp",
  "cocode-mcp-types",
  "cocode-message",
@@ -1772,6 +1847,7 @@ dependencies = [
  "cocode-protocol",
  "cocode-rmcp-client",
  "cocode-sandbox",
+ "cocode-secret-redact",
  "cocode-shell",
  "cocode-shell-parser",
  "cocode-skill",
@@ -1807,10 +1883,10 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "chrono",
- "cocode-api",
  "cocode-config",
  "cocode-error",
  "cocode-file-search",
+ "cocode-inference",
  "cocode-keybindings",
  "cocode-loop",
  "cocode-protocol",
@@ -2269,6 +2345,12 @@ checksum = "06d2e3287df1c007e74221c49ca10a95d557349e54b3a75dc2fb14712c751f04"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "data-encoding"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
 name = "dbus"
@@ -6272,6 +6354,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "secret-service"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7227,6 +7318,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7678,6 +7781,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.9.2",
+ "sha1",
+ "thiserror 2.0.18",
+ "utf-8",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7717,6 +7837,15 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-normalization-alignments"
