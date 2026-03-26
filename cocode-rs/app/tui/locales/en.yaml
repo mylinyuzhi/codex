@@ -163,6 +163,7 @@ status.dialogs_waiting: "%{count} waiting"
 
 # Thinking status
 status.fast_mode: "Fast"
+status.sandbox: "SANDBOX"
 
 status.thinking: "thinking..."
 status.thinking_with_duration: "thinking... %{duration}s"
@@ -392,6 +393,10 @@ toast.slow_query: "Query took %{duration}s"
 toast.fast_mode_on: "Fast mode enabled"
 toast.fast_mode_off: "Fast mode disabled"
 
+# Sandbox
+toast.sandbox_active: "Sandbox active: %{enforcement}"
+toast.sandbox_violations: "%{count} sandbox violation(s) detected"
+
 # Permission mode
 toast.permission_mode_changed: "Permission mode"
 
@@ -514,6 +519,7 @@ tool.title_running: "Tools (%{count} running)"
 tool.running: "Running"
 tool.completed: "Completed"
 tool.failed: "Failed"
+tool.exploring_group: "Exploring (%{count} calls)"
 
 # ============================================================
 # Subagent panel

@@ -69,6 +69,14 @@ pub const SLOW_QUERY_THRESHOLD: Duration = Duration::from_secs(30);
 /// Idle time before showing a "waiting for input" notification.
 pub const IDLE_NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Duration of the overlay transition gate.
+///
+/// When a user-triggered overlay is opened, agent-driven overlays
+/// (permissions, questions) are queued for this duration instead of
+/// being shown immediately. Prevents jarring dialog flashes during
+/// UI transitions (matches Claude Code's `shouldContinueAnimation`).
+pub const OVERLAY_TRANSITION_GATE: Duration = Duration::from_millis(150);
+
 // ========== Toast Durations ==========
 
 /// Default display duration for info toasts.
@@ -194,6 +202,14 @@ pub const FILE_SEARCH_CHANNEL_BUFFER: i32 = 16;
 
 /// Buffer size for the symbol search event channel.
 pub const SYMBOL_SEARCH_CHANNEL_BUFFER: i32 = 16;
+
+// ========== Message Display ==========
+
+/// Maximum messages shown in the chat view (most recent N).
+///
+/// Prevents degraded rendering performance in very long sessions.
+/// Beyond this limit, older messages are hidden (but still in history).
+pub const MAX_MESSAGE_DISPLAY: i32 = 150;
 
 // ========== Transcript Mode ==========
 

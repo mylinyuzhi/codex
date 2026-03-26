@@ -40,6 +40,9 @@ pub const PERMISSION_BYPASS: &str = include_str!("permission_bypass.md");
 /// Summarization template for context compaction.
 pub const SUMMARIZATION: &str = include_str!("summarization.md");
 
+/// Sandbox mode instructions for the Bash tool.
+pub const SANDBOX_BASH: &str = include_str!("sandbox_bash.md");
+
 #[cfg(test)]
 #[path = "mod.test.rs"]
 mod tests;

@@ -94,6 +94,14 @@ pub struct ConversationContext {
     pub transcript_path: Option<std::path::PathBuf>,
     /// Output style configuration for prompt modification.
     pub output_style: Option<OutputStylePromptConfig>,
+    /// Whether sandbox enforcement is active.
+    pub sandbox_active: bool,
+    /// Sandbox enforcement description for prompt injection (e.g. "read-only", "workspace-write").
+    pub sandbox_enforcement_desc: Option<String>,
+    /// Whether unsandboxed commands are allowed (open mode vs closed mode).
+    pub sandbox_allow_unsandboxed: bool,
+    /// Sandbox network description for prompt injection.
+    pub sandbox_network_desc: Option<String>,
 }
 
 impl ConversationContext {
@@ -119,6 +127,10 @@ pub struct ConversationContextBuilder {
     subagent_type: Option<SubagentType>,
     transcript_path: Option<std::path::PathBuf>,
     output_style: Option<OutputStylePromptConfig>,
+    sandbox_active: bool,
+    sandbox_enforcement_desc: Option<String>,
+    sandbox_allow_unsandboxed: bool,
+    sandbox_network_desc: Option<String>,
 }
 
 impl ConversationContextBuilder {
@@ -187,6 +199,21 @@ impl ConversationContextBuilder {
         self
     }
 
+    /// Set sandbox active state, enforcement description, and open/closed mode.
+    pub fn sandbox(
+        mut self,
+        active: bool,
+        enforcement_desc: Option<String>,
+        allow_unsandboxed: bool,
+        network_desc: Option<String>,
+    ) -> Self {
+        self.sandbox_active = active;
+        self.sandbox_enforcement_desc = enforcement_desc;
+        self.sandbox_allow_unsandboxed = allow_unsandboxed;
+        self.sandbox_network_desc = network_desc;
+        self
+    }
+
     /// Build the [`ConversationContext`].
     ///
     /// Returns `Err` if required fields are missing.
@@ -216,6 +243,10 @@ impl ConversationContextBuilder {
             subagent_type: self.subagent_type,
             transcript_path: self.transcript_path,
             output_style: self.output_style,
+            sandbox_active: self.sandbox_active,
+            sandbox_enforcement_desc: self.sandbox_enforcement_desc,
+            sandbox_allow_unsandboxed: self.sandbox_allow_unsandboxed,
+            sandbox_network_desc: self.sandbox_network_desc,
         })
     }
 }

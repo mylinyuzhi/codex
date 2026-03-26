@@ -14,12 +14,14 @@
 
 mod config;
 mod item;
+pub mod jsonrpc;
 mod notification;
 mod request;
 mod usage;
 
 pub use config::*;
 pub use item::*;
+pub use jsonrpc::*;
 pub use notification::*;
 pub use request::*;
 pub use usage::*;

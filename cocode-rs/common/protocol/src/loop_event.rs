@@ -407,6 +407,12 @@ pub enum LoopEvent {
         retry_info: Option<RetryInfo>,
     },
 
+    /// Rate limit information from an API response.
+    RateLimit {
+        /// Rate limit details (provider-specific JSON).
+        info: serde_json::Value,
+    },
+
     // ========== MCP Events ==========
     /// An MCP tool call has begun.
     McpToolCallBegin {
@@ -710,6 +716,21 @@ pub enum LoopEvent {
         request: ApprovalRequest,
         /// Type of sandbox access requested.
         access_type: SandboxAccessType,
+    },
+
+    // ========== Sandbox State ==========
+    /// Sandbox enforcement state changed (e.g., initialized at session start).
+    SandboxStateChanged {
+        /// Whether sandbox is active.
+        active: bool,
+        /// Enforcement level description.
+        enforcement: String,
+    },
+
+    /// New sandbox violations detected during command execution.
+    SandboxViolationsDetected {
+        /// Number of new non-benign violations since last report.
+        count: i32,
     },
 
     // ========== Fast Mode ==========

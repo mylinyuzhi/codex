@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import shutil
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from cocode_sdk.generated.protocol import ServerNotification
 
@@ -42,6 +42,9 @@ class SubprocessCLITransport(Transport):
     and logged for debugging.
     """
 
+    MAX_START_RETRIES = 3
+    INITIAL_BACKOFF = 1.0
+
     def __init__(
         self,
         binary_path: str | None = None,
@@ -55,6 +58,24 @@ class SubprocessCLITransport(Transport):
         self._stderr_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        last_error: Exception | None = None
+        for attempt in range(self.MAX_START_RETRIES):
+            try:
+                await self._start_process()
+                return
+            except OSError as e:
+                last_error = e
+                backoff = self.INITIAL_BACKOFF * (2 ** attempt)
+                logger.warning(
+                    "Failed to start cocode (attempt %d/%d): %s. Retrying in %.1fs",
+                    attempt + 1, self.MAX_START_RETRIES, e, backoff,
+                )
+                await asyncio.sleep(backoff)
+        raise RuntimeError(
+            f"Failed to start cocode after {self.MAX_START_RETRIES} attempts"
+        ) from last_error
+
+    async def _start_process(self) -> None:
         cmd = [self._binary_path, "--sdk-mode"]
 
         process_env = os.environ.copy()
@@ -93,14 +114,13 @@ class SubprocessCLITransport(Transport):
         self._process.stdin.write(data)
         await self._process.stdin.drain()
 
-    async def read_events(self) -> AsyncIterator[ServerNotification]:
+    async def read_lines(self) -> AsyncIterator[dict[str, Any]]:
         if not self._process or not self._process.stdout:
             raise RuntimeError("Transport not started")
 
         while True:
             line = await self._process.stdout.readline()
             if not line:
-                # stdout closed — check if process crashed
                 returncode = self._process.returncode
                 if returncode is not None and returncode != 0:
                     raise RuntimeError(
@@ -111,12 +131,16 @@ class SubprocessCLITransport(Transport):
             if not line_str:
                 continue
             try:
-                data = json.loads(line_str)
-                yield ServerNotification.model_validate(data)
+                yield json.loads(line_str)
             except json.JSONDecodeError as e:
                 logger.warning("Malformed JSON from cocode: %s (line: %s)", e, line_str[:200])
+
+    async def read_events(self) -> AsyncIterator[ServerNotification]:
+        async for data in self.read_lines():
+            try:
+                yield ServerNotification.model_validate(data)
             except Exception as e:
-                logger.warning("Failed to parse server event: %s (line: %s)", e, line_str[:200])
+                logger.warning("Failed to parse server event: %s", e)
 
     async def close(self) -> None:
         if self._process:

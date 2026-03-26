@@ -117,6 +117,8 @@ pub enum AgentSource {
     UserSettings,
     ProjectSettings,
     Plugin,
+    /// Agent provided by an SDK client at session initialization.
+    Sdk,
     CliFlag,
 }
 
@@ -128,7 +130,8 @@ impl AgentSource {
             AgentSource::Plugin => 1,
             AgentSource::UserSettings => 2,
             AgentSource::ProjectSettings => 3,
-            AgentSource::CliFlag => 4,
+            AgentSource::Sdk => 4,
+            AgentSource::CliFlag => 5,
         }
     }
 }

@@ -230,6 +230,17 @@ pub struct SessionState {
     /// Shell executor for command execution and background tasks.
     shell_executor: ShellExecutor,
 
+    /// Sandbox state for platform-level command isolation (shared via Arc).
+    sandbox_state: Option<std::sync::Arc<cocode_sandbox::SandboxState>>,
+
+    /// Running sandbox proxy server for network domain filtering.
+    /// Kept alive for the session lifetime; stopped in `close()`.
+    sandbox_proxy: Option<cocode_sandbox::proxy::ProxyServer>,
+
+    /// Running sandbox bridge manager for Linux network namespace proxy access.
+    /// Kept alive for the session lifetime; stopped in `close()`.
+    sandbox_bridge: Option<cocode_sandbox::BridgeManager>,
+
     /// Queued commands for real-time steering (Enter during streaming).
     /// Shared via `Arc<Mutex>` with the running `AgentLoop` so the TUI driver
     /// can push commands while a turn is executing. Drained once per iteration
@@ -238,6 +249,9 @@ pub struct SessionState {
 
     /// Optional suffix appended to the end of the system prompt.
     system_prompt_suffix: Option<String>,
+
+    /// Full system prompt override (replaces built-in prompt entirely).
+    system_prompt_override: Option<String>,
 
     /// Subagent manager for Task tool agent spawning.
     ///
@@ -326,6 +340,12 @@ pub struct SessionState {
 
     /// Team mailbox for querying unread messages.
     team_mailbox: Arc<cocode_team::Mailbox>,
+
+    /// Optional permission requester for interactive approval flow (SDK mode).
+    ///
+    /// When set, the `AgentLoop` wires this into the `StreamingToolExecutor`
+    /// so tools needing approval can block on a response from the SDK client.
+    permission_requester: Option<Arc<dyn cocode_tools::PermissionRequester>>,
 }
 
 impl SessionState {
@@ -658,6 +678,20 @@ impl SessionState {
         let mut shell_executor = ShellExecutor::with_default_shell(session.working_dir.clone());
         shell_executor.start_snapshotting(config.cocode_home.clone(), &session.id.to_string());
 
+        // Initialize sandbox (4-gate bootstrap) and start proxy for domain filtering
+        let sandbox_state = crate::sandbox_init::initialize_sandbox(&config);
+        let mut sandbox_proxy = None;
+        let mut sandbox_bridge = None;
+        if let Some(ref state) = sandbox_state {
+            shell_executor = shell_executor.with_sandbox_state(std::sync::Arc::clone(state));
+            if let Some(net_result) =
+                crate::sandbox_init::start_sandbox_proxy(state, CancellationToken::new()).await
+            {
+                sandbox_proxy = Some(net_result.proxy);
+                sandbox_bridge = net_result.bridge;
+            }
+        }
+
         // Create OTel manager if OTel is configured
         let otel_manager = config.otel.as_ref().map(|_| {
             let mgr = Arc::new(cocode_otel::OtelManager::new(
@@ -738,8 +772,12 @@ impl SessionState {
             context_window,
             api,
             shell_executor,
+            sandbox_state,
+            sandbox_proxy,
+            sandbox_bridge,
             queued_commands: Arc::new(Mutex::new(Vec::new())),
             system_prompt_suffix: plugin_agent_suffix,
+            system_prompt_override: None,
             config,
             permission_rules,
             todos: serde_json::json!([]),
@@ -759,6 +797,7 @@ impl SessionState {
             auto_memory_state,
             team_store,
             team_mailbox,
+            permission_requester: None,
         });
 
         // Clean up orphaned worktrees at session startup (Gap 8 fix)
@@ -872,6 +911,9 @@ impl SessionState {
             ctx_builder = ctx_builder.output_style(style_config);
         }
 
+        // Wire sandbox fields for system prompt injection
+        ctx_builder = self.apply_sandbox_context(ctx_builder);
+
         let context = ctx_builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
@@ -969,6 +1011,7 @@ impl SessionState {
         .web_fetch_config(self.config.web_fetch_config.clone())
         .permission_rules(self.permission_rules.clone())
         .shell_executor(self.shell_executor.clone())
+        .maybe_sandbox_state(self.sandbox_state.clone())
         .skill_manager(self.skill_manager.clone())
         .otel_manager(self.otel_manager.clone())
         .lsp_manager(self.lsp_manager.clone())
@@ -987,6 +1030,11 @@ impl SessionState {
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
             builder = builder.snapshot_manager(sm.clone());
+        }
+
+        // Wire permission requester for interactive approval (SDK mode)
+        if let Some(ref requester) = self.permission_requester {
+            builder = builder.permission_requester(requester.clone());
         }
 
         let mut loop_instance = builder.build();
@@ -1373,8 +1421,17 @@ impl SessionState {
     /// Execute SessionEnd hooks and perform cleanup.
     ///
     /// Call this before dropping the session state to give hooks a chance
-    /// to run (e.g., saving state, logging).
-    pub async fn close(&self) {
+    /// to run (e.g., saving state, logging). Also stops the sandbox proxy
+    /// server if one is running.
+    pub async fn close(&mut self) {
+        // Stop sandbox bridge and proxy servers
+        if let Some(ref mut bridge) = self.sandbox_bridge {
+            bridge.stop().await;
+        }
+        if let Some(ref mut proxy) = self.sandbox_proxy {
+            proxy.stop().await;
+        }
+
         let ctx = cocode_hooks::HookContext::new(
             cocode_hooks::HookEventType::SessionEnd,
             self.session.id.clone(),
@@ -1630,6 +1687,18 @@ impl SessionState {
         self.system_prompt_suffix = Some(suffix);
     }
 
+    /// Set a full system prompt override (replaces built-in prompt entirely).
+    pub fn set_system_prompt_override(&mut self, prompt: String) {
+        self.system_prompt_override = Some(prompt);
+    }
+
+    /// Set a JSON Schema for structured output validation.
+    pub fn set_structured_output_schema(&mut self, _schema: serde_json::Value) {
+        // TODO: Wire structured output schema to the agent loop.
+        // The schema should be passed to the API client for guided generation.
+        tracing::info!("Structured output schema set (API wiring pending)");
+    }
+
     /// Resolve the active output style for prompt generation.
     ///
     /// Priority: runtime override > config file setting.
@@ -1687,6 +1756,34 @@ impl SessionState {
             .unwrap_or_default()
     }
 
+    /// Apply sandbox fields to a ConversationContext builder.
+    ///
+    /// Sets `sandbox_active`, `sandbox_enforcement_desc`, `sandbox_allow_unsandboxed`,
+    /// and `sandbox_network_desc` so the system prompt includes sandbox instructions.
+    fn apply_sandbox_context(
+        &self,
+        mut builder: cocode_context::ConversationContextBuilder,
+    ) -> cocode_context::ConversationContextBuilder {
+        if let Some(ref state) = self.sandbox_state
+            && state.is_active()
+        {
+            let settings = state.settings();
+            let enforcement_desc = format!("{:?}", state.enforcement());
+            builder = builder.sandbox(
+                /*active=*/ true,
+                /*enforcement_desc=*/ Some(enforcement_desc),
+                /*allow_unsandboxed=*/ settings.allow_unsandboxed_commands,
+                /*network_desc=*/
+                if state.network_active() {
+                    Some("Proxy-filtered (domain allow/deny lists active)".to_string())
+                } else {
+                    Some("Allowed".to_string())
+                },
+            );
+        }
+        builder
+    }
+
     // ==========================================================
     // Queued Commands API
     // ==========================================================
@@ -1708,6 +1805,7 @@ impl SessionState {
             id: id.clone(),
             prompt: prompt.into(),
             queued_at: now,
+            target_turn: None,
         };
         self.queued_commands
             .lock()
@@ -1830,6 +1928,105 @@ impl SessionState {
     /// AskUserQuestion tool immediately during the turn.
     pub fn question_responder(&self) -> Arc<cocode_tools::QuestionResponder> {
         self.question_responder.clone()
+    }
+
+    /// Set the permission mode from a string (e.g., "default", "acceptEdits").
+    pub fn set_permission_mode_from_str(&mut self, mode: &str) {
+        let parsed = match mode {
+            "acceptEdits" => PermissionMode::AcceptEdits,
+            "bypassPermissions" | "bypass" => PermissionMode::Bypass,
+            "plan" => PermissionMode::Plan,
+            _ => PermissionMode::Default,
+        };
+        self.set_permission_mode(parsed);
+    }
+
+    /// Set a model override for the next turn.
+    ///
+    /// Updates the main role selection with the given model string.
+    /// Accepts a full provider/model slug (e.g., "anthropic/claude-sonnet-4")
+    /// or a model name that the model hub will resolve.
+    pub fn set_model_override(&mut self, model: &str) {
+        // Parse "provider/model" format or treat entire string as model name
+        let (provider, slug) = if let Some((p, m)) = model.split_once('/') {
+            (p.to_string(), m.to_string())
+        } else {
+            // Default to anthropic for unqualified names
+            ("anthropic".to_string(), model.to_string())
+        };
+
+        let spec = cocode_protocol::ModelSpec::new(provider, slug);
+        let selection = cocode_protocol::RoleSelection::new(spec);
+        self.session
+            .selections
+            .set(cocode_protocol::ModelRole::Main, selection);
+        tracing::info!(model, "SDK model override applied");
+    }
+
+    /// Apply SDK-provided environment variable overrides.
+    ///
+    /// Pushes to the shell executor's env overlay so spawned subprocesses
+    /// inherit these variables. Not applied to the current process since
+    /// `std::env::set_var` is unsafe in async code.
+    pub fn apply_sdk_env_overrides(&mut self, env: &std::collections::HashMap<String, String>) {
+        self.shell_executor.add_env_overlay(env.clone());
+        tracing::debug!(count = env.len(), "SDK environment overrides applied");
+    }
+
+    /// Cancel a background task/agent by ID.
+    ///
+    /// Cancels the agent's token and marks it as killed in the subagent manager.
+    pub async fn cancel_background_task(&self, task_id: &str) {
+        let mut manager = self.subagent_manager.lock().await;
+        if let Some(instance) = manager.remove_agent(task_id) {
+            if let Some(token) = &instance.cancel_token {
+                token.cancel();
+            }
+            tracing::info!(task_id, "Background task cancelled via SDK");
+        } else {
+            tracing::warn!(task_id, "Background task not found for cancellation");
+        }
+    }
+
+    /// Set the permission requester for interactive approval flow (SDK mode).
+    pub fn set_permission_requester(
+        &mut self,
+        requester: Arc<dyn cocode_tools::PermissionRequester>,
+    ) {
+        self.permission_requester = Some(requester);
+    }
+
+    /// Append SDK-provided permission rules from raw JSON.
+    ///
+    /// Each JSON value should have: `tool_pattern`, optional `file_pattern`,
+    /// and `action` ("allow", "deny", or "ask").
+    pub fn append_permission_rules_from_json(&mut self, rules: &[serde_json::Value]) {
+        for rule_json in rules {
+            let tool_pattern = rule_json
+                .get("tool_pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("*")
+                .to_string();
+            let file_pattern = rule_json
+                .get("file_pattern")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let action = match rule_json
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ask")
+            {
+                "allow" => cocode_policy::RuleAction::Allow,
+                "deny" => cocode_policy::RuleAction::Deny,
+                _ => cocode_policy::RuleAction::Ask,
+            };
+            self.permission_rules.push(cocode_policy::PermissionRule {
+                source: cocode_protocol::RuleSource::Session,
+                tool_pattern,
+                file_pattern,
+                action,
+            });
+        }
     }
 
     /// Get the current task list from the most recent TodoWrite tool call.
@@ -2168,6 +2365,7 @@ impl SessionState {
         let tool_registry = self.tool_registry.clone();
         let hook_registry = self.hook_registry.clone();
         let shell_executor = self.shell_executor.clone();
+        let sandbox_state = self.sandbox_state.clone();
         let working_dir = self.session.working_dir.clone();
         let cocode_home = self.config.cocode_home.clone();
         let context_window = self.context_window;
@@ -2188,6 +2386,7 @@ impl SessionState {
             let tool_registry = tool_registry.clone();
             let hook_registry = hook_registry.clone();
             let shell_executor = shell_executor.clone();
+            let sandbox_state = sandbox_state.clone();
             let working_dir = working_dir.clone();
             let cocode_home = cocode_home.clone();
             let features = features.clone();
@@ -2297,6 +2496,26 @@ impl SessionState {
                 if !injections.is_empty() {
                     ctx_builder = ctx_builder.injections(injections);
                 }
+
+                // Wire sandbox fields for subagent system prompt
+                if let Some(ref state) = sandbox_state
+                    && state.is_active()
+                {
+                    let settings = state.settings();
+                    let enforcement_desc = format!("{:?}", state.enforcement());
+                    ctx_builder = ctx_builder.sandbox(
+                        /*active=*/ true,
+                        /*enforcement_desc=*/ Some(enforcement_desc),
+                        /*allow_unsandboxed=*/ settings.allow_unsandboxed_commands,
+                        /*network_desc=*/
+                        if state.network_active() {
+                            Some("Proxy-filtered".to_string())
+                        } else {
+                            Some("Allowed".to_string())
+                        },
+                    );
+                }
+
                 let context = ctx_builder.build().map_err(cocode_error::boxed_err)?;
 
                 // ── G1: Memory injection ───────────────────────────────
@@ -2497,6 +2716,7 @@ impl SessionState {
                 .web_fetch_config(web_fetch_config)
                 .permission_rules(permission_rules)
                 .shell_executor(forked_shell)
+                .maybe_sandbox_state(sandbox_state)
                 .skill_manager(skill_manager)
                 .lsp_manager(lsp_manager)
                 .is_subagent(true)
@@ -2794,6 +3014,9 @@ impl SessionState {
             ctx_builder = ctx_builder.output_style(style_config);
         }
 
+        // Wire sandbox fields for system prompt injection
+        ctx_builder = self.apply_sandbox_context(ctx_builder);
+
         let context = ctx_builder.build().map_err(boxed_err)?;
 
         // Set the execute_fn, tool list, and event_tx on the subagent manager (fresh per-turn)
@@ -2827,6 +3050,7 @@ impl SessionState {
         .web_fetch_config(self.config.web_fetch_config.clone())
         .permission_rules(self.permission_rules.clone())
         .shell_executor(self.shell_executor.clone())
+        .maybe_sandbox_state(self.sandbox_state.clone())
         .skill_manager(self.skill_manager.clone())
         .otel_manager(self.otel_manager.clone())
         .lsp_manager(self.lsp_manager.clone())
@@ -2845,6 +3069,16 @@ impl SessionState {
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
             builder = builder.snapshot_manager(sm.clone());
+        }
+
+        // Wire permission requester for interactive approval (SDK mode, skill turn)
+        if let Some(ref requester) = self.permission_requester {
+            builder = builder.permission_requester(requester.clone());
+        }
+
+        // Wire full system prompt override (SDK mode)
+        if let Some(ref prompt) = self.system_prompt_override {
+            builder = builder.custom_system_prompt(prompt.clone());
         }
 
         let mut loop_instance = builder.build();

@@ -23,6 +23,9 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
+use cocode_sandbox::SandboxBypass;
+use cocode_sandbox::SandboxState;
+
 use crate::background::BackgroundProcess;
 use crate::background::BackgroundTaskRegistry;
 use crate::command::CommandResult;
@@ -93,6 +96,8 @@ pub struct ShellExecutor {
     /// These are applied to every spawned command as an env overlay,
     /// avoiding unsafe global mutation via `std::env::set_var`.
     env_overlay: Arc<StdMutex<std::collections::HashMap<String, String>>>,
+    /// Sandbox state for platform-level command isolation.
+    sandbox_state: Option<Arc<SandboxState>>,
 }
 
 impl std::fmt::Debug for ShellExecutor {
@@ -115,6 +120,10 @@ impl std::fmt::Debug for ShellExecutor {
                     .unwrap_or_else(PoisonError::into_inner)
                     .len(),
             )
+            .field(
+                "sandbox_active",
+                &self.sandbox_state.as_ref().map(|s| s.is_active()),
+            )
             .finish()
     }
 }
@@ -133,6 +142,7 @@ impl ShellExecutor {
             snapshot_initialized: false,
             path_extractor: None,
             env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+            sandbox_state: None,
         }
     }
 
@@ -147,6 +157,7 @@ impl ShellExecutor {
             shell: Some(shell),
             snapshot_initialized: false,
             path_extractor: None,
+            sandbox_state: None,
             env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
         }
     }
@@ -174,6 +185,17 @@ impl ShellExecutor {
     pub fn with_path_extractor(mut self, extractor: Arc<dyn PathExtractor>) -> Self {
         self.path_extractor = Some(extractor);
         self
+    }
+
+    /// Sets the sandbox state for platform-level command isolation.
+    pub fn with_sandbox_state(mut self, state: Arc<SandboxState>) -> Self {
+        self.sandbox_state = Some(state);
+        self
+    }
+
+    /// Returns the sandbox state, if configured.
+    pub fn sandbox_state(&self) -> Option<&Arc<SandboxState>> {
+        self.sandbox_state.as_ref()
     }
 
     /// Returns the configured path extractor, if any.
@@ -328,6 +350,7 @@ impl ShellExecutor {
             snapshot_initialized: self.snapshot_initialized,
             path_extractor: self.path_extractor.clone(), // Share path extractor
             env_overlay: self.env_overlay.clone(),       // Share env overlay
+            sandbox_state: self.sandbox_state.clone(),   // Share sandbox state
         }
     }
 
@@ -341,19 +364,28 @@ impl ShellExecutor {
     /// This is essentially an alias for `execute()` to make the intent clear
     /// when used in subagent contexts.
     pub async fn execute_for_subagent(&self, command: &str, timeout_secs: i64) -> CommandResult {
-        self.execute(command, timeout_secs).await
+        self.execute(command, timeout_secs, SandboxBypass::No).await
     }
 
-    /// Executes a shell command with the given timeout.
+    /// Executes a shell command with the given timeout and sandbox bypass option.
     ///
     /// The command is run via the configured shell with the executor's working directory.
     /// If a shell snapshot is available and the command uses login shell mode (`-lc`),
     /// it is rewritten to source the snapshot via non-login shell (`-c`).
     /// Output is truncated if it exceeds the maximum size limit.
     ///
+    /// When a `SandboxState` is configured and the command qualifies for sandboxing,
+    /// the command is wrapped with platform-specific sandbox enforcement
+    /// (Seatbelt on macOS, bubblewrap on Linux).
+    ///
     /// If the command times out, a `CommandResult` is returned with exit code -1
     /// and a timeout message in stderr.
-    pub async fn execute(&self, command: &str, timeout_secs: i64) -> CommandResult {
+    pub async fn execute(
+        &self,
+        command: &str,
+        timeout_secs: i64,
+        sandbox_bypass: SandboxBypass,
+    ) -> CommandResult {
         let start = Instant::now();
 
         let timeout = if timeout_secs > 0 {
@@ -364,7 +396,7 @@ impl ShellExecutor {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout as u64),
-            self.run_command(command),
+            self.run_command(command, sandbox_bypass),
         )
         .await;
 
@@ -384,6 +416,7 @@ impl ShellExecutor {
                 truncated: false,
                 new_cwd: None,
                 extracted_paths: None,
+                sandboxed: false,
             },
         }
     }
@@ -397,8 +430,9 @@ impl ShellExecutor {
         &mut self,
         command: &str,
         timeout_secs: i64,
+        sandbox_bypass: SandboxBypass,
     ) -> CommandResult {
-        let result = self.execute(command, timeout_secs).await;
+        let result = self.execute(command, timeout_secs, sandbox_bypass).await;
         self.maybe_update_cwd(&result);
         result
     }
@@ -420,8 +454,13 @@ impl ShellExecutor {
     /// # Returns
     ///
     /// A `CommandResult` with `extracted_paths` populated if extraction was performed.
-    pub async fn execute_with_extraction(&self, command: &str, timeout_secs: i64) -> CommandResult {
-        let mut result = self.execute(command, timeout_secs).await;
+    pub async fn execute_with_extraction(
+        &self,
+        command: &str,
+        timeout_secs: i64,
+        sandbox_bypass: SandboxBypass,
+    ) -> CommandResult {
+        let mut result = self.execute(command, timeout_secs, sandbox_bypass).await;
 
         // Only extract paths if command succeeded and extractor is available
         if result.exit_code == 0
@@ -474,8 +513,11 @@ impl ShellExecutor {
         &mut self,
         command: &str,
         timeout_secs: i64,
+        sandbox_bypass: SandboxBypass,
     ) -> CommandResult {
-        let result = self.execute_with_extraction(command, timeout_secs).await;
+        let result = self
+            .execute_with_extraction(command, timeout_secs, sandbox_bypass)
+            .await;
         self.maybe_update_cwd(&result);
         result
     }
@@ -494,6 +536,7 @@ impl ShellExecutor {
         command: &str,
         timeout_secs: i64,
         signal_id: &str,
+        sandbox_bypass: SandboxBypass,
     ) -> ExecuteResult {
         let start = Instant::now();
         let timeout = if timeout_secs > 0 {
@@ -531,6 +574,9 @@ impl ShellExecutor {
             cmd.env(key, value);
         }
 
+        // Apply sandbox wrapping if active
+        let sandboxed = self.maybe_apply_sandbox(command, sandbox_bypass, &mut cmd);
+
         let child = cmd.spawn();
 
         let mut child = match child {
@@ -545,6 +591,7 @@ impl ShellExecutor {
                     truncated: false,
                     new_cwd: None,
                     extracted_paths: None,
+                    sandboxed,
                 });
             }
         };
@@ -631,6 +678,7 @@ impl ShellExecutor {
                     truncated: truncated_stdout || truncated_stderr,
                     new_cwd,
                     extracted_paths: None,
+                    sandboxed,
                 })
             }
 
@@ -660,6 +708,7 @@ impl ShellExecutor {
                     truncated: truncated_stdout || truncated_stderr,
                     new_cwd,
                     extracted_paths: None,
+                    sandboxed,
                 })
             }
 
@@ -677,6 +726,7 @@ impl ShellExecutor {
                     truncated: false,
                     new_cwd: None,
                     extracted_paths: None,
+                    sandboxed,
                 })
             }
         }
@@ -813,9 +863,10 @@ impl ShellExecutor {
         command: &str,
         timeout_secs: i64,
         signal_id: &str,
+        sandbox_bypass: SandboxBypass,
     ) -> ExecuteResult {
         let result = self
-            .execute_backgroundable(command, timeout_secs, signal_id)
+            .execute_backgroundable(command, timeout_secs, signal_id, sandbox_bypass)
             .await;
 
         if let ExecuteResult::Completed(ref cmd_result) = result {
@@ -836,6 +887,62 @@ impl ShellExecutor {
                 *guard = new_cwd.clone();
             }
         }
+    }
+
+    /// Applies sandbox wrapping to a command if sandbox is active and the command qualifies.
+    ///
+    /// Returns `true` if the command was wrapped with sandbox enforcement.
+    fn maybe_apply_sandbox(
+        &self,
+        command: &str,
+        sandbox_bypass: SandboxBypass,
+        cmd: &mut tokio::process::Command,
+    ) -> bool {
+        let Some(state) = self.sandbox_state.as_ref() else {
+            return false;
+        };
+
+        if !state.should_sandbox_command(command, sandbox_bypass) {
+            tracing::debug!(
+                bypass = ?sandbox_bypass,
+                "sandbox.command_decision: skipped (not qualifying)"
+            );
+            return false;
+        }
+
+        // Apply proxy env vars if network isolation is active
+        for (key, value) in state.proxy_env_vars() {
+            cmd.env(key, value);
+        }
+
+        // Canonicalize CWD before sandbox wrapping so mount points match
+        // resolved paths (handles symlink aliases in containerized envs).
+        if let Some(cwd) = cmd.as_std().get_current_dir()
+            && let Ok(canonical) = std::fs::canonicalize(cwd)
+            && canonical != cwd
+        {
+            tracing::debug!(
+                original = %cwd.display(),
+                canonical = %canonical.display(),
+                "CWD canonicalized for sandbox wrapping"
+            );
+            cmd.current_dir(&canonical);
+        }
+
+        // Wrap with platform enforcement (Seatbelt on macOS, bubblewrap on Linux)
+        let config = state.config();
+        if let Err(e) = state.platform().wrap_command(&config, cmd) {
+            tracing::warn!("Failed to apply sandbox wrapping: {e}");
+            return false;
+        }
+
+        tracing::info!(
+            enforcement = ?state.enforcement(),
+            network_active = state.network_active(),
+            decision = "sandboxed",
+            "sandbox.command_decision"
+        );
+        true
     }
 
     /// POSIX-only: rewrite login shell commands to source snapshot.
@@ -909,18 +1016,23 @@ impl ShellExecutor {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
 
+        // Build the command and apply sandbox wrapping BEFORE tokio::spawn
+        // so background tasks get the same sandbox enforcement as foreground.
+        let mut cmd = tokio::process::Command::new(&shell_args[0]);
+        cmd.args(&shell_args[1..])
+            .current_dir(&cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        for (key, value) in &env_overlay_snapshot {
+            cmd.env(key, value);
+        }
+
+        // Apply sandbox wrapping if active (matches foreground execution path)
+        self.maybe_apply_sandbox(command, SandboxBypass::No, &mut cmd);
+
         tokio::spawn(async move {
-            let mut cmd = tokio::process::Command::new(&shell_args[0]);
-            cmd.args(&shell_args[1..])
-                .current_dir(&cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-
-            for (key, value) in &env_overlay_snapshot {
-                cmd.env(key, value);
-            }
-
             let child = cmd.spawn();
 
             match child {
@@ -1008,7 +1120,7 @@ impl ShellExecutor {
     /// `pwd -P >| {cwd_file}` and the result is read back after execution.
     /// This avoids polluting stdout with CWD markers and is resilient to
     /// output truncation.
-    async fn run_command(&self, command: &str) -> CommandResult {
+    async fn run_command(&self, command: &str, sandbox_bypass: SandboxBypass) -> CommandResult {
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
         let cwd = self.resolve_cwd();
@@ -1035,6 +1147,9 @@ impl ShellExecutor {
             cmd.env(key, value);
         }
 
+        // Apply sandbox wrapping if active
+        let sandboxed = self.maybe_apply_sandbox(command, sandbox_bypass, &mut cmd);
+
         let child = cmd.spawn();
 
         let child = match child {
@@ -1048,6 +1163,7 @@ impl ShellExecutor {
                     truncated: false,
                     new_cwd: None,
                     extracted_paths: None,
+                    sandboxed,
                 };
             }
         };
@@ -1063,6 +1179,7 @@ impl ShellExecutor {
                     truncated: false,
                     new_cwd: None,
                     extracted_paths: None,
+                    sandboxed,
                 };
             }
         };
@@ -1082,6 +1199,7 @@ impl ShellExecutor {
             truncated: truncated_stdout || truncated_stderr,
             new_cwd,
             extracted_paths: None,
+            sandboxed,
         }
     }
 }

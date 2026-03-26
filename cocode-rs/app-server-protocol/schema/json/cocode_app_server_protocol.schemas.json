@@ -3,12 +3,106 @@
   "definitions": {
     "AgentDefinitionConfig": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "AgentHookConfig": {
+          "description": "A hook definition scoped to an agent.",
+          "properties": {
+            "command": {
+              "description": "The command to execute.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event type (e.g., \"PreToolUse\", \"PostToolUse\", \"Stop\").",
+              "type": "string"
+            },
+            "matcher": {
+              "description": "Optional matcher pattern (e.g., tool name).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout": {
+              "description": "Optional timeout in seconds.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command",
+            "event"
+          ],
+          "type": "object"
+        },
+        "AgentIsolationMode": {
+          "description": "Isolation mode for agent execution environment.",
+          "oneOf": [
+            {
+              "description": "No isolation — agent shares parent's working directory.",
+              "enum": [
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Git worktree isolation — agent runs in a detached worktree.",
+              "enum": [
+                "worktree"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "AgentMemoryScope": {
+          "description": "Memory scope for persistent agent memory.",
+          "oneOf": [
+            {
+              "description": "User-level memory.",
+              "enum": [
+                "user"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Project-level memory.",
+              "enum": [
+                "project"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Local (gitignored) memory.",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
       "description": "Agent definition for SDK-provided custom agents.",
       "properties": {
         "background": {
           "default": false,
           "description": "Whether the agent defaults to background execution.",
           "type": "boolean"
+        },
+        "color": {
+          "description": "Display color hint (e.g., \"cyan\", \"blue\", \"green\", \"orange\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_reminder": {
+          "description": "Critical reminder prepended to the agent's prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "description": {
           "description": "Short description of when to use this agent.",
@@ -27,6 +121,32 @@
             "null"
           ]
         },
+        "fork_context": {
+          "default": false,
+          "description": "Whether to fork the parent conversation context to this agent.",
+          "type": "boolean"
+        },
+        "hooks": {
+          "description": "Hook definitions scoped to this agent.",
+          "items": {
+            "$ref": "#/definitions/AgentHookConfig"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentIsolationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Isolation mode for the agent's execution environment."
+        },
         "max_turns": {
           "description": "Maximum turns.",
           "format": "int32",
@@ -35,8 +155,36 @@
             "null"
           ]
         },
+        "mcp_servers": {
+          "description": "MCP server name references required by this agent.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentMemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Memory scope for persistent agent memory."
+        },
         "model": {
           "description": "Model override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override (e.g., \"default\", \"bypassPermissions\").",
           "type": [
             "string",
             "null"
@@ -49,6 +197,16 @@
             "null"
           ]
         },
+        "skills": {
+          "description": "Skill names to load for this agent.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "tools": {
           "description": "Tool whitelist.",
           "items": {
@@ -58,10 +216,99 @@
             "array",
             "null"
           ]
+        },
+        "use_custom_prompt": {
+          "default": false,
+          "description": "Whether `prompt` replaces the entire system prompt (true) or appends (false).",
+          "type": "boolean"
         }
       },
       "title": "AgentDefinitionConfig",
       "type": "object"
+    },
+    "AgentHookConfig": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "A hook definition scoped to an agent.",
+      "properties": {
+        "command": {
+          "description": "The command to execute.",
+          "type": "string"
+        },
+        "event": {
+          "description": "The event type (e.g., \"PreToolUse\", \"PostToolUse\", \"Stop\").",
+          "type": "string"
+        },
+        "matcher": {
+          "description": "Optional matcher pattern (e.g., tool name).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Optional timeout in seconds.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "event"
+      ],
+      "title": "AgentHookConfig",
+      "type": "object"
+    },
+    "AgentIsolationMode": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Isolation mode for agent execution environment.",
+      "oneOf": [
+        {
+          "description": "No isolation — agent shares parent's working directory.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Git worktree isolation — agent runs in a detached worktree.",
+          "enum": [
+            "worktree"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "AgentIsolationMode"
+    },
+    "AgentMemoryScope": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Memory scope for persistent agent memory.",
+      "oneOf": [
+        {
+          "description": "User-level memory.",
+          "enum": [
+            "user"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Project-level memory.",
+          "enum": [
+            "project"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Local (gitignored) memory.",
+          "enum": [
+            "local"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "AgentMemoryScope"
     },
     "ApprovalDecision": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -87,13 +334,255 @@
             "deny"
           ],
           "type": "string"
+        },
+        {
+          "description": "Approve with modified tool input.",
+          "enum": [
+            "modify"
+          ],
+          "type": "string"
         }
       ],
       "title": "ApprovalDecision"
     },
+    "ApprovalModifyPayload": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for `approval/resolve`.\n\nWhen `decision` is `Modify`, `updated_input` must be provided with the new tool input to use instead of the original.",
+      "properties": {
+        "updated_input": {
+          "description": "Modified tool input (required when decision is `modify`)."
+        }
+      },
+      "required": [
+        "updated_input"
+      ],
+      "title": "ApprovalModifyPayload",
+      "type": "object"
+    },
     "ClientRequest": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
+        "AgentDefinitionConfig": {
+          "description": "Agent definition for SDK-provided custom agents.",
+          "properties": {
+            "background": {
+              "default": false,
+              "description": "Whether the agent defaults to background execution.",
+              "type": "boolean"
+            },
+            "color": {
+              "description": "Display color hint (e.g., \"cyan\", \"blue\", \"green\", \"orange\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "critical_reminder": {
+              "description": "Critical reminder prepended to the agent's prompt.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "description": "Short description of when to use this agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "disallowed_tools": {
+              "description": "Tool blacklist.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "fork_context": {
+              "default": false,
+              "description": "Whether to fork the parent conversation context to this agent.",
+              "type": "boolean"
+            },
+            "hooks": {
+              "description": "Hook definitions scoped to this agent.",
+              "items": {
+                "$ref": "#/definitions/AgentHookConfig"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "isolation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AgentIsolationMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Isolation mode for the agent's execution environment."
+            },
+            "max_turns": {
+              "description": "Maximum turns.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mcp_servers": {
+              "description": "MCP server name references required by this agent.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "memory": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AgentMemoryScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Memory scope for persistent agent memory."
+            },
+            "model": {
+              "description": "Model override.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "description": "Permission mode override (e.g., \"default\", \"bypassPermissions\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "description": "System prompt or instructions.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "skills": {
+              "description": "Skill names to load for this agent.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "tools": {
+              "description": "Tool whitelist.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "use_custom_prompt": {
+              "default": false,
+              "description": "Whether `prompt` replaces the entire system prompt (true) or appends (false).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "AgentHookConfig": {
+          "description": "A hook definition scoped to an agent.",
+          "properties": {
+            "command": {
+              "description": "The command to execute.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event type (e.g., \"PreToolUse\", \"PostToolUse\", \"Stop\").",
+              "type": "string"
+            },
+            "matcher": {
+              "description": "Optional matcher pattern (e.g., tool name).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout": {
+              "description": "Optional timeout in seconds.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command",
+            "event"
+          ],
+          "type": "object"
+        },
+        "AgentIsolationMode": {
+          "description": "Isolation mode for agent execution environment.",
+          "oneOf": [
+            {
+              "description": "No isolation — agent shares parent's working directory.",
+              "enum": [
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Git worktree isolation — agent runs in a detached worktree.",
+              "enum": [
+                "worktree"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "AgentMemoryScope": {
+          "description": "Memory scope for persistent agent memory.",
+          "oneOf": [
+            {
+              "description": "User-level memory.",
+              "enum": [
+                "user"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Project-level memory.",
+              "enum": [
+                "project"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Local (gitignored) memory.",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "ApprovalDecision": {
           "description": "Decision on an approval request.",
           "oneOf": [
@@ -117,6 +606,13 @@
                 "deny"
               ],
               "type": "string"
+            },
+            {
+              "description": "Approve with modified tool input.",
+              "enum": [
+                "modify"
+              ],
+              "type": "string"
             }
           ]
         },
@@ -134,6 +630,9 @@
             "request_id": {
               "description": "The request ID of the approval being resolved.",
               "type": "string"
+            },
+            "updated_input": {
+              "description": "Modified tool input (required when decision is `modify`)."
             }
           },
           "required": [
@@ -141,6 +640,243 @@
             "request_id"
           ],
           "type": "object"
+        },
+        "HookCallbackConfig": {
+          "description": "SDK hook callback configuration.\n\nPre-registered at initialize time following the Claude Agent SDK pattern. When a hook event fires, the server emits `ServerRequest::HookCallback` with the callback_id, and the SDK client responds.",
+          "properties": {
+            "callback_id": {
+              "description": "Unique callback identifier (UUID, pre-registered at init).",
+              "type": "string"
+            },
+            "event": {
+              "description": "Hook event type (e.g., \"PreToolUse\", \"PostToolUse\").",
+              "type": "string"
+            },
+            "matcher": {
+              "description": "Tool name pattern to match (glob-style, None = all tools).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_ms": {
+              "description": "Timeout in milliseconds for the callback response.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "callback_id",
+            "event"
+          ],
+          "type": "object"
+        },
+        "HookCallbackResponseParams": {
+          "description": "Parameters for `hook/callbackResponse`.",
+          "properties": {
+            "error": {
+              "description": "Error message if the callback failed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output": {
+              "default": null,
+              "description": "Hook output payload."
+            },
+            "request_id": {
+              "description": "The request_id from the corresponding HookCallback.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id"
+          ],
+          "type": "object"
+        },
+        "KeepAliveRequestParams": {
+          "description": "Parameters for `control/keepAlive`.",
+          "properties": {
+            "timestamp": {
+              "description": "Optional timestamp (milliseconds since epoch).",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "McpServerConfig": {
+          "description": "MCP server configuration for SDK clients.",
+          "oneOf": [
+            {
+              "description": "Subprocess-based MCP server (stdio transport).",
+              "properties": {
+                "args": {
+                  "default": [],
+                  "description": "Command arguments.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "command": {
+                  "description": "Command to run.",
+                  "type": "string"
+                },
+                "env": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Environment variables.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "stdio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "SSE-based MCP server.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "sse"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Server URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "HTTP-based MCP server.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "http"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Server URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputFormatConfig": {
+          "description": "Output format configuration for structured output.",
+          "properties": {
+            "schema": {
+              "description": "JSON Schema for the expected output."
+            }
+          },
+          "required": [
+            "schema"
+          ],
+          "type": "object"
+        },
+        "RewindFilesRequestParams": {
+          "description": "Parameters for `control/rewindFiles`.",
+          "properties": {
+            "turn_id": {
+              "description": "Turn ID to rewind files to.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id"
+          ],
+          "type": "object"
+        },
+        "SandboxConfig": {
+          "description": "Sandbox configuration.",
+          "properties": {
+            "auto_allow_bash_if_sandboxed": {
+              "default": false,
+              "description": "Auto-allow Bash tool when sandboxed (avoids approval prompts).",
+              "type": "boolean"
+            },
+            "exclude_commands": {
+              "description": "Commands excluded from sandbox restrictions.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SandboxMode"
+                }
+              ],
+              "default": "none",
+              "description": "Sandbox mode."
+            },
+            "network_access": {
+              "default": false,
+              "description": "Whether to allow network access in sandbox.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "SandboxMode": {
+          "description": "Sandbox execution mode.",
+          "oneOf": [
+            {
+              "description": "No sandboxing.",
+              "enum": [
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Read-only filesystem access.",
+              "enum": [
+                "read_only"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Strict sandboxing.",
+              "enum": [
+                "strict"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "SessionResumeRequestParams": {
           "description": "Parameters for `session/resume`.",
@@ -165,10 +901,27 @@
         "SessionStartRequestParams": {
           "description": "Parameters for `session/start`.",
           "properties": {
+            "agents": {
+              "additionalProperties": {
+                "$ref": "#/definitions/AgentDefinitionConfig"
+              },
+              "description": "Custom sub-agent definitions.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "cwd": {
               "description": "Working directory override.",
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "disable_builtin_agents": {
+              "description": "Disable all built-in agent definitions.",
+              "type": [
+                "boolean",
                 "null"
               ]
             },
@@ -182,11 +935,39 @@
                 "null"
               ]
             },
+            "hooks": {
+              "description": "SDK hook callbacks (pre-registered at session start).",
+              "items": {
+                "$ref": "#/definitions/HookCallbackConfig"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "max_budget_cents": {
+              "description": "Maximum budget in cents before stopping.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "max_turns": {
               "description": "Maximum turns before stopping.",
               "format": "int32",
               "type": [
                 "integer",
+                "null"
+              ]
+            },
+            "mcp_servers": {
+              "additionalProperties": {
+                "$ref": "#/definitions/McpServerConfig"
+              },
+              "description": "MCP server configurations.",
+              "type": [
+                "object",
                 "null"
               ]
             },
@@ -197,6 +978,17 @@
                 "null"
               ]
             },
+            "output_format": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OutputFormatConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Structured output JSON schema."
+            },
             "permission_mode": {
               "description": "Permission mode override.",
               "type": [
@@ -204,9 +996,39 @@
                 "null"
               ]
             },
+            "permission_rules": {
+              "description": "Permission rules.",
+              "items": true,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Initial prompt to send.",
               "type": "string"
+            },
+            "sandbox": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SandboxConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sandbox configuration."
+            },
+            "system_prompt": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SystemPromptConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Full system prompt override or structured config."
             },
             "system_prompt_suffix": {
               "description": "System prompt suffix (appended to built-in system prompt).",
@@ -214,12 +1036,195 @@
                 "string",
                 "null"
               ]
+            },
+            "thinking": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThinkingConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Thinking/reasoning configuration."
+            },
+            "tools": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ToolsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Tool whitelist or preset configuration."
             }
           },
           "required": [
             "prompt"
           ],
           "type": "object"
+        },
+        "SetModelRequestParams": {
+          "description": "Parameters for `control/setModel`.",
+          "properties": {
+            "model": {
+              "description": "Model identifier (e.g., \"sonnet\", \"opus\", \"haiku\").",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model"
+          ],
+          "type": "object"
+        },
+        "SetPermissionModeRequestParams": {
+          "description": "Parameters for `control/setPermissionMode`.",
+          "properties": {
+            "mode": {
+              "description": "Permission mode (e.g., \"default\", \"acceptEdits\", \"bypassPermissions\").",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "SetThinkingRequestParams": {
+          "description": "Parameters for `control/setThinking`.",
+          "properties": {
+            "thinking": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThinkingConfig"
+                }
+              ],
+              "description": "Thinking configuration to apply."
+            }
+          },
+          "required": [
+            "thinking"
+          ],
+          "type": "object"
+        },
+        "StopTaskRequestParams": {
+          "description": "Parameters for `control/stopTask`.",
+          "properties": {
+            "task_id": {
+              "description": "Task ID to stop.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id"
+          ],
+          "type": "object"
+        },
+        "SystemPromptConfig": {
+          "anyOf": [
+            {
+              "description": "Raw system prompt string.",
+              "type": "string"
+            },
+            {
+              "description": "Structured system prompt with preset and optional append.",
+              "properties": {
+                "append": {
+                  "description": "Text to append to the preset.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "preset": {
+                  "description": "Base preset to use.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preset"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "System prompt configuration."
+        },
+        "ThinkingConfig": {
+          "description": "Thinking / reasoning configuration.",
+          "properties": {
+            "max_tokens": {
+              "description": "Maximum thinking tokens (if applicable).",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThinkingMode"
+                }
+              ],
+              "description": "Thinking mode."
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "ThinkingMode": {
+          "description": "Thinking mode.",
+          "oneOf": [
+            {
+              "description": "Model decides when to think.",
+              "enum": [
+                "adaptive"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Always use extended thinking.",
+              "enum": [
+                "enabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Never use extended thinking.",
+              "enum": [
+                "disabled"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "ToolsConfig": {
+          "anyOf": [
+            {
+              "description": "Explicit list of tool names.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "description": "Preset-based configuration.",
+              "properties": {
+                "preset": {
+                  "description": "Preset name (e.g., \"default\").",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preset"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Tools configuration."
         },
         "TurnInterruptRequestParams": {
           "description": "Parameters for `turn/interrupt`.",
@@ -244,6 +1249,39 @@
           },
           "required": [
             "text"
+          ],
+          "type": "object"
+        },
+        "UpdateEnvRequestParams": {
+          "description": "Parameters for `control/updateEnv`.",
+          "properties": {
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Environment variables to set or update.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        },
+        "UserInputResolveRequestParams": {
+          "description": "Parameters for `input/resolveUserInput`.",
+          "properties": {
+            "request_id": {
+              "description": "The request ID of the input request being resolved.",
+              "type": "string"
+            },
+            "response": {
+              "description": "Response payload (structure depends on the original question)."
+            }
+          },
+          "required": [
+            "request_id",
+            "response"
           ],
           "type": "object"
         }
@@ -344,9 +1382,300 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Respond to a user input request (e.g., AskUserQuestion tool).",
+          "properties": {
+            "method": {
+              "enum": [
+                "input/resolveUserInput"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/UserInputResolveRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Change the model during a session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/setModel"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SetModelRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Change the permission mode during a session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/setPermissionMode"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SetPermissionModeRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop a running background task.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/stopTask"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/StopTaskRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Respond to an SDK hook callback.",
+          "properties": {
+            "method": {
+              "enum": [
+                "hook/callbackResponse"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/HookCallbackResponseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Change thinking configuration during a session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/setThinking"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SetThinkingRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Rewind files to a previous turn's state.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/rewindFiles"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RewindFilesRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Update environment variables during a session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/updateEnv"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/UpdateEnvRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Keepalive signal (prevents idle timeouts).",
+          "properties": {
+            "method": {
+              "enum": [
+                "control/keepAlive"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/KeepAliveRequestParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ClientRequest"
+    },
+    "HookBehavior": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Hook callback behavior decision.",
+      "oneOf": [
+        {
+          "description": "Allow the tool execution to proceed.",
+          "enum": [
+            "allow"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Deny the tool execution.",
+          "enum": [
+            "deny"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Report an error for this tool execution.",
+          "enum": [
+            "error"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "HookBehavior"
+    },
+    "HookCallbackConfig": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "SDK hook callback configuration.\n\nPre-registered at initialize time following the Claude Agent SDK pattern. When a hook event fires, the server emits `ServerRequest::HookCallback` with the callback_id, and the SDK client responds.",
+      "properties": {
+        "callback_id": {
+          "description": "Unique callback identifier (UUID, pre-registered at init).",
+          "type": "string"
+        },
+        "event": {
+          "description": "Hook event type (e.g., \"PreToolUse\", \"PostToolUse\").",
+          "type": "string"
+        },
+        "matcher": {
+          "description": "Tool name pattern to match (glob-style, None = all tools).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Timeout in milliseconds for the callback response.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "callback_id",
+        "event"
+      ],
+      "title": "HookCallbackConfig",
+      "type": "object"
+    },
+    "HookCallbackOutput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "HookBehavior": {
+          "description": "Hook callback behavior decision.",
+          "oneOf": [
+            {
+              "description": "Allow the tool execution to proceed.",
+              "enum": [
+                "allow"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Deny the tool execution.",
+              "enum": [
+                "deny"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Report an error for this tool execution.",
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "description": "Output payload for hook callback responses.",
+      "properties": {
+        "behavior": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookBehavior"
+            }
+          ],
+          "description": "What to do with the tool execution."
+        },
+        "message": {
+          "description": "Message to include (for deny/error behaviors).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_input": {
+          "description": "Modified tool input (for allow behavior with changes)."
+        }
+      },
+      "required": [
+        "behavior"
+      ],
+      "title": "HookCallbackOutput",
+      "type": "object"
     },
     "ItemStatus": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -382,6 +1711,166 @@
         }
       ],
       "title": "ItemStatus"
+    },
+    "JsonRpcError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "JsonRpcErrorData": {
+          "description": "Error detail within a JSON-RPC error response.",
+          "properties": {
+            "code": {
+              "description": "Error code.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "data": {
+              "description": "Optional additional data."
+            },
+            "message": {
+              "description": "Human-readable error message.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        "RequestId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "format": "int64",
+              "type": "integer"
+            }
+          ],
+          "description": "A JSON-RPC request ID (string or integer)."
+        }
+      },
+      "description": "An error response to a request.",
+      "properties": {
+        "error": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/JsonRpcErrorData"
+            }
+          ],
+          "description": "Error details."
+        },
+        "id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            }
+          ],
+          "description": "The request ID this error corresponds to."
+        }
+      },
+      "required": [
+        "error",
+        "id"
+      ],
+      "title": "JsonRpcError",
+      "type": "object"
+    },
+    "JsonRpcNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "A notification which does not expect a response.",
+      "properties": {
+        "method": {
+          "description": "Method name (e.g., \"turn/started\", \"agentMessage/delta\").",
+          "type": "string"
+        },
+        "params": {
+          "description": "Notification parameters."
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "title": "JsonRpcNotification",
+      "type": "object"
+    },
+    "JsonRpcRequest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "RequestId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "format": "int64",
+              "type": "integer"
+            }
+          ],
+          "description": "A JSON-RPC request ID (string or integer)."
+        }
+      },
+      "description": "A request that expects a response.",
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            }
+          ],
+          "description": "Unique request identifier for correlation."
+        },
+        "method": {
+          "description": "Method name (e.g., \"session/start\", \"turn/start\").",
+          "type": "string"
+        },
+        "params": {
+          "description": "Method parameters."
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "JsonRpcRequest",
+      "type": "object"
+    },
+    "JsonRpcResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "RequestId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "format": "int64",
+              "type": "integer"
+            }
+          ],
+          "description": "A JSON-RPC request ID (string or integer)."
+        }
+      },
+      "description": "A successful response to a request.",
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            }
+          ],
+          "description": "The request ID this response corresponds to."
+        },
+        "result": {
+          "description": "The result value."
+        }
+      },
+      "required": [
+        "id",
+        "result"
+      ],
+      "title": "JsonRpcResponse",
+      "type": "object"
     },
     "McpServerConfig": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -468,6 +1957,172 @@
       ],
       "title": "McpServerConfig"
     },
+    "NotificationHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `Notification` hook callbacks.",
+      "properties": {
+        "notification_type": {
+          "description": "Notification type.",
+          "type": "string"
+        },
+        "payload": {
+          "default": null,
+          "description": "Notification payload."
+        }
+      },
+      "required": [
+        "notification_type"
+      ],
+      "title": "NotificationHookInput",
+      "type": "object"
+    },
+    "OutputFormatConfig": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Output format configuration for structured output.",
+      "properties": {
+        "schema": {
+          "description": "JSON Schema for the expected output."
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "title": "OutputFormatConfig",
+      "type": "object"
+    },
+    "PermissionSuggestion": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "A permission suggestion that can be presented to the user.",
+      "properties": {
+        "behavior": {
+          "description": "Suggested behavior (e.g., \"allow\", \"deny\").",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable reason for the suggestion.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "behavior"
+      ],
+      "title": "PermissionSuggestion",
+      "type": "object"
+    },
+    "PostToolUseHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `PostToolUse` hook callbacks.",
+      "properties": {
+        "is_error": {
+          "default": false,
+          "description": "Whether the tool execution failed.",
+          "type": "boolean"
+        },
+        "tool_input": {
+          "default": null,
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool that was executed.",
+          "type": "string"
+        },
+        "tool_output": {
+          "description": "Tool output (if available).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_use_id": {
+          "description": "Tool use identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tool_name"
+      ],
+      "title": "PostToolUseHookInput",
+      "type": "object"
+    },
+    "PreToolUseHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `PreToolUse` hook callbacks.",
+      "properties": {
+        "tool_input": {
+          "default": null,
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool about to be executed.",
+          "type": "string"
+        },
+        "tool_use_id": {
+          "description": "Tool use identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tool_name"
+      ],
+      "title": "PreToolUseHookInput",
+      "type": "object"
+    },
+    "PromptSuggestionParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for `prompt/suggestion`.",
+      "properties": {
+        "suggestions": {
+          "description": "Suggested follow-up prompts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "suggestions"
+      ],
+      "title": "PromptSuggestionParams",
+      "type": "object"
+    },
+    "RequestId": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ],
+      "description": "A JSON-RPC request ID (string or integer).",
+      "title": "RequestId"
+    },
+    "RewindFilesRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for `control/rewindFiles`.",
+      "properties": {
+        "turn_id": {
+          "description": "Turn ID to rewind files to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id"
+      ],
+      "title": "RewindFilesRequestParams",
+      "type": "object"
+    },
     "SandboxConfig": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
@@ -500,6 +2155,18 @@
       },
       "description": "Sandbox configuration.",
       "properties": {
+        "auto_allow_bash_if_sandboxed": {
+          "default": false,
+          "description": "Auto-allow Bash tool when sandboxed (avoids approval prompts).",
+          "type": "boolean"
+        },
+        "exclude_commands": {
+          "description": "Commands excluded from sandbox restrictions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "mode": {
           "allOf": [
             {
@@ -517,6 +2184,34 @@
       },
       "title": "SandboxConfig",
       "type": "object"
+    },
+    "SandboxMode": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Sandbox execution mode.",
+      "oneOf": [
+        {
+          "description": "No sandboxing.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Read-only filesystem access.",
+          "enum": [
+            "read_only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Strict sandboxing.",
+          "enum": [
+            "strict"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "SandboxMode"
     },
     "ServerNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -541,6 +2236,26 @@
             "delta",
             "item_id",
             "turn_id"
+          ],
+          "type": "object"
+        },
+        "CommandInfo": {
+          "description": "Information about an available command or skill.",
+          "properties": {
+            "description": {
+              "description": "Short description of the command.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Command name (e.g., \"/commit\").",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
           ],
           "type": "object"
         },
@@ -713,6 +2428,34 @@
             }
           ]
         },
+        "KeepAliveParams": {
+          "description": "Parameters for `keepAlive`.",
+          "properties": {
+            "timestamp": {
+              "description": "Timestamp (milliseconds since epoch).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "timestamp"
+          ],
+          "type": "object"
+        },
+        "MaxTurnsReachedParams": {
+          "description": "Parameters for `turn/maxReached`.",
+          "properties": {
+            "max_turns": {
+              "description": "Maximum turns limit that was reached.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "McpServerFailure": {
           "description": "Info about a failed MCP server startup.",
           "properties": {
@@ -822,6 +2565,58 @@
           ],
           "type": "object"
         },
+        "ModelFallbackStartedParams": {
+          "description": "Parameters for `model/fallbackStarted`.",
+          "properties": {
+            "from_model": {
+              "description": "Original model.",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Reason for fallback.",
+              "type": "string"
+            },
+            "to_model": {
+              "description": "Fallback model.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_model",
+            "reason",
+            "to_model"
+          ],
+          "type": "object"
+        },
+        "PermissionModeChangedParams": {
+          "description": "Parameters for `permission/modeChanged`.",
+          "properties": {
+            "mode": {
+              "description": "The new permission mode.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "PromptSuggestionParams": {
+          "description": "Parameters for `prompt/suggestion`.",
+          "properties": {
+            "suggestions": {
+              "description": "Suggested follow-up prompts.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "suggestions"
+          ],
+          "type": "object"
+        },
         "RateLimitParams": {
           "description": "Parameters for `rateLimit`.",
           "properties": {
@@ -857,9 +2652,160 @@
           ],
           "type": "object"
         },
+        "SessionEndedParams": {
+          "description": "Parameters for `session/ended`.",
+          "properties": {
+            "reason": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SessionEndedReason"
+                }
+              ],
+              "description": "Reason for session termination."
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        },
+        "SessionEndedReason": {
+          "description": "Reason why a session ended.",
+          "oneOf": [
+            {
+              "description": "All turns completed normally.",
+              "enum": [
+                "completed"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Maximum turn limit reached.",
+              "enum": [
+                "max_turns"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Budget limit exceeded.",
+              "enum": [
+                "max_budget"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "An error terminated the session.",
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "User interrupted the session.",
+              "enum": [
+                "user_interrupt"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "stdin was closed (SDK client disconnected).",
+              "enum": [
+                "stdin_closed"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "SessionResultParams": {
+          "description": "Parameters for `session/result`.",
+          "properties": {
+            "duration_api_ms": {
+              "description": "Total time spent on API calls in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "duration_ms": {
+              "description": "Total session duration in milliseconds.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "session_id": {
+              "description": "Session identifier.",
+              "type": "string"
+            },
+            "stop_reason": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SessionEndedReason"
+                }
+              ],
+              "description": "Why the session ended."
+            },
+            "structured_output": {
+              "description": "Structured output (if output_format schema was provided)."
+            },
+            "total_cost_cents": {
+              "description": "Total cost in cents (if available).",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "total_turns": {
+              "description": "Total number of turns in the session.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "usage": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Usage"
+                }
+              ],
+              "description": "Aggregated token usage across all turns."
+            }
+          },
+          "required": [
+            "duration_ms",
+            "session_id",
+            "stop_reason",
+            "total_turns",
+            "usage"
+          ],
+          "type": "object"
+        },
         "SessionStartedParams": {
           "description": "Parameters for `session/started`.",
           "properties": {
+            "commands": {
+              "description": "Available slash commands / skills.",
+              "items": {
+                "$ref": "#/definitions/CommandInfo"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "models": {
+              "description": "Available model identifiers.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "protocol_version": {
+              "default": "1",
+              "description": "Protocol version (for future version negotiation).",
+              "type": "string"
+            },
             "session_id": {
               "description": "Session identifier.",
               "type": "string"
@@ -933,6 +2879,47 @@
             "agent_id",
             "agent_type",
             "description"
+          ],
+          "type": "object"
+        },
+        "TaskCompletedParams": {
+          "description": "Parameters for `task/completed`.",
+          "properties": {
+            "is_error": {
+              "default": false,
+              "description": "Whether the task failed.",
+              "type": "boolean"
+            },
+            "result": {
+              "description": "Task result text.",
+              "type": "string"
+            },
+            "task_id": {
+              "description": "Task identifier.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        "TaskStartedParams": {
+          "description": "Parameters for `task/started`.",
+          "properties": {
+            "task_id": {
+              "description": "Task identifier.",
+              "type": "string"
+            },
+            "task_type": {
+              "description": "Type of task (e.g., \"shell\", \"agent\").",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "task_type"
           ],
           "type": "object"
         },
@@ -1305,6 +3292,19 @@
           ],
           "type": "object"
         },
+        "TurnInterruptedParams": {
+          "description": "Parameters for `turn/interrupted`.",
+          "properties": {
+            "turn_id": {
+              "description": "Turn identifier (if available).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "TurnStartedParams": {
           "description": "Parameters for `turn/started`.",
           "properties": {
@@ -1674,6 +3674,158 @@
           "type": "object"
         },
         {
+          "description": "A background task has started.",
+          "properties": {
+            "method": {
+              "enum": [
+                "task/started"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TaskStartedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A background task has completed.",
+          "properties": {
+            "method": {
+              "enum": [
+                "task/completed"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TaskCompletedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The current turn was interrupted.",
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/interrupted"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnInterruptedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Maximum turns limit reached.",
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/maxReached"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MaxTurnsReachedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Model fallback started (switching to a different model).",
+          "properties": {
+            "method": {
+              "enum": [
+                "model/fallbackStarted"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelFallbackStartedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Permission mode has changed.",
+          "properties": {
+            "method": {
+              "enum": [
+                "permission/modeChanged"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionModeChangedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Aggregated session result emitted before session/ended.",
+          "properties": {
+            "method": {
+              "enum": [
+                "session/result"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SessionResultParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Follow-up prompt suggestions after a turn completes.",
+          "properties": {
+            "method": {
+              "enum": [
+                "prompt/suggestion"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PromptSuggestionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A non-fatal error occurred.",
           "properties": {
             "method": {
@@ -1710,6 +3862,44 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Keepalive echo from the server.",
+          "properties": {
+            "method": {
+              "enum": [
+                "keepAlive"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/KeepAliveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Session has ended (clean termination).",
+          "properties": {
+            "method": {
+              "enum": [
+                "session/ended"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SessionEndedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ServerNotification"
@@ -1720,6 +3910,20 @@
         "AskForApprovalParams": {
           "description": "Parameters for `approval/askForApproval`.",
           "properties": {
+            "blocked_path": {
+              "description": "Filesystem path that triggered a permission block (if applicable).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision_reason": {
+              "description": "Reason for the permission decision.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "description": {
               "description": "Human-readable description of what the tool will do.",
               "type": [
@@ -1729,6 +3933,16 @@
             },
             "input": {
               "description": "Tool input (JSON)."
+            },
+            "permission_suggestions": {
+              "description": "Suggested approval behaviors the SDK client may present to the user.",
+              "items": {
+                "$ref": "#/definitions/PermissionSuggestion"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "request_id": {
               "description": "Unique request identifier (for correlation with response).",
@@ -1743,6 +3957,33 @@
             "input",
             "request_id",
             "tool_name"
+          ],
+          "type": "object"
+        },
+        "HookCallbackParams": {
+          "description": "Parameters for `hook/callback`.",
+          "properties": {
+            "callback_id": {
+              "description": "Callback identifier (pre-registered at initialize time).",
+              "type": "string"
+            },
+            "event_type": {
+              "description": "Hook event type (e.g., \"PreToolUse\").",
+              "type": "string"
+            },
+            "input": {
+              "default": null,
+              "description": "Hook input payload (tool name, input, context)."
+            },
+            "request_id": {
+              "description": "Unique request identifier (for correlation with response).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "callback_id",
+            "event_type",
+            "request_id"
           ],
           "type": "object"
         },
@@ -1765,6 +4006,26 @@
             "message",
             "request_id",
             "server_name"
+          ],
+          "type": "object"
+        },
+        "PermissionSuggestion": {
+          "description": "A permission suggestion that can be presented to the user.",
+          "properties": {
+            "behavior": {
+              "description": "Suggested behavior (e.g., \"allow\", \"deny\").",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Human-readable reason for the suggestion.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "behavior"
           ],
           "type": "object"
         },
@@ -1848,18 +4109,772 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Invoke an SDK-registered hook callback.",
+          "properties": {
+            "method": {
+              "enum": [
+                "hook/callback"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/HookCallbackParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ServerRequest"
     },
+    "SessionEndedReason": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Reason why a session ended.",
+      "oneOf": [
+        {
+          "description": "All turns completed normally.",
+          "enum": [
+            "completed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Maximum turn limit reached.",
+          "enum": [
+            "max_turns"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Budget limit exceeded.",
+          "enum": [
+            "max_budget"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An error terminated the session.",
+          "enum": [
+            "error"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User interrupted the session.",
+          "enum": [
+            "user_interrupt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stdin was closed (SDK client disconnected).",
+          "enum": [
+            "stdin_closed"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "SessionEndedReason"
+    },
+    "SessionResultParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "SessionEndedReason": {
+          "description": "Reason why a session ended.",
+          "oneOf": [
+            {
+              "description": "All turns completed normally.",
+              "enum": [
+                "completed"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Maximum turn limit reached.",
+              "enum": [
+                "max_turns"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Budget limit exceeded.",
+              "enum": [
+                "max_budget"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "An error terminated the session.",
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "User interrupted the session.",
+              "enum": [
+                "user_interrupt"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "stdin was closed (SDK client disconnected).",
+              "enum": [
+                "stdin_closed"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "Usage": {
+          "description": "Token usage for a turn or session.",
+          "properties": {
+            "cache_creation_tokens": {
+              "description": "Tokens written to prompt cache.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cache_read_tokens": {
+              "description": "Tokens served from prompt cache.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "input_tokens": {
+              "default": 0,
+              "description": "Input tokens consumed.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "description": "Output tokens generated.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "reasoning_tokens": {
+              "description": "Tokens used for extended thinking / reasoning.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Parameters for `session/result`.",
+      "properties": {
+        "duration_api_ms": {
+          "description": "Total time spent on API calls in milliseconds.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "description": "Total session duration in milliseconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "session_id": {
+          "description": "Session identifier.",
+          "type": "string"
+        },
+        "stop_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionEndedReason"
+            }
+          ],
+          "description": "Why the session ended."
+        },
+        "structured_output": {
+          "description": "Structured output (if output_format schema was provided)."
+        },
+        "total_cost_cents": {
+          "description": "Total cost in cents (if available).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_turns": {
+          "description": "Total number of turns in the session.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "usage": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Usage"
+            }
+          ],
+          "description": "Aggregated token usage across all turns."
+        }
+      },
+      "required": [
+        "duration_ms",
+        "session_id",
+        "stop_reason",
+        "total_turns",
+        "usage"
+      ],
+      "title": "SessionResultParams",
+      "type": "object"
+    },
     "SessionStartRequestParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "AgentDefinitionConfig": {
+          "description": "Agent definition for SDK-provided custom agents.",
+          "properties": {
+            "background": {
+              "default": false,
+              "description": "Whether the agent defaults to background execution.",
+              "type": "boolean"
+            },
+            "color": {
+              "description": "Display color hint (e.g., \"cyan\", \"blue\", \"green\", \"orange\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "critical_reminder": {
+              "description": "Critical reminder prepended to the agent's prompt.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "description": "Short description of when to use this agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "disallowed_tools": {
+              "description": "Tool blacklist.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "fork_context": {
+              "default": false,
+              "description": "Whether to fork the parent conversation context to this agent.",
+              "type": "boolean"
+            },
+            "hooks": {
+              "description": "Hook definitions scoped to this agent.",
+              "items": {
+                "$ref": "#/definitions/AgentHookConfig"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "isolation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AgentIsolationMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Isolation mode for the agent's execution environment."
+            },
+            "max_turns": {
+              "description": "Maximum turns.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mcp_servers": {
+              "description": "MCP server name references required by this agent.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "memory": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AgentMemoryScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Memory scope for persistent agent memory."
+            },
+            "model": {
+              "description": "Model override.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "description": "Permission mode override (e.g., \"default\", \"bypassPermissions\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "description": "System prompt or instructions.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "skills": {
+              "description": "Skill names to load for this agent.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "tools": {
+              "description": "Tool whitelist.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "use_custom_prompt": {
+              "default": false,
+              "description": "Whether `prompt` replaces the entire system prompt (true) or appends (false).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "AgentHookConfig": {
+          "description": "A hook definition scoped to an agent.",
+          "properties": {
+            "command": {
+              "description": "The command to execute.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event type (e.g., \"PreToolUse\", \"PostToolUse\", \"Stop\").",
+              "type": "string"
+            },
+            "matcher": {
+              "description": "Optional matcher pattern (e.g., tool name).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout": {
+              "description": "Optional timeout in seconds.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command",
+            "event"
+          ],
+          "type": "object"
+        },
+        "AgentIsolationMode": {
+          "description": "Isolation mode for agent execution environment.",
+          "oneOf": [
+            {
+              "description": "No isolation — agent shares parent's working directory.",
+              "enum": [
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Git worktree isolation — agent runs in a detached worktree.",
+              "enum": [
+                "worktree"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "AgentMemoryScope": {
+          "description": "Memory scope for persistent agent memory.",
+          "oneOf": [
+            {
+              "description": "User-level memory.",
+              "enum": [
+                "user"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Project-level memory.",
+              "enum": [
+                "project"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Local (gitignored) memory.",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "HookCallbackConfig": {
+          "description": "SDK hook callback configuration.\n\nPre-registered at initialize time following the Claude Agent SDK pattern. When a hook event fires, the server emits `ServerRequest::HookCallback` with the callback_id, and the SDK client responds.",
+          "properties": {
+            "callback_id": {
+              "description": "Unique callback identifier (UUID, pre-registered at init).",
+              "type": "string"
+            },
+            "event": {
+              "description": "Hook event type (e.g., \"PreToolUse\", \"PostToolUse\").",
+              "type": "string"
+            },
+            "matcher": {
+              "description": "Tool name pattern to match (glob-style, None = all tools).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_ms": {
+              "description": "Timeout in milliseconds for the callback response.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "callback_id",
+            "event"
+          ],
+          "type": "object"
+        },
+        "McpServerConfig": {
+          "description": "MCP server configuration for SDK clients.",
+          "oneOf": [
+            {
+              "description": "Subprocess-based MCP server (stdio transport).",
+              "properties": {
+                "args": {
+                  "default": [],
+                  "description": "Command arguments.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "command": {
+                  "description": "Command to run.",
+                  "type": "string"
+                },
+                "env": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Environment variables.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "stdio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "SSE-based MCP server.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "sse"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Server URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "HTTP-based MCP server.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "http"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Server URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputFormatConfig": {
+          "description": "Output format configuration for structured output.",
+          "properties": {
+            "schema": {
+              "description": "JSON Schema for the expected output."
+            }
+          },
+          "required": [
+            "schema"
+          ],
+          "type": "object"
+        },
+        "SandboxConfig": {
+          "description": "Sandbox configuration.",
+          "properties": {
+            "auto_allow_bash_if_sandboxed": {
+              "default": false,
+              "description": "Auto-allow Bash tool when sandboxed (avoids approval prompts).",
+              "type": "boolean"
+            },
+            "exclude_commands": {
+              "description": "Commands excluded from sandbox restrictions.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SandboxMode"
+                }
+              ],
+              "default": "none",
+              "description": "Sandbox mode."
+            },
+            "network_access": {
+              "default": false,
+              "description": "Whether to allow network access in sandbox.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "SandboxMode": {
+          "description": "Sandbox execution mode.",
+          "oneOf": [
+            {
+              "description": "No sandboxing.",
+              "enum": [
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Read-only filesystem access.",
+              "enum": [
+                "read_only"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Strict sandboxing.",
+              "enum": [
+                "strict"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "SystemPromptConfig": {
+          "anyOf": [
+            {
+              "description": "Raw system prompt string.",
+              "type": "string"
+            },
+            {
+              "description": "Structured system prompt with preset and optional append.",
+              "properties": {
+                "append": {
+                  "description": "Text to append to the preset.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "preset": {
+                  "description": "Base preset to use.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preset"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "System prompt configuration."
+        },
+        "ThinkingConfig": {
+          "description": "Thinking / reasoning configuration.",
+          "properties": {
+            "max_tokens": {
+              "description": "Maximum thinking tokens (if applicable).",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThinkingMode"
+                }
+              ],
+              "description": "Thinking mode."
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "ThinkingMode": {
+          "description": "Thinking mode.",
+          "oneOf": [
+            {
+              "description": "Model decides when to think.",
+              "enum": [
+                "adaptive"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Always use extended thinking.",
+              "enum": [
+                "enabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Never use extended thinking.",
+              "enum": [
+                "disabled"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "ToolsConfig": {
+          "anyOf": [
+            {
+              "description": "Explicit list of tool names.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "description": "Preset-based configuration.",
+              "properties": {
+                "preset": {
+                  "description": "Preset name (e.g., \"default\").",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preset"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Tools configuration."
+        }
+      },
       "description": "Parameters for `session/start`.",
       "properties": {
+        "agents": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AgentDefinitionConfig"
+          },
+          "description": "Custom sub-agent definitions.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "cwd": {
           "description": "Working directory override.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "disable_builtin_agents": {
+          "description": "Disable all built-in agent definitions.",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -1873,11 +4888,39 @@
             "null"
           ]
         },
+        "hooks": {
+          "description": "SDK hook callbacks (pre-registered at session start).",
+          "items": {
+            "$ref": "#/definitions/HookCallbackConfig"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "max_budget_cents": {
+          "description": "Maximum budget in cents before stopping.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_turns": {
           "description": "Maximum turns before stopping.",
           "format": "int32",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerConfig"
+          },
+          "description": "MCP server configurations.",
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -1888,6 +4931,17 @@
             "null"
           ]
         },
+        "output_format": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OutputFormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Structured output JSON schema."
+        },
         "permission_mode": {
           "description": "Permission mode override.",
           "type": [
@@ -1895,9 +4949,39 @@
             "null"
           ]
         },
+        "permission_rules": {
+          "description": "Permission rules.",
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "prompt": {
           "description": "Initial prompt to send.",
           "type": "string"
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sandbox configuration."
+        },
+        "system_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SystemPromptConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full system prompt override or structured config."
         },
         "system_prompt_suffix": {
           "description": "System prompt suffix (appended to built-in system prompt).",
@@ -1905,6 +4989,28 @@
             "string",
             "null"
           ]
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThinkingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Thinking/reasoning configuration."
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Tool whitelist or preset configuration."
         }
       },
       "required": [
@@ -1912,6 +5018,178 @@
       ],
       "title": "SessionStartRequestParams",
       "type": "object"
+    },
+    "SetThinkingRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "ThinkingConfig": {
+          "description": "Thinking / reasoning configuration.",
+          "properties": {
+            "max_tokens": {
+              "description": "Maximum thinking tokens (if applicable).",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThinkingMode"
+                }
+              ],
+              "description": "Thinking mode."
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "ThinkingMode": {
+          "description": "Thinking mode.",
+          "oneOf": [
+            {
+              "description": "Model decides when to think.",
+              "enum": [
+                "adaptive"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Always use extended thinking.",
+              "enum": [
+                "enabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Never use extended thinking.",
+              "enum": [
+                "disabled"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "description": "Parameters for `control/setThinking`.",
+      "properties": {
+        "thinking": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThinkingConfig"
+            }
+          ],
+          "description": "Thinking configuration to apply."
+        }
+      },
+      "required": [
+        "thinking"
+      ],
+      "title": "SetThinkingRequestParams",
+      "type": "object"
+    },
+    "StopHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `Stop` hook callbacks (session/turn ending).",
+      "properties": {
+        "stop_reason": {
+          "description": "Reason for stopping.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stop_reason"
+      ],
+      "title": "StopHookInput",
+      "type": "object"
+    },
+    "SubagentStartHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `SubagentStart` hook callbacks.",
+      "properties": {
+        "agent_id": {
+          "description": "Agent identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Agent type being started.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Prompt being sent to the agent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_type",
+        "prompt"
+      ],
+      "title": "SubagentStartHookInput",
+      "type": "object"
+    },
+    "SubagentStopHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `SubagentStop` hook callbacks.",
+      "properties": {
+        "agent_id": {
+          "description": "Agent identifier.",
+          "type": "string"
+        },
+        "agent_type": {
+          "description": "Agent type that stopped.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Agent output (if available).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "agent_type"
+      ],
+      "title": "SubagentStopHookInput",
+      "type": "object"
+    },
+    "SystemPromptConfig": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "anyOf": [
+        {
+          "description": "Raw system prompt string.",
+          "type": "string"
+        },
+        {
+          "description": "Structured system prompt with preset and optional append.",
+          "properties": {
+            "append": {
+              "description": "Text to append to the preset.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "preset": {
+              "description": "Base preset to use.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "preset"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "System prompt configuration.",
+      "title": "SystemPromptConfig"
     },
     "ThinkingConfig": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1967,6 +5245,34 @@
       ],
       "title": "ThinkingConfig",
       "type": "object"
+    },
+    "ThinkingMode": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Thinking mode.",
+      "oneOf": [
+        {
+          "description": "Model decides when to think.",
+          "enum": [
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always use extended thinking.",
+          "enum": [
+            "enabled"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Never use extended thinking.",
+          "enum": [
+            "disabled"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "ThinkingMode"
     },
     "ThreadItem": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2417,6 +5723,33 @@
       "title": "ThreadItem",
       "type": "object"
     },
+    "ToolsConfig": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "anyOf": [
+        {
+          "description": "Explicit list of tool names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "description": "Preset-based configuration.",
+          "properties": {
+            "preset": {
+              "description": "Preset name (e.g., \"default\").",
+              "type": "string"
+            }
+          },
+          "required": [
+            "preset"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Tools configuration.",
+      "title": "ToolsConfig"
+    },
     "Usage": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Token usage for a turn or session.",
@@ -2459,6 +5792,21 @@
         }
       },
       "title": "Usage",
+      "type": "object"
+    },
+    "UserPromptSubmitHookInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input payload for `UserPromptSubmit` hook callbacks.",
+      "properties": {
+        "prompt": {
+          "description": "The user's prompt text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "title": "UserPromptSubmitHookInput",
       "type": "object"
     }
   },

@@ -116,6 +116,8 @@ pub struct AttachmentSettings {
     pub output_token_usage: bool,
     /// Enable configuration change notifications.
     pub config_change: bool,
+    /// Enable sandbox violation notifications.
+    pub sandbox_violations: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -157,6 +159,7 @@ impl Default for AttachmentSettings {
             session_name: true,
             output_token_usage: true,
             config_change: true,
+            sandbox_violations: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }
