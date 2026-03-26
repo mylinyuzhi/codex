@@ -88,6 +88,7 @@ fn test_render_with_permission_overlay() {
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: None,
             },
         )));
 

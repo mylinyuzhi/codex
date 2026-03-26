@@ -21,6 +21,7 @@ cocode-loop.workspace = true
 cocode-executor.workspace = true
 
 # Internal - exec
+cocode-sandbox.workspace = true
 cocode-shell.workspace = true
 
 # Internal - features

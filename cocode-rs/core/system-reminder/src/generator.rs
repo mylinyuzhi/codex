@@ -398,6 +398,10 @@ pub struct CollabNotification {
 /// Queued commands are entered by the user via Enter during streaming.
 /// They are consumed once and injected as steering system-reminders that
 /// ask the model to address the message and continue with its tasks.
+///
+/// The optional `target_turn` field allows stale-command rejection:
+/// if set, the command is only injected when `target_turn` matches the
+/// current turn number (inspired by codex-rs `expected_turn_id`).
 #[derive(Debug, Clone)]
 pub struct QueuedCommandInfo {
     /// Unique identifier for this command.
@@ -406,6 +410,10 @@ pub struct QueuedCommandInfo {
     pub prompt: String,
     /// When the command was queued (Unix millis).
     pub queued_at: i64,
+    /// Turn number when this command was queued.
+    /// Used for stale-command rejection: if set, the command is only
+    /// injected when the current turn matches.
+    pub target_turn: Option<i32>,
 }
 
 /// Team context data for the current agent.
@@ -605,6 +613,10 @@ pub struct GeneratorContext<'a> {
     /// Number of active worktrees in the session.
     pub active_worktree_count: i32,
 
+    // === Sandbox violations ===
+    /// Recent sandbox violations (operation, path, command_tag).
+    pub sandbox_violations: Vec<(String, Option<String>, Option<String>)>,
+
     // === Delta tracking ===
     /// Deferred tools added since last turn.
     pub deferred_tools_added: Vec<String>,
@@ -706,6 +718,7 @@ pub struct GeneratorContextBuilder<'a> {
     is_auto_compact_enabled: bool,
     auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
     active_worktree_count: i32,
+    sandbox_violations: Vec<(String, Option<String>, Option<String>)>,
     deferred_tools_added: Vec<String>,
     deferred_tools_removed: Vec<String>,
     mcp_instructions_changes: Vec<(String, String)>,
@@ -922,6 +935,14 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn sandbox_violations(
+        mut self,
+        violations: Vec<(String, Option<String>, Option<String>)>,
+    ) -> Self {
+        self.sandbox_violations = violations;
+        self
+    }
+
     pub fn deferred_tools_added(mut self, tools: Vec<String>) -> Self {
         self.deferred_tools_added = tools;
         self
@@ -997,6 +1018,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             mention_read_records: self.mention_read_records,
             auto_memory_state: self.auto_memory_state,
             active_worktree_count: self.active_worktree_count,
+            sandbox_violations: self.sandbox_violations,
             deferred_tools_added: self.deferred_tools_added,
             deferred_tools_removed: self.deferred_tools_removed,
             mcp_instructions_changes: self.mcp_instructions_changes,

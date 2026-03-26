@@ -379,6 +379,7 @@ StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12
 | **No `unsafe` Code** | Never use `unsafe` blocks, `unsafe fn`, `unsafe impl`, or `unsafe trait` anywhere in the codebase. All code must be written in safe Rust. If a dependency requires `unsafe` at the boundary, wrap it in a safe abstraction within that dependency — never expose `unsafe` to cocode-rs crates. If you believe `unsafe` is truly unavoidable, stop and discuss the design with the team first. |
 | **No Hardcoded Tool/Enum Names** | Never use string literals like `"Read"`, `"Task"`, `"shutdown_request"` for tool names or enum identifiers. Always use the canonical enum's `as_str()` method: `ToolName::Read.as_str()`, `MessageType::ShutdownRequest.as_str()`. For const arrays use `const X: &[&str] = &[ToolName::Xxx.as_str(), ...]`. When the canonical enum is in a crate you cannot depend on (e.g., cross-layer), define well-known constants in a shared module (see `generator::message_types`). This prevents silent breakage when enum variants are renamed. |
 | **No Single-Use Helpers** | Do not create small helper methods that are referenced only once. Inline the logic at the call site. |
+| **Python SDK Only** | `cocode-sdk/` currently targets Python only. Do not add TypeScript, Go, or other language SDKs at this stage. The codegen pipeline (`Rust → JSON Schema → datamodel-code-generator`) is designed for multi-language extension later, but the current priority is full Python SDK feature parity. |
 
 ## Specialized Documentation
 

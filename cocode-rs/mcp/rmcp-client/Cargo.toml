@@ -38,7 +38,9 @@ rmcp = { workspace = true, default-features = false, features = [
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sse-stream = { workspace = true }
 sha2 = { workspace = true }
+thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-util",

@@ -208,6 +208,8 @@ pub struct StreamingToolExecutor {
     completed_results: Arc<Mutex<Vec<ToolExecutionResult>>>,
     /// Shell executor for command execution and background tasks.
     shell_executor: ShellExecutor,
+    /// Sandbox state for platform-level command isolation.
+    sandbox_state: Option<std::sync::Arc<cocode_sandbox::SandboxState>>,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
     /// Shared registry of cancellation tokens for background agents.
@@ -365,6 +367,7 @@ impl StreamingToolExecutor {
             pending_unsafe: Arc::new(Mutex::new(Vec::new())),
             completed_results: Arc::new(Mutex::new(Vec::new())),
             shell_executor,
+            sandbox_state: None,
             spawn_agent_fn: None,
             agent_cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
             killed_agents: Arc::new(Mutex::new(HashSet::new())),
@@ -418,6 +421,15 @@ impl StreamingToolExecutor {
     /// Set the shell executor for command execution and background tasks.
     pub fn with_shell_executor(mut self, executor: ShellExecutor) -> Self {
         self.shell_executor = executor;
+        self
+    }
+
+    /// Set the sandbox state for platform-level command isolation.
+    pub fn with_sandbox_state(
+        mut self,
+        state: std::sync::Arc<cocode_sandbox::SandboxState>,
+    ) -> Self {
+        self.sandbox_state = Some(state);
         self
     }
 
@@ -1274,6 +1286,9 @@ impl StreamingToolExecutor {
             builder = builder.cocode_home(home.clone());
         }
 
+        // Add sandbox state for platform-level command isolation
+        builder = builder.maybe_sandbox_state(self.sandbox_state.clone());
+
         // Share output offsets across tool contexts for delta reads
         builder = builder.output_offsets(self.output_offsets.clone());
 
@@ -1726,6 +1741,7 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern,
+        input: Some(input.clone()),
     }
 }
 
@@ -1782,6 +1798,7 @@ async fn check_permission_pipeline(
                     risks: vec![],
                     allow_remember: true,
                     proposed_prefix_pattern: extract_prefix_pattern(name, input),
+                    input: Some(input.clone()),
                 },
             };
         }

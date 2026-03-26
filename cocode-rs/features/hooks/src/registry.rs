@@ -46,6 +46,19 @@ pub type HookAgentFn = Arc<
         + Sync,
 >;
 
+/// Callback for routing hook execution to an SDK client.
+///
+/// Args: (callback_id, event_type, hook_context_json) -> Ok(output_json) or Err(error)
+pub type HookSdkCallbackFn = Arc<
+    dyn Fn(
+            String,
+            String,
+            serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Central registry that stores hooks and dispatches events.
 ///
 /// The registry supports one-shot hooks (`once: true`) which are automatically
@@ -65,6 +78,8 @@ pub struct HookRegistry {
     model_call_fn: RwLock<Option<HookModelCallFn>>,
     /// Optional agent spawn callback for Agent handler verification mode.
     agent_fn: RwLock<Option<HookAgentFn>>,
+    /// Optional SDK callback for routing hooks to the SDK client.
+    sdk_callback_fn: RwLock<Option<HookSdkCallbackFn>>,
     /// Optional async hook tracker for completing background hook tasks.
     ///
     /// When set, background hooks will call `tracker.complete()` when they finish,
@@ -87,6 +102,7 @@ impl HookRegistry {
             settings: RwLock::new(HookSettings::default()),
             model_call_fn: RwLock::new(None),
             agent_fn: RwLock::new(None),
+            sdk_callback_fn: RwLock::new(None),
             async_tracker: RwLock::new(None),
         }
     }
@@ -110,6 +126,11 @@ impl HookRegistry {
         *lock_write(&self.agent_fn, "agent_fn") = Some(f);
     }
 
+    /// Sets the SDK callback for routing hooks to the SDK client.
+    pub fn set_sdk_callback_fn(&self, f: HookSdkCallbackFn) {
+        *lock_write(&self.sdk_callback_fn, "sdk_callback_fn") = Some(f);
+    }
+
     /// Returns a clone of the model call callback if set.
     fn get_model_call_fn(&self) -> Option<HookModelCallFn> {
         lock_read(&self.model_call_fn, "model_call_fn").clone()
@@ -118,6 +139,11 @@ impl HookRegistry {
     /// Returns a clone of the agent callback if set.
     fn get_agent_fn(&self) -> Option<HookAgentFn> {
         lock_read(&self.agent_fn, "agent_fn").clone()
+    }
+
+    /// Returns a clone of the SDK callback if set.
+    fn get_sdk_callback_fn(&self) -> Option<HookSdkCallbackFn> {
+        lock_read(&self.sdk_callback_fn, "sdk_callback_fn").clone()
     }
 
     /// Updates the hook settings (e.g., `disable_all_hooks`, `allow_managed_hooks_only`).
@@ -227,10 +253,11 @@ impl HookRegistry {
         // Snapshot callbacks and tracker for use in spawned tasks
         let model_call_fn = self.get_model_call_fn();
         let agent_fn = self.get_agent_fn();
+        let sdk_callback_fn = self.get_sdk_callback_fn();
         let async_tracker = lock_read(&self.async_tracker, "async_tracker").clone();
 
         // Stable-sort matched hooks by handler type for deterministic result aggregation.
-        // Command(0) > Webhook(1) > Prompt(2) > Agent(3) > Inline(4)
+        // Command(0) > Webhook(1) > Prompt(2) > Agent(3) > Inline(4) > SdkCallback(5)
         let mut matching = matching;
         matching.sort_by_key(|h| match &h.handler {
             HookHandler::Command { .. } => 0,
@@ -238,6 +265,7 @@ impl HookRegistry {
             HookHandler::Prompt { .. } => 2,
             HookHandler::Agent { .. } => 3,
             HookHandler::Inline => 4,
+            HookHandler::SdkCallback { .. } => 5,
         });
 
         // Execute all matching hooks in parallel
@@ -251,6 +279,7 @@ impl HookRegistry {
                 let ctx = ctx.clone();
                 let model_call_fn = model_call_fn.clone();
                 let agent_fn = agent_fn.clone();
+                let sdk_callback_fn = sdk_callback_fn.clone();
                 // Config-based async: background the hook immediately unless forced sync
                 // or SessionStart (always sync).
                 let should_background = hook.is_async
@@ -283,6 +312,7 @@ impl HookRegistry {
                                     &ctx,
                                     model_call_fn.as_ref(),
                                     agent_fn.as_ref(),
+                                    sdk_callback_fn.as_ref(),
                                 ),
                             )
                             .await;
@@ -340,6 +370,7 @@ impl HookRegistry {
                                 &ctx,
                                 model_call_fn.as_ref(),
                                 agent_fn.as_ref(),
+                                sdk_callback_fn.as_ref(),
                             ),
                         )
                         .await
@@ -533,6 +564,7 @@ async fn execute_handler(
     ctx: &HookContext,
     model_call_fn: Option<&HookModelCallFn>,
     agent_fn: Option<&HookAgentFn>,
+    sdk_callback_fn: Option<&HookSdkCallbackFn>,
 ) -> (HookResult, bool) {
     match handler {
         HookHandler::Command { command } => {
@@ -636,7 +668,47 @@ async fn execute_handler(
             warn!("Inline hook definition has no registered handler closure");
             (HookResult::Continue, false)
         }
+        HookHandler::SdkCallback { callback_id } => {
+            if let Some(callback_fn) = sdk_callback_fn {
+                let event_type = format!("{:?}", ctx.event_type);
+                let input = serde_json::to_value(ctx).unwrap_or(serde_json::Value::Null);
+                match callback_fn(callback_id.clone(), event_type, input).await {
+                    Ok(output) => parse_sdk_callback_response(output),
+                    Err(e) => {
+                        warn!(callback_id, "SDK hook callback failed: {e}");
+                        (HookResult::Continue, false)
+                    }
+                }
+            } else {
+                warn!(
+                    callback_id,
+                    "SdkCallback hook has no registered callback function"
+                );
+                (HookResult::Continue, false)
+            }
+        }
     }
+}
+
+/// Parse an SDK callback response into a `HookResult`.
+///
+/// Tries to deserialize as `HookResult` first, then falls back to
+/// `HookOutput` (Claude Code v2.1.7 format), and finally defaults
+/// to `Continue`.
+fn parse_sdk_callback_response(output: serde_json::Value) -> (HookResult, bool) {
+    // Try direct HookResult deserialization
+    if let Ok(result) = serde_json::from_value::<HookResult>(output.clone()) {
+        return (result, false);
+    }
+
+    // Try HookOutput format (has continue_execution, updated_input, etc.)
+    if let Ok(hook_output) = serde_json::from_value::<handlers::command::HookOutput>(output) {
+        let suppress = hook_output.suppress_output;
+        return (hook_output.into_result(None), suppress);
+    }
+
+    // Unrecognized format — continue by default
+    (HookResult::Continue, false)
 }
 
 impl std::fmt::Debug for HookRegistry {

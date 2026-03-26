@@ -134,6 +134,7 @@ impl Tool for WriteTool {
                         }],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }
@@ -155,6 +156,7 @@ impl Tool for WriteTool {
                         }],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }
@@ -181,6 +183,7 @@ impl Tool for WriteTool {
                 risks: vec![],
                 allow_remember: true,
                 proposed_prefix_pattern: None,
+                input: Some(input.clone()),
             },
         }
     }

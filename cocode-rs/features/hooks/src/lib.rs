@@ -54,6 +54,7 @@ pub use matcher::HookMatcher;
 pub use registry::HookAgentFn;
 pub use registry::HookModelCallFn;
 pub use registry::HookRegistry;
+pub use registry::HookSdkCallbackFn;
 pub use result::HookOutcome;
 pub use result::HookResult;
 pub use scope::HookScope;

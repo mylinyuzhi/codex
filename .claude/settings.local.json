@@ -89,7 +89,8 @@
       "Bash(pip3 list:*)",
       "Bash(pip install:*)",
       "Bash(pip3 install:*)",
-      "Bash(apt-get install:*)"
+      "Bash(apt-get install:*)",
+      "Bash(PYTHONPATH=src python3 -m pytest:*)"
     ],
     "deny": [],
     "ask": []

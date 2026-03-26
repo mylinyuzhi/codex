@@ -1,40 +1,68 @@
 //! Platform-specific sandbox implementations.
 //!
 //! Provides a `SandboxPlatform` trait with platform-gated implementations
-//! for Unix (macOS/Linux) and Windows.
+//! for macOS (Seatbelt) and Linux (bubblewrap + seccomp).
 
 use crate::config::SandboxConfig;
 use crate::error::Result;
 
-#[cfg(unix)]
-pub mod unix;
+#[cfg(target_os = "macos")]
+pub mod macos;
 
-#[cfg(windows)]
-pub mod windows;
+#[cfg(target_os = "linux")]
+pub mod linux;
 
 /// Platform-specific sandbox enforcement.
 ///
-/// Implementations of this trait apply OS-level restrictions
-/// (e.g., seccomp, Seatbelt, Windows Job Objects) based on the
-/// provided sandbox configuration.
+/// Implementations wrap child process commands with OS-level restrictions
+/// (Seatbelt on macOS, bubblewrap + seccomp on Linux).
 pub trait SandboxPlatform: Send + Sync {
     /// Returns true if this sandbox implementation is available on the current OS.
     fn available(&self) -> bool;
 
-    /// Applies the sandbox configuration to the current process or child processes.
-    fn apply(&self, config: &SandboxConfig) -> Result<()>;
+    /// Wraps a command to run under sandbox enforcement.
+    ///
+    /// Modifies the command to execute within the platform-specific sandbox,
+    /// applying filesystem, network, and process isolation according to the config.
+    fn wrap_command(&self, config: &SandboxConfig, cmd: &mut tokio::process::Command)
+    -> Result<()>;
 }
 
 /// Returns the platform-appropriate sandbox implementation.
-#[cfg(unix)]
-pub fn platform_sandbox() -> unix::UnixSandbox {
-    unix::UnixSandbox
+#[cfg(target_os = "macos")]
+pub fn create_platform() -> Box<dyn SandboxPlatform> {
+    Box::new(macos::MacOsSandbox)
 }
 
 /// Returns the platform-appropriate sandbox implementation.
-#[cfg(windows)]
-pub fn platform_sandbox() -> windows::WindowsSandbox {
-    windows::WindowsSandbox
+#[cfg(target_os = "linux")]
+pub fn create_platform() -> Box<dyn SandboxPlatform> {
+    Box::new(linux::LinuxSandbox)
+}
+
+/// Returns a no-op sandbox for unsupported platforms.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn create_platform() -> Box<dyn SandboxPlatform> {
+    Box::new(NoopSandbox)
+}
+
+/// No-op sandbox for unsupported platforms.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+struct NoopSandbox;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl SandboxPlatform for NoopSandbox {
+    fn available(&self) -> bool {
+        false
+    }
+
+    fn wrap_command(
+        &self,
+        _config: &SandboxConfig,
+        _cmd: &mut tokio::process::Command,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

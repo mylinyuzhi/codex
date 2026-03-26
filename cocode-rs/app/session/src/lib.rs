@@ -47,6 +47,7 @@
 
 pub mod manager;
 pub mod persistence;
+pub mod sandbox_init;
 pub mod session;
 pub mod state;
 
